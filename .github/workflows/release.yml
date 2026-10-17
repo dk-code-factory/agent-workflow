@@ -119,11 +119,11 @@ jobs:
           persist-credentials: false
       - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
       - run: python3 scripts/validate-release.py "$TAG"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: archives
           path: dist
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-*
           path: dist
