@@ -42,7 +42,12 @@ func TestSubprocessPromptModelWorkspaceAndFlags(t *testing.T) {
 				t.Fatalf("wrong prompt %q", data)
 			}
 			data, _ = os.ReadFile(filepath.Join(root, "cwd"))
-			if strings.TrimSpace(string(data)) != root {
+			// macOS temporary roots may use /var while pwd returns /private/var.
+			physicalRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(string(data)) != physicalRoot {
 				t.Fatalf("wrong cwd %q", data)
 			}
 			data, _ = os.ReadFile(filepath.Join(root, "args"))
