@@ -51,7 +51,7 @@ jobs:
               assert sha256(archive) == sha256(Path('.agent-workflow/repro') / archive.name), archive
           PY
       - run: python3 scripts/audit-release.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: archives
           path: |
@@ -93,7 +93,7 @@ jobs:
           syft "docker-archive:dist/worker-linux-$ARCH.docker.tar" -o "cyclonedx-json=dist/worker-linux-$ARCH.sbom.json"
           trivy image --input "dist/worker-linux-$ARCH.docker.tar" --severity HIGH,CRITICAL --exit-code 1 --format json --output "dist/worker-linux-$ARCH.vulnerabilities.json"
       - run: python3 scripts/compress-worker-image.py '${{ matrix.arch }}'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.arch }}
           path: |
