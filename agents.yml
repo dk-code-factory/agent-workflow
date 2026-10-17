@@ -1,0 +1,21 @@
+agents:
+  claude:
+    provider: claude-cli
+    # Omit model to use the CLI's configured default.
+    permission-mode: dontAsk
+
+  codex:
+    provider: codex-cli
+    sandbox: read-only
+  planner:
+    provider: claude-cli
+    permission-mode: plan
+  builder:
+    provider: codex-cli
+    sandbox: workspace-write
+  reviewer_claude:
+    provider: claude-cli
+    permission-mode: plan
+  reviewer_codex:
+    provider: codex-cli
+    sandbox: read-only

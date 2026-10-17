@@ -1,0 +1,29 @@
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make test check build
+  sdk-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix bridge/claude --ignore-scripts
+      - run: node --check bridge/claude/bridge.mjs
+      - run: go test ./pkg/clirunner -run TestSDKBridgeAgainstFakeGateway -count=1
+        env:
+          AGENT_WORKFLOW_SDK_TEST: '1'

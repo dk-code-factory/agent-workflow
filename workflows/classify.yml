@@ -1,0 +1,29 @@
+name: Reusable structured classifier
+on:
+  workflow_call:
+    inputs:
+      task:
+        type: string
+        required: true
+    outputs:
+      category:
+        value: ${{ jobs.classify.outputs.category }}
+jobs:
+  classify:
+    outputs:
+      category: ${{ steps.classify.outputs.structured.category }}
+    steps:
+      - id: classify
+        uses: agent/claude
+        with:
+          prompt: "Classify this task: ${{ inputs.task }}"
+          output:
+            format: json
+            schema:
+              type: object
+              additionalProperties: false
+              required: [category]
+              properties:
+                category:
+                  type: string
+                  enum: [bug, feature, question]

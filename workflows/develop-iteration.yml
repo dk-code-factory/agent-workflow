@@ -1,0 +1,100 @@
+name: One bounded development iteration
+on:
+  workflow_call:
+    inputs:
+      task: {type: string, required: true}
+      plan: {type: string, required: true}
+      check: {type: string, default: 'go test ./...'}
+      previous: {type: object, default: {}}
+    outputs:
+      path: {value: '${{ jobs.implement.outputs.path }}'}
+      commit: {value: '${{ jobs.implement.outputs.commit }}'}
+      clean: {value: '${{ jobs.test.outputs.exit_code == 0 and jobs.review_one.outputs.clean and jobs.review_two.outputs.clean }}'}
+      findings:
+        value: |
+          Tests: ${{ jobs.test.outputs.stderr }}
+          Claude: ${{ jobs.review_one.outputs.findings }}
+          Codex: ${{ jobs.review_two.outputs.findings }}
+jobs:
+  implement:
+    outputs:
+      path: ${{ steps.workspace.outputs.path }}
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      - id: workspace
+        uses: workspace/create
+        with:
+          commit: ${{ inputs.previous.outputs.commit }}
+      - uses: agent/builder
+        with:
+          workspace: ${{ steps.workspace.outputs.path }}
+          prompt: |
+            Implement the task in this isolated workspace. Do not commit or publish.
+            Task: ${{ inputs.task }}
+            Plan: ${{ inputs.plan }}
+            Previous findings: ${{ inputs.previous.outputs.findings }}
+      - id: commit
+        uses: git/commit
+        with:
+          path: ${{ steps.workspace.outputs.path }}
+          message: Implement workflow task
+  test:
+    needs: implement
+    outputs:
+      exit_code: ${{ steps.check.outputs.exit_code }}
+      stderr: ${{ steps.check.outputs.stderr }}
+    steps:
+      - id: check
+        shell: sh
+        run: ${{ inputs.check }}
+        working-directory: ${{ needs.implement.outputs.path }}
+        timeout: 10m
+        continue-on-error: true
+  review_one:
+    needs: [implement, test]
+    outputs:
+      clean: ${{ steps.review.outputs.structured.clean }}
+      findings: ${{ steps.review.outputs.structured.findings }}
+    steps:
+      - id: snapshot
+        uses: workspace/snapshot
+        with: {commit: '${{ needs.implement.outputs.commit }}'}
+      - id: review
+        uses: agent/reviewer_claude
+        with:
+          workspace: ${{ steps.snapshot.outputs.path }}
+          prompt: 'Review this fixed snapshot for correctness. Do not edit. Task: ${{ inputs.task }}'
+          output:
+            format: json
+            repair-attempts: 0
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clean, findings]
+              properties:
+                clean: {type: boolean}
+                findings: {type: array, items: {type: string}}
+  review_two:
+    needs: [implement, test]
+    outputs:
+      clean: ${{ steps.review.outputs.structured.clean }}
+      findings: ${{ steps.review.outputs.structured.findings }}
+    steps:
+      - id: snapshot
+        uses: workspace/snapshot
+        with: {commit: '${{ needs.implement.outputs.commit }}'}
+      - id: review
+        uses: agent/reviewer_codex
+        with:
+          workspace: ${{ steps.snapshot.outputs.path }}
+          prompt: 'Independently review this fixed snapshot for correctness. Do not edit. Task: ${{ inputs.task }}'
+          output:
+            format: json
+            repair-attempts: 0
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clean, findings]
+              properties:
+                clean: {type: boolean}
+                findings: {type: array, items: {type: string}}

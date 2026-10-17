@@ -1,0 +1,92 @@
+name: Plan, implement, test, review, and publish
+on:
+  manual: {}
+  workflow_call:
+    inputs:
+      task: {type: string, required: true}
+      check: {type: string, default: 'go test ./...'}
+      title: {type: string, default: 'Implement workflow task'}
+    outputs:
+      pr: {value: '${{ jobs.publish.outputs.url }}'}
+jobs:
+  plan:
+    outputs: {plan: '${{ steps.plan.outputs.text }}'}
+    steps:
+      - id: plan
+        uses: agent/planner
+        with:
+          prompt: 'Plan this task without editing or publishing: ${{ inputs.task }}'
+  iterate:
+    needs: plan
+    uses: workflows/develop-iteration.yml
+    repeat: {max-attempts: 3, until: '${{ iteration.outputs.clean }}'}
+    with:
+      task: ${{ inputs.task }}
+      plan: ${{ needs.plan.outputs.plan }}
+      check: ${{ inputs.check }}
+      previous: ${{ iteration.previous }}
+  test:
+    needs: iterate
+    outputs:
+      checked_commit: ${{ needs.iterate.outputs.commit }}
+    steps:
+      - shell: sh
+        run: ${{ inputs.check }}
+        working-directory: ${{ needs.iterate.outputs.path }}
+        timeout: 10m
+  review_one:
+    needs: iterate
+    outputs:
+      reviewed_commit: ${{ steps.snapshot.outputs.commit }}
+      clean: ${{ steps.review.outputs.structured.clean }}
+    steps:
+      - id: snapshot
+        uses: workspace/snapshot
+        with: {commit: '${{ needs.iterate.outputs.commit }}'}
+      - id: review
+        uses: agent/reviewer_claude
+        with:
+          workspace: ${{ steps.snapshot.outputs.path }}
+          prompt: 'Review this final fixed snapshot independently, without edits. Task: ${{ inputs.task }}'
+          output:
+            format: json
+            repair-attempts: 0
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clean]
+              properties: {clean: {type: boolean}}
+  review_two:
+    needs: iterate
+    outputs:
+      reviewed_commit: ${{ steps.snapshot.outputs.commit }}
+      clean: ${{ steps.review.outputs.structured.clean }}
+    steps:
+      - id: snapshot
+        uses: workspace/snapshot
+        with: {commit: '${{ needs.iterate.outputs.commit }}'}
+      - id: review
+        uses: agent/reviewer_codex
+        with:
+          workspace: ${{ steps.snapshot.outputs.path }}
+          prompt: 'Review this final fixed snapshot independently, without edits. Task: ${{ inputs.task }}'
+          output:
+            format: json
+            repair-attempts: 0
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clean]
+              properties: {clean: {type: boolean}}
+  publish:
+    needs: [iterate, test, review_one, review_two]
+    steps:
+      - id: pr
+        uses: github/pr
+        with:
+          path: ${{ needs.iterate.outputs.path }}
+          commit: ${{ needs.iterate.outputs.commit }}
+          title: ${{ inputs.title }}
+          body: 'Task: ${{ inputs.task }}. Checks and both independent reviews passed for the published commit.'
+    outputs:
+      url: ${{ steps.pr.outputs.url }}

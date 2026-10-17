@@ -1,0 +1,4 @@
+/bin/
+/.agent-workflow/
+*.test
+node_modules/

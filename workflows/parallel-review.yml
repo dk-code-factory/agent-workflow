@@ -1,0 +1,54 @@
+name: Parallel Claude and Codex review
+on:
+  manual: {}
+  workflow_call:
+    inputs:
+      task:
+        type: string
+        required: true
+    outputs:
+      summary:
+        value: ${{ jobs.combine.outputs.summary }}
+
+jobs:
+  claude_review:
+    outputs:
+      findings: ${{ steps.review.outputs.text }}
+    steps:
+      - id: review
+        uses: agent/claude
+        with:
+          prompt: |
+            Review the task below for correctness risks. Inspect relevant files
+            if useful. Return findings only. Do not edit files.
+            Task: ${{ inputs.task }}
+
+  codex_review:
+    outputs:
+      findings: ${{ steps.review.outputs.text }}
+    steps:
+      - id: review
+        uses: agent/codex
+        with:
+          prompt: |
+            Review the task below for security and test gaps. Inspect relevant
+            files if useful. Return findings only. Do not edit files.
+            Task: ${{ inputs.task }}
+
+  combine:
+    needs: [claude_review, codex_review]
+    outputs:
+      summary: ${{ steps.merge.outputs.text }}
+    steps:
+      - id: merge
+        uses: agent/claude
+        with:
+          prompt: |
+            Combine these independent reviews. Remove duplicates and preserve
+            disagreements. Do not edit files.
+
+            Claude findings:
+            ${{ needs.claude_review.outputs.findings }}
+
+            Codex findings:
+            ${{ needs.codex_review.outputs.findings }}
