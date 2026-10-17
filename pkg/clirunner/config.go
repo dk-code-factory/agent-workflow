@@ -11,12 +11,18 @@ import (
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/development"
+	"github.com/dkropachev/agent-workflow/pkg/operational"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
+	"github.com/dkropachev/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
 
 var roleIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 type Execution struct {
+	Cleanup      string `yaml:"cleanup"`
+	UID          *int   `yaml:"uid"`
+	GID          *int   `yaml:"gid"`
 	runID        string
 	invocationID string
 	ownerRoot    string
@@ -24,6 +30,10 @@ type Execution struct {
 	Image        string `yaml:"image"`
 	Runtime      string `yaml:"runtime"`
 	Writable     bool   `yaml:"writable"`
+}
+
+func (e Execution) policy() runtimeexec.Policy {
+	return runtimeexec.Policy{Mode: e.Mode, Image: e.Image, Runtime: e.Runtime, Writable: e.Writable, Cleanup: e.Cleanup, UID: e.UID, GID: e.GID}
 }
 
 type Authentication struct {
@@ -43,25 +53,31 @@ type Limits struct {
 }
 
 type Agent struct {
-	Limits          Limits         `yaml:"limits"`
-	Execution       Execution      `yaml:"execution"`
-	Instructions    []string       `yaml:"instructions"`
-	InstructionText string         `yaml:"-"`
-	Tools           []string       `yaml:"tools,omitempty"`
-	Authentication  Authentication `yaml:"authentication"`
-	Bridge          string         `yaml:"bridge"`
-	Provider        string         `yaml:"provider"`
-	Model           string         `yaml:"model"`
-	Command         string         `yaml:"command"`
-	Args            []string       `yaml:"args"`
-	Workspace       string         `yaml:"workspace"`
-	Sandbox         string         `yaml:"sandbox"`
-	PermissionMode  string         `yaml:"permission-mode"`
+	MCPGrants       []workflows.ToolGrant `yaml:"mcp-grants"`
+	Limits          Limits                `yaml:"limits"`
+	Execution       Execution             `yaml:"execution"`
+	Instructions    []string              `yaml:"instructions"`
+	InstructionText string                `yaml:"-"`
+	Tools           []string              `yaml:"tools,omitempty"`
+	Authentication  Authentication        `yaml:"authentication"`
+	Bridge          string                `yaml:"bridge"`
+	Provider        string                `yaml:"provider"`
+	Model           string                `yaml:"model"`
+	Command         string                `yaml:"command"`
+	Args            []string              `yaml:"args"`
+	Workspace       string                `yaml:"workspace"`
+	Sandbox         string                `yaml:"sandbox"`
+	PermissionMode  string                `yaml:"permission-mode"`
 }
 
 type Config struct {
-	Publication development.PublicationPolicy `yaml:"publication"`
-	Agents      map[string]Agent              `yaml:"agents"`
+	Controller         operational.Config            `yaml:"controller"`
+	Execution          Execution                     `yaml:"execution"`
+	CatalogFingerprint string                        `yaml:"-"`
+	MCPServers         map[string]MCPServer          `yaml:"mcp-servers"`
+	ToolCatalog        []workflows.ToolDefinition    `yaml:"-"`
+	Publication        development.PublicationPolicy `yaml:"publication"`
+	Agents             map[string]Agent              `yaml:"agents"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -82,7 +98,24 @@ func LoadConfig(path string) (Config, error) {
 	if err := d.Decode(&extra); err != io.EOF {
 		return cfg, fmt.Errorf("expected one config document")
 	}
+	if cfg.Controller.TempDirectory != "" && !filepath.IsAbs(cfg.Controller.TempDirectory) {
+		cfg.Controller.TempDirectory = filepath.Join(filepath.Dir(path), cfg.Controller.TempDirectory)
+	}
 	for id, agent := range cfg.Agents {
+		if agent.Execution.Mode == "" && agent.Execution.Image == "" && agent.Execution.Runtime == "" && !agent.Execution.Writable && agent.Execution.UID == nil && agent.Execution.GID == nil {
+			cleanup := agent.Execution.Cleanup
+			agent.Execution = cfg.Execution
+			if cleanup != "" {
+				agent.Execution.Cleanup = cleanup
+			}
+		}
+		if cfg.Execution.Cleanup == "strict" {
+			if agent.Execution.Cleanup != "" && agent.Execution.Cleanup != "strict" {
+				return cfg, fmt.Errorf("agent %s cannot weaken global strict cleanup", id)
+			}
+			agent.Execution.Cleanup = "strict"
+		}
+
 		for _, resource := range agent.Instructions {
 			if !filepath.IsAbs(resource) {
 				resource = filepath.Join(filepath.Dir(path), resource)
@@ -112,10 +145,22 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if err := c.Controller.Validate(); err != nil {
+		return err
+	}
+	if err := c.Execution.policy().Validate(); err != nil {
+		return err
+	}
+	if err := c.validateMCP(); err != nil {
+		return err
+	}
 	if len(c.Agents) == 0 {
 		return fmt.Errorf("at least one agent must be configured")
 	}
 	for id, agent := range c.Agents {
+		if err := agent.Execution.policy().Validate(); err != nil {
+			return fmt.Errorf("agent %s: %w", id, err)
+		}
 		if !roleIDPattern.MatchString(id) {
 			return fmt.Errorf("invalid role id")
 		}
@@ -146,6 +191,9 @@ func (c Config) Validate() error {
 			}
 		}
 		legacy := agent.Provider == "claude" || agent.Provider == "claude-cli" || agent.Provider == "codex" || agent.Provider == "codex-cli"
+		if len(agent.MCPGrants) > 0 && agent.Provider != "claude-sdk" && agent.Provider != "codex-app-server" {
+			return fmt.Errorf("agent %s: broker tools require a session backend", id)
+		}
 		if legacy {
 			if len(agent.Instructions) > 0 || agent.InstructionText != "" || agent.Tools != nil || agent.Bridge != "" {
 				return fmt.Errorf("agent %s: managed instructions/tools/bridge require a session backend", id)
@@ -167,6 +215,9 @@ func (c Config) Validate() error {
 			}
 		case "codex", "codex-cli", "codex-app-server":
 			if agent.Provider == "codex-app-server" {
+				if len(agent.Args) > 0 {
+					return fmt.Errorf("agent %s: app-server raw arguments are unsupported; use explicit managed fields", id)
+				}
 				if agent.Authentication.Mode != "native" && agent.Authentication.Mode != "api-key" {
 					return fmt.Errorf("agent %s: explicit native or api-key authentication required", id)
 				}
@@ -185,6 +236,9 @@ func (c Config) Validate() error {
 			}
 		case "claude-sdk":
 			for _, tool := range agent.Tools {
+				if strings.ContainsAny(tool, "*?") || strings.HasPrefix(strings.ToLower(tool), "mcp__") {
+					return fmt.Errorf("agent %s: MCP tools require exact mcp-grants", id)
+				}
 				normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(tool))
 				switch normalized {
 				case "agent", "task", "skill", "toolsearch", "teamcreate", "teamdelete", "sendmessage":
@@ -194,7 +248,7 @@ func (c Config) Validate() error {
 			if agent.Sandbox != "" || agent.PermissionMode != "" || len(agent.Args) > 0 {
 				return fmt.Errorf("agent %s: SDK roles use explicit tools/container policy rather than CLI flags", id)
 			}
-			if agent.Bridge == "" {
+			if agent.Bridge == "" && agent.Execution.Mode != "container" {
 				return fmt.Errorf("agent %s: claude-sdk requires pinned bridge path", id)
 			}
 			if agent.Authentication.Mode != "gateway" || agent.Authentication.Endpoint == "" || agent.Authentication.CredentialEnv == "" {
@@ -206,3 +260,5 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+func (c Config) CommandExecutionPolicy() runtimeexec.Policy { return c.Execution.policy() }

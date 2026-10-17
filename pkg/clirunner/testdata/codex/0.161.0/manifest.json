@@ -1,0 +1,17 @@
+{
+  "provider": "codex-cli 0.161.0",
+  "source": "upstream CLI generate-json-schema --experimental",
+  "documentation": "https://learn.chatgpt.com/docs/app-server",
+  "bundle_sha256": "cf2f40a24b2bb5f464d945de7f14209ca14883c21d746eaefc170467e59bf735",
+  "files": {
+    "v1/InitializeParams.json": "b55124e7c0f36a1789396daa5578217a92be67f053903696236686e59f6f212e",
+    "v2/ThreadStartParams.json": "80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de",
+    "v2/ThreadResumeParams.json": "cc5bb3b25f82073d24af5b6c09e4804ac307467f8400ba5f263fa86f9f0349e6",
+    "v2/TurnInterruptParams.json": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b",
+    "v2/LoginAccountParams.json": "48fb9bea54d7e0890052653ac06737efb3200ba2261515b2c4014027f36bea3d",
+    "DynamicToolCallParams.json": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc",
+    "DynamicToolCallResponse.json": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02"
+  },
+  "managed_policy_certified": false,
+  "live_provider_verified": false
+}

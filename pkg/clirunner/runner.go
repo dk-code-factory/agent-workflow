@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
 
@@ -21,6 +22,14 @@ type Runner struct {
 	versions  sync.Map
 	Config    Config
 	Workspace string
+}
+
+func (r *Runner) UsageProvider(role, model string) (string, string) {
+	agent := r.Config.Agents[role]
+	if model == "" {
+		model = agent.Model
+	}
+	return agent.Provider, model
 }
 
 func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[string]any, error) {
@@ -111,14 +120,15 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 	args = append(args, "-")
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
-	cmd.Env = append(nativeEnvironment(), "MAX_STRUCTURED_OUTPUT_RETRIES=0")
+	cmd.Env = append(nativeEnvironment(), providerEnvironment(agent.Authentication.CredentialEnv)...)
+	cmd.Env = append(cmd.Env, "MAX_STRUCTURED_OUTPUT_RETRIES=0")
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	stdout := boundedBuffer{limit: outputLimit(agent)}
 	stderr := boundedBuffer{limit: outputLimit(agent)}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
-	cleanup, superviseErr := process.Supervise(cmd)
+	cleanup, superviseErr := runtimeexec.Supervise(ctx, cmd)
 	if superviseErr != nil {
 		return nil, superviseErr
 	}
@@ -155,6 +165,7 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 		return partialOutputs(stdout.String(), stderr.String()), err
 	}
 	outputs["provider"] = agent.Provider
+	outputs["model"] = model
 	outputs["provider_version"] = r.providerVersion(ctx, agent)
 	outputs["provider_status"] = "succeeded"
 	return outputs, nil
@@ -283,6 +294,11 @@ func (r *Runner) providerVersion(ctx context.Context, a Agent) string {
 	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(versionCtx, command, "--version")
+	removeProbe, err := prepareVersionProbe(cmd)
+	if err != nil {
+		return "unavailable"
+	}
+	defer removeProbe()
 	var output boundedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output

@@ -1,0 +1,12 @@
+{
+  "id": "mixed-development-cli",
+  "driver": "workflow-cli",
+  "provider": "",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "workflow_succeeded",
+    "usage_observed"
+  ],
+  "prompt": ""
+}

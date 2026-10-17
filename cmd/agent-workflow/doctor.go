@@ -9,11 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/clirunner"
+	"github.com/dkropachev/agent-workflow/pkg/operational"
 	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
 
@@ -54,11 +58,37 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 	report := map[string]any{"workspace": root, "backends": map[string]any{}, "native_authentication": "cached status only; actual model acceptance requires a separate budgeted live probe"}
 	backends := report["backends"].(map[string]any)
 	var failures error
+	guarantee := func(container bool) string {
+		if container || runtime.GOOS == "linux" {
+			return "strict descendant cleanup"
+		}
+		return "process-group cleanup; strict descendants require containers"
+	}
+	report["command_execution_policy"] = cfg.CommandExecutionPolicy()
+	report["command_cleanup_guarantee"] = guarantee(cfg.Execution.Mode == "container")
+	if err := cfg.CommandExecutionPolicy().Validate(); err != nil {
+		failures = errors.Join(failures, err)
+	}
+	if cfg.Execution.Mode == "container" {
+		probe, cancel := runtimeexec.ProbeContext(ctx)
+		err := runtimeexec.CheckImage(probe, cfg.CommandExecutionPolicy(), false)
+		cancel()
+		if err != nil {
+			report["command_execution_error"] = workflows.Redact(err.Error(), secrets)
+			failures = errors.Join(failures, err)
+		}
+	}
 	for id, a := range cfg.Agents {
 		item := map[string]any{"provider": a.Provider, "authentication_route": a.Authentication.Mode}
+		item["cleanup_guarantee"] = guarantee(a.Execution.Mode == "container")
+		if a.Execution.Mode == "container" {
+			item["mount_compatibility"] = "PID 1 verifies read/write policy and selected UID mapping before workload effects"
+			item["guardian_protocol"] = runtimeexec.GuardianProtocol
+		}
 		backends[id] = item
 		caps, err := runner.Capabilities(id)
 		if err != nil {
+			item["error"] = workflows.Redact(err.Error(), secrets)
 			failures = errors.Join(failures, err)
 			continue
 		}
@@ -147,6 +177,8 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 			if err != nil || parseErr != nil || !auth.LoggedIn {
 				failures = errors.Join(failures, fmt.Errorf("agent %s native authentication status unavailable", id))
 			}
+		} else if a.Provider == "codex-app-server" && a.Authentication.Mode == "native" {
+			item["native_file_authentication"] = "available; model acceptance unverified"
 		} else if a.Execution.Mode != "container" && (a.Authentication.Mode == "native" || a.Provider == "codex" || a.Provider == "codex-cli") {
 			_, err := doctorCommand(ctx, root, command, "login", "status")
 			item["native_cached_login"] = err == nil
@@ -173,6 +205,34 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 			report["state_write_permission"] = true
 		}
 	}
+	disks := map[string]any{}
+	for name, path := range map[string]string{"state": dir, "temporary": cfg.Controller.TemporaryDirectory()} {
+		capacity, capacityErr := cfg.Controller.Check(path)
+		item := map[string]any{"capacity": capacity, "ready": capacityErr == nil}
+		if capacityErr != nil {
+			item["error"] = capacityErr.Error()
+			failures = errors.Join(failures, capacityErr)
+		}
+		disks[name] = item
+	}
+	report["filesystems"] = disks
+	if _, statErr := os.Stat(filepath.Join(dir, "state.db")); statErr == nil {
+		permissionErr := operational.CheckPrivateState(dir)
+		report["state_permissions_private"] = permissionErr == nil
+		if permissionErr != nil {
+			failures = errors.Join(failures, permissionErr)
+		}
+	}
+	if store, openErr := workflows.OpenSQLiteInspection(dir); openErr == nil {
+		pending, pendingErr := store.Invocations(ctx, "", true)
+		if pendingErr != nil {
+			failures = errors.Join(failures, pendingErr)
+		} else {
+			report["unresolved_invocations"] = len(pending)
+		}
+		_ = store.Close()
+	}
+	report["provider_conformance"] = map[string]any{"claude_sdk_version": clirunner.ClaudeSDKVersion, "codex_protocol_version": clirunner.CodexProtocolVersion, "deterministic_protocol_tests": true, "production_certified": false, "codex_managed_policy": false}
 	if err = json.NewEncoder(out).Encode(report); err != nil {
 		return errors.Join(failures, err)
 	}

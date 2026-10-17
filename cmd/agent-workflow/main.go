@@ -9,18 +9,23 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	workflowassets "github.com/dkropachev/agent-workflow"
+	"github.com/dkropachev/agent-workflow/internal/buildinfo"
 	"github.com/dkropachev/agent-workflow/pkg/clirunner"
 	"github.com/dkropachev/agent-workflow/pkg/controller"
 	"github.com/dkropachev/agent-workflow/pkg/development"
+	"github.com/dkropachev/agent-workflow/pkg/operational"
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
 
@@ -40,13 +45,20 @@ func main() {
 	}
 }
 func command(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
+		return json.NewEncoder(stdout).Encode(buildinfo.Metadata())
+	}
+	if len(args) > 0 && args[0] == "bridge" {
+		return bridgeSetup(ctx, args[1:], stdout, stderr)
+	}
+
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Fprintln(stdout, "Usage: agent-workflow <run|validate|status|list|logs|attempts|cancel|resume|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
 		return nil
 	}
 	verb := args[0]
 	switch verb {
-	case "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker":
+	case "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker", "tool-calls", "invocations", "usage", "backup", "restore", "bundle", "cleanup-status":
 	default:
 		return fmt.Errorf("unknown command %q", verb)
 	}
@@ -66,9 +78,11 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	workerRole := fs.String("role", "", "configured worker role")
 	workerParent := fs.String("parent", "", "parent worker ID")
 	workerTurns := fs.Int("turns", 0, "worker turn budget (default 32)")
-	workerRequest := fs.String("request-id", "", "durable mailbox request ID")
+	workerRequest := fs.String("request-id", "", "durable start, resume, or mailbox request ID")
 	workerPrompt := fs.String("message", "", "mailbox message")
 	artifact := fs.String("artifact", "", "export the named stdout/stderr artifact as bytes")
+	limit := fs.Int("limit", 100, "inspection page size (1–1000)")
+	cursor := fs.String("cursor", "", "opaque inspection continuation cursor")
 	after := fs.Int64("after", 0, "return events after sequence")
 	var inputFlags, secretFlags values
 	fs.Var(&inputFlags, "input", "NAME=VALUE (JSON or string), repeatable")
@@ -110,10 +124,11 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			method = "POST"
 			input = workflows.WorkerSpec{RunID: *workerRun, ParentID: *workerParent, Role: *workerRole, Turns: *workerTurns}
 		case "list":
+			path += "?limit=" + strconv.Itoa(*limit) + "&cursor=" + url.QueryEscape(*cursor)
 		case "status":
 			path += "/" + *workerID
 		case "messages":
-			path += "/" + *workerID + "/messages"
+			path += "/" + *workerID + "/messages?limit=" + strconv.Itoa(*limit) + "&cursor=" + url.QueryEscape(*cursor)
 		case "send":
 			path += "/" + *workerID + "/send"
 			method = "POST"
@@ -144,18 +159,37 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		return encode(result)
 	}
+	if verb == "backup" || verb == "restore" || verb == "bundle" {
+		result, err := databaseMaintenance(ctx, dir, verb, id)
+		if err != nil {
+			return err
+		}
+		return encode(result)
+	}
 	if verb == "init" {
 		return initialize(root, stdout)
 	}
-	if verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" {
-		store, err := workflows.OpenSQLite(dir)
+	if verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" || verb == "tool-calls" || verb == "invocations" || verb == "usage" || verb == "cleanup-status" {
+		var store *workflows.SQLiteStore
+		var err error
+		if verb == "cleanup" {
+			store, err = workflows.OpenSQLite(dir)
+		} else {
+			store, err = workflows.OpenSQLiteInspection(dir)
+		}
 		if err != nil {
+			if verb == "status" && len(id) == 32 && strings.Trim(id, "0123456789abcdef") == "" {
+				if b, legacyErr := os.ReadFile(filepath.Join(dir, "runs", id+".json")); legacyErr == nil {
+					_, err = stdout.Write(b)
+					return err
+				}
+			}
 			return err
 		}
 		defer store.Close()
 		switch verb {
 		case "list":
-			v, err := store.List(ctx)
+			v, err := store.ListPage(ctx, *limit, *cursor)
 			if err != nil {
 				return err
 			}
@@ -186,6 +220,30 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 					return err
 				}
 			}
+		case "cleanup-status":
+			record, err := store.Retention(ctx, id)
+			if err != nil {
+				return err
+			}
+			return encode(record)
+		case "usage":
+			usage, err := store.Usage(ctx, id)
+			if err != nil {
+				return err
+			}
+			return encode(usage)
+		case "invocations":
+			records, err := store.Invocations(ctx, id, true)
+			if err != nil {
+				return err
+			}
+			return encode(records)
+		case "tool-calls":
+			records, err := store.ToolCalls(ctx, id, true)
+			if err != nil {
+				return err
+			}
+			return encode(records)
 		case "attempts":
 			v, err := store.Attempts(ctx, id)
 			if err != nil {
@@ -198,7 +256,10 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 				return err
 			}
 			defer lock.Close()
-			return (&development.Runtime{Root: root, Store: store}).Cleanup(ctx, id)
+			if err = store.Migrate(ctx, lock); err != nil {
+				return err
+			}
+			return (&development.Runtime{Root: root, Store: store}).CleanupOwned(ctx, id, lock)
 		default:
 			if verb == "export" {
 				if *artifact != "" {
@@ -217,6 +278,15 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			}
 			run, _, err := store.Load(ctx, id)
 			if err == nil {
+				owner := run.OriginID
+				if owner == "" {
+					owner = run.ID
+				}
+				usage, usageErr := store.Usage(ctx, owner)
+				if usageErr != nil {
+					return usageErr
+				}
+				run.Usage = &usage.Summary
 				return encode(run)
 			}
 			if len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" {
@@ -243,7 +313,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
-	executor := &workflows.Executor{WorkspaceDir: root, Agents: &clirunner.Runner{Config: cfg, Workspace: root}, MaxParallel: *parallel, Roles: roles}
+	executor := &workflows.Executor{CommandExecution: cfg.CommandExecutionPolicy(), WorkspaceDir: root, Agents: &clirunner.Runner{Config: cfg, Workspace: root}, MaxParallel: *parallel, Roles: roles}
 	executor.RoleRunner = func(raw json.RawMessage) (workflows.AgentRunner, error) {
 		var pinned clirunner.Config
 		if err := json.Unmarshal(raw, &pinned); err != nil {
@@ -277,7 +347,17 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return &development.Runtime{Root: root, Store: store, Policy: pinned.Publication}, nil
 		}
 		fmt.Fprintln(stderr, "Controller listening in", dir)
-		return (&controller.Server{Executor: executor, Store: store, Dir: dir, Workers: workerManager(store, root)}).Serve(ctx)
+		workers := workerManager(store, root)
+		binder := toolBinder(store, workers, root)
+		executor.BindTools = binder
+		workers.BindTools = binder
+		logs := &operational.RotatingLog{Path: filepath.Join(dir, "controller.log")}
+		defer logs.Close()
+		logger := slog.New(slog.NewJSONHandler(logs, nil))
+		previous := slog.Default()
+		slog.SetDefault(logger)
+		defer slog.SetDefault(previous)
+		return (&controller.Server{Executor: executor, Store: store, Dir: dir, Workers: workers, Operational: cfg.Controller, Logger: logger, MaxQueued: cfg.Controller.MaxQueued, MaxRuns: cfg.Controller.MaxRuns, RunTimeout: cfg.Controller.Timeout()}).Serve(ctx)
 	}
 	if verb == "mcp" {
 		if err = ensureController(ctx, controller.NewClient(dir), root, path, *parallel, stderr); err != nil {
@@ -286,16 +366,28 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return serveMCP(ctx, dir, stdout)
 	}
 	if verb == "run" && *foreground {
-		lock, err := controller.Own(dir)
-		if err != nil {
-			return err
-		}
-		defer lock.Close()
 		store, err := workflows.OpenSQLite(dir)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
+		lock, err := controller.Own(dir)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if err = store.Migrate(ctx, lock); err != nil {
+			return err
+		}
+		executor.Ready = func(ctx context.Context) error {
+			if _, err := cfg.Controller.Check(dir); err != nil {
+				return fmt.Errorf("%w: state filesystem: %v", operational.ErrUnavailable, err)
+			}
+			if _, err := cfg.Controller.Check(cfg.Controller.TemporaryDirectory()); err != nil {
+				return fmt.Errorf("%w: temporary filesystem: %v", operational.ErrUnavailable, err)
+			}
+			return store.ProbeStorage(ctx)
+		}
 		executor.Store = store
 		executor.Actions = &development.Runtime{Root: root, Store: store, Policy: cfg.Publication}
 		executor.ActionFactory = func(raw json.RawMessage) (workflows.ActionRunner, error) {
@@ -308,6 +400,27 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err = store.Recover(ctx); err != nil {
 			return err
 		}
+		workers := workerManager(store, root)
+		if executor.Slots == nil {
+			executor.Slots = make(chan struct{}, *parallel)
+		}
+		executor.Capacity = &workflows.Capacity{Slots: executor.Slots}
+		workers.Slots = executor.Slots
+		workers.Capacity = executor.Capacity
+		binder := toolBinder(store, workers, root)
+		executor.BindTools = binder
+		workers.BindTools = binder
+		executor.BeforeFinalize = func(ctx context.Context, id string) error {
+			return errors.Join(workers.StopRun(ctx, id), store.CheckToolEffects(ctx, id), store.ReconcileInvocations(ctx, id), store.CheckInvocationCleanup(ctx, id))
+		}
+		if err = workers.Init(ctx); err != nil {
+			return err
+		}
+		workerCtx, stopWorkers := context.WithCancel(ctx)
+		workersDone := make(chan struct{})
+		go func() { defer close(workersDone); workers.Serve(workerCtx) }()
+		defer func() { stopWorkers(); <-workersDone }()
+
 		req, err := parseStart(id, inputFlags, secretFlags)
 		if err != nil {
 			return err
@@ -344,10 +457,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	if verb == "resume" {
 		var v any
-		suffix := ""
-		if *retry {
-			suffix = "?retry_uncertain=true"
-		}
+		suffix := "?retry_uncertain=" + strconv.FormatBool(*retry) + "&request_id=" + url.QueryEscape(*workerRequest)
 		if err = client.Call(ctx, "POST", "/runs/"+id+"/resume"+suffix, nil, &v); err != nil {
 			return err
 		}

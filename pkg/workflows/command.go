@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
 )
 
 const MaxCommandOutput = 16 << 20
@@ -93,7 +95,21 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	}
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
-	cleanup, superviseErr := process.Supervise(cmd)
+	var cleanup func()
+	var superviseErr error
+	if e.CommandExecution.Mode == "container" {
+		binding, ok := runtimeexec.BindingFrom(ctx)
+		if !ok {
+			return nil, fmt.Errorf("container commands require durable invocation ownership")
+		}
+		state := filepath.Join(binding.Dir, "providers", "commands", binding.RunID, binding.LogicalID)
+		if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
+			return nil, err
+		}
+		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
+	} else {
+		cleanup, superviseErr = runtimeexec.Supervise(ctx, cmd)
+	}
 	if superviseErr != nil {
 		return nil, superviseErr
 	}

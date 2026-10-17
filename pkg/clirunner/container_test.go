@@ -5,6 +5,8 @@ package clirunner
 import (
 	"bytes"
 	"context"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
+	"github.com/dkropachev/agent-workflow/pkg/workflows"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,33 +47,48 @@ func TestContainerMountsAndCredentialAllowlist(t *testing.T) {
 			t.Fatalf("credential or host mount in args: %s", forbidden)
 		}
 	}
-	for _, required := range []string{"--env ANTHROPIC_API_KEY", "--read-only", "--cap-drop=ALL", "dst=/workspace,ro=true", "dst=/bridge,ro=true"} {
+	for _, required := range []string{"--env ANTHROPIC_API_KEY", "--read-only", "--cap-drop=ALL", "dst=/workspace,ro=true", runtimeexec.ContainerBridge, "dst=/engine-lifetime,ro=true"} {
 		if !strings.Contains(args, required) {
 			t.Fatalf("missing restriction %s", required)
 		}
 	}
-	if len(cleanup) != 3 || cleanup[0] != "__container_cleanup_v1" {
+	if len(cleanup) != 2 || cleanup[0] != "__container_cleanup_v2" {
 		t.Fatal("container has no lifetime cleanup")
 	}
 }
 func TestContainerExecutionAndCleanup(t *testing.T) {
 	image := os.Getenv("AGENT_WORKFLOW_CONTAINER_IMAGE")
 	if image == "" {
-		t.Skip("set AGENT_WORKFLOW_CONTAINER_IMAGE to an existing image with sh")
+		t.Skip("set AGENT_WORKFLOW_CONTAINER_IMAGE to an existing pinned image with guardian protocol 1 and sh")
 	}
-	if _, err := exec.LookPath("podman"); err != nil {
-		t.Skip("podman unavailable")
+	runtime := os.Getenv("AGENT_WORKFLOW_CONTAINER_RUNTIME")
+	if runtime == "" {
+		runtime = "podman"
+	}
+	if _, err := exec.LookPath(runtime); err != nil {
+		t.Skip("selected container runtime unavailable")
 	}
 	root := t.TempDir()
 	_ = os.Mkdir(filepath.Join(root, ".git"), 0700)
 	t.Setenv("GH_TOKEN", "controller-only")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	store, err := workflows.OpenSQLite(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	run := &workflows.Run{ID: strings.Repeat("1", 32), Status: workflows.RunStatusRunning}
+	if err = store.Admit(ctx, run, workflows.Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: store, Dir: store.Dir, RunID: run.ID, Generation: run.Generation, LogicalID: "container-conformance"})
 	cmd := exec.CommandContext(ctx, "sh", "-c", `test -z "$GH_TOKEN" && test ! -S /var/run/docker.sock && test "$PWD" = /workspace && printf isolated`)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	a := Agent{Execution: Execution{Mode: "container", Image: image, Runtime: "podman"}}
+	a := Agent{Execution: Execution{Mode: "container", Image: image, Runtime: runtime}}
+	a.Execution.ownerRoot = root
 	cleanup, err := superviseContainer(ctx, cmd, a, root, t.TempDir(), false)
 	if err != nil {
 		t.Fatal(err)

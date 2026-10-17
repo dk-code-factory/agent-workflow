@@ -1,17 +1,15 @@
 package clirunner
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/process"
@@ -25,6 +23,11 @@ func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error)
 	}
 	switch a.Provider {
 	case "claude-sdk":
+		if a.Execution.Mode != "container" {
+			if err := verifySDKBridge(a); err != nil {
+				return workflows.ProviderCapabilities{}, err
+			}
+		}
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true, ManagedPolicy: true}, nil
 	case "codex-app-server":
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true}, nil
@@ -34,7 +37,7 @@ func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error)
 		return workflows.ProviderCapabilities{}, fmt.Errorf("unsupported provider %s", a.Provider)
 	}
 }
-func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
 	agent, ok := r.Config.Agents[req.AgentID]
 	if !ok {
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
@@ -48,6 +51,23 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	}
 	defer cancel()
 	ctx = turn
+	var observationErr error
+	defer func() { err = errors.Join(err, observationErr) }()
+	parentEmit := emit
+	emit = func(event workflows.ProviderEvent) {
+		if event.Type == "usage" && req.ObserveUsage != nil {
+			usage, _ := event.Data["usage"].(map[string]any)
+			key, _ := event.Data["observation_key"].(string)
+			provider, model := r.UsageProvider(req.AgentID, req.Model)
+			if recordErr := req.ObserveUsage(workflows.UsageUpdate{Key: key, Provider: provider, Model: model, SessionID: event.SessionID, Usage: usage, Incomplete: true}); recordErr != nil {
+				observationErr = errors.Join(observationErr, recordErr)
+				cancel()
+			}
+		}
+		if parentEmit != nil {
+			parentEmit(event)
+		}
+	}
 	if agent.Provider == "codex-app-server" {
 		result, err := r.codexTurn(ctx, agent, req, emit)
 		if err != nil {
@@ -89,9 +109,12 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if agent.Execution.Mode == "container" {
 		input["workspace"] = "/workspace"
 	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		return workflows.SessionResult{}, err
+	if req.Tools != nil && req.Tools.Binding != nil && !req.RepairOnly {
+		catalog := []map[string]any{}
+		for _, d := range req.Tools.Binding.Catalog() {
+			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d)})
+		}
+		input["broker_tools"] = catalog
 	}
 	command := agent.Command
 	if command == "" {
@@ -99,15 +122,20 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	}
 	cmd := exec.CommandContext(ctx, command, agent.Bridge)
 	cmd.Dir = workspace
-	cmd.Stdin = bytes.NewReader(data)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return workflows.SessionResult{}, err
+	}
+	defer stdin.Close()
+	writer := &bridgeWriter{writer: stdin}
 	// Gateway auth is explicit. The SDK receives an engine-owned config directory;
 	// host user/project settings and native role/skill/plugin discovery are disabled.
-	state := filepath.Join(r.Workspace, ".agent-workflow", "providers", "claude", req.AgentID)
-	if err = os.MkdirAll(state, 0700); err != nil {
+	state, err := providerStateDir(r.Workspace, "claude", req)
+	if err != nil {
 		return workflows.SessionResult{}, err
 	}
 	cmd.Env = providerEnvironment(agent.Authentication.CredentialEnv)
-	cmd.Env = append(cmd.Env, "ANTHROPIC_BASE_URL="+agent.Authentication.Endpoint, "ANTHROPIC_API_KEY="+credential, "CLAUDE_CONFIG_DIR="+state, "MAX_STRUCTURED_OUTPUT_RETRIES=0", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
+	cmd.Env = append(cmd.Env, "ANTHROPIC_BASE_URL="+agent.Authentication.Endpoint, "ANTHROPIC_API_KEY="+credential, "CLAUDE_CONFIG_DIR="+state, "HOME="+filepath.Join(state, "home"), "MAX_STRUCTURED_OUTPUT_RETRIES=0", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
 	var stderr boundedBuffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -119,10 +147,35 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		return workflows.SessionResult{}, err
 	}
 	defer cleanup()
+	// Cancellation first requests SDK interruption. The guardian remains the
+	// five-second fallback and still observes controller owner loss directly.
+	var interruptTimer *time.Timer
+	var interruptMu sync.Mutex
+	cmd.Cancel = func() error {
+		interruptMu.Lock()
+		if interruptTimer == nil {
+			interruptTimer = time.AfterFunc(5*time.Second, cleanup)
+		}
+		interruptMu.Unlock()
+		go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
+		return nil
+	}
+	defer func() {
+		interruptMu.Lock()
+		if interruptTimer != nil {
+			interruptTimer.Stop()
+		}
+		interruptMu.Unlock()
+	}()
 	if err = cmd.Start(); err != nil {
 		return workflows.SessionResult{}, err
 	}
-	result, parseErr := parseBridge(stdout, emit)
+
+	invocationTools := req.Tools
+	if req.RepairOnly {
+		invocationTools = nil
+	}
+	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup)
 	if parseErr == nil && req.SessionID != "" && result.SessionID != req.SessionID {
 		parseErr = fmt.Errorf("provider returned an unexpected resumed session identity")
 	}
@@ -156,64 +209,6 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	}
 	return limitResult(result, agent)
 }
-func parseBridge(reader io.Reader, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 4096), maxOutput)
-	var result workflows.SessionResult
-	terminal := false
-	total := 0
-	for scanner.Scan() {
-		total += len(scanner.Bytes())
-		if total > maxOutput {
-			return result, fmt.Errorf("bridge output exceeds limit")
-		}
-		var frame struct {
-			Version         int            `json:"version"`
-			Type            string         `json:"type"`
-			SessionID       string         `json:"session_id"`
-			Status          string         `json:"status"`
-			ProviderStatus  string         `json:"provider_status"`
-			ProviderVersion string         `json:"provider_version"`
-			Outputs         map[string]any `json:"outputs"`
-			Error           string         `json:"error"`
-			Data            map[string]any `json:"data"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
-			return result, fmt.Errorf("invalid bridge frame: %w", err)
-		}
-		if frame.Version > 1 {
-			return result, fmt.Errorf("unsupported bridge protocol version %d", frame.Version)
-		}
-		if frame.SessionID != "" {
-			if result.SessionID != "" && result.SessionID != frame.SessionID {
-				return result, fmt.Errorf("bridge changed session identity within a turn")
-			}
-			result.SessionID = frame.SessionID
-		}
-		if terminal {
-			return result, fmt.Errorf("bridge emitted data after terminal status")
-		}
-		if frame.Type == "result" {
-			terminal = true
-			result.Status = frame.Status
-			result.ProviderStatus = frame.ProviderStatus
-			result.ProviderVersion = frame.ProviderVersion
-			result.Outputs = frame.Outputs
-			if frame.Status != workflows.RunStatusSucceeded {
-				return result, fmt.Errorf("provider failed: %s", frame.Error)
-			}
-		} else if emit != nil {
-			emit(workflows.ProviderEvent{Type: frame.Type, SessionID: frame.SessionID, Data: frame.Data})
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return result, err
-	}
-	if !terminal {
-		return result, fmt.Errorf("bridge returned no terminal status")
-	}
-	return result, nil
-}
 
 // Only explicit provider authentication is added by each session adapter.
 // In particular GH_TOKEN, SSH_AUTH_SOCK and host tool configuration are excluded.
@@ -235,7 +230,7 @@ func stripJSONText(s string) string { return strings.TrimSpace(s) }
 
 func (r *Runner) SecretValues() map[string]string {
 	out := map[string]string{}
-	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"} {
+	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"} {
 		if value, ok := os.LookupEnv(key); ok && value != "" {
 			out[key] = value
 		}
@@ -244,6 +239,31 @@ func (r *Runner) SecretValues() map[string]string {
 		if ref := agent.Authentication.CredentialEnv; ref != "" {
 			if v, ok := os.LookupEnv(ref); ok {
 				out["provider_"+id] = v
+			}
+		}
+	}
+	for id, agent := range r.Config.Agents {
+		if agent.Provider == "codex-app-server" && agent.Authentication.Mode == "native" {
+			if login, err := nativeCodexCredentials(agent); err == nil {
+				for key, value := range login {
+					if key != "type" {
+						if value, ok := value.(string); ok {
+							out["native_"+id+"_"+key] = value
+						}
+					}
+				}
+			}
+		}
+	}
+	for name, server := range r.Config.MCPServers {
+		for key, ref := range server.Environment {
+			if value, ok := os.LookupEnv(ref); ok {
+				out["mcp_"+name+"_"+key] = value
+			}
+		}
+		for key, ref := range server.Headers {
+			if value, ok := os.LookupEnv(ref); ok {
+				out["mcp_"+name+"_"+key] = value
 			}
 		}
 	}
@@ -268,12 +288,10 @@ func (r *Runner) WorkerLimits(id string) (workflows.WorkerLimits, error) {
 }
 
 func nativeEnvironment() []string {
-	blocked := map[string]bool{"GH_TOKEN": true, "GITHUB_TOKEN": true, "GH_ENTERPRISE_TOKEN": true, "GITHUB_ENTERPRISE_TOKEN": true, "SSH_AUTH_SOCK": true, "GIT_ASKPASS": true, "SSH_ASKPASS": true, "GIT_SSH_COMMAND": true}
-	out := []string{}
-	for _, assignment := range os.Environ() {
-		key, _, _ := strings.Cut(assignment, "=")
-		if !blocked[key] {
-			out = append(out, assignment)
+	out := providerEnvironment("")
+	for _, key := range []string{"HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"} {
+		if value, ok := os.LookupEnv(key); ok {
+			out = append(out, key+"="+value)
 		}
 	}
 	return out
@@ -297,8 +315,39 @@ func (r *Runner) WorkerAccess(id string) (workflows.WorkerAccess, error) {
 		return workflows.WorkerAccess{}, err
 	}
 	access := workflows.WorkerAccess{Container: a.Execution.Mode == "container", Writable: true, Workspace: real}
+	access.Cleanup = "process-group"
+	if access.Container || runtime.GOOS == "linux" {
+		access.Cleanup = "strict"
+	}
+	if a.Provider == "codex-app-server" && (a.Sandbox == "" || a.Sandbox == "read-only") {
+		access.Writable = false
+	}
 	if access.Container {
 		access.Writable = a.Execution.Writable
 	}
 	return access, nil
+}
+
+func (r *Runner) WithWorkerWorkspace(role, workspace string) (workflows.SessionRunner, error) {
+	access, err := r.WorkerAccess(role)
+	if err != nil {
+		return nil, err
+	}
+	target, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(access.Workspace, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("child workspace exceeds role workspace scope")
+	}
+	cfg := r.Config
+	cfg.Agents = make(map[string]Agent, len(r.Config.Agents))
+	for id, a := range r.Config.Agents {
+		cfg.Agents[id] = a
+	}
+	a := cfg.Agents[role]
+	a.Workspace = target
+	cfg.Agents[role] = a
+	return &Runner{Config: cfg, Workspace: r.Workspace}, nil
 }

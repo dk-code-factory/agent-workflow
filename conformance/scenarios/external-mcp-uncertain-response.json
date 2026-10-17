@@ -1,0 +1,8 @@
+{
+  "id": "external-mcp-uncertain-response",
+  "driver": "external-uncertain",
+  "provider": "claude-sdk",
+  "managed_policy_required": true,
+  "assertions": ["uncertain_effect_not_replayed", "usage_observed"],
+  "prompt": "Call the local conformance effect exactly once; a lost response must quarantine the turn."
+}

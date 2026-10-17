@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
+	"strconv"
 	"time"
 
+	"github.com/dkropachev/agent-workflow/internal/buildinfo"
 	"github.com/dkropachev/agent-workflow/pkg/controller"
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -24,6 +27,7 @@ type eventQuery struct {
 	After int64  `json:"after,omitempty"`
 }
 type resumeQuery struct {
+	RequestID      string `json:"request_id,omitempty"`
 	ID             string `json:"id"`
 	RetryUncertain bool   `json:"retry_uncertain,omitempty"`
 }
@@ -37,7 +41,28 @@ func serveMCP(ctx context.Context, dir string, _ io.Writer) error {
 }
 
 func newMCPServer(client *controller.Client) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "agent-workflow", Version: "0.2.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "agent-workflow", Version: buildinfo.Version}, nil)
+	for _, operation := range []string{"backup", "restore", "bundle"} {
+		op := operation
+		mcp.AddTool(server, &mcp.Tool{Name: "database_" + op, Description: "Database " + op + " requires a stopped controller and exclusive workspace ownership; no model calls."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+			Path string `json:"path"`
+		}) (*mcp.CallToolResult, map[string]any, error) {
+			out, err := databaseMaintenance(ctx, client.Dir, op, in.Path)
+			return nil, out, err
+		})
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "controller_stop", Description: "Stop the controller after supervised work stops, allowing exclusive database maintenance."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, map[string]any, error) {
+		var out map[string]any
+		err := client.Call(ctx, "POST", "/shutdown", nil, &out)
+		return nil, out, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "run_usage", Description: "Inspect normalized provider-reported usage and cost; unknown cost and incomplete usage remain explicit."}, func(ctx context.Context, _ *mcp.CallToolRequest, in runHandle) (*mcp.CallToolResult, map[string]any, error) {
+		var out map[string]any
+		err := client.Call(ctx, "GET", "/runs/"+in.ID+"/usage", nil, &out)
+		return nil, out, err
+	})
+
 	mcp.AddTool(server, &mcp.Tool{Name: "workflow_discover", Description: "List available validated workflow definitions and input/output contracts."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, map[string]any, error) {
 		var out []any
 		err := client.Call(ctx, "GET", "/workflows", nil, &out)
@@ -65,10 +90,7 @@ func newMCPServer(client *controller.Client) *mcp.Server {
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "run_resume", Description: "Resume admitted definitions, retaining completed work. Uncertain effects require an explicit acknowledgement."}, func(ctx context.Context, _ *mcp.CallToolRequest, in resumeQuery) (*mcp.CallToolResult, map[string]any, error) {
 		var out map[string]any
-		suffix := ""
-		if in.RetryUncertain {
-			suffix = "?retry_uncertain=true"
-		}
+		suffix := "?retry_uncertain=" + strconv.FormatBool(in.RetryUncertain) + "&request_id=" + url.QueryEscape(in.RequestID)
 		err := client.Call(ctx, "POST", "/runs/"+in.ID+"/resume"+suffix, nil, &out)
 		return nil, out, err
 	})

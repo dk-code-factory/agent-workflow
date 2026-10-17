@@ -3,9 +3,12 @@ package workflows
 import (
 	"context"
 	"errors"
+	"github.com/dkropachev/agent-workflow/pkg/operational"
 	"github.com/dkropachev/agent-workflow/pkg/process"
 	"strings"
 )
+
+func FailureClass(err error) string { return classifyFailure(err) }
 
 func classifyFailure(err error) string {
 	if err == nil {
@@ -13,6 +16,9 @@ func classifyFailure(err error) string {
 	}
 	if errors.Is(err, process.ErrCleanup) {
 		return "needs_attention"
+	}
+	if errors.Is(err, operational.ErrUnavailable) {
+		return "prerequisite"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"

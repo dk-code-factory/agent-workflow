@@ -1,0 +1,13 @@
+{
+  "id": "disposable-github-publication",
+  "driver": "publication",
+  "provider": "",
+  "managed_policy_required": false,
+  "publication": true,
+  "assertions": [
+    "workflow_succeeded",
+    "usage_observed",
+    "one_durable_publication"
+  ],
+  "prompt": ""
+}

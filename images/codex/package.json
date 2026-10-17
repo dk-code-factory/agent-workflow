@@ -1,0 +1,6 @@
+{
+  "name": "agent-workflow-codex-image-dependency",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {"@openai/codex": "0.161.0"}
+}

@@ -1,0 +1,12 @@
+{
+  "id": "session-resume",
+  "driver": "session",
+  "provider": "",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "session_context_retained",
+    "usage_observed"
+  ],
+  "prompt": ""
+}

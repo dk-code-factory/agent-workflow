@@ -27,11 +27,12 @@ type PublicationPolicy struct {
 	Reviewers  []string `yaml:"reviewers"`
 }
 type Runtime struct {
-	Secrets map[string]string
-	Root    string
-	Store   *workflows.SQLiteStore
-	Policy  PublicationPolicy
-	mu      sync.Mutex
+	retentionHook func(string, string) error
+	Secrets       map[string]string
+	Root          string
+	Store         *workflows.SQLiteStore
+	Policy        PublicationPolicy
+	mu            sync.Mutex
 }
 
 func (r *Runtime) git(ctx context.Context, dir string, args ...string) (string, error) {

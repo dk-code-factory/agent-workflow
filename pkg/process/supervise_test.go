@@ -18,7 +18,7 @@ import (
 func TestGuardianStopsDescendantsAfterParentDeath(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_GUARDIAN_PARENT_TEST") == "1" {
 		cmd := exec.CommandContext(context.Background(), "sh", "-c", `sleep 300 & echo $! > "$1"; wait`, "sh", os.Getenv("AGENT_WORKFLOW_GUARDIAN_PID_FILE"))
-		cleanup, err := Supervise(cmd)
+		cleanup, err := SuperviseWithOptions(cmd, SupervisionOptions{CompletionPath: os.Getenv("AGENT_WORKFLOW_GUARDIAN_COMPLETION"), Token: "fixture-completion-token"})
 		if err != nil {
 			os.Exit(2)
 		}
@@ -29,7 +29,7 @@ func TestGuardianStopsDescendantsAfterParentDeath(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	self, _ := os.Executable()
 	parent := exec.Command(self, "-test.run=^TestGuardianStopsDescendantsAfterParentDeath$")
-	parent.Env = append(os.Environ(), "AGENT_WORKFLOW_GUARDIAN_PARENT_TEST=1", "AGENT_WORKFLOW_GUARDIAN_PID_FILE="+pidFile)
+	parent.Env = append(os.Environ(), "AGENT_WORKFLOW_GUARDIAN_PARENT_TEST=1", "AGENT_WORKFLOW_GUARDIAN_PID_FILE="+pidFile, "AGENT_WORKFLOW_GUARDIAN_COMPLETION="+pidFile+".complete")
 	if err := parent.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +71,17 @@ func TestGuardianStopsDescendantsAfterParentDeath(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		if err := ReadCompletion(pidFile+".complete", "fixture-completion-token"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("owner-loss cleanup did not leave a durable acknowledgement")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 }
 
 func TestGuardianStopsDetachedDescendantOnNormalCompletion(t *testing.T) {

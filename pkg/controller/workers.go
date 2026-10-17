@@ -4,9 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
+
+func inspectionLimit(r *http.Request) (int, error) {
+	if !r.URL.Query().Has("limit") {
+		return 100, nil
+	}
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit < 1 || limit > 1000 {
+		return 0, fmt.Errorf("limit must be between 1 and 1000")
+	}
+	return limit, nil
+}
 
 type SendRequest struct {
 	RequestID string `json:"request_id"`
@@ -19,6 +31,12 @@ func (s *Server) workerAPI(w http.ResponseWriter, r *http.Request, run string, p
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": workflows.Redact(err.Error(), secrets)})
 	}
 	encode := func(v any) { _ = json.NewEncoder(w).Encode(v) }
+	if r.Method == "POST" && (len(path) == 0 || len(path) == 2 && (path[1] == "send" || path[1] == "resume")) {
+		if err := s.requireReady(r.Context()); err != nil {
+			fail(503, err)
+			return
+		}
+	}
 	decode := func(v any) error {
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
 		d.DisallowUnknownFields()
@@ -26,6 +44,20 @@ func (s *Server) workerAPI(w http.ResponseWriter, r *http.Request, run string, p
 	}
 	if len(path) == 0 {
 		if r.Method == "GET" {
+			if r.URL.Query().Has("limit") || r.URL.Query().Has("cursor") {
+				limit, err := inspectionLimit(r)
+				if err != nil {
+					fail(400, err)
+					return
+				}
+				out, err := s.Workers.ListPage(r.Context(), run, limit, r.URL.Query().Get("cursor"))
+				if err != nil {
+					fail(400, err)
+					return
+				}
+				encode(out)
+				return
+			}
 			out, err := s.Workers.List(r.Context(), run)
 			if err != nil {
 				fail(500, err)
@@ -67,6 +99,20 @@ func (s *Server) workerAPI(w http.ResponseWriter, r *http.Request, run string, p
 	if len(path) == 2 {
 		id := path[0]
 		if path[1] == "messages" && r.Method == "GET" {
+			if r.URL.Query().Has("limit") || r.URL.Query().Has("cursor") {
+				limit, err := inspectionLimit(r)
+				if err != nil {
+					fail(400, err)
+					return
+				}
+				out, err := s.Workers.MessagesPage(r.Context(), run, id, limit, r.URL.Query().Get("cursor"))
+				if err != nil {
+					fail(400, err)
+					return
+				}
+				encode(out)
+				return
+			}
 			out, err := s.Workers.Messages(r.Context(), run, id)
 			if err != nil {
 				fail(404, err)

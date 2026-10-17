@@ -1,0 +1,12 @@
+{
+  "id": "session-interruption",
+  "driver": "interrupt",
+  "provider": "",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "interruption_retains_session",
+    "usage_observed"
+  ],
+  "prompt": ""
+}

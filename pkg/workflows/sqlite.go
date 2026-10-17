@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
 	_ "modernc.org/sqlite"
 )
 
@@ -20,6 +23,7 @@ const RunStatusNeedsAttention = "needs_attention"
 // Snapshot is the admitted definition closure and nonsecret execution context.
 // Credentials are resolved again on resume; values never belong here.
 type Snapshot struct {
+	Execution       runtimeexec.Policy   `json:"execution,omitempty"`
 	Metadata        map[string]any       `json:"metadata,omitempty"`
 	Version         int                  `json:"version"`
 	Definitions     map[string]*Workflow `json:"definitions"`
@@ -88,7 +92,11 @@ func OpenSQLite(dir string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	_ = f.Close()
-	db, err := sql.Open("sqlite", path)
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -99,20 +107,28 @@ func OpenSQLite(dir string) (*SQLiteStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if version > 1 {
+	if version > schemaVersion {
 		_ = db.Close()
-		return nil, fmt.Errorf("unsupported state schema version %d", version)
+		return nil, fmt.Errorf("unsupported state schema version %d (maximum %d)", version, schemaVersion)
 	}
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
- CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, record BLOB NOT NULL, snapshot BLOB NOT NULL, updated TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS admission_requests(request_id TEXT PRIMARY KEY,run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE);
- CREATE TABLE IF NOT EXISTS cancellations(run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,requested_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, job_id TEXT NOT NULL, step_id TEXT NOT NULL, iteration INTEGER NOT NULL, number INTEGER NOT NULL, status TEXT NOT NULL, record BLOB NOT NULL, UNIQUE(run_id,job_id,step_id,iteration,number));
- CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, attempt_id TEXT NOT NULL REFERENCES attempts(id) ON DELETE CASCADE, name TEXT NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL);
- CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, time TEXT NOT NULL, type TEXT NOT NULL, data BLOB);
- PRAGMA user_version=1;`); err != nil {
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	// Only empty stores are initialized here. Upgrades require an explicit
+	// Migrate call under exclusive workspace ownership; inspection never upgrades.
+	if version == 0 {
+		lock, lockErr := ownership.Own(dir)
+		if lockErr != nil {
+			_ = db.Close()
+			return nil, lockErr
+		}
+		err = s.Migrate(context.Background(), lock)
+		_ = lock.Close()
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -122,6 +138,7 @@ func newID() string { // crypto/rand is shared with the executor's admission hel
 }
 func snapshotFor(all map[string]*Workflow, req RunRequest, roles json.RawMessage, parallel int) (Snapshot, error) {
 	s := Snapshot{RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
+	s.Execution = req.Execution
 	for k, w := range all {
 		b, err := json.Marshal(w)
 		if err != nil {
@@ -144,6 +161,9 @@ func addEvent(ctx context.Context, tx *sql.Tx, id, kind string, value any) error
 	return err
 }
 func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
+	if r.Generation == 0 {
+		r.Generation = 1
+	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -157,7 +177,13 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "INSERT INTO runs VALUES(?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO runs(id,status,record,snapshot,updated,origin_id,generation,owner,admitted) VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano), originID(r, snap), r.Generation, r.Owner, time.Now().UTC().UnixNano()); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO executions(run_id,generation,retry_uncertain,admitted,status,record) VALUES(?,?,0,?,?,?)", r.ID, r.Generation, time.Now().UTC().UnixNano(), r.Status, b); err != nil {
 		return err
 	}
 	if snap.RequestID != "" {
@@ -180,24 +206,38 @@ func (s *SQLiteStore) Save(ctx context.Context, r *Run) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=? WHERE id=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), r.ID)
+	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	owner := r.Owner
+	if r.Status != RunStatusRunning && r.Status != RunStatusQueued {
+		owner = ""
+	}
+	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=?,owner=? WHERE id=? AND generation=? AND owner=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), owner, r.ID, r.Generation, r.Owner)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n != 1 {
-		return fmt.Errorf("run %s was not admitted", r.ID)
+		return fmt.Errorf("run %s is absent or execution ownership changed", r.ID)
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE executions SET status=?,record=? WHERE run_id=? AND generation=?", r.Status, b, r.ID, r.Generation); err != nil {
+		return err
 	}
 	if err = addEvent(ctx, tx, r.ID, "run."+r.Status, r); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	r.Owner = owner
+	return nil
 }
 func (s *SQLiteStore) Load(ctx context.Context, id string) (*Run, Snapshot, error) {
 	var b, p []byte
 	var r Run
 	var snap Snapshot
-	if err := s.db.QueryRowContext(ctx, "SELECT record,snapshot FROM runs WHERE id=?", id).Scan(&b, &p); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT record,snapshot,generation,owner FROM runs WHERE id=?", id).Scan(&b, &p, &r.Generation, &r.Owner); err != nil {
 		return nil, snap, err
 	}
 	if err := decodeJSONWithNumbers(b, &r); err != nil {
@@ -221,6 +261,9 @@ func (s *SQLiteStore) Begin(ctx context.Context, run, job, step string, iteratio
 		return Attempt{}, false, err
 	}
 	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return Attempt{}, false, err
+	}
 	var b []byte
 	var last Attempt
 	err = tx.QueryRowContext(ctx, "SELECT record FROM attempts WHERE run_id=? AND job_id=? AND step_id=? AND iteration=? ORDER BY number DESC LIMIT 1", run, job, step, iteration).Scan(&b)
@@ -270,6 +313,9 @@ func (s *SQLiteStore) Complete(ctx context.Context, a Attempt, result StepExecut
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
 	for _, name := range []string{"stdout", "stderr"} {
 		if output, ok := result.Outputs[name].(string); ok {
 			h := sha256.Sum256([]byte(output))
@@ -293,7 +339,7 @@ func (s *SQLiteStore) Complete(ctx context.Context, a Attempt, result StepExecut
 	return tx.Commit()
 }
 func (s *SQLiteStore) Attempts(ctx context.Context, id string) ([]Attempt, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT record FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR json_extract(CAST(snapshot AS TEXT),'$.metadata.origin_run_id')=?) ORDER BY rowid", id, id)
+	rows, err := s.db.QueryContext(ctx, "SELECT record FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR origin_id=?) ORDER BY rowid", id, id)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +359,10 @@ func (s *SQLiteStore) Attempts(ctx context.Context, id string) ([]Attempt, error
 	return out, rows.Err()
 }
 func (s *SQLiteStore) List(ctx context.Context) ([]Run, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT record FROM runs ORDER BY updated DESC")
+	return s.listRecords(ctx, "SELECT record,generation,owner FROM runs ORDER BY updated DESC")
+}
+func (s *SQLiteStore) listRecords(ctx context.Context, query string, args ...any) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +371,7 @@ func (s *SQLiteStore) List(ctx context.Context) ([]Run, error) {
 	for rows.Next() {
 		var b []byte
 		var r Run
-		if err = rows.Scan(&b); err != nil {
+		if err = rows.Scan(&b, &r.Generation, &r.Owner); err != nil {
 			return nil, err
 		}
 		if err = decodeJSONWithNumbers(b, &r); err != nil {
@@ -333,7 +382,7 @@ func (s *SQLiteStore) List(ctx context.Context) ([]Run, error) {
 	return out, rows.Err()
 }
 func (s *SQLiteStore) Events(ctx context.Context, id string, after int64) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT sequence,run_id,time,type,data FROM events WHERE run_id IN (SELECT id FROM runs WHERE id=? OR json_extract(CAST(snapshot AS TEXT),'$.metadata.origin_run_id')=?) AND sequence>? ORDER BY sequence LIMIT 1000", id, id, after)
+	rows, err := s.db.QueryContext(ctx, "SELECT sequence,run_id,time,type,data FROM events WHERE run_id IN (SELECT id FROM runs WHERE id=? OR origin_id=?) AND sequence>? ORDER BY sequence LIMIT 1000", id, id, after)
 	if err != nil {
 		return nil, err
 	}
@@ -354,19 +403,29 @@ func (s *SQLiteStore) Events(ctx context.Context, id string, after int64) ([]Eve
 // Recover is called only while holding exclusive workspace ownership. It never
 // replays effects or claims a process is dead based on a reused PID.
 func (s *SQLiteStore) Recover(ctx context.Context) error {
-	runs, err := s.List(ctx)
+	if err := s.RecoverToolCalls(ctx); err != nil {
+		return err
+	}
+	runs, err := s.listRecords(ctx, "SELECT record,generation,owner FROM runs WHERE status='running'")
 	if err != nil {
 		return err
 	}
 	for _, r := range runs {
 		if r.Status == RunStatusRunning {
 			r.Status = RunStatusNeedsAttention
+			r.FailureClass = "owner_loss"
 			canceled, err := s.CancellationRequested(ctx, r.ID)
 			if err != nil {
 				return err
 			}
 			if canceled {
-				r.Status = RunStatusCanceled
+				var pending int
+				if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM invocations WHERE run_id=? AND state!='cleaned'", r.ID).Scan(&pending); err != nil {
+					return err
+				}
+				if pending == 0 {
+					r.Status = RunStatusCanceled
+				}
 			}
 			r.Error = "execution owner stopped; inspect workspace and attempts before explicit resume"
 			if err = s.Save(ctx, &r); err != nil {
@@ -377,6 +436,9 @@ func (s *SQLiteStore) Recover(ctx context.Context) error {
 	return nil
 }
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
+	if err := s.CheckInvocationCleanup(ctx, id); err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention')", id)
 	if err != nil {
 		return err
@@ -391,6 +453,8 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 // Claim atomically transfers a suspended/queued run into execution. A second
 // contender cannot launch effects even if it loaded the same prior checkpoint.
 func (s *SQLiteStore) Claim(ctx context.Context, r *Run, previous string) error {
+	oldOwner := r.Owner
+	r.Owner = newID()
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -400,7 +464,7 @@ func (s *SQLiteStore) Claim(ctx context.Context, r *Run, previous string) error 
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=? WHERE id=? AND status=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), r.ID, previous)
+	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=?,owner=? WHERE id=? AND status=? AND generation=? AND owner=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), r.Owner, r.ID, previous, r.Generation, oldOwner)
 	if err != nil {
 		return err
 	}
@@ -424,7 +488,7 @@ type Artifact struct {
 }
 
 func (s *SQLiteStore) Artifacts(ctx context.Context, run string) ([]Artifact, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,run_id,attempt_id,name,sha256,length(data) FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR json_extract(CAST(snapshot AS TEXT),'$.metadata.origin_run_id')=?) ORDER BY rowid", run, run)
+	rows, err := s.db.QueryContext(ctx, "SELECT id,run_id,attempt_id,name,sha256,length(data) FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR origin_id=?) ORDER BY rowid", run, run)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +505,7 @@ func (s *SQLiteStore) Artifacts(ctx context.Context, run string) ([]Artifact, er
 }
 func (s *SQLiteStore) Artifact(ctx context.Context, run, id string) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, "SELECT data FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR json_extract(CAST(snapshot AS TEXT),'$.metadata.origin_run_id')=?) AND id=?", run, run, id).Scan(&data)
+	err := s.db.QueryRowContext(ctx, "SELECT data FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE id=? OR origin_id=?) AND id=?", run, run, id).Scan(&data)
 	return data, err
 }
 
@@ -452,13 +516,32 @@ func (s *SQLiteStore) AdmissionRequest(ctx context.Context, requestID string) (*
 	}
 	return s.Load(ctx, id)
 }
+
+var ErrStaleExecution = errors.New("execution generation changed")
+
 func (s *SQLiteStore) RequestCancel(ctx context.Context, id string) error {
+	return s.RequestCancelGeneration(ctx, id, 0)
+}
+
+// RequestCancelGeneration fences delayed requests against a later resume. Zero
+// selects the current generation for compatibility callers.
+func (s *SQLiteStore) RequestCancelGeneration(ctx context.Context, id string, generation int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "INSERT INTO cancellations VALUES(?,?) ON CONFLICT DO NOTHING", id, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	var current int64
+	if err = tx.QueryRowContext(ctx, "SELECT generation FROM runs WHERE id=?", id).Scan(&current); err != nil {
+		return err
+	}
+	if generation != 0 && current != generation {
+		return ErrStaleExecution
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO cancellations(run_id,requested_at) VALUES(?,?) ON CONFLICT DO NOTHING", id, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE executions SET cancellation_requested=1 WHERE run_id=? AND generation=(SELECT generation FROM runs WHERE id=?)", id, id); err != nil {
 		return err
 	}
 	if err = addEvent(ctx, tx, id, "run.cancellation_requested", map[string]string{"id": id}); err != nil {
@@ -485,6 +568,9 @@ func (s *SQLiteStore) RecordAttempt(ctx context.Context, a Attempt) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, "UPDATE attempts SET record=? WHERE id=? AND run_id=? AND status='running'", b, a.ID, a.RunID)
 	if err != nil {
 		return err
@@ -497,4 +583,23 @@ func (s *SQLiteStore) RecordAttempt(ctx context.Context, a Attempt) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// Configure connection-local safety settings on every driver connection,
+// including replacements after an I/O error or an idle-connection eviction.
+func sqliteDSN(path string, readOnly bool) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	query := url.Values{}
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	if readOnly {
+		query.Set("mode", "ro")
+	} else {
+		query.Add("_pragma", "synchronous(FULL)")
+	}
+	u := url.URL{Scheme: "file", Path: absolute, RawQuery: query.Encode()}
+	return u.String(), nil
 }

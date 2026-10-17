@@ -11,10 +11,13 @@ import (
 	"time"
 )
 
-type Client struct{ HTTP *http.Client }
+type Client struct {
+	HTTP *http.Client
+	Dir  string
+}
 
 func NewClient(dir string) *Client {
-	return &Client{HTTP: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	return &Client{Dir: dir, HTTP: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		socket, err := socketAddress(dir)
 		if err != nil {
 			return nil, err

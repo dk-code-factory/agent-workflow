@@ -3,11 +3,155 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/dkropachev/agent-workflow/pkg/process"
 	"sync"
 	"testing"
 	"time"
 )
+
+type slowCleanupSession struct {
+	fakeSession
+	started  chan struct{}
+	cleaning chan struct{}
+	finish   chan struct{}
+}
+
+func (s *slowCleanupSession) RunTurn(ctx context.Context, _ SessionRequest, _ func(ProviderEvent)) (SessionResult, error) {
+	close(s.started)
+	<-ctx.Done()
+	close(s.cleaning)
+	<-s.finish
+	return SessionResult{Status: "interrupted"}, process.ErrCleanup
+}
+
+func TestStopRunJoinsWorkersAndPreservesCleanupUncertainty(t *testing.T) {
+	m, run := workerFixture(t, &fakeSession{})
+	session := &slowCleanupSession{started: make(chan struct{}), cleaning: make(chan struct{}), finish: make(chan struct{})}
+	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
+		return session, []string{"Read"}, nil, nil
+	}
+	w, err := m.Spawn(context.Background(), WorkerSpec{RunID: run, Role: "reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Send(context.Background(), run, w.ID, "cleanup", "review"); err != nil {
+		t.Fatal(err)
+	}
+	serveWorkers(t, m)
+	// Admission precedes accounting and provider entry. Wait for the actual
+	// provider boundary; cancellation before it correctly has no cleanup work.
+	select {
+	case <-session.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider turn did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- m.StopRun(context.Background(), run) }()
+	select {
+	case <-session.cleaning:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not begin cleanup")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned before provider stopped: %v", err)
+	default:
+	}
+	close(session.finish)
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker join did not finish")
+	}
+	if !errors.Is(err, process.ErrCleanup) {
+		t.Fatalf("cleanup uncertainty lost: %v", err)
+	}
+	current, err := m.Get(context.Background(), run, w.ID)
+	if err != nil || current.Status != "closed" {
+		t.Fatalf("worker admission left open: %+v %v", current, err)
+	}
+}
+
+func TestFinalizationBarrierRejectsLateWorkerAdmission(t *testing.T) {
+	manager, runID := workerFixture(t, &fakeSession{})
+	ctx := context.Background()
+	worker, err := manager.Spawn(ctx, WorkerSpec{RunID: runID, Role: "reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := manager.Store.Load(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Store.BeginFinalization(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Spawn(ctx, WorkerSpec{RunID: runID, Role: "reviewer"}); err == nil {
+		t.Fatal("worker admitted after finalization closed admission")
+	}
+	if _, err = manager.Send(ctx, runID, worker.ID, "late", "must not execute"); err == nil {
+		t.Fatal("message admitted after finalization")
+	}
+	worker.Status = RunStatusNeedsAttention
+	data, _ := json.Marshal(worker)
+	if _, err = manager.Store.db.ExecContext(ctx, "UPDATE workers SET status=?,record=? WHERE id=?", worker.Status, data, worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Resume(ctx, runID, worker.ID); err == nil {
+		t.Fatal("worker recovery reopened admission after finalization")
+	}
+	eligible, err := manager.eligible(ctx)
+	if err != nil || len(eligible) != 0 {
+		t.Fatal("finalizing origin remained schedulable", eligible, err)
+	}
+	current, _, err := manager.Store.Load(ctx, runID)
+	if err != nil || current.Status != RunStatusRunning {
+		t.Fatal("barrier prematurely published a terminal status", current, err)
+	}
+	if err = manager.StopRun(ctx, runID); err != nil {
+		t.Fatal("cancellation/cleanup unavailable behind barrier", err)
+	}
+}
+
+func TestWorkerSchedulingIgnoresCompletedMailboxHistory(t *testing.T) {
+	session := &fakeSession{started: make(chan string, 1)}
+	m, run := workerFixture(t, session)
+	w, err := m.Spawn(context.Background(), WorkerSpec{RunID: run, Role: "reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2000; i++ {
+		if _, err = m.Store.db.Exec("INSERT INTO messages VALUES(?,?,?,?,?,?)", randomID(), w.ID, fmt.Sprint(i), i, RunStatusSucceeded, []byte("invalid-json")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	message, err := m.Send(context.Background(), run, w.ID, "new", "bounded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveWorkers(t, m)
+	select {
+	case prompt := <-session.started:
+		if prompt != "bounded" {
+			t.Fatal(prompt)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduler decoded completed messages or failed to dispatch")
+	}
+	page, err := m.MessagesPage(context.Background(), run, w.ID, 100, "")
+	if err != nil || len(page.Items) != 100 || page.NextCursor == "" {
+		t.Fatalf("compact mailbox page failed: %+v %v", page, err)
+	}
+	// The full legacy list still decodes records; the scheduler and summary API
+	// must never use it. Corrupt terminal fixture records prove that distinction.
+	if _, err = m.Messages(context.Background(), run, w.ID); err == nil {
+		t.Fatal("history fixture did not exercise decode avoidance")
+	}
+	_ = message
+}
 
 type fakeSession struct {
 	mu      sync.Mutex

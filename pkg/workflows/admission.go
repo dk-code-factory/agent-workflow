@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -11,6 +12,18 @@ const RunStatusQueued = "queued"
 // Prepare validates and persists a queued run before acknowledging admission.
 // Controller admission resolves credentials separately from the snapshot.
 func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
+	copy := *e
+	e = &copy
+	req.Execution = e.CommandExecution
+	if source, ok := e.Agents.(interface {
+		AdmittedRoles(context.Context) (json.RawMessage, error)
+	}); ok {
+		roles, err := source.AdmittedRoles(ctx)
+		if err != nil {
+			return nil, err
+		}
+		e.Roles = roles
+	}
 	journal, ok := e.Store.(Journal)
 	if !ok {
 		return nil, fmt.Errorf("durable store required")

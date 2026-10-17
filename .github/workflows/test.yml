@@ -12,8 +12,13 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make test check build
+      - name: Build and smoke the native extracted distribution with fake providers
+        run: python3 scripts/build-release.py --platform "$(go env GOOS)/$(go env GOARCH)" --smoke
   sdk-bridge:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,6 +29,35 @@ jobs:
           node-version: '24'
       - run: npm ci --prefix bridge/claude --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
-      - run: go test ./pkg/clirunner -run TestSDKBridgeAgainstFakeGateway -count=1
+      - run: go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker)AgainstFakeGateway' -count=1
         env:
           AGENT_WORKFLOW_SDK_TEST: '1'
+  filesystem-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Exhaust only a bounded tmpfs in a private mount namespace
+        run: sudo env "PATH=$PATH" AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run '^TestDisposableFilesystemExhaustion$' -count=1
+  container-conformance:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        runtime: [docker, podman]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Podman when selected
+        if: matrix.runtime == 'podman'
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Build pinned local worker image; never publish
+        run: python3 scripts/build-worker-image.py --runtime '${{ matrix.runtime }}' --arch amd64
+      - name: Exercise runtime isolation and verified cleanup without model calls
+        run: |
+          export AGENT_WORKFLOW_CONTAINER_RUNTIME='${{ matrix.runtime }}'
+          export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat dist/worker-linux-amd64.iid)"
+          go test ./pkg/clirunner -run '^TestContainerExecutionAndCleanup$' -count=1

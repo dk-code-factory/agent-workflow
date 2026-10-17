@@ -57,14 +57,18 @@ type JobExecution struct {
 }
 
 type AgentRequest struct {
-	RunID        string
-	InvocationID string
-	RepairOnly   bool
-	AgentID      string
-	Model        string
-	Prompt       string
-	Workspace    string
-	Output       *AgentOutputContract
+	ObserveUsage   func(UsageUpdate) error
+	Tools          *InvocationTools
+	Generation     int64
+	ParentWorkerID string
+	RunID          string
+	InvocationID   string
+	RepairOnly     bool
+	AgentID        string
+	Model          string
+	Prompt         string
+	Workspace      string
+	Output         *AgentOutputContract
 }
 
 type AgentRunner interface {

@@ -1,0 +1,13 @@
+{
+  "id": "native-claude-smoke",
+  "driver": "agent",
+  "provider": "claude-cli",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "workflow_succeeded",
+    "response_marker",
+    "usage_observed"
+  ],
+  "prompt": "Reply only CONFORMANCE_OK."
+}

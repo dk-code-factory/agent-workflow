@@ -1,0 +1,7 @@
+{
+  "id": "container-owner-loss",
+  "driver": "container-owner-loss",
+  "managed_policy_required": false,
+  "assertions": ["owner_loss_quarantined", "owner_loss_cleanup_confirmed", "usage_observed"],
+  "prompt": "Kill the explicitly launched disposable controller while its container turn is active; verify owned cleanup and guarded recovery."
+}

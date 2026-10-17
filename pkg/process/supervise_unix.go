@@ -6,11 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dkropachev/agent-workflow/pkg/containerapi"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,12 +33,33 @@ func init() {
 	}
 	syscall.CloseOnExec(fd)
 	var cleanupArgs []string
+	var completionPath, completionToken string
 	target := 3
-	if len(os.Args) > 4 && os.Args[3] == "--cleanup" {
-		if len(os.Args) < 7 || json.Unmarshal([]byte(os.Args[4]), &cleanupArgs) != nil {
-			os.Exit(125)
+	for target < len(os.Args) {
+		if os.Args[target] == "--cleanup" {
+			if target+1 >= len(os.Args) || json.Unmarshal([]byte(os.Args[target+1]), &cleanupArgs) != nil {
+				os.Exit(125)
+			}
+			target += 2
+		} else if os.Args[target] == "--completion" {
+			if target+2 >= len(os.Args) {
+				os.Exit(125)
+			}
+			completionPath, completionToken = os.Args[target+1], os.Args[target+2]
+			target += 3
+		} else {
+			break
 		}
-		target = 5
+	}
+	if target >= len(os.Args) {
+		os.Exit(125)
+	}
+	finish := func(code int, cleanupErr error) {
+		if err := writeCompletion(completionPath, completionToken, cleanupErr); err != nil {
+			fmt.Fprintln(os.Stderr, "guardian completion persistence failed")
+			code = 125
+		}
+		os.Exit(code)
 	}
 	var cleanupError error
 	var cleanupOnce sync.Once
@@ -47,16 +68,12 @@ func init() {
 			if len(cleanupArgs) > 0 {
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				if cleanupArgs[0] == "__container_cleanup_v1" && len(cleanupArgs) == 3 {
-					runtime, name := cleanupArgs[1], cleanupArgs[2]
-					remove := exec.CommandContext(ctx, runtime, "rm", "--force", name)
-					diagnostics, err := remove.CombinedOutput()
-					if err != nil {
-						listing, listErr := exec.CommandContext(ctx, runtime, "ps", "-a", "--filter", "name=^"+name+"$", "--format", "{{.Names}}").Output()
-						if listErr != nil || strings.TrimSpace(string(listing)) != "" {
-							cleanupError = fmt.Errorf("container cleanup failed: %w", err)
-							_, _ = os.Stderr.Write(diagnostics)
-						}
+				if cleanupArgs[0] == "__container_cleanup_v2" && len(cleanupArgs) == 2 {
+					var owner containerapi.Owner
+					if err := json.Unmarshal([]byte(cleanupArgs[1]), &owner); err != nil {
+						cleanupError = err
+					} else {
+						cleanupError = containerapi.Remove(ctx, owner)
 					}
 					return
 				}
@@ -70,7 +87,7 @@ func init() {
 	if len(cleanupArgs) == 0 {
 		if err = prepareDescendants(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(125)
+			finish(125, err)
 		}
 	}
 	cmd := exec.Command(os.Args[target], os.Args[target+1:]...)
@@ -80,7 +97,8 @@ func init() {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err = cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(127)
+		clean()
+		finish(127, cleanupError)
 	}
 	var groupMu sync.Mutex
 	groupOwned := true
@@ -110,16 +128,16 @@ func init() {
 	if descendantErr != nil {
 		fmt.Fprintln(os.Stderr, descendantErr)
 		clean()
-		os.Exit(125)
+		finish(125, descendantErr)
 	}
 	if waitErr != nil {
 		fmt.Fprintln(os.Stderr, "guardian wait failed:", waitErr)
 		clean()
-		os.Exit(125)
+		finish(125, waitErr)
 	}
 	clean()
 	if cleanupError != nil {
-		os.Exit(125)
+		finish(125, cleanupError)
 	}
 	code := 0
 	if err != nil {
@@ -131,7 +149,7 @@ func init() {
 			}
 		}
 	}
-	os.Exit(code)
+	finish(code, nil)
 }
 
 // Supervise wraps a not-yet-started command. Call cleanup after Wait/Run, even
@@ -139,6 +157,10 @@ func init() {
 // are preserved; no shell interprets its arguments.
 func Supervise(cmd *exec.Cmd) (func(), error) { return SuperviseWithCleanup(cmd, nil) }
 func SuperviseWithCleanup(cmd *exec.Cmd, cleanupArgs []string) (func(), error) {
+	return SuperviseWithOptions(cmd, SupervisionOptions{Cleanup: cleanupArgs})
+}
+func SuperviseWithOptions(cmd *exec.Cmd, options SupervisionOptions) (func(), error) {
+	cleanupArgs := options.Cleanup
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -160,6 +182,9 @@ func SuperviseWithCleanup(cmd *exec.Cmd, cleanupArgs []string) (func(), error) {
 			return nil, err
 		}
 		prefix = append(prefix, "--cleanup", string(data))
+	}
+	if options.CompletionPath != "" {
+		prefix = append(prefix, "--completion", options.CompletionPath, options.Token)
 	}
 	cmd.Args = append(append(prefix, original), args...)
 	cmd.ExtraFiles = append(cmd.ExtraFiles, reader)

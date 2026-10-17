@@ -1,0 +1,13 @@
+{
+  "id": "claude-gateway-structured",
+  "driver": "structured",
+  "provider": "claude-sdk",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "workflow_succeeded",
+    "structured_schema_valid",
+    "usage_observed"
+  ],
+  "prompt": "Return exactly {\"ok\":true}."
+}

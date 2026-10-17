@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dkropachev/agent-workflow/pkg/operational"
 	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,16 +27,20 @@ const (
 )
 
 type Run struct {
-	OriginID    string                  `json:"origin_run_id,omitempty"`
-	Version     int                     `json:"version,omitempty"`
-	ID          string                  `json:"id"`
-	WorkflowRef string                  `json:"workflow_ref"`
-	Status      string                  `json:"status"`
-	StartedAt   time.Time               `json:"started_at"`
-	FinishedAt  time.Time               `json:"finished_at,omitempty"`
-	Jobs        map[string]JobExecution `json:"jobs"`
-	Outputs     map[string]any          `json:"outputs,omitempty"`
-	Error       string                  `json:"error,omitempty"`
+	Usage        *UsageSummary           `json:"normalized_usage,omitempty"`
+	Generation   int64                   `json:"execution_generation,omitempty"`
+	Owner        string                  `json:"-"`
+	FailureClass string                  `json:"failure_class,omitempty"`
+	OriginID     string                  `json:"origin_run_id,omitempty"`
+	Version      int                     `json:"version,omitempty"`
+	ID           string                  `json:"id"`
+	WorkflowRef  string                  `json:"workflow_ref"`
+	Status       string                  `json:"status"`
+	StartedAt    time.Time               `json:"started_at"`
+	FinishedAt   time.Time               `json:"finished_at,omitempty"`
+	Jobs         map[string]JobExecution `json:"jobs"`
+	Outputs      map[string]any          `json:"outputs,omitempty"`
+	Error        string                  `json:"error,omitempty"`
 }
 
 type RunStore interface {
@@ -42,6 +48,13 @@ type RunStore interface {
 }
 
 type Executor struct {
+	// BeforeFinalize retains execution ownership until supervised workers stop.
+	BeforeFinalize   func(context.Context, string) error
+	Capacity         *Capacity
+	BindTools        ToolBinder
+	CommandExecution runtimeexec.Policy
+	Ready            func(context.Context) error
+
 	redactionValues map[string]string
 	Actions         ActionRunner
 	ActionFactory   func(json.RawMessage) (ActionRunner, error)
@@ -56,6 +69,7 @@ type Executor struct {
 }
 
 type RunRequest struct {
+	Execution      runtimeexec.Policy
 	RequestID      string
 	Metadata       map[string]any
 	Ref            string
@@ -148,9 +162,19 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	}
 	copy := *e
 	e = &copy
+	req.Execution = e.CommandExecution
 	e.redactionValues = e.redactions(req.Secrets)
 	if j, ok := e.Store.(Journal); ok {
 		e.Store = redactedStore{Journal: j, secrets: e.redactions(req.Secrets)}
+	}
+	if source, ok := e.Agents.(interface {
+		AdmittedRoles(context.Context) (json.RawMessage, error)
+	}); ok {
+		roles, err := source.AdmittedRoles(ctx)
+		if err != nil {
+			return nil, err
+		}
+		e.Roles = roles
 	}
 	all, err := e.Load(req.Ref)
 	if err != nil {
@@ -228,6 +252,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		if err := e.save(ctx, run); err != nil {
 			return run, err
 		}
+	}
+	if depth == 0 {
+		ctx = fenceContext(ctx, run)
 	}
 	req.runID = run.ID
 	ctx, cancel := context.WithCancel(ctx)
@@ -323,6 +350,49 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if runErr != nil {
 		run.Error = runErr.Error()
 	}
+	if depth == 0 {
+		if store := invocationStore(e.Store); store != nil {
+			if err := store.BeginFinalization(context.WithoutCancel(ctx), run); err != nil {
+				runErr = errors.Join(runErr, err)
+				run.Status = RunStatusNeedsAttention
+				run.Error = runErr.Error()
+			}
+		}
+	}
+	if depth == 0 && e.BeforeFinalize != nil {
+		if err := e.BeforeFinalize(context.WithoutCancel(ctx), run.ID); err != nil {
+			runErr = errors.Join(runErr, err)
+			run.Status = RunStatusNeedsAttention
+			run.Error = runErr.Error()
+		}
+	}
+	if depth == 0 {
+		if store := invocationStore(e.Store); store != nil {
+			finalCtx := context.WithoutCancel(ctx)
+			if err := errors.Join(store.ReconcileInvocations(finalCtx, run.ID), store.CheckInvocationCleanup(finalCtx, run.ID), store.CheckToolEffects(finalCtx, run.ID)); err != nil {
+				runErr = errors.Join(runErr, err)
+				run.Status = RunStatusNeedsAttention
+				run.Error = runErr.Error()
+			}
+		}
+	}
+	if ctx.Err() != nil && run.Status != RunStatusNeedsAttention {
+		run.Status = RunStatusCanceled
+		runErr = errors.Join(runErr, ctx.Err())
+		run.Error = runErr.Error()
+	}
+	if depth == 0 {
+		if store := invocationStore(e.Store); store != nil {
+			if report, usageErr := store.Usage(context.WithoutCancel(ctx), run.ID); usageErr != nil {
+				runErr = errors.Join(runErr, usageErr)
+				run.Status = RunStatusNeedsAttention
+				run.Error = runErr.Error()
+			} else {
+				run.Usage = &report.Summary
+			}
+		}
+	}
+	run.FailureClass = classifyFailure(runErr)
 	run.FinishedAt = time.Now().UTC()
 	if err := e.save(context.WithoutCancel(ctx), run); err != nil {
 		return run, errors.Join(runErr, err)
@@ -384,7 +454,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if ctx.Err() != nil {
 			out.Status = RunStatusCanceled
 		}
-		if errors.Is(err, process.ErrCleanup) {
+		if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
 			out.Status = RunStatusNeedsAttention
 		}
 		out.Error = err.Error()
@@ -505,7 +575,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				if durable {
 					ec.Attempt = &attempt
 				}
-				result.Outputs, err = e.executeStep(ctx, step, ec, slots)
+				result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
 				result.FinishedAt = time.Now().UTC()
 				if err != nil {
 					result.Status = RunStatusFailed
@@ -514,7 +584,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 					if ctx.Err() != nil {
 						result.Status = RunStatusCanceled
 					}
-					if errors.Is(err, process.ErrCleanup) {
+					if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
 						result.Status = RunStatusNeedsAttention
 					}
 				}
@@ -529,7 +599,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				result.Status = RunStatusCanceled
 			}
 			result.FailureClass = classifyFailure(err)
-			if errors.Is(err, process.ErrCleanup) {
+			if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
 				result.Status = RunStatusNeedsAttention
 			}
 			result.Error = err.Error()
@@ -558,6 +628,14 @@ func allMustJob(all map[string]*Workflow, ref, id string) Job {
 }
 
 func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if e.Ready != nil {
+		if err := e.Ready(ctx); err != nil {
+			return nil, fmt.Errorf("%w: %v", operational.ErrUnavailable, err)
+		}
+	}
 	if IsControllerAction(step.Uses) {
 		if e.Actions == nil {
 			return nil, fmt.Errorf("controller actions are not configured")
@@ -614,12 +692,29 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	}
 	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: step.Uses[len("agent/"):], Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
 	queued := time.Now()
-	select {
-	case slots <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	pool := e.Capacity
+	if pool == nil {
+		pool = &Capacity{Slots: slots}
 	}
-	defer func() { <-slots }()
+	lease, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	if e.BindTools != nil {
+		generation := int64(1)
+		ownerToken := ""
+		if f, ok := ctx.Value(fenceKey{}).(executionFence); ok {
+			generation = f.generation
+			ownerToken = f.owner
+		}
+		req.Generation = generation
+		binding, err := e.BindTools(ctx, ToolInvocation{RunID: owner, Owner: ownerToken, Generation: generation, InvocationID: invocation, Role: req.AgentID, Workspace: workspace, Secrets: e.redactions(ec.Secrets)})
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = &InvocationTools{Binding: binding, Lease: lease}
+	}
 	queueTime := time.Since(queued).Milliseconds()
 	a := ec.Attempt
 	if a == nil {
@@ -632,10 +727,36 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 		return nil
 	}
 	call := func(request AgentRequest) (map[string]any, error) {
+		store := invocationStore(e.Store)
+		identity := UsageIdentity{ID: invocation, RunID: owner, TaskAttemptID: a.ID, Kind: "task", Model: request.Model}
+		if source, ok := e.Agents.(interface {
+			UsageProvider(string, string) (string, string)
+		}); ok {
+			identity.Provider, identity.Model = source.UsageProvider(request.AgentID, request.Model)
+		}
+		if request.RepairOnly {
+			identity.ID = repairUsageID(a.ID, a.RepairCount)
+			identity.Kind = "repair"
+			identity.TaskAttemptID = a.TaskAttemptID
+		}
+		if store != nil && invocation != "" {
+			if err := store.BeginUsage(ctx, identity); err != nil {
+				return nil, err
+			}
+			request.ObserveUsage = func(update UsageUpdate) error {
+				return store.ObserveUsage(context.WithoutCancel(ctx), identity, update)
+			}
+		}
 		outputs, err := e.Agents.RunAgent(ctx, request)
 		if outputs != nil {
 			outputs = cloneJSONValue(outputs).(map[string]any)
 			outputs["queue_time_ms"] = queueTime
+		}
+		if store != nil && invocation != "" {
+			update := usageUpdate(outputs, true)
+			if observeErr := store.ObserveUsage(context.WithoutCancel(ctx), identity, update); observeErr != nil {
+				err = errors.Join(err, observeErr)
+			}
 		}
 		return outputs, err
 	}
@@ -742,7 +863,7 @@ func randomID() string {
 
 // Resume uses the admitted closure, never current workflow files. Uncertain
 // attempts require an explicit acknowledgement before another effect is launched.
-func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]string, retry bool) (*Run, error) {
+func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]string, retry bool) (result *Run, err error) {
 	if e.Slots != nil && cap(e.Slots) == 0 {
 		return nil, fmt.Errorf("execution capacity must be positive")
 	}
@@ -753,11 +874,13 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		return nil, fmt.Errorf("legacy JSON records cannot resume")
 	}
 	e.redactionValues = e.redactions(secrets)
+	defer func() { result, err = safeResult(result, err, e.redactionValues) }()
 	e.Store = redactedStore{Journal: journal, secrets: e.redactionValues}
 	run, snap, err := journal.Load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	e.CommandExecution = snap.Execution
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {
 		return nil, fmt.Errorf("resume originating run %s", origin)
 	}
@@ -766,6 +889,16 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	}
 	if run.Status == RunStatusRunning {
 		return nil, fmt.Errorf("run is still owned; recover it before resume")
+	}
+	if run.Status != RunStatusQueued {
+		if admissions, ok := journal.(interface {
+			QueueResume(context.Context, string, string, bool, int) (*Run, error)
+		}); ok {
+			run, err = admissions.QueueResume(ctx, id, "", retry, 0)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	if e.ActionFactory != nil {
 		actions, err := e.ActionFactory(snap.Roles)
@@ -811,7 +944,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 			delete(run.Jobs, k)
 		}
 	}
-	req := RunRequest{Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
+	req := RunRequest{Execution: snap.Execution, Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
 	slots := e.Slots
 	if slots == nil {
 		limit := snap.Parallel
@@ -821,7 +954,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		slots = make(chan struct{}, limit)
 	}
 	result, runErr := e.execute(ctx, run.WorkflowRef, req, snap.Definitions, slots, 0, run)
-	return safeResult(result, runErr, e.redactionValues)
+	return result, runErr
 }
 
 func (e *Executor) redactions(secrets map[string]string) map[string]string {

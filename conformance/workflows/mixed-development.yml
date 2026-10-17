@@ -1,0 +1,45 @@
+on:
+  workflow_call:
+    inputs:
+      task:
+        type: string
+        default: 'Create conformance.txt containing PUBLIC_CONFORMANCE_OK and verify it.'
+jobs:
+  plan:
+    steps:
+      - id: plan
+        uses: agent/planner
+        with:
+          prompt: 'Plan this disposable task briefly: ${{ inputs.task }}'
+  build:
+    needs: plan
+    steps:
+      - id: build
+        uses: agent/builder
+        with:
+          prompt: 'Implement the task in this disposable repository: ${{ inputs.task }}'
+  check:
+    needs: build
+    steps:
+      - argv: [git, diff, --check]
+      - argv: [sh, -c, 'test -f conformance.txt && test "$(cat conformance.txt)" = PUBLIC_CONFORMANCE_OK']
+  review_claude:
+    needs: check
+    steps:
+      - uses: agent/reviewer_claude
+        with:
+          prompt: 'Read conformance.txt and review the disposable task. Return {"clean":true} only when it contains PUBLIC_CONFORMANCE_OK.'
+          output:
+            format: json
+            repair-attempts: 0
+            schema: {type: object, required: [clean], properties: {clean: {type: boolean, const: true}}}
+  review_codex:
+    needs: check
+    steps:
+      - uses: agent/reviewer_codex
+        with:
+          prompt: 'Read conformance.txt and independently review the disposable task. Return {"clean":true} only when it contains PUBLIC_CONFORMANCE_OK.'
+          output:
+            format: json
+            repair-attempts: 0
+            schema: {type: object, required: [clean], properties: {clean: {type: boolean, const: true}}}

@@ -17,8 +17,7 @@ type ExternalIntent struct {
 }
 
 func (s *SQLiteStore) InitIntents(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS external_intents(key TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,kind TEXT NOT NULL,record BLOB NOT NULL)")
-	return err
+	return nil // Tables are created by ordered workspace migrations.
 }
 func (s *SQLiteStore) Intent(ctx context.Context, key string) (ExternalIntent, error) {
 	var b []byte

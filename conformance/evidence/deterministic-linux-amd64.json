@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "recorded_date": "2026-10-16",
+  "kind": "sanitized deterministic verification summary",
+  "engine_commit": "6328874c3f0a95b18f4efa77f8ad69932fa3eb56",
+  "source_state": "uncommitted implementation candidate; exact archive identities are in dist build metadata",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "toolchain": "go version go1.27.2 linux/amd64",
+  "checks": [
+    {
+      "command": "make test check build",
+      "result": "passed",
+      "coverage": "race suite, vet, example validation, CLI build",
+      "log": ".agent-workflow/build-tmp/final-deterministic.log"
+    },
+    {
+      "command": "AGENT_WORKFLOW_SDK_TEST=1 go test -race ./pkg/clirunner -run 'TestSDK(Bridge|Broker)AgainstFakeGateway' -count=1",
+      "result": "passed",
+      "provider": "pinned Claude SDK 0.3.301 against a local fake API only",
+      "log": ".agent-workflow/build-tmp/final-sdk.log"
+    },
+    {
+      "command": "go test ./pkg/clirunner -run TestContainerExecutionAndCleanup -count=1",
+      "result": "passed",
+      "runtime": "real rootless Podman 5.7.0",
+      "image": "sha256:7f57e2d5e12f604e47ecd5d4b14a7003d345cc06e568f34c77c77235f7f6ac38",
+      "coverage": "shell commands, mount isolation, credential exclusion, verified cleanup; no model calls",
+      "log": ".agent-workflow/build-tmp/final-podman.log"
+    },
+    {
+      "command": "python3 scripts/build-release.py --smoke; python3 scripts/verify-release.py dist",
+      "result": "passed; rebuilt sets must be verified independently",
+      "coverage": "Linux/macOS amd64/arm64 archives; native Linux extracted fake-provider smoke",
+      "verified_source_fingerprint_before_this_evidence_update": "33b3091e1fe925a43dcd79e0711a18bad6a00ee6ab8a06d5e93778c1fc6ea458",
+      "current_verification_artifact": ".agent-workflow/build-tmp/artifact-verification.json"
+    },
+    {
+      "command": "python3 scripts/audit-release.py",
+      "result": "passed",
+      "coverage": "Go call-graph vulnerabilities and both locked npm dependency trees",
+      "report": "dist/vulnerability-summary.json"
+    },
+    {
+      "command": "AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run TestDisposableFilesystemExhaustion -count=1",
+      "result": "unverified: local user namespace denied; dedicated CI job required",
+      "coverage": "no shared filesystem deliberately exhausted"
+    }
+  ],
+  "worker_images": {
+    "amd64": {
+      "image": "sha256:7f57e2d5e12f604e47ecd5d4b14a7003d345cc06e568f34c77c77235f7f6ac38",
+      "architecture": "amd64",
+      "base_images": {
+        "go_toolchain": "go1.27.2",
+        "claude_sdk": "0.3.301",
+        "codex_cli": "0.161.0",
+        "guardian_protocol": "1",
+        "bridge_protocol": "2",
+        "go_image": "docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61",
+        "go_image_source_tag": "1.27.2-bookworm",
+        "node_image": "docker.io/library/node@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0",
+        "node_image_source_tag": "24-bookworm"
+      },
+      "archive": "worker-linux-amd64.oci.tar",
+      "archive_sha256": "24e6188ee2262ea0ff2f065674834cf4d04cd9b28d5971e330d440e71fc6100f",
+      "published": false
+    },
+    "arm64": {
+      "image": "sha256:90e72cd0273757e9f6e56da64d49ea3ecce4b7a9a34caeaf63d38d8569b4e570",
+      "architecture": "arm64",
+      "base_images": {
+        "go_toolchain": "go1.27.2",
+        "claude_sdk": "0.3.301",
+        "codex_cli": "0.161.0",
+        "guardian_protocol": "1",
+        "bridge_protocol": "2",
+        "go_image": "docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61",
+        "go_image_source_tag": "1.27.2-bookworm",
+        "node_image": "docker.io/library/node@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0",
+        "node_image_source_tag": "24-bookworm"
+      },
+      "archive": "worker-linux-arm64.oci.tar",
+      "archive_sha256": "60b734742534d0a9fdcd17634baa22684168d31efa3a539c0fe70dffaf6ce2af",
+      "published": false
+    }
+  },
+  "not_executed": [
+    "new live provider calls",
+    "authentication refresh",
+    "GitHub publication",
+    "macOS runtime execution",
+    "arm64 image execution",
+    "independent Docker runtime",
+    "remote CI"
+  ],
+  "certified_provider_platform_combinations": [],
+  "production_certification": false,
+  "published": false,
+  "release_gates": "docs/PRODUCTION_AUDIT.md"
+}

@@ -1,87 +1,30 @@
 package clirunner
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 
+	"github.com/dkropachev/agent-workflow/internal/buildinfo"
 	"github.com/dkropachev/agent-workflow/pkg/process"
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
 
-type rpcFrame struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-	Result json.RawMessage `json:"result"`
-	Error  json.RawMessage `json:"error"`
-}
-type appRPC struct {
-	scanner  *bufio.Scanner
-	writer   io.Writer
-	sequence int
-	total    int
-	pending  []rpcFrame
-	emit     func(workflows.ProviderEvent)
-}
-
-func (rpc *appRPC) write(v any) error { return json.NewEncoder(rpc.writer).Encode(v) }
-func (rpc *appRPC) next() (rpcFrame, error) {
-	var frame rpcFrame
-	if !rpc.scanner.Scan() {
-		if err := rpc.scanner.Err(); err != nil {
-			return frame, err
-		}
-		return frame, io.ErrUnexpectedEOF
-	}
-	rpc.total += len(rpc.scanner.Bytes())
-	if rpc.total > maxOutput {
-		return frame, fmt.Errorf("app-server stream exceeds limit")
-	}
-	if err := json.Unmarshal(rpc.scanner.Bytes(), &frame); err != nil {
-		return frame, fmt.Errorf("invalid app-server frame: %w", err)
-	}
-	// All unconfigured interactive permissions and dynamic tools fail closed.
-	if len(frame.ID) > 0 && frame.Method != "" {
-		if err := rpc.write(map[string]any{"id": json.RawMessage(frame.ID), "error": map[string]any{"code": -32601, "message": "engine has no permission handler for this request"}}); err != nil {
-			return frame, err
-		}
-	}
-	return frame, nil
-}
-func (rpc *appRPC) call(method string, params any) (json.RawMessage, error) {
-	rpc.sequence++
-	id := rpc.sequence
-	if err := rpc.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
-		return nil, err
-	}
-	for {
-		frame, err := rpc.next()
-		if err != nil {
-			return nil, err
-		}
-		if string(frame.ID) == strconv.Itoa(id) && frame.Method == "" {
-			if len(frame.Error) > 0 {
-				return nil, fmt.Errorf("app-server %s failed: %s", method, frame.Error)
-			}
-			return frame.Result, nil
-		}
-		if frame.Method != "" && len(frame.ID) == 0 {
-			rpc.pending = append(rpc.pending, frame)
-		}
-	}
-}
 func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, returnErr error) {
 	result = workflows.SessionResult{SessionID: req.SessionID}
+	if len(agent.Args) > 0 {
+		return result, fmt.Errorf("app-server raw arguments are unsupported; use explicit managed fields")
+	}
 	if req.RepairOnly {
 		return result, fmt.Errorf("app-server tool-free repair is unverified; use output.repair-attempts: 0")
+	}
+	hasBrokerTools := req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0
+	if hasBrokerTools || agent.Tools != nil {
+		return result, fmt.Errorf("Codex managed tool subsets are not certified for upstream 0.161.0")
 	}
 	workspace := r.Workspace
 	if agent.Workspace != "" {
@@ -94,28 +37,22 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if command == "" {
 		command = "codex"
 	}
-	args := []string{"app-server", "--config", "project_doc_max_bytes=0"}
+	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`}
 	args = append(args, agent.Args...)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
 	cmd.Env = providerEnvironment("")
-	state := filepath.Join(r.Workspace, ".agent-workflow", "providers", "codex", req.AgentID)
-	if err := os.MkdirAll(state, 0700); err != nil {
+	state, err := providerStateDir(r.Workspace, "codex", req)
+	if err != nil {
 		return result, err
 	}
+	cmd.Env = append(cmd.Env, "CODEX_HOME="+state, "HOME="+filepath.Join(state, "home"))
 	if agent.Authentication.Mode == "native" {
-		for _, key := range []string{"HOME", "CODEX_HOME"} {
-			if v, ok := os.LookupEnv(key); ok {
-				cmd.Env = append(cmd.Env, key+"="+v)
-			}
-		}
-	} else if agent.Authentication.Mode == "api-key" {
-		state = filepath.Join(r.Workspace, ".agent-workflow", "providers", "codex", req.AgentID)
-		if err := os.MkdirAll(state, 0700); err != nil {
+		err = referenceNativeCodexAuth(state, agent)
+		if err != nil {
 			return result, err
 		}
-		cmd.Env = append(cmd.Env, "CODEX_HOME="+state)
-	} else {
+	} else if agent.Authentication.Mode != "api-key" {
 		return result, fmt.Errorf("codex-app-server requires explicit native or api-key authentication")
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -133,28 +70,37 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		return result, err
 	}
 	defer cleanup()
+	control := newCodexControl(cleanup)
+	cmd.Cancel = control.interrupt
 	if err = cmd.Start(); err != nil {
 		return result, err
 	}
-	// Always stop the server and reap its guardian after a turn, including bad frames.
+	rpc := newAppRPC(context.WithoutCancel(ctx), stdout, stdin, codexRequestHandler(agent, req, control), control.notify)
+	control.mu.Lock()
+	control.rpc = rpc
+	control.mu.Unlock()
 	defer func() {
-		_ = stdin.Close()
+		control.finish(ctx)
 		cleanup()
+		rpc.Close()
 		waitErr := cmd.Wait()
 		if cmd.ProcessState != nil && (cmd.ProcessState.ExitCode() == 125 || cmd.ProcessState.ExitCode() < 0) {
 			returnErr = errors.Join(returnErr, fmt.Errorf("%w: %v", process.ErrCleanup, waitErr))
 		}
+		if ctx.Err() != nil {
+			returnErr = errors.Join(returnErr, ctx.Err())
+		}
 	}()
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 4096), maxOutput)
-	rpc := appRPC{scanner: scanner, writer: stdin, emit: emit}
-	initializeResult, initErr := rpc.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "agent-workflow", "version": "0.2.0"}, "capabilities": map[string]bool{"experimentalApi": false}})
+	initializeResult, initErr := rpc.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "agent-workflow", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": hasBrokerTools}})
 	if initErr != nil {
 		return result, initErr
 	}
 	var initializeInfo map[string]any
 	_ = json.Unmarshal(initializeResult, &initializeInfo)
 	result.ProviderVersion, _ = initializeInfo["userAgent"].(string)
+	if err = verifyCodexHandshake(result.ProviderVersion); err != nil {
+		return result, err
+	}
 	if err = rpc.write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return result, err
 	}
@@ -167,6 +113,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 			return result, err
 		}
 	}
+
 	sandbox := agent.Sandbox
 	if sandbox == "" || req.RepairOnly {
 		sandbox = "read-only"
@@ -181,6 +128,13 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	params := map[string]any{"cwd": workspace, "approvalPolicy": "never", "sandbox": sandbox, "baseInstructions": agent.InstructionText}
 	if model != "" {
 		params["model"] = model
+	}
+	if hasBrokerTools {
+		dynamic := []map[string]any{}
+		for _, d := range req.Tools.Binding.Catalog() {
+			dynamic = append(dynamic, map[string]any{"type": "function", "name": workflows.ToolWireName(d), "description": d.Description, "inputSchema": d.InputSchema, "deferLoading": false})
+		}
+		params["dynamicTools"] = dynamic
 	}
 	method := "thread/start"
 	if req.SessionID != "" {
@@ -203,6 +157,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		return result, fmt.Errorf("app-server returned an unexpected resumed thread identity")
 	}
 	result.SessionID = thread.Thread.ID
+	control.setThread(result.SessionID)
 	if emit != nil {
 		emit(workflows.ProviderEvent{Type: "session", SessionID: result.SessionID})
 	}
@@ -222,22 +177,17 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if err = json.Unmarshal(turnResult, &started); err != nil || started.Turn.ID == "" {
 		return result, fmt.Errorf("app-server returned no turn identity")
 	}
+	control.setTurn(started.Turn.ID)
 	result.Outputs = map[string]any{"text": "", "response": "", "provider": "codex-app-server", "provider_version": result.ProviderVersion, "session_id": result.SessionID}
 	text := ""
 	var usage any
 	for {
-		var frame rpcFrame
-		if len(rpc.pending) > 0 {
-			frame = rpc.pending[0]
-			rpc.pending = rpc.pending[1:]
-		} else {
-			frame, err = rpc.next()
-			if err != nil {
-				if ctx.Err() != nil {
-					return result, ctx.Err()
-				}
-				return result, err
+		frame, readErr := rpc.next()
+		if readErr != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
 			}
+			return result, readErr
 		}
 		var payload map[string]any
 		if len(frame.Params) > 0 {
@@ -269,6 +219,10 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		if frame.Method == "thread/tokenUsage/updated" {
 			usage = payload["tokenUsage"]
 			result.Outputs["usage"] = usage
+			result.Outputs["usage_incomplete"] = true
+			if emit != nil {
+				emit(workflows.ProviderEvent{Type: "usage", SessionID: result.SessionID, Data: map[string]any{"usage": usage, "observation_key": "turn"}})
+			}
 		}
 		if frame.Method == "turn/completed" {
 			turn, _ := payload["turn"].(map[string]any)

@@ -171,12 +171,15 @@ func (r *Runtime) publish(ctx context.Context, req workflows.ActionRequest) (map
 	if title == "" {
 		return nil, fmt.Errorf("PR title is required")
 	}
-	intent, err := r.begin(ctx, req, map[string]any{"repository": policy.Repository, "base": policy.Base, "branch": branch, "commit": sha, "title": title, "body": str(req.With, "body")})
+	intent, err := r.begin(ctx, req, map[string]any{"repository": policy.Repository, "base": policy.Base, "base_commit": base, "branch": branch, "commit": sha, "title": title, "body": str(req.With, "body")})
 	if err != nil {
 		return nil, err
 	}
 	if str(intent.Payload, "commit") != sha || str(intent.Payload, "base") != policy.Base || str(intent.Payload, "repository") != policy.Repository {
 		return nil, fmt.Errorf("publication candidate changed; reconcile the existing intent")
+	}
+	if expected := str(intent.Payload, "base_commit"); expected != "" && expected != base {
+		return nil, fmt.Errorf("unexpected remote base branch change; publication stopped")
 	}
 	remoteSHA, err := r.remoteHead(ctx, remote, branch)
 	if err != nil {
@@ -189,6 +192,16 @@ func (r *Runtime) publish(ctx context.Context, req workflows.ActionRequest) (map
 		if intent.Status == "completed" {
 			return nil, fmt.Errorf("published remote branch was deleted")
 		}
+		pushRequested, _ := intent.Payload["push_requested"].(bool)
+		createRequested, _ := intent.Payload["create_requested"].(bool)
+		if pushRequested || createRequested {
+			return nil, fmt.Errorf("uncertain or deleted publication branch requires manual attention before another push")
+		}
+		intent.Payload["push_requested"] = true
+		intent.Status = "effect_pending"
+		if err = r.Store.PutIntent(ctx, intent); err != nil {
+			return nil, err
+		}
 		if err = r.pushNewBranch(ctx, remote, branch, sha); err != nil {
 			return nil, err
 		}
@@ -200,11 +213,21 @@ func (r *Runtime) publish(ctx context.Context, req workflows.ActionRequest) (map
 			return nil, fmt.Errorf("push did not produce intended remote commit")
 		}
 	}
+	if confirmed, _ := intent.Payload["push_confirmed"].(bool); !confirmed && intent.Status != "completed" {
+		intent.Payload["push_confirmed"] = true
+		intent.Status = "effect_pending"
+		if err = r.Store.PutIntent(ctx, intent); err != nil {
+			return nil, err
+		}
+	}
 	pr, err := r.findPR(ctx, branch, sha)
 	if err != nil {
 		return nil, err
 	}
 	if pr == nil {
+		if intent.Status == "completed" {
+			return nil, fmt.Errorf("completed publication is absent from reconciliation; manual attention required")
+		}
 		if requested, _ := intent.Payload["create_requested"].(bool); requested {
 			return nil, fmt.Errorf("uncertain PR creation is absent from reconciliation; manual attention required before any new create request")
 		}

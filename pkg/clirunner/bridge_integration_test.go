@@ -138,4 +138,24 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(root, "NATIVE_HOOK_RAN")); !os.IsNotExist(err) {
 		t.Fatal("native hook executed")
 	}
+	if err = os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "workflows", "usage.yml"), []byte("jobs: {x: {steps: [{uses: agent/reviewer, with: {prompt: SDK_OK}}]}}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	executor := &workflows.Executor{WorkspaceDir: root, Agents: runner, Store: store}
+	run, err := executor.Run(ctx, workflows.RunRequest{Ref: "workflows/usage.yml"})
+	if err != nil {
+		t.Fatal("engine SDK accounting execution failed", err)
+	}
+	usage, err := store.Usage(ctx, run.ID)
+	if err != nil || usage.Summary.InputTokens == nil || *usage.Summary.InputTokens != 16 || usage.Summary.OutputTokens == nil || !usage.Summary.Complete || usage.Summary.CostUSD == nil {
+		t.Fatalf("pinned SDK observations did not reach durable accounting: %+v %v", usage, err)
+	}
 }

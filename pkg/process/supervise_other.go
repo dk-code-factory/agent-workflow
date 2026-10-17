@@ -12,3 +12,5 @@ func Supervise(*exec.Cmd) (func(), error) {
 }
 
 func SuperviseWithCleanup(cmd *exec.Cmd, _ []string) (func(), error) { return Supervise(cmd) }
+
+func SuperviseWithOptions(cmd *exec.Cmd, _ SupervisionOptions) (func(), error) { return Supervise(cmd) }

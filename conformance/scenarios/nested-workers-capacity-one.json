@@ -1,0 +1,13 @@
+{
+  "id": "nested-workers-capacity-one",
+  "driver": "nested",
+  "provider": "claude-sdk",
+  "managed_policy_required": true,
+  "publication": false,
+  "assertions": [
+    "workflow_succeeded",
+    "nested_workers_at_capacity_one",
+    "usage_observed"
+  ],
+  "prompt": ""
+}

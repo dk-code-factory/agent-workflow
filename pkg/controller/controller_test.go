@@ -5,12 +5,107 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
+
+func TestResumeAdmissionRecordsUnavailableCredentials(t *testing.T) {
+	agent := &fakeAgent{started: make(chan struct{}, 1), release: make(chan struct{})}
+	s, client, _, _ := fixture(t, agent)
+	ctx := context.Background()
+	run, err := s.Executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/main.yml", SecretRefs: map[string]string{"key": "WORKFLOW_RESUME_MISSING_TEST_KEY"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = workflows.RunStatusFailed
+	if err = s.Store.Save(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	var handle workflows.Run
+	if err = client.Call(ctx, "POST", "/runs/"+run.ID+"/resume?request_id=credential-failure", nil, &handle); err != nil {
+		t.Fatal(err)
+	}
+	if handle.Generation != 2 || handle.Status != workflows.RunStatusQueued {
+		t.Fatalf("resume was not durable before acknowledgement: %+v", handle)
+	}
+	result := awaitStatus(t, client, run.ID, workflows.RunStatusNeedsAttention)
+	if result.Error == "" || result.FailureClass != "authentication" {
+		t.Fatalf("credential failure lost: %+v", result)
+	}
+	if agent.calls.Load() != 0 {
+		t.Fatal("effect ran without prerequisites")
+	}
+}
+
+func TestCancellationBeforeClaimRetainsCanceledOutcome(t *testing.T) {
+	store, err := workflows.OpenSQLite(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const id = "0123456789abcdef0123456789abcdef"
+	run := &workflows.Run{ID: id, Status: workflows.RunStatusQueued}
+	if err = store.Admit(context.Background(), run, workflows.Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RequestCancelGeneration(context.Background(), id, run.Generation); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &Server{Store: store, active: map[string]context.CancelFunc{id: cancel}, wake: make(chan struct{}, 1)}
+	s.wg.Add(1)
+	s.executeOwner(ctx, cancel, id, run.Generation)
+	s.wg.Wait()
+	result, _, err := store.Load(context.Background(), id)
+	if err != nil || result.Status != workflows.RunStatusCanceled || result.FailureClass != "canceled" {
+		t.Fatalf("pre-claim cancellation misclassified: %+v %v", result, err)
+	}
+}
+
+func TestSimultaneousResumeRequestsShareOneExecution(t *testing.T) {
+	agent := &fakeAgent{started: make(chan struct{}, 1), release: make(chan struct{})}
+	s, client, _, _ := fixture(t, agent)
+	ctx := context.Background()
+	run, err := s.Executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = workflows.RunStatusFailed
+	if err = s.Store.Save(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	failures := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var handle workflows.Run
+			err := client.Call(ctx, "POST", "/runs/"+run.ID+"/resume?request_id=one", nil, &handle)
+			if err == nil && handle.Generation != 2 {
+				t.Errorf("wrong generation: %+v", handle)
+			}
+			failures <- err
+		}()
+	}
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(agent.release)
+	awaitStatus(t, client, run.ID, workflows.RunStatusSucceeded)
+	if agent.calls.Load() != 1 {
+		t.Fatal("resume launched duplicate effects")
+	}
+}
 
 type fakeAgent struct {
 	calls   atomic.Int32

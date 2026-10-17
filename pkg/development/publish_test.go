@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dkropachev/agent-workflow/pkg/workflows"
 )
@@ -166,5 +167,146 @@ func TestGuardedPushPreservesExistingPrePushHook(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(dir, "creates")); !os.IsNotExist(err) {
 		t.Fatal("PR created despite hook rejection")
+	}
+}
+
+func TestLostPushResponseReconcilesWithoutAnotherPush(t *testing.T) {
+	r, run := fixture(t)
+	workspace := create(t, r, run, "integration")
+	r.Policy = PublicationPolicy{Repository: "owner/repository", Base: "main", Checks: []string{"test"}, Reviewers: []string{"review_one", "review_two"}}
+	dir := fakeGitHub(t, r, run, str(workspace, "commit"), false)
+	git := filepath.Join(dir, "bin", "git")
+	saved := git + "-original"
+	if err := os.Rename(git, saved); err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	script := "#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = push ]; then printf x >> " + quote(filepath.Join(dir, "pushes")) + "; " + quote(saved) + " \"$@\" || exit $?; echo response-lost >&2; exit 1; fi; done\nexec " + quote(saved) + " \"$@\"\n"
+	if err := os.WriteFile(git, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := publicationRequest(run, workspace)
+	if _, err := r.RunAction(context.Background(), req); err == nil {
+		t.Fatal("lost push response ignored")
+	}
+	if _, err := r.RunAction(context.Background(), req); err != nil {
+		t.Fatal("push was not reconciled", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "pushes")); err != nil || string(data) != "x" {
+		t.Fatal("push was replayed", string(data), err)
+	}
+}
+
+func TestDeletedPublishedBranchAndClosedPRRemainVisible(t *testing.T) {
+	for _, change := range []string{"deleted-branch", "closed-pr"} {
+		t.Run(change, func(t *testing.T) {
+			r, run := fixture(t)
+			workspace := create(t, r, run, "integration")
+			r.Policy = PublicationPolicy{Repository: "owner/repository", Base: "main", Checks: []string{"test"}, Reviewers: []string{"review_one", "review_two"}}
+			dir := fakeGitHub(t, r, run, str(workspace, "commit"), false)
+			req := publicationRequest(run, workspace)
+			if _, err := r.RunAction(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			if change == "deleted-branch" {
+				if _, err := r.git(context.Background(), r.Root, "push", "origin", ":refs/heads/agent-workflow/"+run); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				data, err := os.ReadFile(filepath.Join(dir, "pr.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = []byte(strings.Replace(string(data), `"state":"open"`, `"state":"closed"`, 1))
+				if err = os.WriteFile(filepath.Join(dir, "pr.json"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := r.RunAction(context.Background(), req); err == nil {
+				t.Fatal("changed publication silently accepted")
+			}
+			if data, err := os.ReadFile(filepath.Join(dir, "creates")); err != nil || string(data) != "x" {
+				t.Fatal("another PR was created", string(data), err)
+			}
+		})
+	}
+}
+
+func TestChangedRemoteBaseStopsPublicationRecovery(t *testing.T) {
+	r, run := fixture(t)
+	workspace := create(t, r, run, "integration")
+	r.Policy = PublicationPolicy{Repository: "owner/repository", Base: "main", Checks: []string{"test"}, Reviewers: []string{"review_one", "review_two"}}
+	dir := fakeGitHub(t, r, run, str(workspace, "commit"), false)
+	req := publicationRequest(run, workspace)
+	ctx := context.Background()
+	if _, err := r.RunAction(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.git(ctx, r.Root, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := r.remoteHead(ctx, "origin", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := r.git(ctx, r.Root, "commit-tree", tree, "-p", base, "-m", "Independent base update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.git(ctx, r.Root, "push", "origin", changed+":refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.RunAction(ctx, req); err == nil || !strings.Contains(err.Error(), "base branch change") {
+		t.Fatal("changed base accepted", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "creates")); err != nil || string(data) != "x" {
+		t.Fatal("extra publication", err)
+	}
+}
+
+func TestCancellationAfterCreateEffectReconcilesExactlyOnce(t *testing.T) {
+	r, run := fixture(t)
+	workspace := create(t, r, run, "integration")
+	r.Policy = PublicationPolicy{Repository: "owner/repository", Base: "main", Checks: []string{"test"}, Reviewers: []string{"review_one", "review_two"}}
+	dir := fakeGitHub(t, r, run, str(workspace, "commit"), false)
+	path := filepath.Join(dir, "bin", "gh")
+	script, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script = []byte(strings.Replace(string(script), "echo https://github.com/owner/repository/pull/1; exit 0", "sleep 30; exit 0", 1))
+	if err = os.WriteFile(path, script, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	req := publicationRequest(run, workspace)
+	go func() { _, err := r.RunAction(ctx, req); done <- err }()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "pr.json")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake create effect did not occur")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err = <-done:
+		if err == nil {
+			t.Fatal("cancellation ignored")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("publication did not stop")
+	}
+	if _, err = r.RunAction(context.Background(), req); err != nil {
+		t.Fatal("lost create result was not reconciled", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "creates")); err != nil || string(data) != "x" {
+		t.Fatal("create replayed after cancellation", err)
 	}
 }

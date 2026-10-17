@@ -129,6 +129,12 @@ type redactedError struct {
 
 func (e redactedError) Error() string { return e.text }
 func (e redactedError) Unwrap() error { return e.cause }
+func RedactError(err error, secrets map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	return redactedError{cause: err, text: Redact(err.Error(), secrets)}
+}
 func safeResult(run *Run, err error, secrets map[string]string) (*Run, error) {
 	if run != nil {
 		run = redactRun(run, secrets)

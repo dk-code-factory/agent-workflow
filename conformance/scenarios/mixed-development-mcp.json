@@ -1,0 +1,12 @@
+{
+  "id": "mixed-development-mcp",
+  "driver": "workflow-mcp",
+  "provider": "",
+  "managed_policy_required": false,
+  "publication": false,
+  "assertions": [
+    "workflow_succeeded",
+    "usage_observed"
+  ],
+  "prompt": ""
+}
