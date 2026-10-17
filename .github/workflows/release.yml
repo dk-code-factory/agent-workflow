@@ -139,25 +139,25 @@ jobs:
       - name: Publish tested images and assemble index without rebuilding
         id: registry
         run: python3 scripts/publish-release.py registry "$TAG"
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: image_index
         with:
           subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
           subject-digest: ${{ steps.registry.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: image_amd64
         with:
           subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
           subject-digest: ${{ steps.registry.outputs.amd64 }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: image_arm64
         with:
           subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
           subject-digest: ${{ steps.registry.outputs.arm64 }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: archives
         with:
           subject-path: dist/*.tar.gz
@@ -174,7 +174,7 @@ jobs:
           cp "$AMD64" dist/image-amd64-provenance.jsonl
           cp "$ARM64" dist/image-arm64-provenance.jsonl
       - run: python3 scripts/publish-release.py inventory "$TAG"
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: manifest
         with:
           subject-path: dist/release-manifest.json
