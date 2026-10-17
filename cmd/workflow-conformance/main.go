@@ -36,6 +36,8 @@ type manifest struct {
 	Prompt      string   `json:"prompt"`
 }
 type evidence struct {
+	Provider                 string                  `json:"provider"`
+	Authentication           string                  `json:"authentication"`
 	Scenario                 string                  `json:"scenario"`
 	Engine                   map[string]string       `json:"engine"`
 	OS                       string                  `json:"os"`
@@ -145,6 +147,11 @@ func run() (resultErr error) {
 	selected, ok := cfg.Agents[*role]
 	if !ok {
 		return fmt.Errorf("role is not configured")
+	}
+	report.Provider = selected.Provider
+	report.Authentication = selected.Authentication.Mode
+	if report.Authentication == "" {
+		report.Authentication = "native"
 	}
 	if spec.Provider != "" && selected.Provider != spec.Provider {
 		return fmt.Errorf("scenario requires provider %s; backend substitution is forbidden", spec.Provider)

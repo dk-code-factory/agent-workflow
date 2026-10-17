@@ -22,7 +22,7 @@ publisher = module('publish-release')
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
-        self.expected = {'scenario': 'native-codex-smoke', 'provider': 'codex-cli', 'os': 'linux', 'arch': 'amd64'}
+        self.expected = {'scenario': 'native-codex-smoke', 'provider': 'codex-cli', 'authentication': 'native', 'os': 'linux', 'arch': 'amd64'}
         self.policy = {'version': '0.2.0', 'required_evidence': [self.expected], 'publication_repositories': []}
         self.record = dict(self.expected, engine={'commit': 'a' * 40, 'version': '0.2.0', 'dirty': 'false', 'source_fingerprint': 'b' * 64},
                            configuration_fingerprint='c' * 64, started='2026-10-17T01:00:00Z', finished='2026-10-17T01:01:00Z',
@@ -41,7 +41,7 @@ class EvidenceTests(unittest.TestCase):
             report = copy.deepcopy(self.report)
             report[key] = value
             cases.append(report)
-        for change in [{'error': 'failed'}, {'artifacts': ['/private/path']}, {'assertions': {}},
+        for change in [{'authentication': 'gateway'}, {'provider': 'claude-sdk'}, {'error': 'failed'}, {'artifacts': ['/private/path']}, {'assertions': {}},
                        {'engine': dict(self.record['engine'], dirty='true')},
                        {'engine': dict(self.record['engine'], version='0.1.0')}, {'provider_versions': {}}]:
             report = copy.deepcopy(self.report)
@@ -53,6 +53,13 @@ class EvidenceTests(unittest.TestCase):
         for report in cases:
             with self.subTest(report=report), self.assertRaises(gate.GateError):
                 gate.validate_evidence(report, self.policy, 'a' * 40, 'b' * 64)
+
+    def test_unreported_native_claude_version_is_rejected(self):
+        self.expected.update(provider='claude-cli', scenario='native-claude-smoke')
+        self.record.update(self.expected)
+        self.record['provider_versions'] = {'claude-cli': 'unavailable'}
+        with self.assertRaises(gate.GateError):
+            self.validate()
 
     def test_policy_does_not_claim_deferred_or_unsupported_capabilities(self):
         policy = json.loads((gate.ROOT / 'release/policy.json').read_text())

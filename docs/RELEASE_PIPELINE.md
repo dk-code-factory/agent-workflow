@@ -40,8 +40,9 @@ proposals; merging an update never creates a version tag.
 ## Support and evidence
 
 `release/policy.json` is the enforceable support matrix. Its 57 mandatory records
-cover native Claude/Codex smoke, resume/interruption on four platforms; Claude
-SDK gateway structured output, managed discovery, nested workers, uncertain MCP
+cover native Claude/Codex CLI smoke on four platforms; resume/interruption through
+Claude SDK gateway and native Codex app-server session transports; Claude SDK
+gateway structured output, managed discovery, nested workers, uncertain MCP
 and mixed CLI/MCP development; both Linux architectures on Docker/Podman with
 container execution/owner loss; and disposable GitHub publication recovery.
 Four additional signed `runtime_recovery` records (Linux architectures × runtimes)
@@ -49,6 +50,10 @@ require `owner_loss`, `runtime_unavailable`, `runtime_restart`, `cleanup_recover
 and `stale_execution_ownership` assertions, candidate/fingerprint, runtime version
 and exact image digest. These are reviewed records from disposable runtime failure
 fixtures; the manual provider harness does not generate them automatically.
+Compatibility CLI adapters do not support resumable sessions. Every combination
+absent from this matrix remains uncertified, including alternate authentication
+routes. Evidence records the selected provider and authentication mode directly
+from the admitted configuration.
 No production support is certified until the whole matrix passes for the exact
 candidate commit. Codex managed policy remains rejected by admission. macOS
 VM/container certification is deferred and has no required row or support claim.
@@ -63,7 +68,7 @@ freezing the candidate. Nothing refreshes provider login automatically.
 Build and run the manual conformance binary from the exact clean candidate.
 Read `conformance/README.md` for the harness and its assertions. Review private
 reports outside the checkout. Remove private `artifacts` paths and sanitize all
-remaining fields. Add the actual `provider`, `runtime_version` for containers,
+remaining fields. Retain `provider` and `authentication` from the harness; add `runtime_version` for containers,
 and authorized `publication_repository` for publication. Preserve all original
 assertions, timestamps, build identity and provider versions. Container records
 must identify the exact image configuration digest distributed by the release;

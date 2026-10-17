@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,59 @@ func TestEvidenceLocationRejectsCheckoutAndSymlinkAliases(t *testing.T) {
 	}
 	if err := validateEvidenceLocation(filepath.Join(filepath.VolumeName(root)+string(os.PathSeparator), "nonexistent-private-evidence-test")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Release policy must demand only capabilities implemented by the selected
+// transport. In particular, compatibility CLIs have no resumable sessions.
+func TestReleasePolicyMatchesProviderCapabilities(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "release", "policy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		Records []struct {
+			Scenario       string `json:"scenario"`
+			Provider       string `json:"provider"`
+			Authentication string `json:"authentication"`
+		} `json:"required_evidence"`
+	}
+	if err := json.Unmarshal(data, &policy); err != nil || len(policy.Records) == 0 {
+		t.Fatal("missing release evidence policy", err)
+	}
+	for _, record := range policy.Records {
+		data, err := os.ReadFile(filepath.Join("..", "..", "conformance", "scenarios", record.Scenario+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scenario manifest
+		if err := json.Unmarshal(data, &scenario); err != nil {
+			t.Fatal(err)
+		}
+		agent := clirunner.Agent{Provider: record.Provider}
+		// Capabilities checks the SDK install for host execution. This pure
+		// policy test selects container mode without invoking any runtime.
+		if record.Provider == "claude-sdk" {
+			agent.Execution = clirunner.Execution{Mode: "container", Image: "fixture"}
+			if record.Authentication != "gateway" {
+				t.Fatal("SDK certification requires the gateway route")
+			}
+		} else if record.Authentication != "native" {
+			t.Fatal("native certification must identify its authentication route")
+		}
+		runner := clirunner.Runner{Config: clirunner.Config{Agents: map[string]clirunner.Agent{"test": agent}}}
+		capabilities, err := runner.Capabilities("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (scenario.Driver == "session" || scenario.Driver == "interrupt") && (!capabilities.Sessions || !capabilities.Resume) {
+			t.Fatalf("%s cannot certify %s", record.Provider, record.Scenario)
+		}
+		if scenario.Managed && !capabilities.ManagedPolicy {
+			t.Fatalf("%s cannot certify managed policy", record.Provider)
+		}
+		if scenario.Provider != "" && scenario.Provider != record.Provider {
+			t.Fatal("release policy substitutes the scenario provider")
+		}
 	}
 }

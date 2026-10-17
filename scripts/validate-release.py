@@ -35,6 +35,9 @@ def trusted_signature(command, keys, signers):
                 'signature is not from an allowlisted signer')
         return valid[0][2]
 
+def known_version(value):
+    return isinstance(value, str) and bool(value.strip()) and value.strip().lower() not in ['unknown', 'unavailable', 'development']
+
 def validate_evidence(report, policy, commit, fingerprint):
     require(report.get('candidate') == commit, 'evidence belongs to another commit')
     require(report.get('source_fingerprint') == fingerprint, 'evidence source fingerprint mismatch')
@@ -56,16 +59,16 @@ def validate_evidence(report, policy, commit, fingerprint):
         require(all(record.get('assertions', {}).get(a) is True for a in scenario['assertions']),
                 'failed or incomplete assertions: ' + expected['scenario'])
         versions = record.get('provider_versions', {})
-        require(versions and all(isinstance(v, str) and v for v in versions.values()), 'provider versions missing')
+        require(versions and all(known_version(v) for v in versions.values()), 'provider versions missing')
         pins = json.loads((ROOT / 'images/pins.json').read_text())
-        if expected['provider'] == 'codex-cli':
+        if expected['provider'] in ['codex-cli', 'codex-app-server']:
             require(any(re.search(r'(?<![0-9.])' + re.escape(pins['codex_cli']) + r'(?![0-9.])', v) for v in versions.values()), 'evidence uses another Codex protocol version')
         if expected['provider'] == 'claude-sdk':
             require('claude-agent-sdk@' + pins['claude_sdk'] in versions.values(), 'evidence uses another Claude SDK version')
         require('artifacts' not in record, 'remove private artifact paths before signing evidence')
         if expected.get('runtime'):
             require(re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_digest', ''))
-                    and record.get('runtime_version'), 'container identity or runtime version missing')
+                    and known_version(record.get('runtime_version')), 'container identity or runtime version missing')
         if scenario.get('publication'):
             require(record.get('publication_repository') in policy['publication_repositories'],
                     'publication evidence target was not designated in release policy')
@@ -75,7 +78,7 @@ def validate_evidence(report, policy, commit, fingerprint):
         require(len(matches) == 1, 'missing runtime recovery certification: ' + json.dumps(expected))
         record = matches[0]
         require(record.get('candidate') == commit and record.get('source_fingerprint') == fingerprint
-                and record.get('runtime_version') and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_digest', ''))
+                and known_version(record.get('runtime_version')) and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_digest', ''))
                 and not record.get('error') and 'artifacts' not in record, 'invalid runtime recovery identity')
         require(all(record.get('assertions', {}).get(a) is True for a in [
             'owner_loss', 'runtime_unavailable', 'runtime_restart', 'cleanup_recovery', 'stale_execution_ownership']),
