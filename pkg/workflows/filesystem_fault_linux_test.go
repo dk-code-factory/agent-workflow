@@ -30,6 +30,13 @@ func TestDisposableFilesystemExhaustion(t *testing.T) {
 		if _, err = store.db.Exec("CREATE TABLE exhaustion_fixture(data BLOB)"); err != nil {
 			t.Fatal(err)
 		}
+		// Keep bounded recovery headroom on this private filesystem. A failed
+		// large WAL transaction can consume all remaining bytes, so checkpointing
+		// committed pages cannot succeed until capacity becomes available again.
+		reserve := filepath.Join(root, "recovery-headroom")
+		if err = os.WriteFile(reserve, make([]byte, 1<<20), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = store.db.Exec("INSERT INTO exhaustion_fixture VALUES(zeroblob(16777216))"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "full") {
 			t.Fatal("SQLite-full boundary was not reached", err)
 		}
@@ -37,8 +44,18 @@ func TestDisposableFilesystemExhaustion(t *testing.T) {
 		if err = store.db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
 			t.Fatal("SQLite-full rollback damaged storage", integrity, err)
 		}
+		if err = os.Remove(reserve); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = store.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 			t.Fatal(err)
+		}
+		var rows int
+		if err = store.db.QueryRow("SELECT count(*) FROM exhaustion_fixture").Scan(&rows); err != nil || rows != 0 {
+			t.Fatal("failed transaction retained rows", rows, err)
+		}
+		if _, err = store.db.Exec("INSERT INTO exhaustion_fixture VALUES(zeroblob(4096))"); err != nil {
+			t.Fatal("storage did not recover after capacity returned", err)
 		}
 		if err = store.Close(); err != nil {
 			t.Fatal(err)

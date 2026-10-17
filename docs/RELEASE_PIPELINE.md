@@ -2,9 +2,10 @@
 
 The target is public `dk-code-factory/agent-workflow`, with the existing history
 and first stable version `v0.2.0`. This checkout is a preparation candidate;
-repository provisioning, remote CI, signed current-build live evidence, and the
-first immutable publication have **not** completed. The GitHub API returned 404
-for the target during implementation. No remote was created or changed.
+the public repository has been created, the preserved history pushed, and
+immutable releases enabled through GitHub’s API. Remote CI and signed current-build
+live evidence still gate the first immutable publication. The repository is
+https://github.com/dk-code-factory/agent-workflow.
 
 ## Repository bootstrap
 
@@ -93,8 +94,8 @@ gpg --local-user DC4DED587433F319EEE1EB745BD1EAD257F21B89 --armor --detach-sign 
 ```
 
 The checked-in public key and allowlist use the existing configured maintainer
-key, fingerprint `DC4DED587433F319EEE1EB745BD1EAD257F21B89`. No maintainer signing
-was performed by the implementation. The validator imports only checked-in
+key, fingerprint `DC4DED587433F319EEE1EB745BD1EAD257F21B89`. No release tag or conformance evidence
+was signed by the implementation. The validator imports only checked-in
 public keys into a temporary keyring. Missing, expired, revoked or untrusted
 signatures fail. Missing, duplicate, dirty, failed or stale evidence fails.
 Evidence review is a human trust boundary; a signature does not prove assertions
@@ -196,8 +197,9 @@ patch, refresh dependencies by reviewed PR when necessary, and repeat all gates.
 
 ## Pending acceptance
 
-No target repository settings, remote matrix, live conformance, GHCR upload or
-immutable release has been verified from this checkout. Current live credentials,
+Repository creation and enabled immutability have been verified through the API.
+The full remote matrix, protection settings, live conformance, GHCR upload and
+immutable release still require verification. Current live credentials,
 named-scenario authorization, a designated disposable repository, reviewed signed
 evidence, and an exact clean committed candidate remain required. Genuine runtime
 restart/outage and broader provider-frame boundary certification also remain in

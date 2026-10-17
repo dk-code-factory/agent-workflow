@@ -60,11 +60,11 @@ jobs:
       - name: Exhaust only a bounded tmpfs in a private mount namespace
         run: sudo env "PATH=$PATH" AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run '^TestDisposableFilesystemExhaustion$' -count=1
   container-conformance:
+    name: Container (${{ matrix.runtime }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runtime: [docker, podman]
         include:
           - {runtime: docker, runner: ubuntu-24.04, arch: amd64}
           - {runtime: podman, runner: ubuntu-24.04, arch: amd64}
