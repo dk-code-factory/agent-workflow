@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func turnContext(ctx context.Context, a Agent) (context.Context, context.CancelFunc, error) {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func TestDatabaseMaintenanceCLIRequiresOwnershipAndPreservesBackup(t *testing.T) {

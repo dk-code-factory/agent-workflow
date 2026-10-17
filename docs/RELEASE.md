@@ -1,5 +1,9 @@
 # Release evidence and gates
 
+The stable signed-tag release pipeline and its current blockers are documented in
+[RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
+publication instructions below; historical evidence is not current certification.
+
 This is an implementation candidate. The production-readiness declaration in the
 requested plan is gated on the remaining items below; implemented API surfaces
 are not a substitute for conformance evidence.

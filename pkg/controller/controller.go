@@ -20,9 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/internal/buildinfo"
-	"github.com/dkropachev/agent-workflow/pkg/operational"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 type StartRequest struct {

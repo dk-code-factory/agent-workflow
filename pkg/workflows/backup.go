@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
 func syncFileAndDirectory(path string) error {

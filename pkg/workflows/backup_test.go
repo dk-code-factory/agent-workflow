@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
 func TestBackupSourceRejectsMissingFinalizationBarrier(t *testing.T) {

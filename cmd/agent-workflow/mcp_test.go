@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/controller"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/controller"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

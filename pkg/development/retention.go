@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func (r *Runtime) Cleanup(ctx context.Context, id string) error {

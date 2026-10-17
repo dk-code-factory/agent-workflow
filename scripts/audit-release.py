@@ -14,7 +14,7 @@ out = Path(args.output).resolve()
 out.mkdir(parents=True, exist_ok=True)
 reports = []
 commands = [
-    ("go-vulnerabilities.json", ["go", "run", "golang.org/x/vuln/cmd/govulncheck@v1.9.0", "-json", "./..."]),
+    ("go-vulnerabilities.json", ["go", "run", "golang.org/x/vuln/cmd/govulncheck@v1.9.0", "-json", "-scan=module"]),
     ("npm-vulnerabilities.json", ["npm", "audit", "--prefix", "bridge/claude", "--package-lock-only", "--json"]),
     ("codex-image-vulnerabilities.json", ["npm", "audit", "--prefix", "images/codex", "--package-lock-only", "--json"]),
 ]

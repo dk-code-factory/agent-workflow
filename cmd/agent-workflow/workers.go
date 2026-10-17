@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/controller"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/controller"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func workerManager(store *workflows.SQLiteStore, root string) *workflows.WorkerManager {

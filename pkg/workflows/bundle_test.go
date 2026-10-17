@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
 func TestRecoveryBundleExcludesNativeCredentialsAndOtherOwnership(t *testing.T) {

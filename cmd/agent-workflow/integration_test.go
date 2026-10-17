@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
 

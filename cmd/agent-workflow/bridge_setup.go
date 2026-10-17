@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 func bridgeSetup(ctx context.Context, args []string, out, diagnostic io.Writer) error {

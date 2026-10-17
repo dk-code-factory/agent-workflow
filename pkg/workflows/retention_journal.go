@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
 type Removal struct {

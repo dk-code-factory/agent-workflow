@@ -1,4 +1,4 @@
-module github.com/dkropachev/agent-workflow
+module github.com/dk-code-factory/agent-workflow
 
 go 1.25.0
 

@@ -2,6 +2,7 @@
 """Verify archive contents/checksums and pinned image metadata without providers."""
 import hashlib
 import json
+import re
 from pathlib import Path
 import sys
 import tarfile
@@ -17,6 +18,8 @@ def digest_file(path):
 checksums = set()
 for line in (root / "SHA256SUMS").read_text().splitlines():
     digest, name = line.split("  ", 1)
+    if name in checksums or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise SystemExit("duplicate artifact or invalid checksum")
     if Path(name).name != name:
         raise SystemExit("unsafe checksum artifact path")
     checksums.add(name)
@@ -44,7 +47,9 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
         checked.append({"archive": archive.name, "build": metadata})
 if not checked:
     raise SystemExit("no distribution archives verified")
-for image in root.glob("worker-linux-*.json"):
+for image in (root / "worker-linux-amd64.json", root / "worker-linux-arm64.json"):
+    if not image.exists():
+        continue
     value = json.loads(image.read_text())
     if Path(value["archive"]).name != value["archive"] or value["archive"] not in checksums or image.name not in checksums:
         raise SystemExit("unsafe or unchecked worker image artifact")
@@ -77,4 +82,30 @@ for image in root.glob("worker-linux-*.json"):
             raise SystemExit("worker image platform mismatch")
         if str(config["config"].get("User", "")).split(":")[0] in ["", "0", "root"]:
             raise SystemExit("worker image must default to non-root")
+manifest_path = root / "release-manifest.json"
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text())
+    if manifest["repository"] != "dk-code-factory/agent-workflow" or not re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]):
+        raise SystemExit("release manifest identity mismatch")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest["source_fingerprint"]):
+        raise SystemExit("release source fingerprint mismatch")
+    for name, digest in manifest["assets"].items():
+        if Path(name).name != name or name not in checksums or digest_file(root / name) != digest:
+            raise SystemExit("release manifest asset mismatch: " + name)
+    if checksums != set(manifest["assets"]) | {"release-manifest.json", "manifest-provenance.jsonl"}:
+        raise SystemExit("release manifest/checksum asset set mismatch")
+    platforms = set()
+    for item in checked:
+        build = item["build"]
+        if build["commit"] != manifest["commit"] or build["dirty"] != "false" or build["source_fingerprint"] != manifest["source_fingerprint"] or "v" + build["version"] != manifest["tag"]:
+            raise SystemExit("archive does not match clean release candidate")
+        platforms.add((build["os"], build["arch"]))
+    if len(checked) != 4 or platforms != {(os, arch) for os in ["linux", "darwin"] for arch in ["amd64", "arm64"]}:
+        raise SystemExit("release must contain all four CLI platforms")
+    for arch in ["amd64", "arm64"]:
+        if not (root / ("worker-linux-" + arch + ".json")).exists():
+            raise SystemExit("release worker platform missing")
+    summary = json.loads((root / "vulnerability-summary.json").read_text())
+    if summary.get("all_checks_passed") is not True or len(summary.get("reports", [])) != 3 or any(r["exit_code"] != 0 for r in summary["reports"]):
+        raise SystemExit("release vulnerability audits did not pass")
 print(json.dumps({"verified_archives": checked, "published": False}))

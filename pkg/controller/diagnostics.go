@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 )
 
 type Readiness struct {

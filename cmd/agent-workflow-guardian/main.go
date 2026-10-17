@@ -4,7 +4,7 @@ package main
 
 import (
 	"fmt"
-	_ "github.com/dkropachev/agent-workflow/pkg/process"
+	_ "github.com/dk-code-factory/agent-workflow/pkg/process"
 	"os"
 )
 

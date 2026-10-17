@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
 // RecoveryBundle exports only engine-owned state. Provider-owned authentication

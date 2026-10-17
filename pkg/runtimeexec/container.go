@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/containerapi"
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 const GuardianProtocol = "1"

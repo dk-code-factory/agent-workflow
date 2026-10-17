@@ -1,0 +1,388 @@
+{
+  "repository": "dk-code-factory/agent-workflow",
+  "version": "0.2.0",
+  "signers": [
+    "DC4DED587433F319EEE1EB745BD1EAD257F21B89"
+  ],
+  "publication_repositories": [],
+  "required_evidence": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "native-codex-smoke"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "native-claude-smoke"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "claude-gateway-structured"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "managed-discovery-canaries"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "nested-workers-capacity-one"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "external-mcp-uncertain-response"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-cli"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-mcp"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "native-codex-smoke"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "native-claude-smoke"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "claude-gateway-structured"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "managed-discovery-canaries"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "nested-workers-capacity-one"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "external-mcp-uncertain-response"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-cli"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-mcp"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "native-codex-smoke"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "codex-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "native-claude-smoke"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "claude-gateway-structured"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "managed-discovery-canaries"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "nested-workers-capacity-one"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "external-mcp-uncertain-response"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-cli"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-mcp"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "native-codex-smoke"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "codex-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "native-claude-smoke"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "session-resume"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-cli",
+      "scenario": "session-interruption"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "claude-gateway-structured"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "managed-discovery-canaries"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "nested-workers-capacity-one"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "external-mcp-uncertain-response"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-cli"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "scenario": "mixed-development-mcp"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "runtime": "docker",
+      "scenario": "container-execution"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "runtime": "docker",
+      "scenario": "container-owner-loss"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "runtime": "podman",
+      "scenario": "container-execution"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "runtime": "podman",
+      "scenario": "container-owner-loss"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "runtime": "docker",
+      "scenario": "container-execution"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "runtime": "docker",
+      "scenario": "container-owner-loss"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "runtime": "podman",
+      "scenario": "container-execution"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "provider": "claude-sdk",
+      "runtime": "podman",
+      "scenario": "container-owner-loss"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "provider": "claude-sdk",
+      "scenario": "disposable-github-publication"
+    }
+  ],
+  "unsupported": [
+    "codex managed policy and dynamic managed tools"
+  ],
+  "deferred": [
+    "macOS VM/container certification"
+  ],
+  "required_runtime_recovery": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "runtime": "docker"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "runtime": "podman"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "runtime": "docker"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "runtime": "podman"
+    }
+  ]
+}

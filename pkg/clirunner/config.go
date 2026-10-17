@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/development"
-	"github.com/dkropachev/agent-workflow/pkg/operational"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/development"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
 

@@ -3,7 +3,7 @@ package workflows
 import (
 	"context"
 	"errors"
-	"github.com/dkropachev/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 	"math"
 	"testing"
 )

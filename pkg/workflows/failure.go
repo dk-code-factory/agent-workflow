@@ -3,8 +3,8 @@ package workflows
 import (
 	"context"
 	"errors"
-	"github.com/dkropachev/agent-workflow/pkg/operational"
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"strings"
 )
 

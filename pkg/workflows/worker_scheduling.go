@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 func (m *WorkerManager) notify() {

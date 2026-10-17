@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 func TestResumedExecutionStaysRunningDuringFinalCleanup(t *testing.T) {

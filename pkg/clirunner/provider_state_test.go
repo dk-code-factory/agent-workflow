@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func TestProviderStatePartitionsOriginsAndWorkerSessions(t *testing.T) {

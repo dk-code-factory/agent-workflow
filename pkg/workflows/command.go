@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
 const MaxCommandOutput = 16 << 20

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 const maxOutput = 16 << 20

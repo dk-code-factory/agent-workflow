@@ -549,3 +549,6 @@ import, automatic conflict resolution, and automatic merge remain outside scope.
 The original schema/expression/output foundations came from PicoClaw; see
 [NOTICE](NOTICE) and [LICENSE](LICENSE). Runtime bindings and orchestration are
 standalone Go implementations.
+
+Stable release preparation, signed evidence, verification and remaining certification
+gates: [release operations](docs/RELEASE_PIPELINE.md).

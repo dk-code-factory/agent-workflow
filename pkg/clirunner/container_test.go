@@ -5,8 +5,8 @@ package clirunner
 import (
 	"bytes"
 	"context"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,5 +99,89 @@ func TestContainerExecutionAndCleanup(t *testing.T) {
 	}
 	if output.String() != "isolated" {
 		t.Fatal(output.String())
+	}
+}
+
+// Removing only this test's durable container simulates a runtime-side loss.
+// The attached execution must fail, and cleanup must reconcile the missing ID.
+func TestContainerRuntimeRemoval(t *testing.T) {
+	image := os.Getenv("AGENT_WORKFLOW_CONTAINER_IMAGE")
+	if image == "" {
+		t.Skip("set AGENT_WORKFLOW_CONTAINER_IMAGE for real runtime conformance")
+	}
+	runtime := os.Getenv("AGENT_WORKFLOW_CONTAINER_RUNTIME")
+	if runtime == "" {
+		runtime = "podman"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := workflows.OpenSQLite(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	run := &workflows.Run{ID: runtimeexec.NewID(), Status: workflows.RunStatusRunning}
+	if err := store.Admit(ctx, run, workflows.Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: store, Dir: store.Dir, RunID: run.ID, Generation: run.Generation, LogicalID: "runtime-removal"})
+	command := exec.CommandContext(ctx, "sh", "-c", "printf started; exec sleep 120")
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	agent := Agent{Execution: Execution{Mode: "container", Image: image, Runtime: runtime}}
+	agent.Execution.ownerRoot = root
+	cleanup, err := superviseContainer(ctx, command, agent, root, t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	records, err := store.Invocations(ctx, run.ID, false)
+	if err != nil || len(records) != 1 || records[0].Container == nil || records[0].Container.ID == "" {
+		t.Fatalf("missing durable container identity: %v, %v", records, err)
+	}
+	id := records[0].Container.ID
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	for {
+		data, err := exec.CommandContext(ctx, runtime, "inspect", "--format", "{{.State.Running}}", id).Output()
+		if err != nil {
+			t.Fatalf("inspect test-owned container: %v", err)
+		}
+		if strings.TrimSpace(string(data)) == "true" {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("execution stopped before runtime removal: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if data, err := exec.CommandContext(ctx, runtime, "rm", "--force", id).CombinedOutput(); err != nil {
+		t.Fatalf("remove test-owned container: %v: %s", err, data)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("runtime removal unexpectedly reported success")
+		}
+	case <-ctx.Done():
+		t.Fatal("attached execution did not stop after runtime removal")
+	}
+	cleanup()
+	if err := store.ReconcileInvocations(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	records, err = store.Invocations(ctx, run.ID, false)
+	if err != nil || len(records) != 1 || records[0].State != "cleaned" {
+		t.Fatalf("missing container was not reconciled: %v, %v", records, err)
 	}
 }

@@ -2,7 +2,7 @@
 
 package controller
 
-import "github.com/dkropachev/agent-workflow/internal/ownership"
+import "github.com/dk-code-factory/agent-workflow/internal/ownership"
 
 type Lock = ownership.Lock
 

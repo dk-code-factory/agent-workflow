@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import io
+import gzip
+from release_lib import source_fingerprint as fingerprint_source
 import json
 import os
 from pathlib import Path
@@ -37,16 +39,8 @@ version = metadata["version"]
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
 epoch = int(subprocess.check_output(["git", "show", "-s", "--format=%ct", "HEAD"], cwd=ROOT))
-def fingerprint_source():
-    source_hash = hashlib.sha256()
-    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
-    for name in sorted(set(files)):
-        path = ROOT / name
-        if path.is_file() and (path.suffix in [".go", ".mod", ".sum", ".mjs", ".json", ".py", ".yml", ".yaml", ".md"] or path.name in ["LICENSE", "NOTICE", "Makefile"]):
-            source_hash.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
-    return source_hash.hexdigest()
 source_fingerprint = fingerprint_source()
-ldflags = "-s -w -X github.com/dkropachev/agent-workflow/internal/buildinfo.Commit=" + commit + " -X github.com/dkropachev/agent-workflow/internal/buildinfo.Dirty=" + str(dirty).lower() + " -X github.com/dkropachev/agent-workflow/internal/buildinfo.SourceFingerprint=" + source_fingerprint
+ldflags = "-s -w -X github.com/dk-code-factory/agent-workflow/internal/buildinfo.Commit=" + commit + " -X github.com/dk-code-factory/agent-workflow/internal/buildinfo.Dirty=" + str(dirty).lower() + " -X github.com/dk-code-factory/agent-workflow/internal/buildinfo.SourceFingerprint=" + source_fingerprint
 targets = args.platform or ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"]
 raw = subprocess.check_output(["go", "list", "-m", "-json", "all"], cwd=ROOT, text=True)
 decoder = json.JSONDecoder()
@@ -97,9 +91,12 @@ for target in targets:
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             info.mtime = epoch
+            info.mode = 0o755 if info.isdir() or info.mode & 0o111 else 0o644
             return info
-        with tarfile.open(archive, "w:gz") as bundle:
-            bundle.add(stage, arcname=name, filter=normalize)
+        with archive.open("wb") as raw_archive:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_archive, mtime=epoch) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as bundle:
+                    bundle.add(stage, arcname=name, filter=normalize)
         archives.append(archive)
 
 # Dependency inventories are generated from the actual locked inputs.

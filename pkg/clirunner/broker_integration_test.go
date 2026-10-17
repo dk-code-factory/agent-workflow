@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 type sdkBrokerFixture struct {

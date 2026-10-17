@@ -1,63 +1,112 @@
-name: Test
-on: [push, pull_request]
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
 jobs:
-  test:
+  native:
+    name: Native (${{ matrix.platform }})
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - {runner: ubuntu-24.04, platform: linux/amd64}
+          - {runner: ubuntu-24.04-arm, platform: linux/arm64}
+          - {runner: macos-15-intel, platform: darwin/amd64}
+          - {runner: macos-15, platform: darwin/arm64}
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - run: make test check build
-      - name: Build and smoke the native extracted distribution with fake providers
-        run: python3 scripts/build-release.py --platform "$(go env GOOS)/$(go env GOARCH)" --smoke
-  sdk-bridge:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
+      - run: test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}'
+      - run: make test check build
       - run: npm ci --prefix bridge/claude --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
       - run: go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker)AgainstFakeGateway' -count=1
         env:
           AGENT_WORKFLOW_SDK_TEST: '1'
-  filesystem-conformance:
-    runs-on: ubuntu-latest
+      - run: python3 scripts/build-release.py --platform '${{ matrix.platform }}' --smoke
+      - run: python3 scripts/verify-release.py dist
+  workflow-validation:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck=
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+  filesystem-conformance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
       - name: Exhaust only a bounded tmpfs in a private mount namespace
         run: sudo env "PATH=$PATH" AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run '^TestDisposableFilesystemExhaustion$' -count=1
   container-conformance:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         runtime: [docker, podman]
+        include:
+          - {runtime: docker, runner: ubuntu-24.04, arch: amd64}
+          - {runtime: podman, runner: ubuntu-24.04, arch: amd64}
+          - {runtime: docker, runner: ubuntu-24.04-arm, arch: arm64}
+          - {runtime: podman, runner: ubuntu-24.04-arm, arch: arm64}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
       - name: Install Podman when selected
         if: matrix.runtime == 'podman'
         run: sudo apt-get update && sudo apt-get install -y podman
-      - name: Build pinned local worker image; never publish
-        run: python3 scripts/build-worker-image.py --runtime '${{ matrix.runtime }}' --arch amd64
-      - name: Exercise runtime isolation and verified cleanup without model calls
+      - name: Verify genuine runtime and non-root execution
+        env:
+          RUNTIME: ${{ matrix.runtime }}
         run: |
-          export AGENT_WORKFLOW_CONTAINER_RUNTIME='${{ matrix.runtime }}'
-          export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat dist/worker-linux-amd64.iid)"
-          go test ./pkg/clirunner -run '^TestContainerExecutionAndCleanup$' -count=1
+          test "$(id -u)" != 0
+          "$RUNTIME" version
+          if [ "$RUNTIME" = docker ]; then docker version --format '{{.Server.Platform.Name}}' | grep -i docker; fi
+          if [ "$RUNTIME" = podman ]; then test "$(podman info --format '{{.Host.Security.Rootless}}')" = true; fi
+      - run: python3 scripts/build-worker-image.py --runtime '${{ matrix.runtime }}' --arch '${{ matrix.arch }}'
+      - name: Exercise real runtime without model calls
+        env:
+          AGENT_WORKFLOW_CONTAINER_RUNTIME: ${{ matrix.runtime }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat "dist/worker-linux-$ARCH.iid")"
+          go test ./pkg/clirunner -run '^TestContainer(ExecutionAndCleanup|RuntimeRemoval)$' -count=1
+  required:
+    name: Required
+    if: always()
+    needs: [native, workflow-validation, filesystem-conformance, container-conformance]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          assert results and all(job['result'] == 'success' for job in results.values()), results
+          PY

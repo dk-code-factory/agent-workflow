@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func toolBinder(store *workflows.SQLiteStore, workers *workflows.WorkerManager, root string) workflows.ToolBinder {

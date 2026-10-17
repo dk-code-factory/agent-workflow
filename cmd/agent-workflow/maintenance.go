@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func databaseMaintenance(ctx context.Context, dir, operation, path string) (map[string]any, error) {

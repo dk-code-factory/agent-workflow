@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/internal/ownership"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	_ "modernc.org/sqlite"
 )
 

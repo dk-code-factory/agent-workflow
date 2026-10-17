@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/operational"
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func doctorCommand(ctx context.Context, root, command string, args ...string) (string, error) {

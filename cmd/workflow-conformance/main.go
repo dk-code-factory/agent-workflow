@@ -18,10 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/internal/buildinfo"
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/runtimeexec"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 )

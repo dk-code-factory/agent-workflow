@@ -20,13 +20,13 @@ import (
 	"syscall"
 	"time"
 
-	workflowassets "github.com/dkropachev/agent-workflow"
-	"github.com/dkropachev/agent-workflow/internal/buildinfo"
-	"github.com/dkropachev/agent-workflow/pkg/clirunner"
-	"github.com/dkropachev/agent-workflow/pkg/controller"
-	"github.com/dkropachev/agent-workflow/pkg/development"
-	"github.com/dkropachev/agent-workflow/pkg/operational"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	workflowassets "github.com/dk-code-factory/agent-workflow"
+	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
+	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/controller"
+	"github.com/dk-code-factory/agent-workflow/pkg/development"
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 type values []string

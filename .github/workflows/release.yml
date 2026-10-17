@@ -1,0 +1,190 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
+      - name: Require trusted tag, exact signed evidence, protected main CI and immutable settings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: python3 scripts/validate-release.py "$TAG"
+  checks:
+    needs: validate
+    uses: ./.github/workflows/test.yml
+  archives:
+    needs: checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - run: python3 scripts/build-release.py --smoke
+      - name: Require identical archive bytes on a second build
+        run: |
+          python3 scripts/build-release.py --output .agent-workflow/repro
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'scripts')
+          from release_lib import sha256
+          for archive in Path('dist').glob('agent-workflow-*.tar.gz'):
+              assert sha256(archive) == sha256(Path('.agent-workflow/repro') / archive.name), archive
+          PY
+      - run: python3 scripts/audit-release.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: archives
+          path: |
+            dist/*.tar.gz
+            dist/dependencies.json
+            dist/sbom.cdx.json
+            dist/*vulnerabilit*.json
+          if-no-files-found: error
+  images:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, arch: amd64}
+          - {runner: ubuntu-24.04-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: python3 scripts/build-worker-image.py --runtime docker --arch '${{ matrix.arch }}'
+      - name: Test the exact distribution image
+        env:
+          ARCH: ${{ matrix.arch }}
+          AGENT_WORKFLOW_CONTAINER_RUNTIME: docker
+        run: |
+          export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat "dist/worker-linux-$ARCH.iid")"
+          go test ./pkg/clirunner -run '^TestContainer(ExecutionAndCleanup|RuntimeRemoval)$' -count=1
+      - name: Scan the actual image archive
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          go install github.com/anchore/syft/cmd/syft@v1.32.0
+          go install github.com/aquasecurity/trivy/cmd/trivy@v0.67.2
+          syft "docker-archive:dist/worker-linux-$ARCH.docker.tar" -o "cyclonedx-json=dist/worker-linux-$ARCH.sbom.json"
+          trivy image --input "dist/worker-linux-$ARCH.docker.tar" --severity HIGH,CRITICAL --exit-code 1 --format json --output "dist/worker-linux-$ARCH.vulnerabilities.json"
+      - run: python3 scripts/compress-worker-image.py '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.arch }}
+          path: |
+            dist/worker-*.tar.gz
+            dist/worker-*.json
+          if-no-files-found: error
+  publish:
+    needs: [archives, images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
+      - run: python3 scripts/validate-release.py "$TAG"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: archives
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-*
+          path: dist
+          merge-multiple: true
+      - name: Include reviewed signed evidence
+        run: |
+          commit=$(git rev-parse HEAD)
+          git show "refs/remotes/origin/release-evidence:$commit/report.json" > dist/conformance-evidence.json
+          git show "refs/remotes/origin/release-evidence:$commit/report.json.asc" > dist/conformance-evidence.json.asc
+      - run: echo "DOCKER_CONFIG=$RUNNER_TEMP/release-docker" >> "$GITHUB_ENV"
+      - name: Login to GHCR using only this job's token
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish tested images and assemble index without rebuilding
+        id: registry
+        run: python3 scripts/publish-release.py registry "$TAG"
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: image_index
+        with:
+          subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
+          subject-digest: ${{ steps.registry.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: image_amd64
+        with:
+          subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
+          subject-digest: ${{ steps.registry.outputs.amd64 }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: image_arm64
+        with:
+          subject-name: ghcr.io/dk-code-factory/agent-workflow-worker
+          subject-digest: ${{ steps.registry.outputs.arm64 }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: archives
+        with:
+          subject-path: dist/*.tar.gz
+      - run: cp "$BUNDLE" dist/archive-provenance.jsonl
+        env:
+          BUNDLE: ${{ steps.archives.outputs.bundle-path }}
+      - name: Include container provenance bundles
+        env:
+          INDEX: ${{ steps.image_index.outputs.bundle-path }}
+          AMD64: ${{ steps.image_amd64.outputs.bundle-path }}
+          ARM64: ${{ steps.image_arm64.outputs.bundle-path }}
+        run: |
+          cp "$INDEX" dist/image-index-provenance.jsonl
+          cp "$AMD64" dist/image-amd64-provenance.jsonl
+          cp "$ARM64" dist/image-arm64-provenance.jsonl
+      - run: python3 scripts/publish-release.py inventory "$TAG"
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: manifest
+        with:
+          subject-path: dist/release-manifest.json
+      - run: cp "$BUNDLE" dist/manifest-provenance.jsonl
+        env:
+          BUNDLE: ${{ steps.manifest.outputs.bundle-path }}
+      - run: python3 scripts/publish-release.py checksums "$TAG"
+      - run: python3 scripts/verify-release.py dist
+      - name: Verify draft downloads and provenance; publish immutably; verify public release
+        run: python3 scripts/publish-release.py publish "$TAG"
+      - name: Remove runner registry credentials
+        if: always()
+        run: docker logout ghcr.io

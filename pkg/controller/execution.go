@@ -3,11 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
-	"github.com/dkropachev/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"log/slog"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 // executeOwner is the only controller execution path for both first admission

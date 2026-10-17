@@ -1,5 +1,9 @@
 # Production-readiness implementation and evidence audit
 
+The stable signed-tag release pipeline and its current blockers are documented in
+[RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
+publication instructions below; historical evidence is not current certification.
+
 Audited against the eight-phase production-readiness plan on 2026-10-16.
 This is an implementation candidate, not a production certification. The
 working tree is not a released commit. The evidence below distinguishes local

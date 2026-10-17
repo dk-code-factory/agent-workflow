@@ -1,0 +1,5 @@
+# Standard GitHub label added after the pinned actionlint release.
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+self-hosted-runner:
+  labels:
+    - macos-15-intel

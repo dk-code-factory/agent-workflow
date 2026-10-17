@@ -9,9 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/dkropachev/agent-workflow/internal/buildinfo"
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, returnErr error) {

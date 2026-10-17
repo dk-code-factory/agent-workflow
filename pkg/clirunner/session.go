@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error) {

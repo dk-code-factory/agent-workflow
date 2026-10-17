@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dkropachev/agent-workflow/pkg/process"
-	"github.com/dkropachev/agent-workflow/pkg/workflows"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 type PublicationPolicy struct {
