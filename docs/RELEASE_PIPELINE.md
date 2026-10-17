@@ -120,7 +120,8 @@ are current network inputs; scans are separate from deterministic tests.
 
 Archive timestamps, gzip metadata, order, ownership and modes are normalized.
 All tracked source bytes and executable modes, including Dockerfiles, enter the
-fingerprint. Worker builds pass the source epoch to BuildKit and Podman; the
+fingerprint. The archive builder refuses any Go runtime other than the exact
+`go_toolchain` pin; `go.mod` alone would otherwise allow a newer local toolchain. Worker builds pass the source epoch to BuildKit and Podman; the
 release still requires actual image identities to match reviewed evidence.
 Images are loaded from the tested compressed archives and pushed without a
 second build. The multi-architecture index references those platform digests.
@@ -198,8 +199,10 @@ patch, refresh dependencies by reviewed PR when necessary, and repeat all gates.
 ## Pending acceptance
 
 Repository creation and enabled immutability have been verified through the API.
-The full remote matrix, protection settings, live conformance, GHCR upload and
-immutable release still require verification. Current live credentials,
+Current deterministic CI results are available in
+[GitHub Actions](https://github.com/dk-code-factory/agent-workflow/actions/workflows/test.yml).
+Protection settings and current main checks are revalidated by the release gate.
+Live conformance, GHCR upload and immutable release verification remain pending. Current live credentials,
 named-scenario authorization, a designated disposable repository, reviewed signed
 evidence, and an exact clean committed candidate remain required. Genuine runtime
 restart/outage and broader provider-frame boundary certification also remain in

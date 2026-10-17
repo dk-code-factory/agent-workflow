@@ -35,6 +35,9 @@ if any((ROOT / name).read_bytes() != value for name, value in locked_go_files.it
     raise SystemExit("Go dependency locks were incomplete; review and commit them before packaging")
 
 metadata = json.loads(subprocess.check_output(["go", "run", "./cmd/agent-workflow", "version"], cwd=ROOT))
+pins = json.loads((ROOT / "images" / "pins.json").read_text())
+if metadata["go"] != pins["go_toolchain"]:
+    raise SystemExit("release requires pinned Go toolchain " + pins["go_toolchain"])
 version = metadata["version"]
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))

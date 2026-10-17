@@ -167,6 +167,18 @@ class GateRejectionTests(unittest.TestCase):
         with self.assertRaises(gate.GateError):
             fixture.validate()
 
+    def test_newer_toolchain_is_rejected_before_packaging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = root / 'go'
+            command.write_text('#!/bin/sh\nif [ "$1" = run ]; then printf \'%s\\n\' \'{"version":"0.2.0","go":"go99.0.0"}\'; fi\n')
+            command.chmod(0o755)
+            result = subprocess.run(['python3', str(Path(__file__).with_name('build-release.py')), '--output', str(root / 'dist')],
+                env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH']), capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('release requires pinned Go toolchain', result.stderr)
+            self.assertFalse(list((root / 'dist').glob('*.tar.gz')))
+
     def test_altered_archive_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

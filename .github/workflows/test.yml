@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
@@ -48,7 +48,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck=
       - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
   filesystem-conformance:
@@ -59,7 +59,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
       - name: Exhaust only a bounded tmpfs in a private mount namespace
         run: sudo env "PATH=$PATH" AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run '^TestDisposableFilesystemExhaustion$' -count=1
   container-conformance:
@@ -79,7 +79,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
       - name: Install Podman when selected
         if: matrix.runtime == 'podman'
         run: sudo apt-get update && sudo apt-get install -y podman
