@@ -1,0 +1,1 @@
+jobs: {build: &job {steps: [{argv: [echo]}]}, other: *job}

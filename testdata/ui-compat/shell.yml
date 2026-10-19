@@ -1,0 +1,1 @@
+jobs: {build: {steps: [{shell: sh, run: echo ok, timeout: 1m30s}]}}

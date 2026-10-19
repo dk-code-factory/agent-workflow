@@ -1,0 +1,4 @@
+jobs:
+  test:
+    needs: [{bad: value}]
+    steps: [{argv: [echo]}]

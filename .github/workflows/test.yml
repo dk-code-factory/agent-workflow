@@ -99,10 +99,40 @@ jobs:
         run: |
           export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat "dist/worker-linux-$ARCH.iid")"
           go test ./pkg/clirunner -run '^TestContainer(ExecutionAndCleanup|RuntimeRemoval)$' -count=1
+  workflow-ui:
+    name: Workflow UI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: make ui-install
+      - name: Check flow checker and UF documentation synchronization
+        run: |
+          make ui-flow-checker-test
+          node ui/scripts/flows-check.mjs --ci
+      - run: make ui-check ui-test
+      - run: npm exec --prefix ui -- playwright install --with-deps chromium firefox webkit
+      - run: make ui-browser-test
+      - name: Upload UI browser failure reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workflow-ui-browser-failure
+          path: |
+            ui/playwright-report/
+            ui/test-results/
+          if-no-files-found: ignore
   required:
     name: Required
     if: always()
-    needs: [native, workflow-validation, filesystem-conformance, container-conformance]
+    needs: [native, workflow-validation, workflow-ui, filesystem-conformance, container-conformance]
     runs-on: ubuntu-24.04
     steps:
       - env:

@@ -1,0 +1,6 @@
+jobs:
+  "true":
+    steps: [{argv: [echo]}]
+  test:
+    needs: true
+    steps: [{argv: [echo]}]

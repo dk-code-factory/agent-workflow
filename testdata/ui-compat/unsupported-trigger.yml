@@ -1,0 +1,5 @@
+on: {schedule: [{cron: "* * * * *"}]}
+jobs:
+  build:
+    steps:
+      - argv: [echo, ok]
