@@ -1,0 +1,8 @@
+name: 42
+jobs:
+  TRUE:
+    outputs: {answer: 42}
+    steps: [{argv: [echo, 01, true]}]
+  test:
+    needs: TRUE
+    steps: [{argv: [echo]}]

@@ -1,0 +1,2 @@
+on: {workflow_call: {inputs: {task: {type: string, required: !!str YES}}}}
+jobs: {build: {continue-on-error: !!str NO, steps: [{argv: [echo]}]}}

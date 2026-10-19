@@ -1,0 +1,4 @@
+jobs:
+  test:
+    repeat: {max-attempts: 100.9, until: done}
+    steps: [{argv: [echo]}]

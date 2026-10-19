@@ -4,3 +4,10 @@
 node_modules/
 /dist/
 __pycache__/
+/ui/dist/
+/ui/.consumer-artifacts/
+/ui/consumers/*/dist/
+/ui/test-results/
+/ui/playwright-report/
+/ui/.verification-tmp/
+/ui/public/packed/

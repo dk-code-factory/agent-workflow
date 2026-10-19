@@ -1,0 +1,1 @@
+jobs: {a: {needs: b, steps: [{argv: [echo]}]}, b: {needs: a, steps: [{argv: [echo]}]}}

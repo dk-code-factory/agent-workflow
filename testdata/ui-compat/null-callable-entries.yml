@@ -1,0 +1,2 @@
+on: {workflow_call: {inputs: {a: null}, secrets: {s: null}, outputs: {o: null}}}
+jobs: {test: {steps: [{argv: [echo]}]}}

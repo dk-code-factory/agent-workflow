@@ -1,0 +1,1 @@
+jobs: {build: {repeat: {max-attempts: 100, until: done}, steps: [{argv: [echo]}]}}

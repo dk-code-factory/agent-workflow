@@ -1,0 +1,5 @@
+on: {workflow_call: {inputs: {enabled: {required: "no"}}, secrets: {token: {required: YES}}}}
+jobs:
+  test:
+    continue-on-error: on
+    steps: [{argv: [echo], continue-on-error: off}]
