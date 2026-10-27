@@ -55,31 +55,35 @@ type Executor struct {
 	CommandExecution runtimeexec.Policy
 	Ready            func(context.Context) error
 
-	redactionValues map[string]string
-	Actions         ActionRunner
-	ActionFactory   func(json.RawMessage) (ActionRunner, error)
-	WorkspaceDir    string
-	DefinitionsDir  string
-	Agents          AgentRunner
-	Store           RunStore
-	MaxParallel     int
-	Roles           json.RawMessage
-	RoleRunner      func(json.RawMessage) (AgentRunner, error)
-	Slots           chan struct{}
+	redactionValues    map[string]string
+	Actions            ActionRunner
+	ApplicationActions *ActionRegistry
+	applicationActions map[string]*registeredAction
+	actionContracts    map[string]ActionContract
+	ActionFactory      func(json.RawMessage) (ActionRunner, error)
+	WorkspaceDir       string
+	DefinitionsDir     string
+	Agents             AgentRunner
+	Store              RunStore
+	MaxParallel        int
+	Roles              json.RawMessage
+	RoleRunner         func(json.RawMessage) (AgentRunner, error)
+	Slots              chan struct{}
 }
 
 type RunRequest struct {
-	Execution      runtimeexec.Policy
-	RequestID      string
-	Metadata       map[string]any
-	Ref            string
-	Inputs         map[string]any
-	Secrets        map[string]string
-	Event          map[string]any
-	SecretRefs     map[string]string
-	RetryUncertain bool
-	runID          string
-	iteration      int
+	Execution       runtimeexec.Policy
+	RequestID       string
+	Metadata        map[string]any
+	Ref             string
+	Inputs          map[string]any
+	Secrets         map[string]string
+	Event           map[string]any
+	SecretRefs      map[string]string
+	RetryUncertain  bool
+	actionContracts map[string]ActionContract
+	runID           string
+	iteration       int
 }
 
 // Load snapshots and validates the entire reusable workflow closure before any
@@ -189,6 +193,7 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 			return nil, err
 		}
 	}
+	req.actionContracts = e.actionContracts
 	ref, _ := CanonicalLocalRef(req.Ref)
 	limit := e.MaxParallel
 	if limit <= 0 {
@@ -319,7 +324,11 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			needsAttention = true
 		}
 		if (job.Status == RunStatusFailed && !w.Jobs[id].ContinueOnError) || job.Status == RunStatusNeedsAttention {
-			runErr = errors.Join(runErr, fmt.Errorf("job %s: %s", id, job.Error))
+			jobErr := fmt.Errorf("job %s: %s", id, job.Error)
+			if job.FailureClass == "action_integrity" {
+				jobErr = fmt.Errorf("%w: %v", ErrActionIntegrity, jobErr)
+			}
+			runErr = errors.Join(runErr, jobErr)
 		}
 	}
 	if ctx.Err() != nil {
@@ -454,7 +463,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if ctx.Err() != nil {
 			out.Status = RunStatusCanceled
 		}
-		if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
+		if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
 			out.Status = RunStatusNeedsAttention
 		}
 		out.Error = err.Error()
@@ -464,6 +473,12 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
 	if err := ctx.Err(); err != nil {
 		return fail(err)
+	}
+	for _, result := range needs {
+		if result.Status == RunStatusNeedsAttention {
+			out.Status = RunStatusSkipped
+			return out
+		}
 	}
 	if job.If == "" {
 		for dep, result := range needs {
@@ -512,6 +527,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			return fail(fmt.Errorf("secrets must be inherit or a mapping"))
 		}
 		ref, _ := CanonicalLocalRef(job.Uses)
+		childReq.actionContracts = req.actionContracts
 		childReq.SecretRefs = req.SecretRefs
 		childReq.RetryUncertain = req.RetryUncertain
 		hash := sha256.Sum256([]byte(req.runID + "/" + id + fmt.Sprint(req.iteration)))
@@ -560,7 +576,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			out.Steps[sid] = result
 			continue
 		}
-		if err == nil {
+		if err == nil && isApplicationAction(step.Uses) {
+			result, err = e.executeApplicationAction(ctx, step, ec)
+		} else if err == nil {
 			var attempt Attempt
 			var reused bool
 			journal, durable := e.Store.(Journal)
@@ -584,7 +602,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 					if ctx.Err() != nil {
 						result.Status = RunStatusCanceled
 					}
-					if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
+					if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
 						result.Status = RunStatusNeedsAttention
 					}
 				}
@@ -599,13 +617,13 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				result.Status = RunStatusCanceled
 			}
 			result.FailureClass = classifyFailure(err)
-			if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) {
+			if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
 				result.Status = RunStatusNeedsAttention
 			}
 			result.Error = err.Error()
 		}
 		out.Steps[sid] = result
-		if err != nil && !step.ContinueOnError {
+		if err != nil && (!step.ContinueOnError || errors.Is(err, ErrActionIntegrity)) {
 			return fail(err)
 		}
 	}
@@ -885,6 +903,12 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		return nil, fmt.Errorf("resume originating run %s", origin)
 	}
 	if run.Status == RunStatusSucceeded {
+		if err := e.preflight(ctx, snap.Definitions); err != nil {
+			return nil, err
+		}
+		if err := e.validateActionRecovery(ctx, run.ID, snap); err != nil {
+			return nil, err
+		}
 		return run, nil
 	}
 	if run.Status == RunStatusRunning {
@@ -939,12 +963,18 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if err = journal.Claim(ctx, run, previousStatus); err != nil {
 		return nil, err
 	}
+	if err = e.validateActionRecovery(fenceContext(ctx, run), run.ID, snap); err != nil {
+		run.Status = RunStatusNeedsAttention
+		run.Error = err.Error()
+		run.FinishedAt = time.Now().UTC()
+		return run, errors.Join(err, e.save(fenceContext(ctx, run), run))
+	}
 	for k, v := range run.Jobs {
 		if v.Status != RunStatusSucceeded {
 			delete(run.Jobs, k)
 		}
 	}
-	req := RunRequest{Execution: snap.Execution, Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
+	req := RunRequest{actionContracts: snap.ActionContracts, Execution: snap.Execution, Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
 	slots := e.Slots
 	if slots == nil {
 		limit := snap.Parallel

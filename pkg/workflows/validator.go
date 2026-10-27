@@ -89,6 +89,15 @@ func Validate(w *Workflow) error {
 			if step.Shell != "" || step.Timeout != "" || step.WorkingDirectory != "" {
 				return fmt.Errorf("step %s: command fields require argv or run", sid)
 			}
+			if isApplicationAction(step.Uses) {
+				if !idPattern.MatchString(strings.TrimPrefix(step.Uses, "action/")) {
+					return fmt.Errorf("step %s: invalid registered action name", sid)
+				}
+				if step.Context != (RunContext{}) {
+					return fmt.Errorf("step %s: registered actions cannot use session context", sid)
+				}
+				continue
+			}
 			if IsControllerAction(step.Uses) {
 				allowed := map[string]bool{}
 				switch step.Uses {

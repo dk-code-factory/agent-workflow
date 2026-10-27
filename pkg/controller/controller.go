@@ -274,7 +274,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	encode := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	if r.URL.Path == "/health" && r.Method == "GET" {
 		h := sha256.Sum256(s.Executor.Roles)
-		encode(map[string]any{"version": 1, "engine_version": buildinfo.Version, "build": buildinfo.Metadata(), "roles_hash": hex.EncodeToString(h[:]), "parallel": cap(s.Executor.Slots)})
+		encode(map[string]any{"version": 1, "engine_version": buildinfo.Version, "capabilities": workflows.Capabilities(), "build": buildinfo.Metadata(), "roles_hash": hex.EncodeToString(h[:]), "parallel": cap(s.Executor.Slots)})
 		return
 	}
 	if r.URL.Path == "/workflows" && r.Method == "GET" {

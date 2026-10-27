@@ -41,6 +41,7 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 			return nil, err
 		}
 	}
+	req.actionContracts = e.actionContracts
 	ref, _ := CanonicalLocalRef(req.Ref)
 	if _, err = resolveInputs(all[ref].On.WorkflowCall, req.Inputs, req.Secrets); err != nil {
 		return nil, err

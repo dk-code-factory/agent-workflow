@@ -23,18 +23,19 @@ const RunStatusNeedsAttention = "needs_attention"
 // Snapshot is the admitted definition closure and nonsecret execution context.
 // Credentials are resolved again on resume; values never belong here.
 type Snapshot struct {
-	Execution       runtimeexec.Policy   `json:"execution,omitempty"`
-	Metadata        map[string]any       `json:"metadata,omitempty"`
-	Version         int                  `json:"version"`
-	Definitions     map[string]*Workflow `json:"definitions"`
-	Hashes          map[string]string    `json:"hashes"`
-	Inputs          map[string]any       `json:"inputs,omitempty"`
-	Event           map[string]any       `json:"event,omitempty"`
-	SecretRefs      map[string]string    `json:"secret_refs,omitempty"`
-	RequestID       string               `json:"request_id,omitempty"`
-	RequiredSecrets []string             `json:"required_secrets,omitempty"`
-	Roles           json.RawMessage      `json:"roles,omitempty"`
-	Parallel        int                  `json:"parallel"`
+	ActionContracts map[string]ActionContract `json:"application_actions,omitempty"`
+	Execution       runtimeexec.Policy        `json:"execution,omitempty"`
+	Metadata        map[string]any            `json:"metadata,omitempty"`
+	Version         int                       `json:"version"`
+	Definitions     map[string]*Workflow      `json:"definitions"`
+	Hashes          map[string]string         `json:"hashes"`
+	Inputs          map[string]any            `json:"inputs,omitempty"`
+	Event           map[string]any            `json:"event,omitempty"`
+	SecretRefs      map[string]string         `json:"secret_refs,omitempty"`
+	RequestID       string                    `json:"request_id,omitempty"`
+	RequiredSecrets []string                  `json:"required_secrets,omitempty"`
+	Roles           json.RawMessage           `json:"roles,omitempty"`
+	Parallel        int                       `json:"parallel"`
 }
 
 type Attempt struct {
@@ -139,6 +140,7 @@ func newID() string { // crypto/rand is shared with the executor's admission hel
 func snapshotFor(all map[string]*Workflow, req RunRequest, roles json.RawMessage, parallel int) (Snapshot, error) {
 	s := Snapshot{RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
 	s.Execution = req.Execution
+	s.ActionContracts = req.actionContracts
 	for k, w := range all {
 		b, err := json.Marshal(w)
 		if err != nil {

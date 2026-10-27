@@ -14,6 +14,9 @@ func classifyFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, ErrActionIntegrity) {
+		return "action_integrity"
+	}
 	if errors.Is(err, process.ErrCleanup) {
 		return "needs_attention"
 	}

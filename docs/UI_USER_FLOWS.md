@@ -295,7 +295,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-20.spec.ts)
 
-- **Coverage:** Host fields and the custom prompt renderer update the appended action parameters.
+- **Coverage:** Host fields and the custom prompt renderer update the appended action parameters. Registered `action/<name>` forms edit bindings while preserving nested custom evidence parameters; browser validation reports that registration and typed schemas require the host runtime.
 
 - **Starting point:** The host provides custom action choices and forms.
 - **My flow:** I add the action from the palette or select its Step type →
@@ -449,7 +449,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-31.spec.ts)
 
-- **Coverage:** Correcting command arguments clears browser errors; rejected host validation appears in diagnostics.
+- **Coverage:** Correcting command arguments clears browser errors; rejected host validation appears in diagnostics. Correcting an invalid registered action name clears browser errors and exposes the host registration/schema check without requiring agent parameters.
 
 - **Starting point:** The diagnostics area reports warnings or errors.
 - **My flow:** I expand diagnostics → read the message, document path, source,

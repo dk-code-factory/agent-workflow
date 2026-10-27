@@ -192,6 +192,18 @@ content and rotate at 10 MiB with three retained files.
 
 ## Development actions and publication
 
+Registered application Go actions use `action/<name>` and a separate frozen
+registry. Their admitted manifest pins immutable implementation identity, derived
+object schemas, and explicit read-only/mutation classification. Schema 8 links
+action provenance and reconciliation history to step attempts. Action admission
+and completion atomically update both records under the originating execution
+fence. Successful job, repeat, and reusable-child reuse first validates current
+contracts, bindings, and retained evidence through application-owned read-only
+hooks. Lost mutation responses require receipt reconciliation: completed results
+are validated and committed, absence proofs commit before retry, and unknown
+outcomes remain blocked regardless of uncertain-retry acknowledgement. Application
+code owns authority and receipt storage; the CLI does not load Go plugins.
+
 The controller pins a Git baseline before admitting development actions. Writers
 get detached worktrees, or independent repositories for containers. Reviewers
 get fixed independent clones. Commit actions record intent before staging and

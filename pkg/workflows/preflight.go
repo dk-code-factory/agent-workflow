@@ -8,6 +8,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if err := e.configureActions(all); err != nil {
+		return err
+	}
 	if e.Ready != nil {
 		if err := e.Ready(ctx); err != nil {
 			return err

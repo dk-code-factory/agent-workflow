@@ -74,6 +74,11 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
+Registered Go `action/<name>` steps preserve custom parameters and use the existing
+host action forms. The browser validates identifier syntax and reports registration
+availability and typed schema validation as host checks. See the
+[Go action contract](../docs/REGISTERED_ACTIONS.md) for execution and recovery.
+
 ```ts
 const options = {
   source: yamlSource,
