@@ -99,10 +99,56 @@ jobs:
         run: |
           export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat "dist/worker-linux-$ARCH.iid")"
           go test ./pkg/clirunner -run '^TestContainer(ExecutionAndCleanup|RuntimeRemoval)$' -count=1
+  workflow-ui:
+    name: Workflow UI (${{ matrix.browser }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    container:
+      # Keep this version aligned with @playwright/test in ui/package-lock.json.
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --user 1001 --init --ipc=host
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui --ignore-scripts
+      - name: Check flow checker and UF documentation synchronization
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          node --test ui/scripts/flows-check.test.mjs
+          node ui/scripts/flows-check.mjs --ci
+      - name: Check types and unit tests
+        run: |
+          npm run check --prefix ui
+          npm test --prefix ui
+      - name: Build and test packed consumers
+        run: |
+          npm run build --prefix ui
+          npm run test:consumers --prefix ui
+      - name: Run browser tests
+        run: npm run test:browser --prefix ui -- --project=${{ matrix.browser }}
+      - name: Upload UI browser failure reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workflow-ui-${{ matrix.browser }}-failure
+          path: |
+            ui/playwright-report/
+            ui/test-results/
+          if-no-files-found: ignore
   required:
     name: Required
     if: always()
-    needs: [native, workflow-validation, filesystem-conformance, container-conformance]
+    needs: [native, workflow-validation, workflow-ui, filesystem-conformance, container-conformance]
     runs-on: ubuntu-24.04
     steps:
       - env:

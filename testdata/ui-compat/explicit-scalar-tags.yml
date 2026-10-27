@@ -1,0 +1,8 @@
+name: !!int 01
+jobs:
+  "TRUE":
+    repeat: {max-attempts: !!float 1.5, until: done}
+    steps: [{argv: [echo, !!bool TRUE, !!int 010, !!str 01]}]
+  test:
+    needs: !!bool TRUE
+    steps: [{argv: [echo]}]

@@ -552,3 +552,8 @@ standalone Go implementations.
 
 Stable release preparation, signed evidence, verification and remaining certification
 gates: [release operations](docs/RELEASE_PIPELINE.md).
+
+The independent [workflow viewer and editor](ui/README.md) provides React components,
+plain JavaScript mounts, and a standalone browser bundle for authoring workflow YAML.
+Run `make ui-install ui-check ui-test ui-browser-test` for deterministic UI validation,
+or `npm run dev --prefix ui` to explore the repository examples locally.

@@ -1,0 +1,2 @@
+name: null
+jobs: {build: {needs: null, continue-on-error: null, outputs: {result: null}, repeat: null, steps: [{id: null, run: null, uses: agent/claude, with: {prompt: ok}}]}}

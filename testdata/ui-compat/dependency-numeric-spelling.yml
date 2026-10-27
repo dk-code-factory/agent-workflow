@@ -1,0 +1,4 @@
+jobs:
+  test:
+    needs: [01, 0xA, 1.0]
+    steps: [{argv: [echo]}]

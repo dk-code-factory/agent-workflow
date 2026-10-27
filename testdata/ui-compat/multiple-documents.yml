@@ -1,0 +1,9 @@
+jobs:
+  build:
+    steps:
+      - argv: [echo, ok]
+---
+jobs:
+  build:
+    steps:
+      - argv: [echo, ok]

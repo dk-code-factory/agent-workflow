@@ -1,0 +1,6 @@
+jobs:
+  build:
+    steps: [{argv: [echo]}]
+  test:
+    needs: [" build ", "", null]
+    steps: [{argv: [echo]}]

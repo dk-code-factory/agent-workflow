@@ -1,0 +1,380 @@
+[
+  {
+    "name": "classify",
+    "file": "../../workflows/classify.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "parallel-review",
+    "file": "../../workflows/parallel-review.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "develop",
+    "file": "../../workflows/develop.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "develop-iteration",
+    "file": "../../workflows/develop-iteration.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "command",
+    "file": "command.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "shell",
+    "file": "shell.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "dependency",
+    "file": "dependency.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "cycle",
+    "file": "cycle.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "run-without-shell",
+    "file": "run-without-shell.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "command-with-action",
+    "file": "command-with-action.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "command-timeout",
+    "file": "command-timeout.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "action-parameter",
+    "file": "action-parameter.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-zero",
+    "file": "repeat-zero.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-large",
+    "file": "repeat-large.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-boundary",
+    "file": "repeat-boundary.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "alias",
+    "file": "alias.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "duplicate",
+    "file": "duplicate.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "multiple-documents",
+    "file": "multiple-documents.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "merge",
+    "file": "merge.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "unknown-field",
+    "file": "unknown-field.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "shape",
+    "file": "shape.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "unsupported-trigger",
+    "file": "unsupported-trigger.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "bad-id",
+    "file": "bad-id.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "empty",
+    "file": "empty.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "reserved-object-ids",
+    "file": "reserved-object-ids.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "unknown-action",
+    "file": "unknown-action.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "sub-nanosecond-timeout",
+    "file": "sub-nanosecond-timeout.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "overflow-timeout",
+    "file": "overflow-timeout.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "dependency-list-normalization",
+    "file": "dependency-list-normalization.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "dependency-scalar-boolean",
+    "file": "dependency-scalar-boolean.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "dependency-list-scalars",
+    "file": "dependency-list-scalars.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "dependency-numeric-spelling",
+    "file": "dependency-numeric-spelling.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "dependency-list-mapping",
+    "file": "dependency-list-mapping.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "scalar-string-fields",
+    "file": "scalar-string-fields.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "scalar-key-duplicate",
+    "file": "scalar-key-duplicate.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "legacy-boolean-fields",
+    "file": "legacy-boolean-fields.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-fractional",
+    "file": "repeat-fractional.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-fractional-upper",
+    "file": "repeat-fractional-upper.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-fractional-zero",
+    "file": "repeat-fractional-zero.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-fractional-negative",
+    "file": "repeat-fractional-negative.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-fractional-over-bound",
+    "file": "repeat-fractional-over-bound.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-octal",
+    "file": "repeat-octal.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-decimal-leading-zero",
+    "file": "repeat-decimal-leading-zero.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-exponent",
+    "file": "repeat-exponent.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "repeat-infinity",
+    "file": "repeat-infinity.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "repeat-nan",
+    "file": "repeat-nan.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "repeat-integer-max",
+    "file": "repeat-integer-max.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "repeat-integer-overflow",
+    "file": "repeat-integer-overflow.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "explicit-scalar-tags",
+    "file": "explicit-scalar-tags.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "null-argv-only",
+    "file": "null-argv-only.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "null-argv-elements",
+    "file": "null-argv-elements.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "null-step-elements",
+    "file": "null-step-elements.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "null-steps-only",
+    "file": "null-steps-only.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "null-job",
+    "file": "null-job.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "null-callable-entries",
+    "file": "null-callable-entries.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "null-optional-mappings",
+    "file": "null-optional-mappings.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "null-triggers",
+    "file": "null-triggers.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "root-null",
+    "file": "root-null.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "root-scalar",
+    "file": "root-scalar.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "root-sequence",
+    "file": "root-sequence.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "null-steps",
+    "file": "null-steps.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "typed-null-scalars",
+    "file": "typed-null-scalars.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "tagged-legacy-booleans",
+    "file": "tagged-legacy-booleans.yml",
+    "parse": true,
+    "valid": true
+  }
+]

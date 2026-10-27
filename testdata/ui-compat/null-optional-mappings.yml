@@ -1,0 +1,2 @@
+on: {workflow_call: null, channel_message: null, schedule: [null]}
+jobs: {test: {repeat: null, context: null, steps: [{argv: [echo], context: null}]}}
