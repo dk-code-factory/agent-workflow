@@ -472,7 +472,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-32.spec.ts)
 
-- **Coverage:** Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
+- **Coverage:** Host replacement with malformed YAML first preserves pending fields for confirmation; Use incoming discards them before stale editing resumes. Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
 
 - **Starting point:** My source becomes malformed or structurally unusable.
 - **My flow:** I read **Stale preview — fix the YAML structure to resume visual
@@ -539,16 +539,18 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source; theme controls, example-named downloads, layout storage, and reloading original source are exercised. The download-only notice is visible and no Save button or host save status claims draft persistence.
+- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Reset confirmation, cancellation, example isolation, retained layout, theme activation, and reload disposal are exercised.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
-  or `develop-iteration`) → explore or edit it → choose **Theme** (`system`,
-  `light`, or `dark`) → use **Export YAML** to download my changes.
-- **What I see:** **Export YAML** downloads an example-named YAML file. A notice explains that workflow drafts are not retained. The playground
-  remembers layout separately for each example in browser storage; switching
-  examples reloads the selected example's original source, so I download edits
-  I want to keep before switching.
+  or `develop-iteration`) → explore or edit it → switch examples and return to
+  my draft → choose **Theme** → use **Export YAML** to download my changes.
+  I select **Reset example** and confirm when I want its original source back.
+- **What I see:** Each example keeps its editor, source history, selection, and
+  unapplied inspector fields while the page stays open. Reset discards only the
+  active example's source, history, and inspector drafts, retaining layout and
+  the current theme. Cancellation preserves the draft. Layout is stored separately
+  in browser storage; reloading clears drafts. Export uses the example's filename.
 
 ## Connecting work across jobs and steps
 
@@ -706,16 +708,19 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-47.spec.ts)
 
-- **Coverage:** Undo after a host replacement restores the prior local draft for export.
+- **Coverage:** Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Both visible controls and the imperative handle discard unapplied text without committing it, with undo recovery. Controlled React echoes and repeated props do not reopen notices.
 
-- **Starting point:** The host replaces the definition in the same open editor
-  instance, for example after loading an updated version.
-- **My flow:** I inspect the new graph and YAML → select **Undo** if I want my
-  previous draft back → review it and save or export the version I want to keep.
-- **What I see:** Source replacement participates in the document history, so
-  the previous draft can be restored while that editor instance remains open.
-  This is document undo; it does not reverse storage changes already made by
-  the host or recover history after the editor is destroyed and reopened.
+- **Starting point:** The host sends a different definition to the same editor.
+- **My flow:** I read the incoming-source notice → select **Keep local** to retain
+  my draft, or **Use incoming** to discard unapplied fields and accept the latest
+  host source → review and save or export. I can **Undo** an accepted replacement.
+- **What I see:** Local source edits and pending inspector text trigger confirmation.
+  Clean replacements and read-only viewer updates appear immediately. Change echoes
+  and repeated incoming values do not reopen resolved notices. Accepted replacement
+  is one source-history edit; unapplied field text is excluded from snapshots and
+  cannot be restored with document undo. `hasLocalChanges` exposes draft protection
+  independently from save status. Destruction remains unconditional; the embedding
+  host must confirm disposal or retain the instance before destroying it.
 
 ## Implementation references
 

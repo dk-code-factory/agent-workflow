@@ -330,9 +330,13 @@ describe('asynchronous host lifecycle', () => {
     expect(document.getSnapshot().dirty).toBe(false);
     document.redo();
     expect(document.getSnapshot().dirty).toBe(true);
-    document.update({ source });
+    document.update({ source: 'name: Incoming\njobs: {}' });
+    document.resolveSourceReplacement('use-incoming');
+    expect(document.getSnapshot().dirty).toBe(true);
+    document.undo(); document.undo();
     expect(document.getSnapshot().dirty).toBe(false);
     document.update({ source: 'jobs: [' });
+    document.resolveSourceReplacement('use-incoming');
     expect(document.getSnapshot().dirty).toBe(true);
     await document.save();
     expect(document.getSnapshot()).toMatchObject({ dirty: false, stale: true });
@@ -346,10 +350,10 @@ describe('asynchronous host lifecycle', () => {
     await document.save();
     expect(onSave).toHaveBeenCalledTimes(1);
     finish(); await pending;
-    expect(document.getSnapshot()).toMatchObject({ dirty: true, saving: false });
+    expect(document.getSnapshot()).toMatchObject({ dirty: true, saving: false, hasLocalChanges: true });
     expect(onSave.mock.calls[0][0].source).toBe(source);
     document.undo();
-    expect(document.getSnapshot().dirty).toBe(false);
+    expect(document.getSnapshot()).toMatchObject({ dirty: false, hasLocalChanges: false });
     document.setInspectorDirty(true);
     const next = document.save(); finish(); await next;
     expect(document.getSnapshot().dirty).toBe(true);
@@ -392,5 +396,77 @@ describe('asynchronous host lifecycle', () => {
     await pending;
     expect(document.getSnapshot()).toBe(snapshot);
     expect(changed).toHaveBeenCalledTimes(calls);
+  });
+});
+
+
+describe('host source replacement protection', () => {
+  it('starts clean independently from saving and protects edits through echoes', () => {
+    const doc = new WorkflowDocument({ source });
+    expect(doc.getSnapshot()).toMatchObject({ hasLocalChanges: false, dirty: true });
+    doc.setField(['name'], 'Local');
+    const local = doc.getSnapshot().source;
+    doc.update({ source }); // unchanged initial prop
+    doc.update({ source: local });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
+    // A host that changes back to the original after echoing a local edit
+    // is requesting a real replacement, rather than repeating an initial prop.
+    doc.update({ source });
+    expect(doc.getSnapshot().pendingSourceReplacement).toBe(source);
+    doc.resolveSourceReplacement('keep-local');
+    const incoming = 'name: Incoming\njobs: {}';
+    doc.update({ source: incoming });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: incoming });
+    doc.resolveSourceReplacement('keep-local');
+    doc.update({ source: local }); doc.update({ source: incoming });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
+  });
+  it('accepts clean replacements and viewers immediately', () => {
+    for (const readOnly of [false, true]) {
+      const doc = new WorkflowDocument({ source }, readOnly);
+      doc.update({ source: 'jobs: {}' });
+      expect(doc.getSnapshot()).toMatchObject({ source: 'jobs: {}', hasLocalChanges: false, pendingSourceReplacement: undefined });
+      doc.undo();
+      expect(doc.getSnapshot().source).toBe(readOnly ? 'jobs: {}' : source);
+    }
+  });
+  it('protects inspector text and uses the newest candidate as one undoable edit', () => {
+    const doc = new WorkflowDocument({ source });
+    const discard = vi.fn(); doc.onDiscardInspector(discard);
+    doc.setInspectorDirty(true);
+    doc.update({ source: 'jobs: {}' });
+    doc.update({ source: '' });
+    expect(doc.getSnapshot()).toMatchObject({ hasLocalChanges: true, pendingSourceReplacement: '' });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(doc.getSnapshot()).toMatchObject({ source: '', hasLocalChanges: false, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, hasLocalChanges: true });
+    doc.redo(); expect(doc.getSnapshot().hasLocalChanges).toBe(false);
+  });
+  it('does not let old saves override accepted replacements or newer inspector protection', async () => {
+    let finish = () => {};
+    const doc = new WorkflowDocument({ source, onSave: () => new Promise<void>(resolve => { finish = resolve; }) });
+    doc.setField(['name'], 'Submitted');
+    const pending = doc.save();
+    doc.update({ source: 'jobs: {}' }); doc.resolveSourceReplacement('use-incoming');
+    doc.setSource(source);
+    finish(); await pending;
+    expect(doc.getSnapshot().hasLocalChanges).toBe(true);
+    doc.update({ source: 'name: Newer\njobs: {}' });
+    expect(doc.getSnapshot().pendingSourceReplacement).toContain('Newer');
+    doc.resolveSourceReplacement('use-incoming');
+    const next = doc.save(); doc.setInspectorDirty(true); finish(); await next;
+    expect(doc.getSnapshot().hasLocalChanges).toBe(true);
+  });
+  it('saves current source as the protection baseline and ignores obsolete validation', async () => {
+    const responses: ((value: []) => void)[] = [];
+    const doc = new WorkflowDocument({ source, onSave: () => {}, validate: () => new Promise<[]>(resolve => responses.push(resolve)) });
+    doc.start(); doc.setField(['name'], 'Saved'); await doc.save();
+    expect(doc.getSnapshot().hasLocalChanges).toBe(false);
+    doc.update({ source: 'jobs: {}' });
+    responses[0]([]); await Promise.resolve();
+    expect(doc.getSnapshot()).toMatchObject({ source: 'jobs: {}', hasLocalChanges: false, validating: true });
+    responses.at(-1)!([]); await Promise.resolve();
+    expect(doc.getSnapshot().validating).toBe(false);
   });
 });

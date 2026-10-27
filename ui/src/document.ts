@@ -19,13 +19,18 @@ export class WorkflowDocument {
   private lastEditTime = 0;
   private savedSource?: string;
   private inspectorDirty = false;
+  private protectionSource: string;
+  private protectionEpoch = 0;
+  private lastIncomingSource?: string;
+  private discardInspectorListeners = new Set<() => void>();
   readonly readOnly: boolean;
   layout: LayoutState;
   constructor(options: WorkflowOptions, readOnly = false) {
     this.options = options; this.readOnly = readOnly;
+    this.protectionSource = options.source;
     this.layout = structuredClone(options.layout ?? emptyLayout());
     this.parsed = parseWorkflow(options.source);
-    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false, dirty: true };
+    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false, dirty: true, hasLocalChanges: false, pendingSourceReplacement: undefined };
   }
   start = () => { this.disposed = false; void this.validate(); };
   getOptions = () => this.options;
@@ -36,8 +41,31 @@ export class WorkflowDocument {
     const previous = this.options;
     this.options = { ...previous, ...options };
     if (options.layout) this.layout = structuredClone(options.layout);
-    if (options.source !== undefined && options.source !== this.snapshot.source) this.commit(options.source, true);
-    else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); if (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows)) void this.validate(); }
+    // Current-source echoes are acknowledgements of neither saving nor draft
+    // disposal. Remember distinct incoming candidates separately from echoes.
+    if (options.source !== undefined && options.source !== previous.source && options.source !== this.snapshot.source && options.source !== this.lastIncomingSource) {
+      this.lastIncomingSource = options.source;
+      if (!this.readOnly && this.snapshot.hasLocalChanges) {
+        this.snapshot = { ...this.snapshot, pendingSourceReplacement: options.source };
+        this.emit();
+      } else this.acceptSource(options.source);
+    } else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
+    if (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows)) void this.validate();
+  }
+  onDiscardInspector = (listener: () => void) => { this.discardInspectorListeners.add(listener); return () => { this.discardInspectorListeners.delete(listener); }; };
+  resolveSourceReplacement(choice: 'keep-local' | 'use-incoming') {
+    if (this.disposed || this.snapshot.pendingSourceReplacement === undefined) return;
+    const incoming = this.snapshot.pendingSourceReplacement;
+    if (choice === 'use-incoming') this.acceptSource(incoming);
+    else { this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined }; this.emit(); }
+  }
+  private acceptSource(source: string) {
+    this.discardInspectorListeners.forEach(discard => discard());
+    this.inspectorDirty = false;
+    this.protectionSource = source; this.protectionEpoch++;
+    this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined, hasLocalChanges: this.snapshot.source !== source, dirty: this.snapshot.source !== this.savedSource };
+    if (source !== this.snapshot.source) this.commit(source, true);
+    else this.emit();
   }
   setLayout(next: LayoutState) { this.layout = structuredClone(next); this.options.onLayoutChange?.(structuredClone(this.layout)); this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
   private commit(source: string, history: boolean, group?: string) {
@@ -49,7 +77,7 @@ export class WorkflowDocument {
     }
     this.historyGroup = history ? group : undefined;
     this.parsed = parseWorkflow(source);
-    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource };
+    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource, hasLocalChanges: this.inspectorDirty || source !== this.protectionSource };
     this.emit(); void this.validate();
   }
   getPathAtOffset(offset: number): Path {
@@ -346,7 +374,7 @@ export class WorkflowDocument {
   setInspectorDirty(dirty: boolean) {
     if (this.disposed || this.inspectorDirty === dirty) return;
     this.inspectorDirty = dirty;
-    this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource };
+    this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource, hasLocalChanges: dirty || this.snapshot.source !== this.protectionSource };
     this.emit();
   }
   dismissSaveError() {
@@ -360,12 +388,16 @@ export class WorkflowDocument {
     const onSave = this.options.onSave;
     const submitted = structuredClone({ ...this.snapshot, saving: true, saveError: undefined });
     const revision = submitted.revision;
+    const protectionEpoch = this.protectionEpoch;
     this.snapshot = submitted; this.emit();
     try {
       await onSave(structuredClone(submitted));
       if (!this.disposed) {
         this.savedSource = submitted.source;
-        this.snapshot = { ...this.snapshot, dirty: this.inspectorDirty || this.snapshot.source !== this.savedSource };
+        // An older save still establishes a saved-source baseline, but must
+        // never supersede a host replacement accepted while it was pending.
+        if (protectionEpoch === this.protectionEpoch) this.protectionSource = submitted.source;
+        this.snapshot = { ...this.snapshot, dirty: this.inspectorDirty || this.snapshot.source !== this.savedSource, hasLocalChanges: this.inspectorDirty || this.snapshot.source !== this.protectionSource };
       }
     }
     catch (error) { if (!this.disposed && revision === this.snapshot.revision) this.snapshot = { ...this.snapshot, saveError: String(error) }; }

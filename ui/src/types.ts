@@ -21,6 +21,10 @@ export interface Snapshot {
   saving: boolean; saveError?: string;
   /** Source or built-in inspector edits differ from the last successful save. */
   dirty: boolean;
+  /** Source differs from the initial/accepted/saved source, or inspector text is pending. */
+  hasLocalChanges: boolean;
+  /** New host source awaiting an explicit choice; excludes unapplied inspector text. */
+  pendingSourceReplacement?: string;
 }
 export interface LayoutState {
   positions: Record<string, { x: number; y: number }>;
@@ -68,5 +72,6 @@ export interface WorkflowOptions {
 export interface WorkflowHandle {
   update: (options: Partial<WorkflowOptions>) => void;
   getSnapshot: () => Snapshot;
+  resolveSourceReplacement: (choice: 'keep-local' | 'use-incoming') => void;
   destroy: () => void;
 }

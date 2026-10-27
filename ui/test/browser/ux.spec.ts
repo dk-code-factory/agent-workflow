@@ -36,6 +36,8 @@ test('synchronous host normalization does not reenter CodeMirror updates', async
   } }));
   await first.getByRole('button', { name: 'YAML', exact: true }).click();
   await first.getByRole('textbox', { name: 'Workflow YAML' }).fill('name: NORMALIZE\njobs: {}');
+  await expect(first.getByRole('textbox', { name: 'Workflow YAML' })).toContainText('NORMALIZE');
+  await first.getByRole('button', { name: 'Use incoming', exact: true }).click();
   await expect(first.getByRole('textbox', { name: 'Workflow YAML' })).toContainText('normalized');
   expect(errors).toEqual([]);
 });
@@ -48,6 +50,11 @@ for (const theme of ['light', 'dark', 'system'] as const) test(`accessible ${the
   const scan = () => new AxeBuilder({ page }).include('#a').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect((await scan()).violations).toEqual([]);
   await first.getByRole('button', { name: 'Delete job', exact: true }).click();
+  expect((await scan()).violations).toEqual([]);
+  await first.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await first.getByLabel('Name', { exact: true }).fill('Local job draft');
+  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {}' }));
+  await expect(first.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
   expect((await scan()).violations).toEqual([]);
 });
 

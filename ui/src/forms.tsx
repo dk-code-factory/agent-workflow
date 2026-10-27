@@ -13,13 +13,14 @@ export function applyEdit(fn: () => void): ApplyResult {
   try { fn(); return { ok: true }; }
   catch (error) { return { ok: false, error: String(error) }; }
 }
-type InspectorDraft = { apply: () => boolean; reveal: () => void; identifier: boolean; isPending: () => boolean };
+type InspectorDraft = { apply: () => boolean; discard: () => void; reveal: () => void; identifier: boolean; isPending: () => boolean };
 export class InspectorDrafts {
   private fields = new Set<InspectorDraft>();
   constructor(private onPendingChange: (pending: boolean) => void) {}
   changed() { this.onPendingChange([...this.fields].some(field => field.isPending())); }
   register(field: InspectorDraft) { this.fields.add(field); this.changed(); return () => { this.fields.delete(field); this.changed(); }; }
   pending() { return [...this.fields].find(field => field.isPending()); }
+  discard() { this.fields.forEach(field => field.discard()); this.changed(); }
   apply() {
     // Apply values before converting their type or renaming containing paths;
     // nested structural fields precede parent identifiers. Blurred values are already applied.
@@ -70,7 +71,9 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
   };
   const latestApply = useRef(apply);
   latestApply.current = apply;
-  useEffect(() => registry?.register({ identifier, isPending: pending, apply: () => latestApply.current(), reveal: () => {
+  const latestDiscard = useRef(discard);
+  latestDiscard.current = discard;
+  useEffect(() => registry?.register({ identifier, isPending: pending, apply: () => latestApply.current(), discard: () => latestDiscard.current(), reveal: () => {
     for (let parent = control.current?.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }

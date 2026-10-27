@@ -5,6 +5,8 @@ test('stale preview discards pending property drafts before editing resumes', as
   await editor.getByLabel('Name', { exact: true }).fill('Uncommitted name');
   const source = await page.evaluate(() => (window as any).first.getSnapshot().source);
   await page.evaluate(() => (window as any).first.update({ source: 'jobs: [' }));
+  await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Uncommitted name');
+  await editor.getByRole('button', { name: 'Use incoming', exact: true }).click();
   await expect(editor.getByLabel('Name', { exact: true })).toHaveAttribute('readonly', '');
   await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Browser workflow');
   await page.evaluate(source => (window as any).first.update({ source }), source);

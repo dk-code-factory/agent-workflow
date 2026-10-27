@@ -18,6 +18,7 @@ function mount(element: HTMLElement, options: WorkflowOptions, readOnly: boolean
   return {
     update: next => { if (destroyed) throw new Error('Workflow instance was destroyed'); store.update(next); },
     getSnapshot: () => structuredClone(store.getSnapshot()),
+    resolveSourceReplacement: choice => { if (destroyed) throw new Error('Workflow instance was destroyed'); store.resolveSourceReplacement(choice); },
     destroy: () => { if (!destroyed) { destroyed = true; root.unmount(); store.destroy(); } },
   };
 }

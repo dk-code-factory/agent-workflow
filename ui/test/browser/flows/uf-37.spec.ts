@@ -18,9 +18,9 @@ test('all repository workflows load in the playground and export unchanged sourc
 });
 
 
-test('playground downloads use example names without claiming draft persistence', async ({ page }) => {
+test('playground retains per-example drafts, history, selection, theme, and download names', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('Export YAML downloads your changes. Only layout is stored; workflow drafts are not retained.')).toBeVisible();
+  await expect(page.getByText('Export YAML downloads your changes. Drafts stay available while this page is open. Reloading clears drafts; layout is stored separately.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
   await expect(page.getByRole('status', { name: 'Save status', exact: true })).toHaveCount(0);
   for (const theme of ['dark', 'light', 'system']) {
@@ -40,6 +40,73 @@ test('playground downloads use example names without claiming draft persistence'
   await page.locator('#example').selectOption('parallel-review');
   await page.locator('#example').selectOption('classify');
   await page.getByRole('button', { name: 'Workflow properties', exact: true }).click();
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Playground draft');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Playground draft');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Playground draft');
   expect(await page.evaluate(() => localStorage.getItem('workflow-layout:classify'))).toBe(layout);
+});
+
+
+test('switching preserves invalid YAML and rejected inspector fields', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Inspect job classify', exact: true }).click();
+  const identifier = page.getByLabel('Job ID', { exact: true });
+  await identifier.fill('bad id'); await identifier.press('Tab');
+  await expect(identifier).toHaveAttribute('aria-invalid', 'true');
+  await page.locator('#example').selectOption('parallel-review');
+  await page.locator('#theme').selectOption('dark');
+  await page.locator('#example').selectOption('classify');
+  await expect(page.locator('.aw-editor')).toHaveAttribute('data-theme', 'dark');
+  await expect(identifier).toHaveValue('bad id');
+  await expect(identifier).toHaveAttribute('aria-invalid', 'true');
+  await identifier.press('Escape');
+  await page.getByRole('button', { name: 'YAML', exact: true }).click();
+  await page.locator('.cm-content').fill('jobs: [broken');
+  await expect(page.locator('.aw-stale')).toBeVisible();
+  await page.locator('#example').selectOption('develop');
+  await page.locator('#example').selectOption('classify');
+  await expect(page.locator('.cm-content')).toHaveText('jobs: [broken');
+  await expect(page.locator('.aw-stale')).toBeVisible();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.aw-stale')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(page.locator('.cm-content')).toHaveText('jobs: [broken');
+});
+
+test('reset confirms disposal, isolates examples, and retains layout and theme', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Name', { exact: true }).fill('Classify draft');
+  await page.getByLabel('Name', { exact: true }).press('Enter');
+  await page.getByLabel('Name', { exact: true }).fill('Unapplied reset draft');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: 'Reset example', exact: true }).click();
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Unapplied reset draft');
+  await expect(page.locator('.cm-content')).toContainText('Classify draft');
+  await expect(page.locator('.cm-content')).not.toContainText('Unapplied reset draft');
+  await page.getByLabel('Name', { exact: true }).press('Escape');
+  await page.getByRole('button', { name: 'Expand classify', exact: true }).click();
+  await page.locator('#example').selectOption('parallel-review');
+  await page.getByLabel('Name', { exact: true }).fill('Parallel draft');
+  await page.getByLabel('Name', { exact: true }).press('Enter');
+  await page.locator('#example').selectOption('classify');
+  await page.locator('#theme').selectOption('dark');
+  await page.getByRole('button', { name: 'Inspect job classify', exact: true }).click();
+  await page.getByLabel('Job ID', { exact: true }).fill('bad id');
+  await page.getByLabel('Job ID', { exact: true }).press('Tab');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: 'Reset example', exact: true }).click();
+  await expect(page.getByLabel('Job ID', { exact: true })).toHaveValue('bad id');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Reset example', exact: true }).click();
+  await expect(page.locator('.aw-editor')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Classify draft');
+  await expect(page.getByRole('button', { name: 'Expand classify', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeDisabled();
+  await page.locator('#example').selectOption('parallel-review');
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Parallel draft');
+  await page.reload();
+  await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Classify draft');
 });

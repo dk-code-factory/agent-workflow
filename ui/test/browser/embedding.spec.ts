@@ -91,6 +91,8 @@ test('uncontrolled React host rerenders preserve local drafts and accept source 
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
   await expect.poll(() => page.evaluate(() => (window as any).latest.workflow.name)).toBe('Local draft');
   await page.evaluate(() => (window as any).replaceHostSource('name: Host replacement\njobs: {replacement: {steps: [{argv: [echo]}]}}'));
+  await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
+  await first.getByRole('button', { name: 'Use incoming', exact: true }).click();
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Host replacement');
   await first.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
