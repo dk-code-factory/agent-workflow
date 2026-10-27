@@ -11,10 +11,12 @@ export function applyEdit(fn: () => void): ApplyResult {
   try { fn(); return { ok: true }; }
   catch (error) { return { ok: false, error: String(error) }; }
 }
-type InspectorDraft = { apply: () => boolean; reveal: () => void; identifier: boolean };
+type InspectorDraft = { apply: () => boolean; reveal: () => void; identifier: boolean; isPending: () => boolean };
 export class InspectorDrafts {
   private fields = new Set<InspectorDraft>();
-  register(field: InspectorDraft) { this.fields.add(field); return () => { this.fields.delete(field); }; }
+  constructor(private onPendingChange: (pending: boolean) => void) {}
+  changed() { this.onPendingChange([...this.fields].some(field => field.isPending())); }
+  register(field: InspectorDraft) { this.fields.add(field); this.changed(); return () => { this.fields.delete(field); this.changed(); }; }
   apply() {
     // Apply values before renaming their containing paths; nested identifiers
     // precede the job identifier. A successful blur is already accounted for.
@@ -39,24 +41,25 @@ export function Field({ label, value, onApply, readOnly, multiline = false, type
   const errorID = useId();
   const registry = useContext(InspectorDraftContext);
   const cursor = useRef<{ start: number; end: number } | undefined>(undefined);
-  const updateDraft = (next: string) => { current.current = next; setDraft(next); };
-  const discard = () => { updateDraft(text); applied.current = text; setError(''); };
+  const updateDraft = (next: string) => { current.current = next; setDraft(next); registry?.changed(); };
+  const discard = () => { applied.current = text; updateDraft(text); setError(''); };
   useEffect(() => {
     // A sibling field can change this field's stored subtree. Keep its pending
     // draft until it is applied or explicitly discarded.
     const pending = current.current !== applied.current;
     applied.current = text;
     if (!pending || readOnly) { current.current = text; setDraft(text); setError(''); }
+    registry?.changed();
   }, [text, readOnly]);
   const apply = () => {
     if (readOnly || current.current === applied.current) { setError(''); return true; }
     const result = onApply(current.current);
     if (!result.ok) { setError(result.error); return false; }
-    applied.current = current.current; setError(''); return true;
+    applied.current = current.current; registry?.changed(); setError(''); return true;
   };
   const latestApply = useRef(apply);
   latestApply.current = apply;
-  useEffect(() => registry?.register({ identifier, apply: () => latestApply.current(), reveal: () => {
+  useEffect(() => registry?.register({ identifier, isPending: () => current.current !== applied.current, apply: () => latestApply.current(), reveal: () => {
     for (let parent = control.current?.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }

@@ -16,13 +16,15 @@ export class WorkflowDocument {
   private disposed = false;
   private historyGroup?: string;
   private lastEditTime = 0;
+  private savedSource?: string;
+  private inspectorDirty = false;
   readonly readOnly: boolean;
   layout: LayoutState;
   constructor(options: WorkflowOptions, readOnly = false) {
     this.options = options; this.readOnly = readOnly;
     this.layout = structuredClone(options.layout ?? emptyLayout());
     this.parsed = parseWorkflow(options.source);
-    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false };
+    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false, dirty: true };
   }
   start = () => { this.disposed = false; void this.validate(); };
   getOptions = () => this.options;
@@ -46,7 +48,7 @@ export class WorkflowDocument {
     }
     this.historyGroup = history ? group : undefined;
     this.parsed = parseWorkflow(source);
-    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined };
+    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource };
     this.emit(); void this.validate();
   }
   getPathAtOffset(offset: number): Path {
@@ -264,6 +266,12 @@ export class WorkflowDocument {
       seq.items.splice(to, 0, seq.items.splice(from, 1)[0]);
     });
   }
+  setInspectorDirty(dirty: boolean) {
+    if (this.disposed || this.inspectorDirty === dirty) return;
+    this.inspectorDirty = dirty;
+    this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource };
+    this.emit();
+  }
   dismissSaveError() {
     if (this.snapshot.saveError) {
       this.snapshot = { ...this.snapshot, saveError: undefined };
@@ -272,9 +280,17 @@ export class WorkflowDocument {
   }
   async save() {
     if (this.readOnly || !this.options.onSave || this.snapshot.saving) return;
-    const revision = this.snapshot.revision;
-    this.snapshot = { ...this.snapshot, saving: true, saveError: undefined }; this.emit();
-    try { await this.options.onSave(structuredClone(this.snapshot)); }
+    const onSave = this.options.onSave;
+    const submitted = structuredClone({ ...this.snapshot, saving: true, saveError: undefined });
+    const revision = submitted.revision;
+    this.snapshot = submitted; this.emit();
+    try {
+      await onSave(structuredClone(submitted));
+      if (!this.disposed) {
+        this.savedSource = submitted.source;
+        this.snapshot = { ...this.snapshot, dirty: this.inspectorDirty || this.snapshot.source !== this.savedSource };
+      }
+    }
     catch (error) { if (!this.disposed && revision === this.snapshot.revision) this.snapshot = { ...this.snapshot, saveError: String(error) }; }
     finally { if (!this.disposed) { this.snapshot = { ...this.snapshot, saving: false }; this.emit(); } }
   }

@@ -484,12 +484,12 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable.
+- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
-  pending inspector fields and save → wait for **Saving…** to finish.
-- **What I see:** The host handles the submitted source. If saving fails, an
+  pending inspector fields and save → wait for **Saving…** to finish and check **Saved** or **Unsaved changes**.
+- **What I see:** The host handles the exact submitted source. **Unsaved changes** appears until a successful save matches the current source and no inspector edits remain pending. Edits made during saving remain unsaved when it finishes. A failed save shows **Save failed** and an
   alert lets me read and **Dismiss** the error; I can retry. If an inspector edit cannot apply, saving stops and its field is revealed and focused. I correct it, press Escape, or choose Discard edit, then explicitly save again. Save accepts source drafts
   with diagnostics and is never automatic. Without host saving, I use export.
 
@@ -497,14 +497,14 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-35.spec.ts)
 
-- **Coverage:** Downloads preserve original source bytes and include malformed drafts.
+- **Coverage:** Downloads preserve original source bytes and include malformed drafts. Exporting a changed draft leaves host persistence status unsaved; saving that draft through the host can mark it saved.
 
 - **Starting point:** A workflow or draft is open in the editor or viewer.
 - **My flow:** I select **Export YAML** → receive `workflow.yml` through my
   browser's download handling.
 - **What I see:** The download contains the current source, including a draft
   with diagnostics. If I have not edited the source, its original bytes are
-  preserved. Canvas layout is separate from the exported YAML.
+  preserved. Exporting does not change host save status. Canvas layout is separate from the exported YAML.
 
 ### UF-36 — Inspect a workflow in read-only mode
 
@@ -522,13 +522,13 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source; theme controls, example-named saves, layout storage, and reloading original source are exercised.
+- **Coverage:** All four examples export unchanged source; theme controls, example-named downloads, layout storage, and reloading original source are exercised. The download-only notice is visible and no Save button or host save status claims draft persistence.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
   or `develop-iteration`) → explore or edit it → choose **Theme** (`system`,
-  `light`, or `dark`) → use **Save** or **Export YAML** to download my changes.
-- **What I see:** Save downloads an example-named YAML file. The playground
+  `light`, or `dark`) → use **Export YAML** to download my changes.
+- **What I see:** **Export YAML** downloads an example-named YAML file. A notice explains that workflow drafts are not retained. The playground
   remembers layout separately for each example in browser storage; switching
   examples reloads the selected example's original source, so I download edits
   I want to keep before switching.

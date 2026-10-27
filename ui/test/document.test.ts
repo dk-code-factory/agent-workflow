@@ -284,6 +284,54 @@ describe('asynchronous host lifecycle', () => {
     expect(document.getSnapshot()).toBe(snapshot);
     expect(changed).toHaveBeenCalledTimes(calls);
   });
+  it('compares exact saved content across edits, undo and host updates', async () => {
+    const document = new WorkflowDocument({ source, onSave: () => {} });
+    expect(document.getSnapshot().dirty).toBe(true);
+    await document.save();
+    expect(document.getSnapshot().dirty).toBe(false);
+    document.setField(['name'], 'Edited');
+    expect(document.getSnapshot().dirty).toBe(true);
+    document.undo();
+    expect(document.getSnapshot().dirty).toBe(false);
+    document.redo();
+    expect(document.getSnapshot().dirty).toBe(true);
+    document.update({ source });
+    expect(document.getSnapshot().dirty).toBe(false);
+    document.update({ source: 'jobs: [' });
+    expect(document.getSnapshot().dirty).toBe(true);
+    await document.save();
+    expect(document.getSnapshot()).toMatchObject({ dirty: false, stale: true });
+  });
+  it('retains the submitted source when edits or inspector drafts arrive during saving', async () => {
+    let finish = () => {};
+    const onSave = vi.fn((_snapshot: { source: string }) => new Promise<void>(resolve => { finish = resolve; }));
+    const document = new WorkflowDocument({ source, onSave });
+    const pending = document.save();
+    document.setField(['name'], 'New revision');
+    await document.save();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    finish(); await pending;
+    expect(document.getSnapshot()).toMatchObject({ dirty: true, saving: false });
+    expect(onSave.mock.calls[0][0].source).toBe(source);
+    document.undo();
+    expect(document.getSnapshot().dirty).toBe(false);
+    document.setInspectorDirty(true);
+    const next = document.save(); finish(); await next;
+    expect(document.getSnapshot().dirty).toBe(true);
+    document.setInspectorDirty(false);
+    expect(document.getSnapshot().dirty).toBe(false);
+  });
+  it('pins submitted content before notifying the host and protects it from callback mutations', async () => {
+    let changed = false;
+    const onSave = vi.fn((snapshot: any) => { snapshot.source = 'callback mutation'; });
+    const document = new WorkflowDocument({ source, onSave, onChange: snapshot => {
+      if (snapshot.saving && !changed) { changed = true; document.setSource('jobs: ['); }
+    } });
+    await document.save();
+    expect(document.getSnapshot()).toMatchObject({ source: 'jobs: [', dirty: true });
+    document.undo();
+    expect(document.getSnapshot()).toMatchObject({ source, dirty: false });
+  });
   it('ignores save failure for an older revision and allows saving the current draft', async () => {
     let reject: (error: Error) => void = () => {};
     const save = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; }));
