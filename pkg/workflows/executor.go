@@ -354,7 +354,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	}
 	if storeErr != nil {
 		run.Status = RunStatusFailed
-		runErr = errors.Join(runErr, storeErr)
+		runErr = errors.Join(runErr, iterationPersistence(storeErr, req.ordered))
 	}
 	if w.On.WorkflowCall != nil && runErr == nil {
 		run.Outputs = map[string]any{}
@@ -416,7 +416,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	run.FailureClass = classifyFailure(runErr)
 	run.FinishedAt = time.Now().UTC()
 	if err := e.save(context.WithoutCancel(ctx), run); err != nil {
-		return run, errors.Join(runErr, err)
+		return run, errors.Join(runErr, iterationPersistence(err, req.ordered))
 	}
 	return run, runErr
 }
@@ -633,7 +633,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 					}
 				}
 				if durable {
-					err = errors.Join(err, journal.Complete(context.WithoutCancel(ctx), attempt, result))
+					err = errors.Join(err, iterationPersistence(journal.Complete(context.WithoutCancel(ctx), attempt, result), req.ordered))
 				}
 			}
 		}
@@ -809,7 +809,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 		if store != nil && invocation != "" {
 			update := usageUpdate(outputs, true)
 			if observeErr := store.ObserveUsage(context.WithoutCancel(ctx), identity, update); observeErr != nil {
-				err = errors.Join(err, observeErr)
+				err = errors.Join(err, iterationPersistence(observeErr, ec.Ordered))
 			}
 		}
 		return outputs, err

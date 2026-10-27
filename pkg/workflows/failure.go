@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"strings"
@@ -32,11 +33,11 @@ func classifyFailure(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
-	if errors.Is(err, ErrUsageExhausted) {
-		return "usage_exhausted"
-	}
 	if errors.Is(err, ErrProviderFailure) {
 		return "provider_failure"
+	}
+	if errors.Is(err, ErrUsageExhausted) {
+		return "usage_exhausted"
 	}
 	text := strings.ToLower(err.Error())
 	switch {
@@ -64,4 +65,11 @@ func hardExecutionFailure(err error) bool {
 		return true
 	}
 	return false
+}
+
+func iterationPersistence(err error, ordered bool) error {
+	if err == nil || !ordered {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errIterationBlocked, err)
 }

@@ -862,3 +862,59 @@ jobs:
 		t.Fatal(run, err)
 	}
 }
+
+type iterationStorageFailure struct {
+	*SQLiteStore
+	phase  string
+	failed bool
+}
+
+func (s *iterationStorageFailure) Save(ctx context.Context, r *Run) error {
+	if s.phase == "child" && r.OriginID != r.ID && r.Status == RunStatusFailed && !s.failed {
+		s.failed = true
+		return errors.New("sqlite disk full")
+	}
+	return s.SQLiteStore.Save(ctx, r)
+}
+func (s *iterationStorageFailure) Complete(ctx context.Context, a Attempt, r StepExecution) error {
+	if s.phase == "step" && r.Status == RunStatusFailed && !s.failed {
+		s.failed = true
+		return errors.New("sqlite disk full")
+	}
+	return s.SQLiteStore.Complete(ctx, a, r)
+}
+func TestOrderedIterationStorageFailureDominatesProvider(t *testing.T) {
+	for _, phase := range []string{"child", "step"} {
+		t.Run(phase, func(t *testing.T) {
+			calls := 0
+			e, s := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { calls++; return nil, ErrProviderFailure }))
+			e.Store = &iterationStorageFailure{SQLiteStore: s, phase: phase}
+			run, err := e.Run(context.Background(), iterationRequest("a", "b"))
+			if err == nil || calls != 1 || run.Jobs["review"].Items[0].Status != "interrupted" || !strings.Contains(run.Error, "sqlite disk full") {
+				t.Fatal(run, err, calls)
+			}
+		})
+	}
+}
+
+func TestOrderedIterationMixedChildFailuresKeepProviderBlocker(t *testing.T) {
+	e, _ := iterationExecutor(t, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
+		if r.Prompt == "exhaust" {
+			return nil, ErrUsageExhausted
+		}
+		return nil, ErrProviderFailure
+	}))
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
+  workflow_call:
+    inputs: {task: {type: string}, ordinal: {type: number}, identity: {type: string}}
+jobs:
+  exhausted:
+    steps: [{uses: agent/reviewer, with: {prompt: exhaust}}]
+  failed:
+    steps: [{uses: agent/reviewer, with: {prompt: fail}}]
+`)
+	run, err := e.Run(context.Background(), iterationRequest("a"))
+	if !errors.Is(err, ErrProviderFailure) || run.Jobs["review"].Items[0].Status != "provider_failure" || run.Jobs["review"].Complete {
+		t.Fatal(run, err)
+	}
+}
