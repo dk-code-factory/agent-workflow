@@ -45,15 +45,28 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-03.spec.ts)
 
-- **Coverage:** Canvas dimming, palette filtering, and step inspection use the visible search controls.
+- **Coverage:** Job metadata, step names/IDs, prompts, direct and shell commands,
+  duplicate names across jobs, document order, result counts, clearing and no results.
+  Pointer, Tab, arrow, Enter/Space and Escape navigation cover collapsed/offscreen
+  steps, YAML reveal, viewer mode, scrollable narrow layouts and independent instances.
+  Compact Split mode retains canvas space while results scroll.
+  Navigation preserves source, revision, undo/redo history and dependency edges;
+  form edits, undo and host replacements refresh results.
 
 - **Starting point:** A workflow has several jobs or steps.
-- **My flow:** I type in **Search workflow** to find matching content, or use
-  **Search palette** to narrow the job navigation → select the job → select
-  its step on the card or in the inspector.
-- **What I see:** Canvas search dims jobs that do not match while preserving
-  dependency context. Palette search filters its entries. Selecting a job from
-  the palette also brings it into view.
+- **My flow:** In Visual or Split mode, I type in **Search workflow** to search
+  document content → choose a matching job or step from the results → inspect
+  its definition. I can Tab through the result buttons, move between them with
+  Arrow Up/Down, and activate with Enter or Space. Escape clears the query and
+  returns focus to the search input. **Search palette** filters palette entries
+  and job navigation.
+- **What I see:** A scrollable list in document order identifies each matching
+  step's parent job and effective ID. A status announces the result count or
+  **No results**; an empty or whitespace-only query hides the list. Selecting a
+  result selects that exact definition in the inspector and YAML source, expands
+  its parent if needed, and brings the target into view. Viewer mode supports the
+  same navigation. Unrelated jobs dim while dependency arrows remain. Search,
+  selection, expansion and viewport changes stay outside document undo history.
 
 ### UF-04 — Arrange the graph for easier reading
 
