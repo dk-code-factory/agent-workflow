@@ -539,7 +539,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Reset confirmation, cancellation, example isolation, retained layout, theme activation, and reload disposal are exercised. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
+- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Invalid-source setup uses the YAML editor’s select-all command and verifies the complete replacement before switching; returning to a cached example verifies its edited export and original example filename. Reset confirmation, cancellation, example isolation, retained layout, theme activation, and reload disposal are exercised. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
