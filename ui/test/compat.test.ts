@@ -5,6 +5,61 @@ import { parseWorkflow } from '../src/validation';
 import { WorkflowDocument } from '../src/document';
 const root = resolve(import.meta.dirname, '../../testdata/ui-compat');
 const fixtures = JSON.parse(readFileSync(resolve(root, 'cases.json'), 'utf8')) as { name: string; file: string; parse: boolean; valid: boolean }[];
+describe('advisory reference dependencies', () => {
+  it.each([
+    { name: 'repeated missing dependency', needs: [], prompt: '${{ needs.producer.outputs.text }} ${{ needs.producer.outputs.text }}', condition: '', warnings: 1, errors: 0 },
+    { name: 'normalized existing dependency', needs: [' producer '], prompt: '${{ needs.producer.outputs.text }}', condition: '', warnings: 0, errors: 0 },
+    { name: 'unknown producer', needs: [], prompt: '${{ needs.absent.outputs.text }}', condition: '', warnings: 0, errors: 1 },
+    { name: 'missing output and dependency', needs: [], prompt: '${{ needs.producer.outputs.absent }}', condition: '', warnings: 1, errors: 1 },
+    { name: 'bare condition', needs: [], prompt: 'literal', condition: 'needs.producer.outputs.text', warnings: 1, errors: 0 },
+    { name: 'literal prompt', needs: [], prompt: 'needs.producer.outputs.text', condition: '', warnings: 0, errors: 0 },
+  ])('$name', ({ needs, prompt, condition, warnings, errors }) => {
+    const result = parseWorkflow(JSON.stringify({ jobs: {
+      producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
+      consumer: { needs, if: condition, steps: [{ uses: 'agent/claude', with: { prompt } }] },
+    } }));
+    const advisory = result.diagnostics.filter(d => d.code === 'expression-dependency');
+    expect(advisory).toHaveLength(warnings);
+    expect(advisory.every(d => d.severity === 'warning')).toBe(true);
+    expect(result.diagnostics.filter(d => d.code === 'expression-reference')).toHaveLength(errors);
+    expect(result.workflow!.jobs.consumer.needs).toEqual(needs.map(id => id.trim()));
+  });
+
+  it('bounds repeated advisories while retaining distinct consuming fields and producers', () => {
+    const expression = '${{ needs.first.outputs.text }} ${{ needs.second.outputs.text }}';
+    const result = parseWorkflow(JSON.stringify({ jobs: {
+      first: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
+      second: { outputs: { text: 'world' }, steps: [{ argv: ['echo'] }] },
+      consumer: { if: expression.repeat(200), steps: [{ uses: 'agent/claude', with: { prompt: expression.repeat(200) } }] },
+    } }));
+    const warnings = result.diagnostics.filter(d => d.code === 'expression-dependency');
+    expect(warnings).toHaveLength(4);
+    expect(warnings.map(d => d.path)).toEqual([
+      ['jobs', 'consumer', 'if'], ['jobs', 'consumer', 'if'],
+      ['jobs', 'consumer', 'steps', 0, 'with', 'prompt'], ['jobs', 'consumer', 'steps', 0, 'with', 'prompt'],
+    ]);
+    for (const producer of ['first', 'second']) expect(warnings.filter(d => d.message.includes(`Job "${producer}"`))).toHaveLength(2);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+
+  it('normalizes dependencies a bounded number of times for repeated references', () => {
+    const source = JSON.stringify({ jobs: {
+      producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
+      consumer: { needs: Array(100).fill('producer'), steps: [{ uses: 'agent/claude', with: { prompt: '${{ needs.producer.outputs.text }}'.repeat(200) } }] },
+    } });
+    const trim = String.prototype.trim;
+    let normalizations = 0;
+    String.prototype.trim = function (this: string) { if (String(this) === 'producer') normalizations++; return trim.call(this); };
+    let result;
+    try { result = parseWorkflow(source); }
+    finally { String.prototype.trim = trim; }
+    expect(result.usable).toBe(true);
+    expect(result.diagnostics.filter(d => d.code === 'expression-dependency')).toEqual([]);
+    // Allow overhead from parsing/structural checks, but exclude work per reference.
+    expect(normalizations).toBeLessThan(2000);
+  });
+});
+
 describe('runner compatibility', () => {
   for (const fixture of fixtures) it(fixture.name, () => {
     const result = parseWorkflow(readFileSync(resolve(root, fixture.file), 'utf8'));

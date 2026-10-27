@@ -5,7 +5,7 @@ import { WorkflowDocument } from './document';
 import { dependencies, effectiveStepID } from './validation';
 import { Inspector, InspectorDraftContext, InspectorDrafts, type Selection } from './forms';
 import { SourceEditor } from './source';
-import type { Job, LayoutState, Path, Step, WorkflowOptions } from './types';
+import type { Diagnostic, Job, LayoutState, Path, Step, WorkflowOptions } from './types';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 
@@ -47,6 +47,9 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const [selection, select] = useState<Selection>({});
   const [sourceNavigation, navigateSource] = useState(0);
+  const [sourceTarget, setSourceTarget] = useState<{ from: number; to: number; revision: number }>();
+  const [diagnosticTarget, setDiagnosticTarget] = useState<{ diagnostic: Diagnostic; previous: Selection }>();
+  const [navigationNotice, setNavigationNotice] = useState('');
   const [mode, setMode] = useState<'visual' | 'yaml' | 'split'>('split');
   const modeChosen = useRef(false);
   const [panel, setPanel] = useState<'canvas' | 'palette' | 'inspector'>('canvas');
@@ -95,6 +98,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     void store.save();
   };
   const choose = (next: Selection) => {
+    setSourceTarget(undefined);
     setSearchTarget(undefined);
     if (next.job && !Object.hasOwn(geometry, next.job)) pendingFocus.current = next.job;
     select(next); navigateSource(value => value + 1); setPanel('inspector');
@@ -239,6 +243,61 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     }
     if (narrow && panel === 'inspector' && !deletion) element.querySelector<HTMLElement>('.aw-inspector h2')?.focus();
   }, [narrow, panel, !!deletion]);
+  const revealSource = (diagnostic: Diagnostic) => {
+    const source = store.getSnapshot().source;
+    const range = diagnostic.location
+      ? { from: diagnostic.location.offset, to: diagnostic.source === 'parser' ? Math.min(source.length, diagnostic.location.endOffset) : diagnostic.location.endOffset }
+      : diagnostic.path.length ? store.getSourceRange(diagnostic.path) : undefined;
+    if (!range || !Number.isInteger(range.from) || !Number.isInteger(range.to) || range.from < 0 || range.to < range.from || range.to > source.length) {
+      setNavigationNotice('No source location is available for this diagnostic. Review its message and document path.');
+      return false;
+    }
+    modeChosen.current = true;
+    setMode('yaml'); setPanel('canvas'); setSourceTarget({ ...range, revision: store.getSnapshot().revision });
+    return true;
+  };
+  const activateDiagnostic = (diagnostic: Diagnostic) => {
+    const pending = drafts.pending();
+    if (pending) {
+      setNavigationNotice('Complete the pending inspector edit or press Escape to discard it, then activate the diagnostic again.');
+      setPanel('inspector'); pending.reveal(); return;
+    }
+    setNavigationNotice('');
+    if (!diagnostic.path.length || mode === 'yaml' || snapshot.stale || diagnostic.source === 'parser') { revealSource(diagnostic); return; }
+    const path = diagnostic.code === 'expression-dependency' ? [...diagnostic.path.slice(0, 2), 'needs'] : diagnostic.path;
+    const job = path[0] === 'jobs' && typeof path[1] === 'string' && w && Object.hasOwn(w.jobs, path[1]) ? path[1] : undefined;
+    if (path[0] === 'jobs' && path.length > 1 && !job) { revealSource(diagnostic); return; }
+    const step = job && path[2] === 'steps' && typeof path[3] === 'number' ? path[3] : undefined;
+    if (step !== undefined && !w?.jobs[job!].steps?.[step]) { revealSource(diagnostic); return; }
+    // Resolve the new inspector before revealing it or moving the YAML selection.
+    select({ job, step });
+    setDiagnosticTarget({ diagnostic: { ...diagnostic, path }, previous: selection });
+  };
+  useEffect(() => {
+    if (!diagnosticTarget) return;
+    const { diagnostic, previous } = diagnosticTarget;
+    const path = diagnostic.path;
+    const candidates = Array.from(root.current?.querySelectorAll<HTMLElement>('.aw-inspector [data-aw-path]') ?? []).filter(element => {
+      const fieldPath: Path = JSON.parse(element.dataset.awPath!);
+      if (path.length === 2 && path[0] === 'jobs' && diagnostic.code !== 'identifier' && element.dataset.awIdentifier === 'true') return false;
+      return fieldPath.length <= path.length && fieldPath.every((key, i) => key === path[i]) && (fieldPath.length === path.length || element.dataset.awSubtree === 'true');
+    }).sort((a, b) => {
+      const depth = JSON.parse(b.dataset.awPath!).length - JSON.parse(a.dataset.awPath!).length;
+      const preferred = diagnostic.code === 'identifier' ? 'true' : 'false';
+      return depth || Number(b.dataset.awIdentifier === preferred) - Number(a.dataset.awIdentifier === preferred);
+    });
+    const field = candidates[0];
+    if (!field) { select(previous); revealSource(diagnostic); }
+    else {
+      choose(selection);
+      if (selection.job && selection.step !== undefined && store.layout.collapsed[selection.job] === true) store.setLayout({ ...store.layout, collapsed: { ...store.layout.collapsed, [selection.job]: false } });
+      for (let parent: HTMLElement | null = field; parent && parent !== root.current; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
+      const control = field.querySelector<HTMLElement>('input:not(:disabled),textarea:not(:disabled),select:not(:disabled)') ?? field;
+      if (!control.hasAttribute('tabindex') && control === field) control.tabIndex = -1;
+      requestAnimationFrame(() => { control.focus(); field.scrollIntoView({ block: 'nearest' }); });
+    }
+    setDiagnosticTarget(undefined);
+  }, [diagnosticTarget]);
   const remove = () => { if (!deletion) return; attempt(() => {
     if ('path' in deletion) store.deleteEntry(deletion.path, true);
     else if (deletion.step === undefined) { store.deleteJob(deletion.job, true); select({}); }
@@ -309,11 +368,11 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
             if (Object.keys(positions).length) store.setLayout({ ...store.layout, positions: { ...store.layout.positions, ...positions } });
           }} nodesConnectable={!disabled} edgesReconnectable={false} deleteKeyCode={null} fitViewOptions={{ maxZoom: 1, padding: 0.2 }} fitView={!store.layout.viewport} defaultViewport={store.layout.viewport} minZoom={0.15} maxZoom={2} onNodeClick={(event, node) => { if (!(event.target as HTMLElement).closest('button')) choose({ job: node.id }); }} onPaneClick={() => select({})} onConnect={connection => attempt(() => store.connect(connection.source, connection.target))} onMoveEnd={(_, viewport) => store.setLayout({ ...store.layout, viewport })}><Background gap={24} /><Controls showInteractive={false} /></ReactFlow></div>
         </div>}
-        {mode !== 'visual' && <div className="aw-yaml-pane"><div className="aw-pane-title">YAML source <span>{snapshot.validating ? 'Validating…' : `${snapshot.diagnostics.filter(d => d.severity === 'error').length} errors`}</span></div><SourceEditor store={store} jobID={selection.job} stepIndex={selection.step} navigationKey={sourceNavigation} /></div>}
+        {mode !== 'visual' && <div className="aw-yaml-pane"><div className="aw-pane-title">YAML source <span>{snapshot.validating ? 'Validating…' : `${snapshot.diagnostics.filter(d => d.severity === 'error').length} errors`}</span></div><SourceEditor store={store} jobID={(diagnosticTarget?.previous ?? selection).job} stepIndex={(diagnosticTarget?.previous ?? selection).step} navigationKey={sourceNavigation} target={sourceTarget} /></div>}
       </div>
       <aside className="aw-inspector" aria-label="Inspector"><InspectorDraftContext.Provider value={drafts}><Inspector key={`${selection.job ?? "workflow"}:${selection.step ?? "job"}`} store={store} selection={selection} select={choose} attempt={attempt} requestDelete={requestDelete} requestEntryDelete={requestEntryDelete} suggestionsID={`${id}-suggestions`} /></InspectorDraftContext.Provider></aside>
     </div>
-    <footer className="aw-diagnostics"><details open={snapshot.diagnostics.some(d => d.severity === 'error')}><summary>{snapshot.diagnostics.length} diagnostics{snapshot.validating ? ' · validating' : ''}</summary><ul>{snapshot.diagnostics.map((d, i) => <li key={i} data-severity={d.severity}><strong>{d.severity}</strong> {d.location ? `${d.location.line}:${d.location.column} ` : ''}{d.path.join('.')} — {d.message} <small>({d.source})</small></li>)}</ul></details></footer>
+    <footer className="aw-diagnostics"><p role="status">{navigationNotice}</p><details open={snapshot.diagnostics.some(d => d.severity === 'error')}><summary>{snapshot.diagnostics.length} diagnostics{snapshot.validating ? ' · validating' : ''}</summary><ul>{snapshot.diagnostics.map((d, i) => <li key={i} data-severity={d.severity}><button type="button" onMouseDown={event => event.preventDefault()} onClick={event => { if (!drafts.pending()) event.currentTarget.focus(); activateDiagnostic(d); }}><strong>{d.severity}</strong> {d.location ? `${d.location.line}:${d.location.column} ` : ''}{d.path.join('.')} — {d.message} <small>({d.source})</small></button>{d.code === 'expression-reference' && <p className="aw-diagnostic-help">Review this reference in the consuming field. Restore its producer or explicitly replace or remove the reference.</p>}</li>)}</ul></details></footer>
     {deletion && <div className="aw-modal-backdrop"><div className="aw-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-delete-title`} aria-describedby={`${id}-delete-impact`} onKeyDown={e => {
       if (e.key === 'Escape') setDeletion(undefined);
       if (e.key === 'Tab') {

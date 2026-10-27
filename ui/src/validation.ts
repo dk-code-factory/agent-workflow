@@ -65,7 +65,7 @@ export function parseWorkflow(source: string): Parsed {
     const range = node?.range ?? (doc?.getIn(path, true) as Node | undefined)?.range;
     const offset = range?.[0] ?? 0;
     const pos = lines.linePos(offset);
-    diagnostics.push({ code, message, path, severity, source: sourceType, location: { line: Math.max(1, pos.line), column: Math.max(1, pos.col), offset, endOffset: range?.[1] ?? offset } });
+    diagnostics.push({ code, message, path, severity, source: sourceType, location: range || code === 'size' ? { line: Math.max(1, pos.line), column: Math.max(1, pos.col), offset, endOffset: range?.[1] ?? offset } : undefined });
   };
   if (new TextEncoder().encode(source).length > 4 * 1024 * 1024) {
     add('size', 'Workflow exceeds 4 MiB', [], undefined, 'parser');
@@ -240,6 +240,7 @@ export function parseWorkflow(source: string): Parsed {
 type Add = (code: string, message: string, path?: Path, node?: Node | null, source?: Diagnostic['source'], severity?: Diagnostic['severity']) => void;
 function validateWorkflow(w: Workflow, add: Add) {
   const jobs = w.jobs;
+  const dependencySets = new Map<string, Set<string>>();
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
   for (const key of ['schedule', 'channel_message', 'command', 'runtime_event', 'event']) {
@@ -262,6 +263,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');
     }
     const needs = dependencies(job);
+    dependencySets.set(id, new Set(needs));
     for (const dep of needs) if (!Object.hasOwn(jobs, dep)) add('dependency', `Unknown dependency "${dep}"`, [...p, 'needs']);
     if (new Set(needs).size !== needs.length) add('duplicate-dependency', 'Duplicate dependency', [...p, 'needs'], undefined, 'browser', 'warning');
     if (job.uses) {
@@ -315,6 +317,7 @@ function validateWorkflow(w: Workflow, add: Add) {
   const inspect = (value: unknown, path: Path, jobID?: string) => {
     if (typeof value === 'string') {
       if (!hasExpressionReferences(path)) return;
+      const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
         if (ref.scope === 'inputs' || ref.scope === 'secrets') {
           // Manual runs may receive inputs and secrets from their host. A
@@ -328,7 +331,11 @@ function validateWorkflow(w: Workflow, add: Add) {
         }
         const exists = ref.scope === 'steps' ? jobID && jobs[jobID]?.steps?.some((s, i) => effectiveStepID(s, i) === ref.id) : Object.hasOwn(jobs, ref.id);
         if (!exists) add('expression-reference', `Unknown ${ref.scope} reference "${ref.id}"`, path);
-        else if ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
+        if (exists && ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id) && !warnedProducers.has(ref.id)) {
+          warnedProducers.add(ref.id);
+          add('expression-dependency', `Job "${ref.id}" is missing from Dependencies of "${jobID}". Review Dependencies and explicitly add the producer if needed.`, path, undefined, 'browser', 'warning');
+        }
+        if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
           add('expression-reference', `Unknown output "${ref.output}" of job "${ref.id}"`, path);
         }
       }
