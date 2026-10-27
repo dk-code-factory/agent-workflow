@@ -86,7 +86,7 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 			}
 			switch frame.Method {
 			case "initialize":
-				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.161.0 (fixture)"}})
+				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.164.0 (fixture)"}})
 			case "account/login/start":
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
 			case "thread/start", "thread/resume":

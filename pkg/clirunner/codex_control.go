@@ -128,7 +128,7 @@ func codexRequestHandler(agent Agent, req workflows.SessionRequest, control *cod
 		if definition == nil {
 			return nil, fmt.Errorf("dynamic tool is outside broker grants")
 		}
-		// Upstream 0.161.0 does not provide a certified invocation-level
+		// Upstream 0.164.0 does not provide a certified invocation-level
 		// quiescence barrier. Keep its lease occupied; managed worker admission
 		// remains closed rather than guessing that one callback blocks the turn.
 		result, err := req.Tools.Binding.Call(ctx, workflows.ToolRequest{CallID: call.CallID, Server: definition.Server, Tool: definition.Name, Arguments: call.Arguments})

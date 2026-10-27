@@ -26,7 +26,7 @@ class EvidenceTests(unittest.TestCase):
         self.policy = {'version': '0.2.0', 'required_evidence': [self.expected], 'publication_repositories': []}
         self.record = dict(self.expected, engine={'commit': 'a' * 40, 'version': '0.2.0', 'dirty': 'false', 'source_fingerprint': 'b' * 64},
                            configuration_fingerprint='c' * 64, started='2026-10-17T01:00:00Z', finished='2026-10-17T01:01:00Z',
-                           provider_versions={'codex-cli': '0.161.0'}, assertions={'workflow_succeeded': True, 'response_marker': True, 'usage_observed': True})
+                           provider_versions={'codex-cli': '0.164.0'}, assertions={'workflow_succeeded': True, 'response_marker': True, 'usage_observed': True})
         self.report = {'candidate': 'a' * 40, 'source_fingerprint': 'b' * 64, 'reviewed': True, 'records': [self.record]}
 
     def validate(self):

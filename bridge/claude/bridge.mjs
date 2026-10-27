@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 
-const sdkVersion = '0.3.301';
+const sdkVersion = '0.3.311';
 const sdkMetadata = JSON.parse(await readFile(new URL('./package.json', import.meta.resolve('@anthropic-ai/claude-agent-sdk')), 'utf8'));
 if (sdkMetadata.version !== sdkVersion) throw new Error('Pinned Claude SDK version mismatch before turn effects');
 
@@ -164,7 +164,7 @@ try {
         const succeeded = message.subtype === 'success' && !message.is_error;
         const text = message.structured_output !== undefined ? JSON.stringify(message.structured_output) : (message.result ?? '');
         terminal = true;
-        emit({ type: 'result', session_id: sessionID, status: succeeded ? 'succeeded' : 'failed', provider_status: message.subtype, provider_version: 'claude-agent-sdk@0.3.301',
+        emit({ type: 'result', session_id: sessionID, status: succeeded ? 'succeeded' : 'failed', provider_status: message.subtype, provider_version: 'claude-agent-sdk@0.3.311',
           outputs: { text, response: text, usage: message.usage, structured: message.structured_output, cost_usd: message.total_cost_usd }, error: succeeded ? undefined : (message.errors ?? [message.subtype]).join('; ') });
         break;
       }
