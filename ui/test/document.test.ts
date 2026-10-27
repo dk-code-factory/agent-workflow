@@ -252,6 +252,47 @@ describe('host option updates', () => {
     document.update({ validationKey: 'updated-policy' });
     expect(validate).toHaveBeenCalledTimes(2);
   });
+  for (const readOnly of [false, true]) {
+    it(`validates an accepted ${readOnly ? 'viewer' : 'clean editor'} source once with merged context`, async () => {
+      const oldValidate = vi.fn(() => []);
+      const document = new WorkflowDocument({ source, validate: oldValidate }, readOnly);
+      await document.validate();
+      const observations: { source: string; key: unknown; agent: unknown; workflow: unknown; signal: AbortSignal }[] = [];
+      const validate = vi.fn((snapshot: { source: string }, signal: AbortSignal) => {
+        const options = document.getOptions();
+        observations.push({ source: snapshot.source, key: options.validationKey, agent: options.agents?.[0].id, workflow: options.workflows?.[0].id, signal });
+        return [];
+      });
+      const incoming = '# incoming\n' + source;
+      document.update({ source: incoming, validate, validationKey: 'new policy', agents: [{ id: 'fresh-agent' }], workflows: [{ id: 'fresh.yml' }] });
+      expect(oldValidate).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(1);
+      expect(observations[0]).toMatchObject({ source: incoming, key: 'new policy', agent: 'fresh-agent', workflow: 'fresh.yml' });
+      expect(observations[0].signal.aborted).toBe(false);
+      await Promise.resolve(); expect(document.getSnapshot().validating).toBe(false);
+    });
+  }
+  it('refreshes staged replacement context against the retained local source', () => {
+    const observations: { source: string; key: unknown; signal: AbortSignal }[] = [];
+    const document = new WorkflowDocument({ source, validate: (snapshot, signal) => {
+      observations.push({ source: snapshot.source, key: document.getOptions().validationKey, signal }); return [];
+    } });
+    document.setField(['name'], 'Protected local');
+    const local = document.getSnapshot().source; const oldSignal = observations[0].signal; observations.length = 0;
+    const incoming = '# staged\n' + source;
+    document.update({ source: incoming, validationKey: 'staged policy', agents: [{ id: 'new-agent' }] });
+    expect(document.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: incoming });
+    expect(observations).toHaveLength(1); expect(observations[0]).toMatchObject({ source: local, key: 'staged policy' });
+    expect(oldSignal.aborted).toBe(true); expect(observations[0].signal.aborted).toBe(false);
+  });
+  it('continues refreshing key, catalog and validator changes without source edits', async () => {
+    const validate = vi.fn(() => []); const document = new WorkflowDocument({ source, validate });
+    await document.validate();
+    document.update({ validationKey: 'new' }); expect(validate).toHaveBeenCalledTimes(2);
+    document.update({ agents: [{ id: 'new' }] }); expect(validate).toHaveBeenCalledTimes(3);
+    document.update({ workflows: [{ id: 'new.yml' }] }); expect(validate).toHaveBeenCalledTimes(4);
+    const replacement = vi.fn(() => []); document.update({ validate: replacement });
+    expect(replacement).toHaveBeenCalledTimes(1); expect(document.getSnapshot()).toMatchObject({ source, revision: 0 });
+  });
   it('clears catalog warnings when the catalog is removed', async () => {
     const document = new WorkflowDocument({ source, agents: [{ id: 'other' }] });
     await document.validate(); expect(document.getSnapshot().diagnostics.some(d => d.code === 'agent-catalog')).toBe(true);

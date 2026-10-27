@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, step } from './harness';
+import { open, snapshot, field, job } from './harness';
 
 test('fix browser errors and report host validation failure', async ({ page }) => {
   const ui = await open(page, 'jobs: {build: {steps: [{id: bad, argv: []}]}}');
   await expect(ui.locator('.aw-diagnostics')).toContainText('error');
-  await step(page, 'bad'); await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  await job(page); await ui.getByRole('button', { name: '1. bad', exact: true }).click(); await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
   await ui.getByText('Advanced command YAML', { exact: true }).click();
   await field(page, 'Arguments (YAML array)', '[echo, fixed]');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);

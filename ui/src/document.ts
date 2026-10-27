@@ -45,7 +45,7 @@ export class WorkflowDocument {
     if (!this.disposed) { this.listeners.forEach(fn => fn()); this.options.onChange?.(structuredClone(this.snapshot)); }
   }
   update(options: Partial<WorkflowOptions>) {
-    const previous = this.options;
+    const previous = this.options; const validationEpoch = this.epoch;
     this.options = { ...previous, ...options };
     if (options.layout) this.layout = structuredClone(options.layout);
     // Current-source echoes are acknowledgements of neither saving nor draft
@@ -57,7 +57,9 @@ export class WorkflowDocument {
         this.emit();
       } else this.acceptSource(options.source);
     } else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
-    if (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows)) void this.validate();
+    // An accepted source may already have validated the merged options. A
+    // staged or context-only update still needs its own refresh.
+    if (this.epoch === validationEpoch && (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows))) void this.validate();
   }
   /** @internal Invalidates renderer ownership after arbitrary source/history or structural edits. */
   getInspectorGeneration = () => this.inspectorGeneration;
