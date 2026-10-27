@@ -31,7 +31,7 @@ import '@agent-workflow/ui/style.css';
 </div>
 ```
 
-`source` is the initial document and accepts subsequent host replacements. A different incoming source is staged when `hasLocalChanges` is true; the notice offers **Keep local** and **Use incoming**. The latter discards unapplied built-in fields without committing them and replaces source as one undoable edit. Clean editors and viewers accept replacements immediately. Repeated incoming values and current-source change echoes do not reopen notices or clear local protection. A newer distinct incoming value replaces the pending candidate. The editor keeps its own draft between host updates; an unchanged source prop does not reset the draft. `onChange` runs after edits and validation/save state changes. Inline React callbacks and catalogs are supported. Use `validationKey` to rerun validation when external policy or host context changes without a source edit. React and ReactDOM are peers and are external in the ES module build.
+`source` is the initial document and accepts subsequent host replacements. A different incoming source is staged when `hasLocalChanges` is true; the notice offers **Keep local** and **Use incoming**. The latter discards unapplied built-in fields and participating custom-renderer buffers without committing them and replaces source as one undoable edit. Clean editors and viewers accept replacements immediately. Repeated incoming values and current-source change echoes do not reopen notices or clear local protection. A newer distinct incoming value replaces the pending candidate. The editor keeps its own draft between host updates; an unchanged source prop does not reset the draft. `onChange` runs after edits and validation/save state changes. Inline React callbacks and catalogs are supported. Use `validationKey` to rerun validation when external policy or host context changes without a source edit. React and ReactDOM are peers and are external in the ES module build.
 
 Plain JavaScript module consumers use:
 
@@ -68,7 +68,7 @@ The IIFE includes React and the canvas/editor runtime. It needs no global framew
 
 ## Snapshots, validation, and saving
 
-A snapshot contains `source`, `workflow` when the current structure is usable, `previewWorkflow` for the last usable graph, `stale`, `diagnostics`, `revision`, history availability, and asynchronous save/validation state. `dirty` remains true until the current source matches a successful save and no built-in inspector edits remain pending; initial documents have not yet been saved through this editor. Undoing back to saved source clears `dirty`. Host source updates are edits, not save acknowledgements. `hasLocalChanges` starts false and compares source against the initial document, latest accepted host replacement, or successful save, including pending built-in inspector edits. This protection is separate from `dirty`; echoes and export do not acknowledge persistence or draft disposal. A stale asynchronous save cannot clear protection for a newer edit or accepted replacement. The source remains authoritative. Opening/exporting without changes preserves every byte, including line endings. Visual edits use YAML document nodes to preserve comments, mapping order, block prompts, and unrecognized fields; formatting can be normalized when an edit is serialized. Explicitly replacing a structured field replaces that subtree, including its comments.
+A snapshot contains `source`, `workflow` when the current structure is usable, `previewWorkflow` for the last usable graph, `stale`, `diagnostics`, `revision`, history availability, and asynchronous save/validation state. `dirty` remains true until the current source matches a successful save and no built-in or reported custom inspector edits remain pending; initial documents have not yet been saved through this editor. Undoing back to saved source clears `dirty`. Host source updates are edits, not save acknowledgements. `hasLocalChanges` starts false and compares source against the initial document, latest accepted host replacement, or successful save, including pending built-in and reported custom inspector edits. This protection is separate from `dirty`; echoes and export do not acknowledge persistence or draft disposal. A stale asynchronous save cannot clear protection for a newer edit or accepted replacement. The source remains authoritative. Opening/exporting without changes preserves every byte, including line endings. Visual edits use YAML document nodes to preserve comments, mapping order, block prompts, and unrecognized fields; formatting can be normalized when an edit is serialized. Explicitly replacing a structured field replaces that subtree, including its comments.
 
 Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, code, document path, and source location where available. Browser parsing enforces one document, the 4 MiB byte limit, bounded nesting, no aliases/merge keys/duplicate keys, field shapes, and unknown fields. Browser admission checks IDs, dependency integrity/cycles, command/action requirements, repeat bounds, and standalone restrictions. Unknown fields remain in the document for round trips. Duplicate dependencies are a browser warning (the runner currently accepts them), and new duplicate connections are rejected.
 
@@ -150,6 +150,24 @@ const actions = [{
 ```
 
 Fields support `text`, `textarea`, `boolean`, `number`, and `yaml`. Keys are relative to the step's `with` mapping. Numeric edits store finite numbers. A custom renderer gets a copied `step`, the absolute document `path`, `readOnly`, and a guarded `setField` accepting paths relative to that step. Respect `readOnly` in custom controls. Cleanup runs before a replacement render and when unmounted. Host-required field policies belong in additional validation. Built-in forms cover agent prompts/output contracts, direct argv commands, explicit shell commands, all five controller actions, reusable calls, conditions, repeats, and error handling. Guided callable fields cover input types/defaults, required secrets, and outputs; text, boolean, and number controls match their types, while object/array values use field YAML. Guided fields update individual paths; advanced mapping editors explain that applying YAML replaces the entire mapping and its comments.
+
+Raw renderer controls that buffer text before calling `setField` participate through `context.reportDraft(pending, discard)`. Each renderer reports one aggregate pending flag, independently of built-in fields and other editors. Call it whenever the buffer changes and report `false` after applying or resetting it. `discard` must synchronously restore the control's stored value and cancel any queued commit; it must not apply text. The editor suppresses `setField` and reports during discard and disables both callbacks after cleanup. **Keep local** retains the buffer; **Use incoming** invokes discard before replacing source or moving focus. Source undo cannot restore discarded text.
+
+```ts
+const input = document.createElement('input');
+const stored = String(context.step.with?.prompt ?? '');
+input.value = stored;
+input.readOnly = context.readOnly;
+const discard = () => { input.value = stored; };
+input.oninput = () => context.reportDraft(input.value !== stored, discard);
+input.onblur = () => {
+  if (input.value !== stored) context.setField(['with', 'prompt'], input.value);
+  context.reportDraft(false, discard);
+};
+element.append(input);
+```
+
+While a renderer reports pending text, its DOM and copied context are retained through sibling value changes, inline catalog replacements, host rerenders, theme updates, and current-source echoes. After it clears pending state, the next render reconciles the latest step/catalog. Arbitrary source edits, undo/redo, structural edits, or changing the selected job/step, step ID/action kind, or read-only state end that renderer's lifetime; hosts own any additional retention before those transitions. Cleanup must release handlers and cancel delayed work. Unreported renderer state remains the host's responsibility. Reporting does not apply custom text on Save or serialize it into snapshots; the host controls custom apply behavior. A successful source save leaves reported buffers unsaved and protected. If discard throws, the incoming source remains pending and the failing renderer keeps its protection; the notice shows the error and permits retry. Imperative resolution throws the error to its caller.
 
 ## Styling and layout persistence
 

@@ -110,3 +110,27 @@ test('reset confirms disposal, isolates examples, and retains layout and theme',
   await page.reload();
   await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Classify draft');
 });
+
+test('detaching an example retains actual selection and displayed canvas viewport', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Inspect job classify', exact: true }).click();
+  await expect(page.getByLabel('Job ID', { exact: true })).toHaveValue('classify');
+  const viewport = page.locator('.react-flow__viewport');
+  const initial = await viewport.evaluate(element => getComputedStyle(element).transform);
+  await page.getByRole('button', { name: 'Zoom In', exact: true }).click();
+  await expect.poll(() => viewport.evaluate(element => getComputedStyle(element).transform)).not.toBe(initial);
+  // Controls animate zoom. Observe the final displayed value before detaching.
+  await expect.poll(async () => {
+    const shown = await viewport.evaluate(element => getComputedStyle(element).transform);
+    const layout = await page.evaluate(() => JSON.parse(localStorage.getItem('workflow-layout:classify')!).viewport);
+    return Math.abs(Number(shown.match(/matrix\(([^,]+)/)?.[1]) - layout.zoom) < 0.00001;
+  }).toBe(true);
+  const displayed = await viewport.evaluate(element => getComputedStyle(element).transform);
+  await page.locator('#example').selectOption('develop');
+  await expect(page.getByLabel('Job ID', { exact: true })).toHaveCount(0);
+  await page.locator('#example').selectOption('classify');
+  // Do not reselect the job: the inspector and card must retain navigation.
+  await expect(page.getByLabel('Job ID', { exact: true })).toHaveValue('classify');
+  await expect(page.locator('.aw-card.aw-selected')).toHaveAttribute('aria-label', 'Job classify');
+  await expect.poll(() => viewport.evaluate(element => getComputedStyle(element).transform)).toBe(displayed);
+});

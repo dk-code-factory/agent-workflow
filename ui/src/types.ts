@@ -19,7 +19,7 @@ export interface Snapshot {
   source: string; workflow?: Workflow; previewWorkflow?: Workflow; diagnostics: Diagnostic[]; stale: boolean;
   revision: number; canUndo: boolean; canRedo: boolean; validating: boolean;
   saving: boolean; saveError?: string;
-  /** Source or built-in inspector edits differ from the last successful save. */
+  /** Source or pending inspector edits differ from the last successful save. */
   dirty: boolean;
   /** Source differs from the initial/accepted/saved source, or inspector text is pending. */
   hasLocalChanges: boolean;
@@ -35,6 +35,11 @@ export interface ActionField { key: string; label: string; type?: 'text' | 'text
 export interface CustomInspectorContext {
   step: Step; path: Path; readOnly: boolean;
   setField: (path: Path, value: unknown) => void;
+  /** Report this renderer's buffered edits. Discard must synchronously reset them without committing.
+   * Pending renderers retain their DOM through sibling field/catalog updates until cleared or unmounted.
+   * This does not apply or serialize buffers when saving. Call with false after applying/resetting.
+   */
+  reportDraft: (pending: boolean, discard: () => void) => void;
 }
 export interface ActionDefinition {
   uses: string; label: string; fields?: ActionField[];

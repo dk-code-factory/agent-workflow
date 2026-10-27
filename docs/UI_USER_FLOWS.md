@@ -539,7 +539,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Reset confirmation, cancellation, example isolation, retained layout, theme activation, and reload disposal are exercised.
+- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Reset confirmation, cancellation, example isolation, retained layout, theme activation, and reload disposal are exercised. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
@@ -708,7 +708,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-47.spec.ts)
 
-- **Coverage:** Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Both visible controls and the imperative handle discard unapplied text without committing it, with undo recovery. Controlled React echoes and repeated props do not reopen notices.
+- **Coverage:** Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Both visible controls and the imperative handle discard unapplied text without committing it, with undo recovery. Controlled React echoes and repeated props do not reopen notices. Participating raw renderers report buffered text without source edits; Keep local retains the focused buffer, while both replacement entrypoints discard before blur and create one undoable source edit. Raw and built-in contributions aggregate; sibling/catalog/theme updates, saves, identity replacement, obsolete callbacks, destruction, independent editors, and viewer guards are exercised. Throwing custom discard callbacks retain source, candidate, and raw protection until retry. Anonymous-step YAML reordering, whole-step edits, and undo invalidate callbacks before cleanup so drafts cannot apply to a different step.
 
 - **Starting point:** The host sends a different definition to the same editor.
 - **My flow:** I read the incoming-source notice → select **Keep local** to retain
@@ -719,7 +719,9 @@ fields. Escape discards an uncommitted field edit.
   and repeated incoming values do not reopen resolved notices. Accepted replacement
   is one source-history edit; unapplied field text is excluded from snapshots and
   cannot be restored with document undo. `hasLocalChanges` exposes draft protection
-  independently from save status. Destruction remains unconditional; the embedding
+  independently from save status. Raw custom controls participate by reporting pending
+  buffers and a synchronous discard callback; unreported host state remains the
+  host’s responsibility. Destruction remains unconditional; the embedding
   host must confirm disposal or retain the instance before destroying it.
 
 ## Implementation references

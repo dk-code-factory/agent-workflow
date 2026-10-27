@@ -4,6 +4,8 @@ import { dependencies, effectiveStepID, identifier, parseWorkflow } from './vali
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
+// Whole workflow/job/step replacements may change anonymous owners; field leaves do not.
+const preservesInspectorOwner = (path: Path) => path.length > 0 && (path[0] !== 'jobs' || (path.length >= 3 && path[2] !== 'steps') || path.length > 4);
 const emptyLayout = (): LayoutState => ({ positions: {}, collapsed: {} });
 export class WorkflowDocument {
   private options: WorkflowOptions;
@@ -19,6 +21,7 @@ export class WorkflowDocument {
   private lastEditTime = 0;
   private savedSource?: string;
   private inspectorDirty = false;
+  private inspectorGeneration = 0;
   private protectionSource: string;
   private protectionEpoch = 0;
   private lastIncomingSource?: string;
@@ -52,6 +55,8 @@ export class WorkflowDocument {
     } else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
     if (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows)) void this.validate();
   }
+  /** @internal Invalidates renderer ownership after arbitrary source/history or structural edits. */
+  getInspectorGeneration = () => this.inspectorGeneration;
   onDiscardInspector = (listener: () => void) => { this.discardInspectorListeners.add(listener); return () => { this.discardInspectorListeners.delete(listener); }; };
   resolveSourceReplacement(choice: 'keep-local' | 'use-incoming') {
     if (this.disposed || this.snapshot.pendingSourceReplacement === undefined) return;
@@ -68,13 +73,14 @@ export class WorkflowDocument {
     else this.emit();
   }
   setLayout(next: LayoutState) { this.layout = structuredClone(next); this.options.onLayoutChange?.(structuredClone(this.layout)); this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
-  private commit(source: string, history: boolean, group?: string) {
+  private commit(source: string, history: boolean, group?: string, preserveInspector = false) {
     if (this.disposed || source === this.snapshot.source) return;
     if (history) {
       const now = Date.now();
       if (!group || group !== this.historyGroup || now - this.lastEditTime > 750) this.past.push(this.snapshot.source);
       this.future = []; this.lastEditTime = now;
     }
+    if (!preserveInspector) this.inspectorGeneration++;
     this.historyGroup = history ? group : undefined;
     this.parsed = parseWorkflow(source);
     this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource, hasLocalChanges: this.inspectorDirty || source !== this.protectionSource };
@@ -104,10 +110,10 @@ export class WorkflowDocument {
   setSource(source: string, group?: string) { if (!this.readOnly) this.commit(source, true, group); }
   undo() { if (!this.readOnly && this.past.length) { this.future.push(this.snapshot.source); this.commit(this.past.pop()!, false); } }
   redo() { if (!this.readOnly && this.future.length) { this.past.push(this.snapshot.source); this.commit(this.future.pop()!, false); } }
-  private edit(fn: (doc: Document) => void) {
+  private edit(fn: (doc: Document) => void, preserveInspector = false) {
     if (this.readOnly) throw new Error('Viewer is read-only');
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
-    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true);
+    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
   }
   private writeField(doc: Document, path: Path, value: unknown) {
     if (value === undefined) { doc.deleteIn(path); return; }
@@ -128,14 +134,14 @@ export class WorkflowDocument {
     }
     doc.setIn(path, value);
   }
-  setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value)); }
+  setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value), preservesInspectorOwner(path)); }
   moveArgument(path: Path, from: number, to?: number) {
     this.edit(doc => {
       const seq = doc.getIn(path, true);
       if (!isSeq(seq) || from < 1 || from >= seq.items.length || (to !== undefined && (to < 1 || to >= seq.items.length))) throw new Error('Invalid argument position');
       const [item] = seq.items.splice(from, 1);
       if (to !== undefined) seq.items.splice(to, 0, item);
-    });
+    }, preservesInspectorOwner(path));
   }
   previewJobResult(request: JobResultRequest): JobResultPreview {
     if (this.readOnly) throw new Error('Viewer is read-only');
@@ -192,7 +198,7 @@ export class WorkflowDocument {
         else this.writeField(doc, ['jobs', consumer, 'needs'], [...dependencies(this.snapshot.workflow!.jobs[consumer]), producer]);
       }
       this.writeField(doc, target, current.value);
-    });
+    }, true); // Preview admission restricts these writes to non-owner fields.
   }
   private unique(base: string, ids: string[]) { let id = base; let i = 2; while (ids.includes(id)) id = `${base}_${i++}`; return id; }
   addJob(uses?: string): string {

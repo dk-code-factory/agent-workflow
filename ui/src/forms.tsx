@@ -234,14 +234,51 @@ function NamedFields({ store, path, kind, title, requestDelete, suggestionsID }:
 }
 function CustomForm({ definition, store, job, index }: { definition: ActionDefinition; store: WorkflowDocument; job: string; index: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const registry = useContext(InspectorDraftContext);
+  const [, refresh] = useState(0);
+  const rendered = useRef<{ step: string; generation: number; render: ActionDefinition['renderInspector']; job: string; index: number; uses: string | undefined; id: string | undefined; readOnly: boolean; pending: () => boolean; dispose: () => void } | undefined>(undefined);
   const step = (store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow)!.jobs[job].steps![index];
   const readOnly = store.readOnly || store.getSnapshot().stale;
+  const generation = store.getInspectorGeneration();
+  useEffect(() => () => { rendered.current?.dispose(); rendered.current = undefined; }, [store, registry]);
+  // Reconcile explicitly: effect cleanup on every step/catalog change would
+  // destroy raw host buffers before a replacement choice could protect them.
   useEffect(() => {
+    const previous = rendered.current;
+    const text = JSON.stringify(step);
+    if (previous && previous.generation === generation && previous.job === job && previous.index === index && previous.uses === step.uses && previous.id === step.id && previous.readOnly === readOnly &&
+      (previous.pending() || (previous.step === text && previous.render === definition.renderInspector))) return;
+    rendered.current = undefined; previous?.dispose();
     const element = ref.current!;
-    let active = true;
-    const cleanup = definition.renderInspector?.(element, { step: structuredClone(step), path: ['jobs', job, 'steps', index], readOnly, setField: (path, value) => { if (active && !readOnly) store.setField(['jobs', job, 'steps', index, ...path], value); } });
-    return () => { active = false; cleanup?.(); element.replaceChildren(); };
-  }, [definition, store, job, index, step, readOnly]);
+    let active = true; let pending = false; let discarding = false;
+    let discard: (() => void) | undefined;
+    const canEdit = () => {
+      const snapshot = store.getSnapshot();
+      const current = snapshot.workflow?.jobs[job]?.steps?.[index];
+      return active && generation === store.getInspectorGeneration() && !discarding && !readOnly && !snapshot.stale && !!current && current.id === step.id && current.uses === step.uses;
+    };
+    const unregister = registry?.register({ identifier: false, isPending: () => pending, apply: () => true, reveal: () => {}, discard: () => {
+      if (!active || generation !== store.getInspectorGeneration()) return;
+      discarding = true;
+      try { if (pending) discard?.(); pending = false; }
+      finally { discarding = false; registry?.changed(); }
+    } });
+    const cleanup = definition.renderInspector?.(element, {
+      step: structuredClone(step), path: ['jobs', job, 'steps', index], readOnly,
+      setField: (path, value) => { if (canEdit()) store.setField(['jobs', job, 'steps', index, ...path], value); },
+      reportDraft: (next, onDiscard) => {
+        if (!canEdit()) return;
+        const cleared = pending && !next;
+        pending = next; discard = onDiscard; registry?.changed();
+        // Aggregate pending state may stay true because a built-in field is
+        // still pending. Reconcile deferred host updates when this one clears.
+        if (cleared) refresh(value => value + 1);
+      },
+    });
+    rendered.current = { step: text, generation, render: definition.renderInspector, job, index, uses: step.uses, id: step.id, readOnly, pending: () => pending, dispose: () => {
+      active = false; unregister?.(); cleanup?.(); element.replaceChildren();
+    } };
+  });
   return <div className="aw-custom-form" ref={ref} />;
 }
 export type Selection = { job?: string; step?: number };
