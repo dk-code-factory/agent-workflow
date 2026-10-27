@@ -46,7 +46,8 @@ type IterationItemResult struct {
 type IterationJournal interface {
 	Journal
 	CheckIteration(context.Context) error
-	BeginInput(context.Context, string, string, string, int, bool, string, bool) (Attempt, bool, error)
+	IterationRun(context.Context, string, string, string) (string, error)
+	BeginInput(context.Context, string, string, string, int, bool, string, bool, string) (Attempt, bool, error)
 	PinIteration(context.Context, IterationPlan) error
 	IterationPlan(context.Context, string, string) (IterationPlan, error)
 	IterationAttempts(context.Context, string, string) ([]IterationItemResult, error)
@@ -237,4 +238,18 @@ func (s *SQLiteStore) CheckIteration(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	return checkFence(ctx, tx)
+}
+
+// IterationRun finds the first physical controller for a stable logical call.
+// Nested item retries share its immutable plan and completed item observations.
+func (s *SQLiteStore) IterationRun(ctx context.Context, run, logical, job string) (string, error) {
+	if logical == "" {
+		return run, nil
+	}
+	var checkpoint string
+	err := s.db.QueryRowContext(ctx, `SELECT p.run_id FROM iteration_plans p JOIN runs r ON r.id=p.run_id WHERE p.job_id=? AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=? ORDER BY p.rowid LIMIT 1`, job, logical).Scan(&checkpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return run, nil
+	}
+	return checkpoint, err
 }

@@ -89,7 +89,8 @@ ownership, instruction, checkout, storage and cleanup failures stop execution.
 The aggregate is complete only with at least one completed item and no unresolved
 provider failure, interruption or pending item. Exhausted skips can coexist with
 completed coverage. Explicit resume retries noncompleted items with new physical
-children, retains completed records, and invalidates transitive dependent jobs.
+children, retains completed records, and invalidates transitive dependent jobs. Stable logical call identities retain nested
+plans and completed inner item checkpoints across physical ancestor attempts.
 Ordinary steps bind rendered dispatch inputs; changed completed effect inputs
 block replay while read-only aggregation can refresh. Registered item actions use
 stable logical identities across physical children, preserving completed effects

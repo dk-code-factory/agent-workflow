@@ -547,7 +547,10 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		childReq.RetryUncertain = req.RetryUncertain
 		hash := sha256.Sum256([]byte(req.runID + "/" + id + fmt.Sprint(req.iteration)))
 		childReq.runID = hex.EncodeToString(hash[:16])
-		if logical := nativeString(req.Metadata, "iteration_logical_run_id"); logical != "" {
+		if logical := nativeString(req.Metadata, "iteration_logical_run_id"); req.ordered {
+			if logical == "" {
+				logical = req.runID
+			}
 			childReq.Metadata, _ = cloneJSONValue(req.Metadata).(map[string]any)
 			childReq.Metadata["iteration_logical_run_id"] = actionHash([]any{logical, id, req.iteration})
 		}
@@ -555,7 +558,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if journal, ok := e.Store.(Journal); ok {
 			saved, _, loadErr := journal.Load(ctx, childReq.runID)
 			if loadErr == nil {
-				if saved.Status == RunStatusSucceeded {
+				if saved.Status == RunStatusSucceeded && !iterationRetry(saved) {
+					out.ChildRunID = saved.ID
+					out.ChildJobs = saved.Jobs
 					out.Outputs = saved.Outputs
 					return out
 				}
@@ -574,6 +579,8 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			}
 			return result
 		}
+		out.ChildRunID = child.ID
+		out.ChildJobs = child.Jobs
 		out.Outputs = child.Outputs
 		return out
 	}

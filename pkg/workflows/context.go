@@ -47,6 +47,8 @@ type JobIteration struct {
 }
 
 type JobExecution struct {
+	ChildRunID   string                   `json:"child_run_id,omitempty"`
+	ChildJobs    map[string]JobExecution  `json:"child_jobs,omitempty"`
 	Items        []IterationItemResult    `json:"items,omitempty"`
 	Complete     bool                     `json:"complete,omitempty"`
 	FailureClass string                   `json:"failure_class,omitempty"`

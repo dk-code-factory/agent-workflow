@@ -400,7 +400,9 @@ The engine advertises `ordered-dynamic-iteration-v1` through `Capabilities()` an
 controller health. Embedders must supply the optional `IterationJournal`
 extension (implemented by SQLite schema 9). It pins plans, appends item admission
 and terminal observations, binds ordinary step inputs through `BeginInput`, and
-fences every write against the originating execution owner. A committed child
+fences every write against the originating execution owner. Nested controllers retain a
+stable logical checkpoint namespace across physical ancestor retries, preserving
+completed inner items and completed command/action effects. A committed child
 completion recovers a lost parent/item checkpoint without repeating its work.
 Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
 Legacy JSON stores cannot execute iteration workflows.

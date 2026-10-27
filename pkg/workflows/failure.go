@@ -32,6 +32,12 @@ func classifyFailure(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
+	if errors.Is(err, ErrUsageExhausted) {
+		return "usage_exhausted"
+	}
+	if errors.Is(err, ErrProviderFailure) {
+		return "provider_failure"
+	}
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
@@ -44,10 +50,6 @@ func classifyFailure(err error) string {
 		return "integration"
 	case strings.Contains(text, "structured output"):
 		return "schema"
-	case errors.Is(err, ErrUsageExhausted):
-		return "usage_exhausted"
-	case errors.Is(err, ErrProviderFailure):
-		return "provider_failure"
 	case strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
 		return "limit"
 	case strings.Contains(text, "command failed"):

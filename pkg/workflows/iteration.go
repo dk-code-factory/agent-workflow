@@ -43,8 +43,11 @@ func hasOrderedIteration(all map[string]*Workflow) bool {
 }
 func iterationRetry(run *Run) bool {
 	for _, job := range run.Jobs {
+		if iterationRetry(&Run{Jobs: job.ChildJobs}) {
+			return true
+		}
 		for _, item := range job.Items {
-			if item.Status != "completed" {
+			if item.Status != "completed" || iterationRetry(&Run{Jobs: item.Jobs}) {
 				return true
 			}
 		}
@@ -135,7 +138,9 @@ func (e *Executor) iterationPlan(id string, job Job, inputs map[string]any, req 
 	if len(event) == 0 {
 		event = nil
 	}
-	p.Fingerprint = actionHash([]any{p.Items, job, all, contracts, e.Roles, event, req.Metadata})
+	metadata, _ := cloneJSONValue(req.Metadata).(map[string]any)
+	delete(metadata, "iteration_ancestors")
+	p.Fingerprint = actionHash([]any{p.Items, job, all, contracts, e.Roles, event, metadata, req.Execution})
 	// Identity data must be persisted exactly, never with substituted secrets.
 	b, err = actionJSON(p)
 	if err == nil {
@@ -214,14 +219,20 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 	if journal == nil {
 		return fail(fmt.Errorf("durable IterationJournal unavailable"))
 	}
-	p, err := e.iterationPlan(id, job, inputs, req, needs, all)
+	checkpoint, err := journal.IterationRun(ctx, req.runID, nativeString(req.Metadata, "iteration_logical_run_id"), id)
+	if err != nil {
+		return fail(err)
+	}
+	planReq := req
+	planReq.runID = checkpoint
+	p, err := e.iterationPlan(id, job, inputs, planReq, needs, all)
 	if err != nil {
 		return fail(err)
 	}
 	if err = journal.PinIteration(ctx, p); err != nil {
 		return fail(err)
 	}
-	records, err := journal.IterationAttempts(ctx, req.runID, id)
+	records, err := journal.IterationAttempts(ctx, p.RunID, id)
 	if err != nil {
 		return fail(err)
 	}
@@ -266,13 +277,13 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 					child, loadErr = e.execute(ctx, child.WorkflowRef, RunRequest{Ref: child.WorkflowRef, runID: child.ID, Inputs: childSnap.Inputs, Secrets: childSecrets, SecretRefs: req.SecretRefs, Metadata: childSnap.Metadata, Event: req.Event, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, ordered: true}, all, slots, depth+1, child)
 				}
 			}
-			if loadErr == nil && child.Status == RunStatusSucceeded {
+			if loadErr == nil && child.Status == RunStatusSucceeded && !iterationRetry(child) {
 				last.Status = "completed"
 				last.Outputs = child.Outputs
 				last.Jobs = child.Jobs
 				last.Error = ""
 				last.FailureClass = ""
-				if err = e.appendIteration(ctx, journal, req.runID, id, &last); err != nil {
+				if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
 					return fail(err)
 				}
 				out.Items[i] = last
@@ -286,7 +297,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 				last.Status = "interrupted"
 				last.FailureClass = "owner_loss"
 				last.Error = "child completion was not committed"
-				if err = e.appendIteration(ctx, journal, req.runID, id, &last); err != nil {
+				if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
 					return fail(err)
 				}
 			}
@@ -298,8 +309,8 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			}
 		}
 		r := IterationItemResult{PlanFingerprint: p.Fingerprint, Key: item.Key, Number: item.Number, Attempt: last.Attempt + 1, Status: "pending"}
-		r.ChildID = iterationChildID(req.runID, id, item.Key, r.Attempt)
-		if err = e.appendIteration(ctx, journal, req.runID, id, &r); err != nil {
+		r.ChildID = iterationChildID(p.RunID, id, item.Key, r.Attempt)
+		if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
 			return fail(err)
 		}
 		out.Items[i] = r
@@ -324,6 +335,11 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
 		child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, nil)
 		r.Status = "completed"
+		if child != nil && iterationRetry(child) && childErr == nil {
+			r.Status = "exhausted"
+			r.FailureClass = "usage_exhausted"
+			r.Error = "nested iteration contains exhausted skips"
+		}
 		if child != nil {
 			r.Outputs = child.Outputs
 			r.Jobs = child.Jobs
@@ -353,7 +369,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 				stop = true
 			}
 		}
-		if err = e.appendIteration(ctx, journal, req.runID, id, &r); err != nil {
+		if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
 			return fail(errors.Join(childErr, err))
 		}
 		out.Items[i] = r
@@ -413,7 +429,13 @@ func (e *Executor) guardIterationRetry(ctx context.Context, last IterationItemRe
 				continue
 			}
 			if r.State != "completed" {
-				if err = e.reconcileIterationMutation(ctx, j, &r); err != nil {
+				generation := r.Context.Generation
+				if fence, ok := ctx.Value(fenceKey{}).(executionFence); ok {
+					generation = fence.generation
+				}
+				if _, err = e.reconcileAction(ctx, j, &r, generation); err != nil {
+					err = fmt.Errorf("%w: %v", ErrActionIntegrity, err)
+
 					return err
 				}
 				if r.State == "no_effect" {
@@ -429,36 +451,6 @@ func (e *Executor) guardIterationRetry(ctx context.Context, last IterationItemRe
 	}
 	return nil
 }
-func (e *Executor) reconcileIterationMutation(ctx context.Context, j ActionJournal, r *ActionAttempt) error {
-	a := e.applicationActions[r.Contract.Name]
-	if a == nil || a.reconcile == nil {
-		return fmt.Errorf("%w: uncertain item mutation has no reconciliation hook", ErrActionIntegrity)
-	}
-	recovered, err := a.reconcile(ctx, r.Context, r.Input, r.Bindings, r.Result)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrActionIntegrity, err)
-	}
-	proof, err := e.safeActionJSON(recovered.Proof)
-	if err != nil || len(proof) == 0 || string(proof) == "null" || (recovered.Outcome != "completed" && recovered.Outcome != "no_effect") {
-		return fmt.Errorf("%w: mutation outcome remains unknown or lacks proof", ErrActionIntegrity)
-	}
-	if recovered.Outcome == "completed" {
-		r.Result, err = e.safeActionResult(recovered.Result)
-		if err != nil {
-			return err
-		}
-		if err = a.validateResult(ctx, *r); err != nil {
-			return fmt.Errorf("%w: %v", ErrActionIntegrity, err)
-		}
-		if _, err = completeAction(r); err != nil {
-			return err
-		}
-	} else {
-		r.State = "no_effect"
-	}
-	r.Reconciliations = append(r.Reconciliations, ActionRecoveryObservation{Generation: r.Context.Generation, Outcome: recovered.Outcome, Proof: proof})
-	return e.checkpointAction(ctx, j, r)
-}
 
 // Invalidate every dependent aggregate when an item will be retried. Completed
 // effect inputs are checked again by the step/action journals before replay.
@@ -470,7 +462,7 @@ func resetIterationDependents(run *Run, all map[string]*Workflow) {
 	dirty := map[string]bool{}
 	for id, j := range w.Jobs {
 		r, ok := run.Jobs[id]
-		if !ok || r.Status != RunStatusSucceeded || (j.ForEach != nil && itemsIncomplete(r.Items)) {
+		if !ok || r.Status != RunStatusSucceeded || (j.ForEach != nil && itemsIncomplete(r.Items)) || iterationRetry(&Run{Jobs: r.ChildJobs}) {
 			dirty[id] = true
 		}
 	}
@@ -513,7 +505,7 @@ func (e *Executor) beginIterationStep(ctx context.Context, j Journal, step Step,
 	if input == nil {
 		return Attempt{}, false, fmt.Errorf("ordered iteration requires durable IterationJournal")
 	}
-	return input.BeginInput(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, retry, fingerprint, strings.HasPrefix(step.Uses, "agent/"))
+	return input.BeginInput(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, retry, fingerprint, strings.HasPrefix(step.Uses, "agent/"), nativeString(ec.Metadata, "iteration_logical_run_id"))
 }
 
 func jobsValue(jobs map[string]JobExecution) map[string]any {
@@ -554,7 +546,7 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 		if err != nil {
 			return err
 		}
-		req := RunRequest{Ref: r.WorkflowRef, runID: r.ID, Inputs: inputs, Secrets: credentials, Event: s.Event, Metadata: s.Metadata, actionContracts: s.ActionContracts}
+		req := RunRequest{Ref: r.WorkflowRef, runID: r.ID, Inputs: inputs, Secrets: credentials, Event: s.Event, Metadata: s.Metadata, actionContracts: s.ActionContracts, Execution: s.Execution}
 		for id, job := range w.Jobs {
 			needs := map[string]JobExecution{}
 			for _, dep := range job.Needs {
@@ -564,7 +556,13 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 			}
 			ec := expressionContext{Inputs: inputs, Secrets: credentials, Event: s.Event, Needs: needs}
 			if job.ForEach != nil {
-				plan, err := j.IterationPlan(ctx, r.ID, id)
+				checkpoint, err := j.IterationRun(ctx, r.ID, nativeString(s.Metadata, "iteration_logical_run_id"), id)
+				if err != nil {
+					return err
+				}
+				planReq := req
+				planReq.runID = checkpoint
+				plan, err := j.IterationPlan(ctx, checkpoint, id)
 				if errors.Is(err, sql.ErrNoRows) {
 					if len(r.Jobs[id].Items) > 0 {
 						return fmt.Errorf("%w: iteration plan missing", ErrActionIntegrity)
@@ -577,7 +575,7 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 				// A changed dependency can legitimately change a pending job's list. It
 				// will be rejected against the pinned plan at dispatch, before any effect.
 				if len(needs) == len(job.Needs) {
-					expected, err := e.iterationPlan(id, job, inputs, req, needs, s.Definitions)
+					expected, err := e.iterationPlan(id, job, inputs, planReq, needs, s.Definitions)
 					if err != nil {
 						return err
 					}
@@ -585,12 +583,12 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 						return fmt.Errorf("%w: retained ordered plan changed for %s", ErrActionIntegrity, id)
 					}
 				}
-				records, err := j.IterationAttempts(ctx, r.ID, id)
+				records, err := j.IterationAttempts(ctx, checkpoint, id)
 				if err != nil {
 					return err
 				}
 				for _, record := range records {
-					if record.Fingerprint != iterationResultHash(record) || record.PlanFingerprint != plan.Fingerprint || record.Number < 1 || record.Number > len(plan.Items) || record.Key != plan.Items[record.Number-1].Key || record.ChildID != iterationChildID(r.ID, id, record.Key, record.Attempt) {
+					if record.Fingerprint != iterationResultHash(record) || record.PlanFingerprint != plan.Fingerprint || record.Number < 1 || record.Number > len(plan.Items) || record.Key != plan.Items[record.Number-1].Key || record.ChildID != iterationChildID(checkpoint, id, record.Key, record.Attempt) {
 						return fmt.Errorf("%w: retained iteration identity changed", ErrActionIntegrity)
 					}
 					child, childSnap, err := j.Load(ctx, record.ChildID)

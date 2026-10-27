@@ -753,3 +753,85 @@ func TestOrderedIterationRechecksEvidenceAfterCapacityWait(t *testing.T) {
 		t.Fatal(err, providers.Load())
 	}
 }
+
+func TestOrderedIterationNestedResumePreservesCompletedItems(t *testing.T) {
+	for _, outer := range []bool{false, true} {
+		for _, failure := range []error{ErrUsageExhausted, ErrProviderFailure} {
+			t.Run(fmt.Sprint(outer, failure), func(t *testing.T) {
+				retry := false
+				var calls []string
+				e, _ := iterationExecutor(t, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
+					calls = append(calls, r.Prompt)
+					if r.Prompt == "retry" && !retry {
+						return nil, failure
+					}
+					return map[string]any{"text": r.Prompt}, nil
+				}))
+				wrapper := `on:
+  workflow_call: {}
+jobs:
+  inner:
+    uses: workflows/child.yml
+    for-each: {items: [{id: ok, task: ok}, {id: retry, task: retry}], key: item.id}
+    with: {task: '${{ item.task }}'}
+`
+				writeWorkflow(t, e.WorkspaceDir, "wrapper.yml", wrapper)
+				root := "jobs:\n  wrapper:\n    uses: workflows/wrapper.yml\n"
+				if outer {
+					root += "    for-each: {items: [{id: outer}], key: item.id}\n"
+				}
+				writeWorkflow(t, e.WorkspaceDir, "main.yml", root)
+				run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+				if failure == ErrProviderFailure && err == nil {
+					t.Fatal("failure hidden")
+				}
+				if failure == ErrUsageExhausted && err != nil {
+					t.Fatal(err)
+				}
+				retry = true
+				run, err = e.Resume(context.Background(), run.ID, nil, true)
+				if err != nil || !reflect.DeepEqual(calls, []string{"ok", "retry", "retry"}) || iterationRetry(run) {
+					t.Fatal(run, err, calls)
+				}
+			})
+		}
+	}
+}
+func TestOrderedIterationProviderClassificationRetainsReasons(t *testing.T) {
+	for _, cause := range []error{fmt.Errorf("%w: authentication failed", ErrProviderFailure), fmt.Errorf("%w: budget limit", ErrUsageExhausted), fmt.Errorf("%w: structured output rejected", ErrProviderFailure)} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			calls := 0
+			e, _ := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { calls++; return nil, cause }))
+			run, _ := e.Run(context.Background(), iterationRequest("a", "b"))
+			if calls != 2 || run.Jobs["review"].Items[0].Error == "" {
+				t.Fatal(run, calls)
+			}
+		})
+	}
+}
+
+func TestOrderedIterationCommandCheckpointAcrossPhysicalAttempts(t *testing.T) {
+	retry := false
+	e, _ := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+		if !retry {
+			return nil, ErrProviderFailure
+		}
+		return map[string]any{"text": "done"}, nil
+	}))
+	path := filepath.Join(e.WorkspaceDir, "command-count")
+	command := fmt.Sprintf("        argv: [sh, '-c', 'echo once >> %s']", path)
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "      - id: run", "      - id: command\n"+command+"\n      - id: run", 1))
+	run, err := e.Run(context.Background(), iterationRequest("a"))
+	if err == nil {
+		t.Fatal("failure hidden")
+	}
+	retry = true
+	run, err = e.Resume(context.Background(), run.ID, nil, true)
+	if err != nil {
+		t.Fatal(run, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "once\n" {
+		t.Fatal(string(data), err)
+	}
+}
