@@ -11,3 +11,12 @@ test('fix browser errors and report host validation failure', async ({ page }) =
   await expect(ui.locator('.aw-diagnostics')).toContainText('Validator unavailable');
   await expect(ui.locator('.aw-diagnostics')).toContainText('host');
 });
+
+test('registered action syntax defers availability and schema validation to the host', async ({ page }) => {
+  const ui = await open(page, 'jobs: {build: {steps: [{id: capture, uses: action/invalid.name}]}}');
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.severity === 'error')).toBe(true);
+  await step(page, 'capture');
+  await field(page, 'Action target', 'action/capture');
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await expect(ui.locator('.aw-diagnostics')).toContainText('Registered action availability and typed schemas require host runtime validation');
+});

@@ -88,7 +88,7 @@ func openBackupSource(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("backup schema %d is unsupported", version)
 	}
-	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}}
+	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}, {"action_attempts"}}
 	for index := 0; index < version; index++ {
 		for _, table := range checks[index] {
 			var found int

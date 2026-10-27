@@ -93,7 +93,7 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 	}
 	if !retry {
 		var uncertain int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE origin_id=?) AND status NOT IN ('succeeded','skipped') AND COALESCE(json_extract(CAST(record AS TEXT),'$.phase'),'') NOT IN ('task_completed','repair_admitted','repair_completed')`, id).Scan(&uncertain); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE origin_id=?) AND status NOT IN ('succeeded','skipped') AND NOT EXISTS (SELECT 1 FROM action_attempts a WHERE a.attempt_id=attempts.id) AND COALESCE(json_extract(CAST(record AS TEXT),'$.phase'),'') NOT IN ('task_completed','repair_admitted','repair_completed')`, id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {

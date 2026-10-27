@@ -376,5 +376,17 @@
     "file": "tagged-legacy-booleans.yml",
     "parse": true,
     "valid": true
+  },
+  {
+    "name": "registered action custom parameters",
+    "file": "registered-action.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "registered action invalid name",
+    "file": "registered-action-bad-name.yml",
+    "parse": true,
+    "valid": false
   }
 ]

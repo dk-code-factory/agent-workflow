@@ -4,6 +4,9 @@ A Go controller for single-user Claude/Codex workflows on Linux and macOS. It
 supports durable workflow admission, guarded recovery, command steps, bounded
 iterations, worker mailboxes, isolated Git workspaces, and GitHub publication.
 
+Embedding Go applications can also [register typed application actions](docs/REGISTERED_ACTIONS.md)
+with durable provenance, checkpoint validation, and receipt-based mutation recovery.
+
 **Release status: implementation candidate, not yet production certified.** See
 [release evidence and outstanding gates](docs/RELEASE.md). The deterministic CLI
 and MCP publication pilots pass. Codex app-server has passed a native-auth live

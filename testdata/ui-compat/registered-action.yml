@@ -1,0 +1,7 @@
+jobs:
+  capture:
+    steps:
+      - uses: action/capture
+        with:
+          repository: fixture
+          evidence: {path: retained.json}

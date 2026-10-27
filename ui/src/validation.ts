@@ -285,6 +285,8 @@ function validateWorkflow(w: Workflow, add: Add) {
           for (const key of Object.keys(params)) if (!allowed.includes(key)) add('action', `Unsupported controller parameter "${key}"`, [...sp, 'with', key]);
           const required = step.uses === 'git/commit' ? ['path', 'message'] : step.uses === 'github/pr' ? ['path', 'commit', 'title'] : step.uses === 'workspace/integrate' ? ['path'] : [];
           for (const key of required) if (params[key] == null) add('action', `Action requires ${key}`, [...sp, 'with', key]);
+        } else if (/^action\/[A-Za-z_][A-Za-z0-9_-]*$/.test(step.uses ?? '')) {
+          add('host-action', 'Registered action availability and typed schemas require host runtime validation', [...sp, 'uses'], undefined, 'host', 'info');
         } else {
           if (!/^agent\/[A-Za-z_][A-Za-z0-9_-]*$/.test(step.uses ?? '')) add('action', 'Expected agent/<name> or a controller action', [...sp, 'uses']);
           for (const key of Object.keys(params)) if (!['model', 'prompt', 'message', 'workspace', 'output'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
