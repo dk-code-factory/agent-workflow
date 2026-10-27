@@ -541,8 +541,19 @@ AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run TestSDKBridgeAgainstFakeG
 AGENT_WORKFLOW_CONTAINER_IMAGE=sha256:IMAGE_ID go test ./pkg/clirunner -run TestContainer
 ```
 
-CI runs race tests on Linux/macOS. Live tests and publication pilots are separate
-from deterministic tests and require explicit budgets and a disposable repository.
+Pull request CI runs native race tests and Docker/Podman conformance on Linux
+AMD64, plus workflow validation, isolated filesystem checks, and the complete UI
+browser suite. Merge queue (`merge_group: checks_requested`) CI additionally runs
+Linux ARM64 and both macOS architectures. Pushes to `main` and reusable release
+checks also run the full platform matrix. The required `Required` aggregate
+fails unless every job selected for that event succeeds.
+
+Enable **Require merge queue** for `main` when adopting this workflow, retaining
+**Required** as the required status check. The queue must validate the full matrix
+before merging; ordinary PR success covers only the Linux AMD64 feedback path.
+
+Live tests and publication pilots are separate from deterministic tests and
+require explicit budgets and a disposable repository.
 Shared hosting, Windows runtime support, cron/webhook dispatch, native-definition
 import, automatic conflict resolution, and automatic merge remain outside scope.
 
