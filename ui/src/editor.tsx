@@ -3,7 +3,7 @@ import { ReactFlow, ReactFlowProvider, Background, Controls, Handle, Position, u
 import dagre from '@dagrejs/dagre';
 import { WorkflowDocument } from './document';
 import { dependencies, effectiveStepID } from './validation';
-import { Inspector, type Selection } from './forms';
+import { Inspector, InspectorDraftContext, InspectorDrafts, type Selection } from './forms';
 import { SourceEditor } from './source';
 import type { Job, LayoutState, Path, Step, WorkflowOptions } from './types';
 import '@xyflow/react/dist/style.css';
@@ -60,7 +60,14 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const [narrow, setNarrow] = useState(false);
   const options = store.getOptions(); const w = snapshot.workflow ?? snapshot.previewWorkflow;
   const disabled = store.readOnly || snapshot.stale;
+  const drafts = useMemo(() => new InspectorDrafts(), []);
   const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (e) { setError(String(e)); } };
+  const save = () => {
+    if (store.readOnly || !store.getOptions().onSave || store.getSnapshot().saving) return;
+    const rejected = drafts.apply();
+    if (rejected) { setPanel('inspector'); rejected.reveal(); return; }
+    void store.save();
+  };
   const choose = (next: Selection) => {
     if (next.job && !Object.hasOwn(geometry, next.job)) pendingFocus.current = next.job;
     select(next); navigateSource(value => value + 1); setPanel('inspector');
@@ -184,16 +191,14 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') e.preventDefault();
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
-      const target = e.target as HTMLElement;
-      if (target.matches('input,textarea')) target.blur();
-      void store.save();
+      save();
     }
     // Text controls keep native local editing; CodeMirror uses the shared history directly.
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !(e.target as HTMLElement).closest('input,textarea,.cm-editor')) { e.preventDefault(); e.shiftKey ? store.redo() : store.undo(); }
   }}>
     <header className="aw-toolbar"><div className="aw-brand"><span className="aw-mark">⌘</span><strong>{w?.name || 'Workflow'}</strong><span className="aw-hint">{store.readOnly ? 'Viewer' : 'Editor'}</span></div>
       <div className="aw-mode" role="group" aria-label="Editor mode">{(['visual', 'yaml', 'split'] as const).map(value => <button type="button" key={value} aria-pressed={mode === value} onClick={() => { modeChosen.current = true; setMode(value); }}>{value === 'yaml' ? 'YAML' : value[0].toUpperCase() + value.slice(1)}</button>)}</div>
-      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <button type="button" disabled={snapshot.saving} onClick={() => void store.save()}>{snapshot.saving ? 'Saving…' : 'Save'}</button>}</div>
+      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <button type="button" disabled={snapshot.saving} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button>}</div>
     </header>
     <nav className="aw-mobile-nav" aria-label="Panels">{(['palette', 'canvas', 'inspector'] as const).map(p => <button type="button" key={p} aria-pressed={panel === p} onClick={() => setPanel(p)}>{p}</button>)}</nav>
     {snapshot.stale && <div className="aw-stale" role="status">Stale preview — fix the YAML structure to resume visual editing.</div>}
@@ -228,7 +233,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
         </div>}
         {mode !== 'visual' && <div className="aw-yaml-pane"><div className="aw-pane-title">YAML source <span>{snapshot.validating ? 'Validating…' : `${snapshot.diagnostics.filter(d => d.severity === 'error').length} errors`}</span></div><SourceEditor store={store} jobID={selection.job} stepIndex={selection.step} navigationKey={sourceNavigation} /></div>}
       </div>
-      <aside className="aw-inspector" aria-label="Inspector"><Inspector key={`${selection.job ?? "workflow"}:${selection.step ?? "job"}`} store={store} selection={selection} select={choose} attempt={attempt} requestDelete={requestDelete} requestEntryDelete={requestEntryDelete} suggestionsID={`${id}-suggestions`} /></aside>
+      <aside className="aw-inspector" aria-label="Inspector"><InspectorDraftContext.Provider value={drafts}><Inspector key={`${selection.job ?? "workflow"}:${selection.step ?? "job"}`} store={store} selection={selection} select={choose} attempt={attempt} requestDelete={requestDelete} requestEntryDelete={requestEntryDelete} suggestionsID={`${id}-suggestions`} /></InspectorDraftContext.Provider></aside>
     </div>
     <footer className="aw-diagnostics"><details open={snapshot.diagnostics.some(d => d.severity === 'error')}><summary>{snapshot.diagnostics.length} diagnostics{snapshot.validating ? ' · validating' : ''}</summary><ul>{snapshot.diagnostics.map((d, i) => <li key={i} data-severity={d.severity}><strong>{d.severity}</strong> {d.location ? `${d.location.line}:${d.location.column} ` : ''}{d.path.join('.')} — {d.message} <small>({d.source})</small></li>)}</ul></details></footer>
     {deletion && <div className="aw-modal-backdrop"><div className="aw-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-delete-title`} aria-describedby={`${id}-delete-impact`} onKeyDown={e => {
