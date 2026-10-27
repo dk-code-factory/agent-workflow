@@ -120,15 +120,18 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - run: make ui-install
+      - run: npm ci --prefix ui --ignore-scripts
       - name: Check flow checker and UF documentation synchronization
         run: |
-          make ui-flow-checker-test
+          node --test ui/scripts/flows-check.test.mjs
           node ui/scripts/flows-check.mjs --ci
-      - run: make ui-check ui-test
+      - name: Check types and unit tests
+        run: |
+          npm run check --prefix ui
+          npm test --prefix ui
       - name: Build and test packed consumers
         run: |
-          make ui-build
+          npm run build --prefix ui
           npm run test:consumers --prefix ui
       - name: Run browser tests
         run: npm run test:browser --prefix ui -- --project=${{ matrix.browser }}
