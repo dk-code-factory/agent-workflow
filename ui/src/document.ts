@@ -1,5 +1,5 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
-import type { Diagnostic, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
+import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, identifier, parseWorkflow } from './validation';
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
@@ -81,25 +81,89 @@ export class WorkflowDocument {
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
     const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true);
   }
-  setField(path: Path, value: unknown) {
-    this.edit(doc => {
-      if (value === undefined) { doc.deleteIn(path); return; }
-      // Optional mappings such as repeat may be explicitly null in imported
-      // YAML. Materialize only the ancestors the user is now editing.
-      for (let length = 1; length < path.length; length++) {
-        const prefix = path.slice(0, length);
-        const node = doc.getIn(prefix, true);
-        if (node == null || (isScalar(node) && node.value == null)) {
-          const replacement = doc.createNode(typeof path[length] === 'number' ? [] : {});
-          if (isScalar(node)) {
-            replacement.comment = node.comment;
-            replacement.commentBefore = node.commentBefore;
-            replacement.spaceBefore = node.spaceBefore;
-          }
-          doc.setIn(prefix, replacement);
+  private writeField(doc: Document, path: Path, value: unknown) {
+    if (value === undefined) { doc.deleteIn(path); return; }
+    // Optional mappings such as repeat may be explicitly null in imported
+    // YAML. Materialize only the ancestors the user is now editing.
+    for (let length = 1; length < path.length; length++) {
+      const prefix = path.slice(0, length);
+      const node = doc.getIn(prefix, true);
+      if (node == null || (isScalar(node) && node.value == null)) {
+        const replacement = doc.createNode(typeof path[length] === 'number' ? [] : {});
+        if (isScalar(node)) {
+          replacement.comment = node.comment;
+          replacement.commentBefore = node.commentBefore;
+          replacement.spaceBefore = node.spaceBefore;
         }
+        doc.setIn(prefix, replacement);
       }
-      doc.setIn(path, value);
+    }
+    doc.setIn(path, value);
+  }
+  setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value)); }
+  moveArgument(path: Path, from: number, to?: number) {
+    this.edit(doc => {
+      const seq = doc.getIn(path, true);
+      if (!isSeq(seq) || from < 1 || from >= seq.items.length || (to !== undefined && (to < 1 || to >= seq.items.length))) throw new Error('Invalid argument position');
+      const [item] = seq.items.splice(from, 1);
+      if (to !== undefined) seq.items.splice(to, 0, item);
+    });
+  }
+  previewJobResult(request: JobResultRequest): JobResultPreview {
+    if (this.readOnly) throw new Error('Viewer is read-only');
+    const workflow = this.snapshot.workflow;
+    if (this.snapshot.stale || !workflow || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
+    const { target, producer, source } = request;
+    if (!hasExpressionReferences(target)) throw new Error('Choose an expression-capable field');
+    const consumer = pathJob(target);
+    const jobs = workflow.jobs;
+    if (!Object.hasOwn(jobs, producer) || (consumer && !Object.hasOwn(jobs, consumer))) throw new Error('Unknown job');
+    const reaches = (id: string, target: string, seen = new Set<string>()): boolean => id === target || (Object.hasOwn(jobs, id) && !seen.has(id) && (seen.add(id), dependencies(jobs[id]).some(dep => reaches(dep, target, seen))));
+    if (consumer && reaches(producer, consumer)) throw new Error('Result dependency would create a cycle');
+    // Never recreate a deleted step/interface entry or overwrite structured data.
+    const owner = consumer ? target.slice(0, target[2] === 'steps' ? 4 : 2) : target.slice(0, -1);
+    if (!this.parsed.doc.hasIn(owner)) throw new Error('Unknown target field');
+    const stored = this.parsed.doc.getIn(target);
+    if (stored !== undefined && stored !== null && typeof stored !== 'string') throw new Error('Target must be a text field');
+    const text = String(stored ?? '');
+    const outputs = jobs[producer].outputs ?? {};
+    let output: string;
+    let declaration: string | undefined;
+    if (source.kind === 'output') {
+      output = source.output;
+      if (!identifier.test(output) || !Object.hasOwn(outputs, output)) throw new Error('Unknown producer output');
+    } else {
+      const step = jobs[producer].steps?.[source.step];
+      if (!step || jobs[producer].uses) throw new Error('Unknown producer step');
+      if (!identifier.test(source.output) || !identifier.test(source.name)) throw new Error('Choose valid output names');
+      const reference = 'steps.' + effectiveStepID(step, source.step) + '.outputs.' + source.output;
+      const value = '${{ ' + reference + ' }}';
+      const matches = (value: string) => /^\s*\$\{\{\s*(\S+)\s*\}\}\s*$/.exec(value)?.[1] === reference;
+      if (Object.hasOwn(outputs, source.name) && !matches(outputs[source.name])) throw new Error('Output name conflicts with an existing declaration');
+      output = Object.keys(outputs).find(key => matches(outputs[key])) ?? source.name;
+      if (!Object.hasOwn(outputs, output)) declaration = value;
+    }
+    const reference = `${consumer ? 'needs' : 'jobs'}.${producer}.outputs.${output}`;
+    const expression = isExpressionPath(target) && text.trim() && !text.trim().startsWith('${{') ? reference : '${{ ' + reference + ' }}';
+    const { start, end } = request.selection ?? { start: text.length, end: text.length };
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > text.length) throw new Error('Invalid text selection');
+    return { revision: this.snapshot.revision, request: structuredClone(request), output, expression, declaration,
+      addDependency: !!consumer && !dependencies(jobs[consumer]).includes(producer), value: text.slice(0, start) + expression + text.slice(end) };
+  }
+  applyJobResult(preview: JobResultPreview) {
+    if (preview.revision !== this.snapshot.revision) throw new Error('The document changed. Preview the job result again.');
+    // Derive every mutation again; preview fields are never trusted instructions.
+    const current = this.previewJobResult(preview.request);
+    const { target, producer } = current.request;
+    this.edit(doc => {
+      if (current.declaration !== undefined) this.writeField(doc, ['jobs', producer, 'outputs', current.output], current.declaration);
+      const consumer = pathJob(target);
+      if (consumer && current.addDependency) {
+        const needs = doc.getIn(['jobs', consumer, 'needs'], true);
+        if (isSeq(needs)) needs.add(producer);
+        else this.writeField(doc, ['jobs', consumer, 'needs'], [...dependencies(this.snapshot.workflow!.jobs[consumer]), producer]);
+      }
+      this.writeField(doc, target, current.value);
     });
   }
   private unique(base: string, ids: string[]) { let id = base; let i = 2; while (ids.includes(id)) id = `${base}_${i++}`; return id; }

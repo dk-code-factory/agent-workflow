@@ -5,6 +5,7 @@ test('fix browser errors and report host validation failure', async ({ page }) =
   const ui = await open(page, 'jobs: {build: {steps: [{id: bad, argv: []}]}}');
   await expect(ui.locator('.aw-diagnostics')).toContainText('error');
   await step(page, 'bad'); await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  await ui.getByText('Advanced command YAML', { exact: true }).click();
   await field(page, 'Arguments (YAML array)', '[echo, fixed]');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await page.evaluate(() => (window as any).first.update({ validate: async () => { throw new Error('Validator unavailable'); } }));

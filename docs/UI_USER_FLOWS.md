@@ -125,13 +125,14 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-08.spec.ts)
 
-- **Coverage:** Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls.
+- **Coverage:** Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls. Boolean, numeric, and literal string defaults keep their types; object defaults use field YAML, and defaults have no result-binding control.
 
 - **Starting point:** I have enabled **workflow_call** in Workflow properties.
 - **My flow:** I open **Callable inputs**, **Callable secrets**, or **Callable
   outputs** → select **Add input**, **Add secret**, or **Add output** → edit
   the generated identifier and its settings.
-- **What I see:** Inputs offer a type, YAML default, and required checkbox;
+- **What I see:** Inputs offer a type, a matching text, boolean, or number
+  default control, field YAML for object/array values, and a required checkbox;
   secrets offer a required checkbox; outputs offer a value expression. These
   controls define the interface, rather than entering actual secret values.
 
@@ -179,17 +180,22 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo.
+- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under
   **Reusable workflows**. Otherwise, I select a job, change **Job kind** to
-  **Reusable workflow**, and edit **Reusable workflow** → fill in **Call inputs
-  (YAML)** and **Call secrets (YAML)** as needed.
+  **Reusable workflow**, and edit **Reusable workflow** → fill in the named call
+  inputs and secrets when the host supplies interface metadata. I choose Literal,
+  Expression, or field YAML for each input. Without metadata, the inspector
+  explains the fallback to **Advanced call YAML**, including **Call inputs
+  (YAML)** and **Call secrets (YAML)**.
 - **What I see:** The job shows a reusable-call badge and reference instead of
   a step list. Before replacing existing steps, a confirmation names the
   configuration to discard. I can cancel; after confirming, **Undo** restores
-  the prior definition in one edit.
+  the prior definition in one edit. Defaults are shown without adding bindings.
+  Guided fields preserve unknown bindings; inherited secrets stay inherited until
+  I choose **Configure named secrets**. Advanced YAML explains whole-value replacement.
 
 ### UF-13 — Repeat a job until a condition is met
 
@@ -249,13 +255,16 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-17.spec.ts)
 
-- **Coverage:** Argument arrays, working directories, timeouts, and direct-command labels reflect form edits.
+- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
 
 - **Starting point:** I add **Direct command** or choose it under Step type.
-- **My flow:** I enter the executable and arguments in **Arguments (YAML
-  array)** → optionally set **Working directory** and **Timeout**.
+- **My flow:** I enter **Executable**, edit each argument row, and use **Add
+  argument**, **Move up**, **Move down**, or **Remove** → optionally set **Working
+  directory** and **Timeout**. **Advanced command YAML** retains **Arguments (YAML
+  array)** for direct array replacement.
 - **What I see:** The step stores an argument array and is labelled as a direct
-  command. Diagnostics help me spot invalid command configuration.
+  command. Each row is exactly one argument, including spaces, quotes, or an empty
+  string. An empty executable stays a rejected draft until corrected or discarded.
 
 ### UF-18 — Configure a shell command
 
@@ -449,7 +458,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-31.spec.ts)
 
-- **Coverage:** Correcting command arguments clears browser errors; rejected host validation appears in diagnostics. Correcting an invalid registered action name clears browser errors and exposes the host registration/schema check without requiring agent parameters.
+- **Coverage:** Opening Advanced command YAML and correcting an invalid command array clears browser errors; rejected host validation appears in diagnostics. Correcting an invalid registered action name clears browser errors and exposes the host registration/schema check without requiring agent parameters.
 
 - **Starting point:** The diagnostics area reports warnings or errors.
 - **My flow:** I expand diagnostics → read the message, document path, source,
@@ -561,15 +570,20 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-39.spec.ts)
 
-- **Coverage:** A declared producer output becomes an expression option for a dependent summary prompt.
+- **Coverage:** A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed.
 
 - **Starting point:** My `review` job contains an agent step with ID `analyze`,
   and a `summarize` job needs its result.
-- **My flow:** In `review`, I add a **Job output** named `report` with value
-  `${{ steps.analyze.outputs.text }}` → select `summarize` and check `review`
-  under **Dependencies** → select the summary agent step and insert
-  `${{ needs.review.outputs.report }}` into its **Prompt**.
-- **What I see:** The YAML contains both the dependency and the data reference.
+- **My flow:** In the summary step's **Prompt**, I choose **Use job result** →
+  choose `review` and either an existing job output or the `analyze` step's `text`
+  output → name a new output `report` if needed → **Preview result wiring** →
+  review the declaration, dependency, and expression → **Apply job result**.
+  I can also declare outputs and dependencies separately and use the expression picker.
+- **What I see:** Confirmation updates the output, dependency, and field together,
+  inserting `${{ needs.review.outputs.report }}` at my text selection. Existing
+  matching outputs are reused; conflicting names and dependency cycles are rejected.
+  Cancel changes nothing and one Undo restores the complete transaction. If the
+  document changes after preview, I preview again before applying.
   The dependent job's expression suggestions include the declared `report`
   output. I am defining how results will be passed; actual values appear when
   the workflow runs outside this UI.
@@ -595,11 +609,12 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-41.spec.ts)
 
-- **Coverage:** Replacing advanced parameters updates both the stored mapping and guided prompt/model fields.
+- **Coverage:** Replacing advanced parameters updates both the stored mapping and guided prompt/model fields, with visible replacement guidance. Numeric custom-action fields store numbers, while guided text and number edits preserve unrelated parameters and their comments. Overflowing numeric drafts block Save and preserve the previous value until corrected or discarded with Escape.
 
 - **Starting point:** A selected action needs parameters that its guided fields
   do not expose, or I want to edit several parameters together.
-- **My flow:** I open **Advanced parameters** → edit **Parameters (YAML)** →
+- **My flow:** I use the host's typed guided fields for individual values, including
+  numeric fields, or open **Advanced parameters** → edit **Parameters (YAML)** →
   leave the field to apply the mapping → inspect any guided fields and diagnostics.
 - **What I see:** The action's complete parameter mapping is replaced by my
   entry, and guided fields reflect the resulting values. I include existing
