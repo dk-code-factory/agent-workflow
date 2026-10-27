@@ -17,3 +17,5 @@
 .aw-field>label{display:flex;flex-direction:column;gap:5px}.aw-field>label>span{font-weight:600}.aw-expression-picker{font-size:12px}
 
 .aw-source .cm-panels{background:var(--aw-panel);color:var(--aw-text)}.aw-editor .aw-source .cm-panels .cm-panel.cm-search{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 28px 8px 8px}.aw-editor .aw-source .cm-search .cm-textfield{flex:1 0 100%;width:100%;margin:0;background:var(--aw-panel);color:var(--aw-text);border:1px solid var(--aw-border)}.aw-editor .aw-source .cm-search label{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;margin:0}.aw-editor .aw-source .cm-search input[type=checkbox]{width:auto;margin:0}.aw-source .cm-search br{display:none}.aw-editor .aw-source .cm-search .cm-button{font:inherit;background:var(--aw-panel);color:var(--aw-text);border:1px solid var(--aw-border);border-radius:5px;margin:0;padding:3px 6px}
+
+.aw-field-error{color:var(--aw-error);overflow-wrap:anywhere}.aw-field-error p{margin:0 0 8px}.aw-editor [aria-invalid=true]{border-color:var(--aw-error)}

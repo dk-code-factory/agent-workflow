@@ -457,13 +457,13 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-33.spec.ts)
 
-- **Coverage:** Escape restores an invalid structured YAML draft and clears the field error.
+- **Coverage:** Correction, Escape, and Discard edit recover rejected YAML and identifier drafts; recovery alone never invokes saving.
 
 - **Starting point:** A structured YAML field or identifier rejects my edit.
 - **My flow:** I read the error → correct the value and apply it again, or press
-  **Escape** in the field to discard the pending edit.
+  **Escape** in the field or select **Discard edit** to restore the stored value.
 - **What I see:** An invalid YAML draft in a structured field does not replace
-  the stored field value. Escape restores that value and clears its field error.
+  the stored field value. The field is marked invalid and explains that its edit has not been applied. Escape and Discard edit restore the stored value and clear the rejection. I select Save again after recovery.
 
 ## Saving, viewing, and the playground
 
@@ -471,13 +471,13 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** Keyboard saving applies an active multiline draft and shows disabled Saving state until completion; failures can be dismissed and retried.
+- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
-  the active property text field and save → wait for **Saving…** to finish.
+  pending inspector fields and save → wait for **Saving…** to finish.
 - **What I see:** The host handles the submitted source. If saving fails, an
-  alert lets me read and **Dismiss** the error; I can retry. Save accepts drafts
+  alert lets me read and **Dismiss** the error; I can retry. If an inspector edit cannot apply, saving stops and its field is revealed and focused. I correct it, press Escape, or choose Discard edit, then explicitly save again. Save accepts source drafts
   with diagnostics and is never automatic. Without host saving, I use export.
 
 ### UF-35 — Download the YAML
