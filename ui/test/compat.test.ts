@@ -42,6 +42,22 @@ describe('advisory reference dependencies', () => {
     expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
   });
 
+  it('bounds identifier text in dependency messages while retaining full paths', () => {
+    const producer = 'producer_' + 'p'.repeat(4096);
+    const consumer = 'consumer_' + 'c'.repeat(4096);
+    const prompt = '${{ needs.' + producer + '.outputs.text }}';
+    const result = parseWorkflow(JSON.stringify({ jobs: {
+      [producer]: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
+      [consumer]: { steps: [{ uses: 'action/capture', with: Object.fromEntries(Array.from({ length: 64 }, (_, i) => ['value_' + i, prompt])) }] },
+    } }));
+    const warnings = result.diagnostics.filter(d => d.code === 'expression-dependency');
+    expect(warnings).toHaveLength(64);
+    expect(warnings.every(d => d.message.length < 300 && d.message.includes('…'))).toBe(true);
+    expect(warnings.every(d => d.path[1] === consumer)).toBe(true);
+    expect(warnings.at(-1)!.path).toEqual(['jobs', consumer, 'steps', 0, 'with', 'value_63']);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+
   it('normalizes dependencies a bounded number of times for repeated references', () => {
     const source = JSON.stringify({ jobs: {
       producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },

@@ -144,6 +144,24 @@ test('diagnostics reveal guided argument and typed default controls', async ({ p
   expect(await snapshot(page)).toEqual(before);
 });
 
+test('long diagnostic identifiers render bounded labels while preserving navigation paths', async ({ page }) => {
+  const consumer = 'consumer_' + 'c'.repeat(4096);
+  const ui = await open(page, JSON.stringify({ jobs: {
+    producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
+    [consumer]: { steps: [{ uses: 'action/capture', with: { prompt: '${{ needs.producer.outputs.text }}' } }] },
+  } }));
+  await ui.locator('.aw-diagnostics summary').click();
+  const warning = ui.locator('.aw-diagnostics').getByRole('button', { name: /missing from Dependencies/ });
+  expect((await warning.textContent())!.length).toBeLessThan(500);
+  await expect(warning).toContainText('consumer_');
+  await expect(warning).toContainText('…');
+  const before = await snapshot(page);
+  expect(before.diagnostics.find((d: any) => d.code === 'expression-dependency').path[1]).toBe(consumer);
+  await warning.click();
+  await expect(ui.getByRole('group', { name: 'Dependencies' }).getByLabel('producer', { exact: true })).toBeFocused();
+  expect(await snapshot(page)).toEqual(before);
+});
+
 test('narrow inspector to YAML fallback focuses the range after the drawer closes', async ({ page }) => {
   const ui = await open(page, 'jobs: {build: {context: {session: remote}, steps: [{argv: [echo], timeout: invalid}]}}');
   await ui.evaluate(element => { element.style.width = '620px'; });

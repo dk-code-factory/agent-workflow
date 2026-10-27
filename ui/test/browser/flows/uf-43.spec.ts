@@ -29,3 +29,18 @@ test('missing dependency guidance requires an explicit edge repair', async ({ pa
   await expect(warning).toHaveCount(0);
   expect((await snapshot(page)).workflow.jobs.consumer.needs).toEqual(['producer']);
 });
+
+test('viewer dependency diagnostics focus read-only Dependencies', async ({ page }) => {
+  await page.goto('/test/browser.html?viewer');
+  const ui = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {producer: {outputs: {text: hello}, steps: [{argv: [echo]}]}, consumer: {steps: [{uses: agent/claude, with: {prompt: "${{ needs.producer.outputs.text }}"}}]}}' }));
+  await ui.locator('.aw-diagnostics summary').click();
+  const before = await snapshot(page);
+  const warning = ui.locator('.aw-diagnostics').getByRole('button', { name: /missing from Dependencies/ });
+  await warning.click();
+  await expect(ui.getByRole('group', { name: 'Dependencies' }).locator('..')).toBeFocused();
+  await expect(ui.getByRole('group', { name: 'Dependencies' }).getByLabel('producer')).toBeDisabled();
+  await warning.focus(); await warning.press('Enter');
+  await expect(ui.getByRole('group', { name: 'Dependencies' }).locator('..')).toBeFocused();
+  expect(await snapshot(page)).toEqual(before);
+});

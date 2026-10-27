@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type
 import { ReactFlow, ReactFlowProvider, Background, Controls, Handle, Position, useReactFlow, useNodesInitialized, type NodeProps, type Node, type Edge, MarkerType } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import { WorkflowDocument } from './document';
-import { dependencies, effectiveStepID } from './validation';
+import { dependencies, diagnosticLabel, effectiveStepID } from './validation';
 import { Inspector, InspectorDraftContext, InspectorDrafts, type Selection } from './forms';
 import { SourceEditor } from './source';
 import type { Diagnostic, Job, LayoutState, Path, Step, WorkflowOptions } from './types';
@@ -372,7 +372,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       </div>
       <aside className="aw-inspector" aria-label="Inspector"><InspectorDraftContext.Provider value={drafts}><Inspector key={`${selection.job ?? "workflow"}:${selection.step ?? "job"}`} store={store} selection={selection} select={choose} attempt={attempt} requestDelete={requestDelete} requestEntryDelete={requestEntryDelete} suggestionsID={`${id}-suggestions`} /></InspectorDraftContext.Provider></aside>
     </div>
-    <footer className="aw-diagnostics"><p role="status">{navigationNotice}</p><details open={snapshot.diagnostics.some(d => d.severity === 'error')}><summary>{snapshot.diagnostics.length} diagnostics{snapshot.validating ? ' · validating' : ''}</summary><ul>{snapshot.diagnostics.map((d, i) => <li key={i} data-severity={d.severity}><button type="button" onMouseDown={event => event.preventDefault()} onClick={event => { if (!drafts.pending()) event.currentTarget.focus(); activateDiagnostic(d); }}><strong>{d.severity}</strong> {d.location ? `${d.location.line}:${d.location.column} ` : ''}{d.path.join('.')} — {d.message} <small>({d.source})</small></button>{d.code === 'expression-reference' && <p className="aw-diagnostic-help">Review this reference in the consuming field. Restore its producer or explicitly replace or remove the reference.</p>}</li>)}</ul></details></footer>
+    <footer className="aw-diagnostics"><p role="status">{navigationNotice}</p><details open={snapshot.diagnostics.some(d => d.severity === 'error')}><summary>{snapshot.diagnostics.length} diagnostics{snapshot.validating ? ' · validating' : ''}</summary><ul>{snapshot.diagnostics.map((d, i) => <li key={i} data-severity={d.severity}><button type="button" onMouseDown={event => event.preventDefault()} onClick={event => { if (!drafts.pending()) event.currentTarget.focus(); activateDiagnostic(d); }}><strong>{d.severity}</strong> {d.location ? `${d.location.line}:${d.location.column} ` : ''}{d.path.map(diagnosticLabel).join('.')} — {d.message} <small>({d.source})</small></button>{d.code === 'expression-reference' && <p className="aw-diagnostic-help">Review this reference in the consuming field. Restore its producer or explicitly replace or remove the reference.</p>}</li>)}</ul></details></footer>
     {deletion && <div className="aw-modal-backdrop"><div className="aw-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-delete-title`} aria-describedby={`${id}-delete-impact`} onKeyDown={e => {
       if (e.key === 'Escape') setDeletion(undefined);
       if (e.key === 'Tab') {

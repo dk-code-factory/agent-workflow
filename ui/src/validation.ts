@@ -2,6 +2,11 @@ import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments
 import { hasExpressionReferences, isExpressionPath, references } from './expressions';
 import type { Diagnostic, Job, Mapping, Path, Workflow } from './types';
 
+export function diagnosticLabel(value: string | number): string {
+  const text = String(value);
+  return text.length > 80 ? text.slice(0, 77) + '…' : text;
+}
+
 export const identifier = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 export const controllerParameters: Record<string, string[]> = {
   'workspace/create': ['commit', 'independent'], 'workspace/snapshot': ['commit'],
@@ -333,7 +338,7 @@ function validateWorkflow(w: Workflow, add: Add) {
         if (!exists) add('expression-reference', `Unknown ${ref.scope} reference "${ref.id}"`, path);
         if (exists && ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id) && !warnedProducers.has(ref.id)) {
           warnedProducers.add(ref.id);
-          add('expression-dependency', `Job "${ref.id}" is missing from Dependencies of "${jobID}". Review Dependencies and explicitly add the producer if needed.`, path, undefined, 'browser', 'warning');
+          add('expression-dependency', `Job "${diagnosticLabel(ref.id)}" is missing from Dependencies of "${diagnosticLabel(jobID)}". Review Dependencies and explicitly add the producer if needed.`, path, undefined, 'browser', 'warning');
         }
         if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
           add('expression-reference', `Unknown output "${ref.output}" of job "${ref.id}"`, path);
