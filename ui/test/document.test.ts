@@ -406,11 +406,10 @@ describe('host source replacement protection', () => {
     expect(doc.getSnapshot()).toMatchObject({ hasLocalChanges: false, dirty: true });
     doc.setField(['name'], 'Local');
     const local = doc.getSnapshot().source;
-    doc.update({ source }); // unchanged initial prop
     doc.update({ source: local });
     expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
-    // A host that changes back to the original after echoing a local edit
-    // is requesting a real replacement, rather than repeating an initial prop.
+    // Explicit document calls request a replacement; React separately filters
+    // unchanged props before forwarding options to the document.
     doc.update({ source });
     expect(doc.getSnapshot().pendingSourceReplacement).toBe(source);
     doc.resolveSourceReplacement('keep-local');
@@ -420,6 +419,21 @@ describe('host source replacement protection', () => {
     doc.resolveSourceReplacement('keep-local');
     doc.update({ source: local }); doc.update({ source: incoming });
     expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
+  });
+  for (const clean of [false, true]) {
+    it(`honors an explicit initial-source request ${clean ? 'after saving' : 'while protected'}`, async () => {
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.setField(['name'], 'Local'); const local = doc.getSnapshot().source;
+      if (clean) await doc.save();
+      doc.update({ source });
+      expect(doc.getSnapshot()).toMatchObject(clean ? { source, pendingSourceReplacement: undefined } : { source: local, pendingSourceReplacement: source });
+    });
+  }
+  it('honors reused mutable original options without losing the requested source', () => {
+    const options = { source }; const doc = new WorkflowDocument(options);
+    doc.setField(['name'], 'Local'); const local = doc.getSnapshot().source;
+    options.source = 'name: Incoming\njobs: {}'; doc.update(options);
+    expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: options.source });
   });
   for (const saveBeforeResend of [false, true]) {
     it(`reconsiders accepted source after an echo when ${saveBeforeResend ? 'saved clean' : 'locally protected'}`, async () => {
@@ -542,5 +556,23 @@ describe('host source replacement protection', () => {
     expect(doc.getSnapshot()).toMatchObject({ source: 'jobs: {}', hasLocalChanges: false, validating: true });
     responses.at(-1)!([]); await Promise.resolve();
     expect(doc.getSnapshot().validating).toBe(false);
+  });
+});
+
+describe('guided writes and renderer ownership', () => {
+  it('preserves owners for argument leaves and result wiring, and invalidates whole step lists', () => {
+    const doc = new WorkflowDocument({ source: 'jobs: {build: {steps: [{uses: agent/claude, with: {prompt: Hello}}, {uses: agent/claude, with: {prompt: Other}}]}, producer: {steps: [{argv: [echo, first, second]}]}}' });
+    const generation = doc.getInspectorGeneration();
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'model'], 'Sibling model');
+    doc.moveArgument(['jobs', 'producer', 'steps', 0, 'argv'], 1, 2);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    const preview = doc.previewJobResult({ target: ['jobs', 'build', 'steps', 0, 'with', 'model'], producer: 'producer', source: { kind: 'step', step: 0, output: 'stdout', name: 'captured' } });
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    doc.applyJobResult(preview);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    expect(doc.getSnapshot().workflow!.jobs.build.needs).toEqual(['producer']);
+    expect(doc.getSnapshot().workflow!.jobs.producer.outputs).toEqual({ captured: '${{ steps.step_1.outputs.stdout }}' });
+    doc.moveArgument(['jobs', 'build', 'steps'], 1);
+    expect(doc.getInspectorGeneration()).toBeGreaterThan(generation);
   });
 });

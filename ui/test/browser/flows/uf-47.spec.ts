@@ -428,3 +428,92 @@ test('a newer source from custom discard survives the captured replacement witho
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page))).toMatchObject({ source: before.source, canUndo: false });
 });
+
+for (const choice of ['keep-local', 'use-incoming'] as const) {
+  test(`handle ${choice} clears a prior visible discard failure`, async ({ page }) => {
+    const ui = await rawInspector(page); const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.fill('Keep this buffer'); const original = (await snapshot(page)).source;
+    await page.evaluate(source => {
+      const host = (window as any); host.raw.failDiscard = true; host.first.update({ source: source.replace('Hello', 'Incoming retry') });
+    }, original);
+    await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+    await expect(ui.locator('.aw-error')).toContainText('Custom discard failed');
+    await page.evaluate(choice => {
+      const host = (window as any); host.raw.failDiscard = false; host.first.resolveSourceReplacement(choice);
+    }, choice);
+    await expect(ui.locator('.aw-error')).toHaveCount(0);
+    await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
+    await expect(raw).toHaveValue(choice === 'keep-local' ? 'Keep this buffer' : 'Incoming retry');
+  });
+}
+
+test('a new reentrant discard failure stays visible until imperative resolution', async ({ page }) => {
+  const ui = await rawInspector(page); const raw = ui.getByLabel('Raw prompt', { exact: true });
+  await raw.fill('Buffered draft'); const original = (await snapshot(page)).source;
+  await page.evaluate(source => {
+    const host = (window as any); host.raw.failDiscard = true; host.first.update({ source: source.replace('Hello', 'Older source') });
+  }, original);
+  await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+  await expect(ui.locator('.aw-error')).toContainText('Custom discard failed');
+  await page.evaluate(source => {
+    const host = (window as any); host.raw.failDiscard = false;
+    host.raw.onDiscard = () => { host.first.update({ source: source.replace('Hello', 'Newer source') }); throw new Error('Newer discard failure'); };
+  }, original);
+  await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+  await expect(ui.locator('.aw-error')).toContainText('Newer discard failure');
+  expect((await snapshot(page)).pendingSourceReplacement).toContain('Newer source');
+  await page.evaluate(() => (window as any).first.resolveSourceReplacement('keep-local'));
+  await expect(ui.locator('.aw-error')).toHaveCount(0); await expect(raw).toHaveValue('Buffered draft');
+});
+
+for (const clean of [false, true]) {
+  test(`explicit handle reload honors the original source ${clean ? 'after saving' : 'while protected'}`, async ({ page }) => {
+    const ui = await open(page); const original = (await snapshot(page)).source;
+    await field(page, 'Name', 'Local request');
+    if (clean) {
+      await page.evaluate(() => (window as any).first.update({ onSave: () => {} }));
+      await ui.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(ui.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Saved');
+    }
+    await page.evaluate(source => (window as any).first.update({ source }), original);
+    if (clean) expect((await snapshot(page)).source).toBe(original);
+    else await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
+  });
+}
+
+test('unchanged React initial props and theme updates preserve local edits', async ({ page }) => {
+  await page.goto('/test/browser.html?uncontrolled'); const ui = page.locator('#a');
+  await field(page, 'Name', 'Uncontrolled draft');
+  await page.evaluate(() => (window as any).rerenderHost());
+  await expect(ui.locator('.aw-editor')).toHaveAttribute('data-theme', 'dark');
+  await expect(ui.getByLabel('Name', { exact: true })).toHaveValue('Uncontrolled draft');
+  await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
+});
+
+test('guided result wiring preserves a pending raw sibling buffer', async ({ page }) => {
+  const ui = await rawInspector(page, false, false);
+  await page.evaluate(() => {
+    const host = (window as any); host.first.update({ source: host.first.getSnapshot().source.replace('    needs: build\n', '') });
+  });
+  const raw = ui.getByLabel('Raw prompt', { exact: true });
+  await expect(raw).toHaveValue('Hello'); await raw.fill('Pending sibling buffer');
+  const renders = await page.evaluate(() => (window as any).raw.renders);
+  const before = await snapshot(page);
+  await ui.getByRole('button', { name: 'Use job result in Model', exact: true }).click();
+  const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
+  await picker.getByLabel('Producer job', { exact: true }).selectOption('test');
+  await picker.getByLabel('Step output', { exact: true }).fill('stdout');
+  await picker.getByLabel('Job output name', { exact: true }).fill('captured');
+  await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before.source);
+  await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  await expect(raw).toHaveValue('Pending sibling buffer');
+  expect(await page.evaluate(() => (window as any).raw.renders)).toBe(renders);
+  const after = await snapshot(page);
+  expect(after.source).not.toContain('Pending sibling buffer');
+  expect(after.revision).toBe(before.revision + 1);
+  expect(after.workflow.jobs.build.needs).toEqual(['test']);
+  expect(after.workflow.jobs.test.outputs).toEqual({ captured: '${{ steps.step_1.outputs.stdout }}' });
+  expect(after.workflow.jobs.build.steps[0].with.model).toBe('${{ needs.test.outputs.captured }}');
+  expect(after.hasLocalChanges).toBe(true);
+});

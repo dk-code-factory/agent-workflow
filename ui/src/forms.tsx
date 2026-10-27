@@ -16,18 +16,23 @@ export function applyEdit(fn: () => void): ApplyResult {
 type InspectorDraft = { apply: () => boolean; discard: () => void; reveal: () => void; identifier: boolean; custom?: boolean; isPending: () => boolean };
 export class InspectorDrafts {
   private fields = new Set<InspectorDraft>();
+  private discarding = 0;
   constructor(private onPendingChange: (pending: boolean) => void) {}
-  changed() { this.onPendingChange([...this.fields].some(field => field.isPending())); }
+  changed() { if (this.discarding) return; this.onPendingChange([...this.fields].some(field => field.isPending())); }
   register(field: InspectorDraft) { this.fields.add(field); this.changed(); return () => { this.fields.delete(field); this.changed(); }; }
   pending() { return [...this.fields].find(field => field.isPending()); }
   discard() {
     // Fallible host callbacks run before managed drafts are reset. Successful
     // host callbacks are not rolled back if a later callback fails.
-    const fields = [...this.fields];
-    for (const field of [...fields.filter(field => field.custom), ...fields.filter(field => !field.custom)]) {
-      if (this.fields.has(field)) field.discard();
+    this.discarding++;
+    try {
+      const fields = [...this.fields];
+      for (const field of [...fields.filter(field => field.custom), ...fields.filter(field => !field.custom)]) {
+        if (this.fields.has(field)) field.discard();
+      }
+    } finally {
+      if (--this.discarding === 0) this.changed();
     }
-    this.changed();
   }
   apply() {
     // Apply values before converting their type or renaming containing paths;

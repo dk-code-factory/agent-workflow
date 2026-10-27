@@ -36,8 +36,9 @@ export interface CustomInspectorContext {
   step: Step; path: Path; readOnly: boolean;
   setField: (path: Path, value: unknown) => void;
   /** Report this renderer's buffered edits. Discard must synchronously reset them without committing.
-   * Pending DOM survives constrained sibling field/catalog updates. Arbitrary source edits, undo/redo,
-   * structural edits, changes to selected job/step, step ID/action kind or read-only state, and unmount end its lifetime.
+   * Pending DOM survives constrained sibling field/catalog updates, argument-leaf edits and admitted result wiring.
+   * Arbitrary source edits, undo/redo,
+   * other structural edits, changes to selected job/step, step ID/action kind or read-only state, and unmount end its lifetime.
    * Hosts own additional retention before those transitions.
    * This does not apply or serialize buffers when saving. Call with false after applying/resetting.
    */

@@ -50,7 +50,7 @@ export class WorkflowDocument {
     if (options.layout) this.layout = structuredClone(options.layout);
     // Current-source echoes are acknowledgements of neither saving nor draft
     // disposal. Repeat suppression lasts only for the current protected draft.
-    if (options.source !== undefined && options.source !== previous.source && options.source !== this.snapshot.source && (options.source !== this.lastProtectedSource || !this.snapshot.hasLocalChanges)) {
+    if (options.source !== undefined && options.source !== this.snapshot.source && (options.source !== this.lastProtectedSource || !this.snapshot.hasLocalChanges)) {
       if (!this.readOnly && this.snapshot.hasLocalChanges) {
         this.lastProtectedSource = options.source;
         this.snapshot = { ...this.snapshot, pendingSourceReplacement: options.source };
