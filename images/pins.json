@@ -1,11 +1,11 @@
 {
-  "go_toolchain": "go1.27.2",
-  "claude_sdk": "0.3.301",
-  "codex_cli": "0.161.0",
+  "go_toolchain": "go1.27.3",
+  "claude_sdk": "0.3.311",
+  "codex_cli": "0.164.0",
   "guardian_protocol": "1",
   "bridge_protocol": "2",
-  "go_image": "docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61",
-  "go_image_source_tag": "1.27.2-bookworm",
-  "node_image": "docker.io/library/node@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0",
-  "node_image_source_tag": "24-bookworm"
+  "go_image": "docker.io/library/golang@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5",
+  "go_image_source_tag": "1.27.3-bookworm",
+  "node_image": "docker.io/library/node@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a",
+  "node_image_source_tag": "24.22.1-bookworm"
 }

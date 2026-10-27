@@ -22,8 +22,8 @@ FROM ${GO_IMAGE} AS go-runtime
 FROM ${NODE_IMAGE}
 LABEL agent-workflow.guardian-protocol="1" \
       agent-workflow.bridge-protocol="2" \
-      agent-workflow.claude-sdk="0.3.301" \
-      agent-workflow.codex-cli="0.161.0"
+      agent-workflow.claude-sdk="0.3.311" \
+      agent-workflow.codex-cli="0.164.0"
 COPY --from=guardian /guardian /usr/local/bin/agent-workflow-guardian
 COPY --from=go-runtime /usr/local/go /usr/local/go
 COPY --from=dependencies /bridge /opt/agent-workflow/bridge

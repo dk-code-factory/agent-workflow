@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-const ClaudeSDKVersion = "0.3.301"
-const CodexProtocolVersion = "0.161.0"
+const ClaudeSDKVersion = "0.3.311"
+const CodexProtocolVersion = "0.164.0"
 const BridgeProtocolVersion = 2
 
 func verifySDKBridge(a Agent) error {

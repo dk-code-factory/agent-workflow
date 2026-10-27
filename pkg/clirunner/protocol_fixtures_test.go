@@ -12,7 +12,7 @@ import (
 )
 
 func TestPinnedCodexProtocolFixtures(t *testing.T) {
-	root := filepath.Join("testdata", "codex", "0.161.0")
+	root := filepath.Join("testdata", "codex", "0.164.0")
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

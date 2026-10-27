@@ -79,7 +79,7 @@ func CheckImage(ctx context.Context, policy Policy, bridge bool, requiredLabels 
 	if labels["agent-workflow.guardian-protocol"] != GuardianProtocol {
 		return fmt.Errorf("image lacks the required container lifetime guardian")
 	}
-	if bridge && (labels["agent-workflow.bridge-protocol"] != "2" || labels["agent-workflow.claude-sdk"] != "0.3.301") {
+	if bridge && (labels["agent-workflow.bridge-protocol"] != "2" || labels["agent-workflow.claude-sdk"] != "0.3.311") {
 		return fmt.Errorf("image bridge/SDK versions are incompatible")
 	}
 	return nil

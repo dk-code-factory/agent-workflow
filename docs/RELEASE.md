@@ -33,7 +33,7 @@ the current working tree has not been released.
   Model-stream completion and native hook permissions bound capacity handoff.
 - Codex has a single correlated RPC reader, independent callbacks, graceful
   interruption with retained identity/partial usage, isolated writable state and
-  native file authentication references. Generated 0.161.0 protocol fixtures and
+  native file authentication references. Generated 0.164.0 protocol fixtures and
   their schema fingerprints are included. Native preflight, image labels and
   the handshake enforce the upstream version pin before task effects. The internal-only external ChatGPT
   token-login API is deliberately excluded. Managed policy/quiescence remains
