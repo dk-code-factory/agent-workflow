@@ -62,6 +62,8 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const disabled = store.readOnly || snapshot.stale;
   const drafts = useMemo(() => new InspectorDrafts(), []);
   const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (e) { setError(String(e)); } };
+  // Pointer Save keeps the active field focused until this preflight. A blur
+  // rename can otherwise scroll the page between pointer down and click.
   const save = () => {
     if (store.readOnly || !store.getOptions().onSave || store.getSnapshot().saving) return;
     const rejected = drafts.apply();
@@ -198,7 +200,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   }}>
     <header className="aw-toolbar"><div className="aw-brand"><span className="aw-mark">⌘</span><strong>{w?.name || 'Workflow'}</strong><span className="aw-hint">{store.readOnly ? 'Viewer' : 'Editor'}</span></div>
       <div className="aw-mode" role="group" aria-label="Editor mode">{(['visual', 'yaml', 'split'] as const).map(value => <button type="button" key={value} aria-pressed={mode === value} onClick={() => { modeChosen.current = true; setMode(value); }}>{value === 'yaml' ? 'YAML' : value[0].toUpperCase() + value.slice(1)}</button>)}</div>
-      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <button type="button" disabled={snapshot.saving} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button>}</div>
+      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <button type="button" disabled={snapshot.saving} onMouseDown={event => event.preventDefault()} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button>}</div>
     </header>
     <nav className="aw-mobile-nav" aria-label="Panels">{(['palette', 'canvas', 'inspector'] as const).map(p => <button type="button" key={p} aria-pressed={panel === p} onClick={() => setPanel(p)}>{p}</button>)}</nav>
     {snapshot.stale && <div className="aw-stale" role="status">Stale preview — fix the YAML structure to resume visual editing.</div>}

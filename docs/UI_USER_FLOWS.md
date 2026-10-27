@@ -471,7 +471,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable.
+- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
