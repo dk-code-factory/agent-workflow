@@ -2,6 +2,7 @@ import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, identifier, parseWorkflow } from './validation';
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
+import { stepConversion } from './conversion';
 
 const emptyLayout = (): LayoutState => ({ positions: {}, collapsed: {} });
 export class WorkflowDocument {
@@ -111,8 +112,20 @@ export class WorkflowDocument {
       if (reusable) { doc.deleteIn(['jobs', id, 'steps']); doc.setIn(['jobs', id, 'uses'], this.options.workflows?.[0]?.id ?? 'workflows/example.yml'); }
       else {
         for (const key of ['uses', 'with', 'secrets']) doc.deleteIn(['jobs', id, key]);
-        doc.setIn(['jobs', id, 'steps'], [{ id: 'step_1', argv: ['echo', 'Hello'] }]);
+        const steps = doc.getIn(['jobs', id, 'steps'], true);
+        if (!isSeq(steps) || !steps.items.length) doc.setIn(['jobs', id, 'steps'], [{ id: 'step_1', argv: ['echo', 'Hello'] }]);
       }
+    });
+  }
+  setStepKind(id: string, index: number, kind: string) {
+    const step = this.snapshot.workflow?.jobs[id]?.steps?.[index];
+    if (!step) throw new Error('Unknown step');
+    const plan = stepConversion(step, kind);
+    this.edit(doc => {
+      const path: Path = ['jobs', id, 'steps', index];
+      for (const key of plan.remove) doc.deleteIn([...path, ...key]);
+      if (plan.set.some(entry => entry.path[0] === 'with') && !isMap(doc.getIn([...path, 'with'], true))) doc.setIn([...path, 'with'], doc.createNode({}));
+      for (const entry of plan.set) doc.setIn([...path, ...entry.path], entry.value);
     });
   }
   duplicateJob(id: string): string {
