@@ -11,6 +11,12 @@ import './style.css';
 
 type CardData = { job: Job; id: string; collapsed: boolean; readOnly: boolean; selectedStep?: number; select: (step?: number) => void; toggle: () => void };
 type JobNode = Node<CardData, 'job'>;
+type SearchResult = { job: string; step?: number; label: string; detail: string };
+function searchText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(searchText).join(' ');
+  if (value && typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key} ${searchText(item)}`).join(' ');
+  return String(value ?? '');
+}
 type PendingDeletion = { impact: string[]; revision: number } & ({ job: string; step?: number } | { path: Path });
 function JobCard({ data, selected }: NodeProps<JobNode>) {
   return <article className={`aw-card ${selected ? 'aw-selected' : ''}`} aria-label={`Job ${data.id}`}>
@@ -46,6 +52,10 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const [panel, setPanel] = useState<'canvas' | 'palette' | 'inspector'>('canvas');
   const [geometry, setGeometry] = useState<Record<string, Pick<JobNode, 'measured' | 'dragging'>>>({});
   const [query, setQuery] = useState(''); const [paletteQuery, setPaletteQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  const searchResults = useRef<HTMLUListElement>(null);
+  const [searchTarget, setSearchTarget] = useState<{ job: string; step?: number }>();
+  const term = query.trim().toLowerCase();
   const [error, setError] = useState('');
   const [deletion, setDeletion] = useState<PendingDeletion>();
   const flow = useReactFlow<JobNode>(); const id = useId();
@@ -59,6 +69,20 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const pendingFocus = useRef<string | undefined>(undefined);
   const [narrow, setNarrow] = useState(false);
   const options = store.getOptions(); const w = snapshot.workflow ?? snapshot.previewWorkflow;
+  const results = useMemo(() => {
+    const matches: SearchResult[] = [];
+    if (!term) return matches;
+    for (const [jobID, job] of Object.entries(w?.jobs ?? {})) {
+      const { steps, ...metadata } = job;
+      if (`${jobID} ${searchText(metadata)}`.toLowerCase().includes(term)) matches.push({ job: jobID, label: job.name || jobID, detail: `Job ${jobID}` });
+      steps?.forEach((step, index) => {
+        const stepID = effectiveStepID(step, index);
+        if (`${stepID} ${searchText(step)}`.toLowerCase().includes(term)) matches.push({ job: jobID, step: index, label: step.name || stepID, detail: `Step ${stepID} · Job ${job.name ? `${job.name} (${jobID})` : jobID}` });
+      });
+    }
+    return matches;
+  }, [w, term]);
+  const matchingJobs = new Set(results.map(result => result.job));
   const disabled = store.readOnly || snapshot.stale;
   const drafts = useMemo(() => new InspectorDrafts(), []);
   const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (e) { setError(String(e)); } };
@@ -71,6 +95,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     void store.save();
   };
   const choose = (next: Selection) => {
+    setSearchTarget(undefined);
     if (next.job && !Object.hasOwn(geometry, next.job)) pendingFocus.current = next.job;
     select(next); navigateSource(value => value + 1); setPanel('inspector');
   };
@@ -102,6 +127,41 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       void flow.fitView({ nodes: [{ id: job }], maxZoom: 1, padding: 0.2, duration: 0 });
     }
   }, [geometry, flow]);
+  const activateResult = (result: SearchResult) => {
+    choose({ job: result.job, step: result.step });
+    pendingFocus.current = undefined;
+    if (result.step !== undefined && Object.hasOwn(store.layout.collapsed, result.job) && store.layout.collapsed[result.job]) {
+      store.setLayout({ ...store.layout, collapsed: { ...store.layout.collapsed, [result.job]: false } });
+    }
+    setSearchTarget({ job: result.job, step: result.step });
+  };
+  useEffect(() => {
+    if (!searchTarget || !nodesInitialized || !flow.viewportInitialized || mode === 'yaml') return;
+    if (!w || !Object.hasOwn(w.jobs, searchTarget.job) || (searchTarget.step !== undefined && !w.jobs[searchTarget.job].steps?.[searchTarget.step])) {
+      setSearchTarget(undefined);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const node = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(searchTarget.job)}"]`);
+      // Expansion and selection change the card height. Wait for React Flow's
+      // ResizeObserver measurement before using the step's updated position.
+      if (!node || geometry[searchTarget.job]?.measured?.height !== node.offsetHeight) return;
+      if (searchTarget.step === undefined) {
+        void flow.fitView({ nodes: [{ id: searchTarget.job }], maxZoom: 1, padding: 0.2, duration: 0 });
+      } else {
+        const step = node.querySelector<HTMLElement>(`.aw-steps > li:nth-child(${searchTarget.step + 1}) > button`);
+        if (!step || !canvas.current) return;
+        const bounds = step.getBoundingClientRect();
+        const center = flow.screenToFlowPosition({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+        const zoom = Math.max(0.15, Math.min(1, (canvas.current.clientWidth - 32) / node.offsetWidth, (canvas.current.clientHeight - 32) / step.offsetHeight));
+        void flow.setCenter(center.x, center.y, { zoom, duration: 0 });
+      }
+      setSearchTarget(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [searchTarget, geometry, nodesInitialized, flow, flow.viewportInitialized, mode, w]);
+  const clearSearch = () => { setQuery(''); searchInput.current?.focus(); };
+  const focusResult = (index: number) => searchResults.current?.querySelectorAll<HTMLButtonElement>('button')[index]?.focus();
   const viewport = store.layout.viewport;
   useEffect(() => {
     if (viewport) {
@@ -135,7 +195,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     ...(Object.hasOwn(geometry, jobID) ? geometry[jobID] : {}),
     id: jobID, type: 'job', position: (Object.hasOwn(store.layout.positions, jobID) ? store.layout.positions[jobID] : defaults[jobID]), selected: selection.job === jobID,
     // Keep matching dependency context on the canvas; use dimming instead of hiding jobs.
-    className: query && !`${jobID} ${JSON.stringify(job)}`.toLowerCase().includes(query.toLowerCase()) ? 'aw-dimmed' : '',
+    className: term && !matchingJobs.has(jobID) ? 'aw-dimmed' : '',
     data: { job, id: jobID, collapsed: (Object.hasOwn(store.layout.collapsed, jobID) && !!store.layout.collapsed[jobID]), readOnly: disabled, selectedStep: selection.job === jobID ? selection.step : undefined,
       select: step => choose({ job: jobID, step }), toggle: () => store.setLayout({ ...store.layout, collapsed: { ...store.layout.collapsed, [jobID]: !(Object.hasOwn(store.layout.collapsed, jobID) && store.layout.collapsed[jobID]) } }) },
   }));
@@ -207,13 +267,29 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     {(error || snapshot.saveError) && <div className="aw-error" role="alert">{error || snapshot.saveError}<button type="button" onClick={() => { setError(''); store.dismissSaveError(); }}>Dismiss</button></div>}
     {(!w || !snapshot.source.trim()) && <div className="aw-empty" role="status"><strong>{snapshot.source.trim() ? 'This YAML does not have a usable workflow yet.' : 'Start a workflow'}</strong><p>Write YAML, or create a workflow with its first job.</p>{!store.readOnly && <button type="button" onClick={() => { store.setSource('name: Untitled workflow\non:\n  manual: {}\njobs:\n  job:\n    steps:\n      - id: step_1\n        argv: [echo, Hello]\n'); choose({ job: 'job' }); }}>Create workflow</button>}{snapshot.source.trim() && <small>The current source can be recovered with Undo.</small>}</div>}
     <div className="aw-workspace">
-      <aside className="aw-palette" aria-label="Palette"><h2>{store.readOnly ? 'Navigate' : 'Add to workflow'}</h2><label className="aw-field"><span>Search palette</span><input aria-label="Search palette" value={paletteQuery} onChange={e => setPaletteQuery(e.target.value)} /></label>
+      <aside className="aw-palette" aria-label="Palette"><h2>{store.readOnly ? 'Navigate' : 'Add to workflow'}</h2><label className="aw-field"><span>Search palette</span><input aria-label="Search palette" placeholder="Filter palette entries…" aria-describedby={`${id}-palette-help`} value={paletteQuery} onChange={e => setPaletteQuery(e.target.value)} /></label>
+        <p id={`${id}-palette-help`} className="aw-search-help">Filters palette entries and job navigation.</p>
         {!store.readOnly && <><button type="button" disabled={disabled} onClick={() => attempt(() => choose({ job: store.addJob() }))}>Add job</button><h3>Steps</h3>{!selection.job && <p className="aw-hint">Select a job to add steps.</p>}{templates.filter(t => t.label.toLowerCase().includes(paletteQuery.toLowerCase())).map((template, i) => <button type="button" key={i} disabled={disabled || !selection.job || !!w?.jobs[selection.job]?.uses} onClick={() => attempt(() => choose({ job: selection.job, step: store.addStep(selection.job!, template.step) }))}>{template.label}</button>)}<h3>Reusable workflows</h3>{options.workflows?.filter(item => `${item.label} ${item.id}`.toLowerCase().includes(paletteQuery.toLowerCase())).map(item => <button type="button" key={item.id} disabled={disabled} onClick={() => attempt(() => choose({ job: store.addJob(item.id) }))}>{item.label ?? item.id}</button>)}</>}
         <h3>Jobs</h3>{Object.entries(w?.jobs ?? {}).filter(([key, job]) => `${key} ${job.name}`.toLowerCase().includes(paletteQuery.toLowerCase())).map(([key, job]) => <button type="button" key={key} onClick={() => { choose({ job: key }); void flow.fitView({ nodes: [{ id: key }], duration: 0, maxZoom: 1, padding: 0.2 }); }}>{job.name || key}</button>)}
         <button type="button" onClick={() => choose({})}>Workflow properties</button>
       </aside>
       <div className={`aw-main aw-mode-${mode}`}>
-        {mode !== 'yaml' && <div className="aw-graph"><div className="aw-canvas-toolbar"><input aria-label="Search workflow" placeholder="Search jobs and steps…" value={query} onChange={e => setQuery(e.target.value)} /><button type="button" onClick={() => void flow.fitView({ duration: 0, maxZoom: 1, padding: 0.2 })}>Fit view</button><button type="button" onClick={() => { store.setLayout({ ...store.layout, positions: automaticLayout(w?.jobs ?? {}, store.layout.collapsed) }); requestAnimationFrame(() => void flow.fitView({ duration: 0, maxZoom: 1, padding: 0.2 })); }}>Auto layout</button></div>
+        {mode !== 'yaml' && <div className="aw-graph"><div className="aw-canvas-toolbar"><input ref={searchInput} aria-label="Search workflow" aria-describedby={`${id}-search-help`} aria-controls={term ? `${id}-search-results` : undefined} placeholder="Search jobs and steps…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => {
+            if (e.key === 'Escape') { e.preventDefault(); clearSearch(); }
+            if (results.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); focusResult(e.key === 'ArrowDown' ? 0 : results.length - 1); }
+          }} /><button type="button" onClick={() => void flow.fitView({ duration: 0, maxZoom: 1, padding: 0.2 })}>Fit view</button><button type="button" onClick={() => { store.setLayout({ ...store.layout, positions: automaticLayout(w?.jobs ?? {}, store.layout.collapsed) }); requestAnimationFrame(() => void flow.fitView({ duration: 0, maxZoom: 1, padding: 0.2 })); }}>Auto layout</button></div>
+          <div className="aw-workflow-search">
+            <p id={`${id}-search-help`} className="aw-search-help">Searches job details and step content.</p>
+            <div role={term ? 'status' : undefined} aria-live="polite" aria-atomic="true" className="aw-search-count">{term ? results.length ? `${results.length} ${results.length === 1 ? 'result' : 'results'}` : 'No results' : ''}</div>
+            {term && <ul ref={searchResults} tabIndex={-1} id={`${id}-search-results`} className="aw-search-results" aria-label="Workflow search results" onKeyDown={e => {
+              if (e.key === 'Escape') { e.preventDefault(); clearSearch(); }
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                const buttons = Array.from(e.currentTarget.querySelectorAll('button'));
+                const index = buttons.indexOf(e.target as HTMLButtonElement);
+                if (index >= 0) { e.preventDefault(); focusResult((index + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length); }
+              }
+            }}>{results.map(result => <li key={`${result.job}:${result.step ?? 'job'}`}><button type="button" onClick={() => activateResult(result)}><strong>{result.label}</strong><small>{result.detail}</small></button></li>)}</ul>}
+          </div>
           <div className="aw-flow" ref={canvas}><ReactFlow<JobNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} nodesDraggable onNodesChange={changes => {
             if (changes.some(change => change.type === 'dimensions' || change.type === 'position')) setGeometry(previous => {
               const next = { ...previous };
