@@ -181,7 +181,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if f, ok := ctx.Value(fenceKey{}).(executionFence); ok {
 		ac.Generation = f.generation
 	}
-	ac.OperationKey = actionHash([]any{ac.RunID, ac.JobID, ac.StepID, ac.Iteration})
+	operationRun := nativeString(ec.Metadata, "iteration_logical_run_id")
+	if operationRun == "" {
+		operationRun = ac.RunID
+	}
+	ac.OperationKey = actionHash([]any{operationRun, ac.JobID, ac.StepID, ac.Iteration})
 	result = StepExecution{ID: step.ID, Status: RunStatusFailed}
 	defer func() {
 		if err != nil && errors.Is(err, ErrActionIntegrity) {
@@ -221,7 +225,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if err != nil {
 		return fail(err)
 	}
-	records, err := j.ActionAttempts(ctx, ec.RunID)
+	recordRun := ec.RunID
+	if nativeString(ec.Metadata, "iteration_logical_run_id") != "" {
+		recordRun = nativeString(ec.Metadata, "origin_run_id")
+	}
+	records, err := j.ActionAttempts(ctx, recordRun)
 	if err != nil {
 		return fail(err)
 	}
@@ -235,57 +243,17 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 		if err = e.validateRetainedAction(ctx, *last); err != nil {
 			return fail(err)
 		}
-		if actionHash(input) != last.InputFingerprint {
+		sameInput := actionHash(input) == last.InputFingerprint
+		if !sameInput && a.contract.Effect == ActionExternalMutation {
 			return fail(fmt.Errorf("rendered action input changed"))
 		}
-		if last.State == "completed" {
+		if last.State == "completed" && sameInput {
 			return last.Attempt.Result, nil
 		}
 		if a.contract.Effect == ActionExternalMutation && last.State != "no_effect" {
-			observation := ActionRecoveryObservation{Generation: ac.Generation, Time: time.Now().UTC(), Outcome: "unknown"}
-			var recovered actionReconciliation
-			if a.reconcile == nil {
-				err = fmt.Errorf("uncertain mutation has no reconciliation hook")
-			} else {
-				recovered, err = a.reconcile(ctx, last.Context, last.Input, last.Bindings, last.Result)
-			}
-			if err == nil {
-				recovered.Proof, err = e.safeActionJSON(recovered.Proof)
-				if err == nil && (recovered.Outcome == "completed" || recovered.Outcome == "no_effect") && (len(recovered.Proof) == 0 || bytes.Equal(recovered.Proof, []byte("null"))) {
-					err = fmt.Errorf("reconciliation requires non-null proof")
-				}
-				if err == nil && recovered.Outcome != "completed" && recovered.Outcome != "no_effect" {
-					err = fmt.Errorf("mutation outcome remains unknown")
-				}
-			}
-			if err == nil && recovered.Outcome == "completed" {
-				var safe ActionValue
-				safe, err = e.safeActionResult(recovered.Result)
-				if err == nil {
-					candidate := *last
-					candidate.Result = safe
-					err = a.validateResult(ctx, candidate)
-				}
-				if err == nil {
-					last.Result = safe
-				}
-			}
-			observation.Proof = recovered.Proof
+			result, err = e.reconcileAction(ctx, j, last, ac.Generation)
 			if err != nil {
-				observation.Error = Redact(err.Error(), e.redactionValues)
-			} else {
-				observation.Outcome = recovered.Outcome
-			}
-			last.Reconciliations = append(last.Reconciliations, observation)
-			if err == nil {
-				last.State = recovered.Outcome
-			}
-			if err == nil && last.State == "completed" {
-				result, err = completeAction(last)
-			}
-			persistErr := e.checkpointAction(ctx, j, last)
-			if err != nil || persistErr != nil {
-				return fail(errors.Join(err, persistErr))
+				return fail(err)
 			}
 			if last.State == "completed" {
 				return result, nil
@@ -311,6 +279,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if err = ctx.Err(); err != nil {
 		return fail(err)
 	}
+	if ec.Ordered {
+		if err = e.iterationEvidence(ctx, RunRequest{runID: ec.RunID, Metadata: ec.Metadata}); err != nil {
+			return fail(err)
+		}
+	}
 	value, callErr := a.handler(ctx, ac, input)
 	r.Result, err = e.safeActionResult(value)
 	if err == nil && callErr == nil {
@@ -333,4 +306,56 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 		return fail(err)
 	}
 	return result, err
+}
+
+// reconcileAction records every observation, including unknown/failed results,
+// before allowing either reuse or a new physical mutation attempt.
+func (e *Executor) reconcileAction(ctx context.Context, j ActionJournal, r *ActionAttempt, generation int64) (result StepExecution, err error) {
+	a := e.applicationActions[r.Contract.Name]
+	observation := ActionRecoveryObservation{Generation: generation, Time: time.Now().UTC(), Outcome: "unknown"}
+	var recovered actionReconciliation
+	if a == nil || a.reconcile == nil {
+		err = fmt.Errorf("uncertain mutation has no reconciliation hook")
+	} else {
+		recovered, err = a.reconcile(ctx, r.Context, r.Input, r.Bindings, r.Result)
+	}
+	if err == nil {
+		recovered.Proof, err = e.safeActionJSON(recovered.Proof)
+		if err == nil && (recovered.Outcome == "completed" || recovered.Outcome == "no_effect") && (len(recovered.Proof) == 0 || bytes.Equal(recovered.Proof, []byte("null"))) {
+			err = fmt.Errorf("reconciliation requires non-null proof")
+		}
+		if err == nil && recovered.Outcome != "completed" && recovered.Outcome != "no_effect" {
+			err = fmt.Errorf("mutation outcome remains unknown")
+		}
+	}
+	if err == nil && recovered.Outcome == "completed" {
+		var safe ActionValue
+		safe, err = e.safeActionResult(recovered.Result)
+		if err == nil {
+			candidate := *r
+			candidate.Result = safe
+			err = a.validateResult(ctx, candidate)
+		}
+		if err == nil {
+			r.Result = safe
+		}
+	}
+	observation.Proof = recovered.Proof
+	if err != nil {
+		observation.Error = Redact(err.Error(), e.redactionValues)
+	} else {
+		observation.Outcome = recovered.Outcome
+	}
+	r.Reconciliations = append(r.Reconciliations, observation)
+	if err == nil {
+		r.State = recovered.Outcome
+	}
+	if err == nil && r.State == "completed" {
+		result, err = completeAction(r)
+	}
+	persistErr := e.checkpointAction(ctx, j, r)
+	if err != nil || persistErr != nil {
+		return result, errors.Join(err, persistErr)
+	}
+	return result, nil
 }

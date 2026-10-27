@@ -180,7 +180,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement.
+- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported ordered iteration YAML retains its literal payloads and item input expressions through guided call edits.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under
@@ -195,7 +195,7 @@ fields. Escape discards an uncommitted field edit.
   configuration to discard. I can cancel; after confirming, **Undo** restores
   the prior definition in one edit. Defaults are shown without adding bindings.
   Guided fields preserve unknown bindings; inherited secrets stay inherited until
-  I choose **Configure named secrets**. Advanced YAML explains whole-value replacement.
+  I choose **Configure named secrets**. Advanced YAML explains whole-value replacement. To call the workflow over an ordered list, I author `for-each: {items, key}` in YAML with `item`, `iteration.key`, and `iteration.number` input expressions. Guided call-input edits preserve that configuration; identity and evidence checks belong to the host runtime.
 
 ### UF-13 — Repeat a job until a condition is met
 
@@ -432,7 +432,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields.
+- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -440,7 +440,7 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** Usable source updates the visual representation. Comments
   and unfamiliar fields remain available in the source; visual edits may
   normalize formatting. Pasting source replaces text I select, rather than
-  opening a file-import dialog.
+  opening a file-import dialog. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job.
 
 ### UF-30 — Search and replace in YAML
 

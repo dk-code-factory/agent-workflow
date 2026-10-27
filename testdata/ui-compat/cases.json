@@ -388,5 +388,53 @@
     "file": "registered-action-bad-name.yml",
     "parse": true,
     "valid": false
+  },
+  {
+    "name": "iteration-literal",
+    "file": "iteration-literal.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "iteration-expression",
+    "file": "iteration-expression.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "iteration-empty",
+    "file": "iteration-empty.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "iteration-repeat-conflict",
+    "file": "iteration-repeat-conflict.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "iteration-steps",
+    "file": "iteration-steps.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "iteration-missing-key",
+    "file": "iteration-missing-key.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "iteration-nonarray",
+    "file": "iteration-nonarray.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "iteration-null",
+    "file": "iteration-null.yml",
+    "parse": true,
+    "valid": true
   }
 ]

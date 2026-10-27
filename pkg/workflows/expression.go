@@ -18,6 +18,8 @@ var (
 )
 
 type expressionContext struct {
+	Item            any
+	Ordered         bool
 	Attempt         *Attempt
 	RunID           string
 	JobID           string
@@ -238,6 +240,8 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 	}
 	var cur any
 	switch parts[0] {
+	case "item":
+		cur = ctx.Item
 	case "iteration":
 		cur = ctx.Iteration
 	case "inputs":
@@ -266,7 +270,7 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("needed job %q not found", parts[1])
 		}
-		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error}
+		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error, "items": iterationItemsValue(job.Items), "complete": job.Complete}
 		parts = append([]string{parts[0]}, parts[2:]...)
 	case "jobs":
 		if len(parts) < 2 {
@@ -276,7 +280,7 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("job %q not found", parts[1])
 		}
-		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error}
+		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error, "items": iterationItemsValue(job.Items), "complete": job.Complete}
 		parts = append([]string{parts[0]}, parts[2:]...)
 	case "delivery":
 		cur = deliveryMap(ctx.Delivery)
@@ -442,4 +446,9 @@ func deliveryMap(d Delivery) map[string]any {
 		"reply_to_message_id": d.ReplyToMessageID,
 		"reply_handles":       d.ReplyHandles,
 	}
+}
+
+func wholeExpression(s string) bool {
+	m := expressionPattern.FindAllString(s, -1)
+	return len(m) == 1 && strings.TrimSpace(s) == m[0]
 }

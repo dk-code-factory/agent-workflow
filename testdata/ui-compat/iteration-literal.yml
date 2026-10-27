@@ -1,0 +1,7 @@
+jobs:
+  review:
+    uses: workflows/reviewer.yml
+    for-each:
+      items: [{id: first, prompt: '${{ literal.payload }}'}, {id: second}]
+      key: item.id
+    with: {reviewer: '${{ item }}', number: '${{ iteration.number }}'}

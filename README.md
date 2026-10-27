@@ -242,7 +242,7 @@ retain full results. HTTP list endpoints opt into pagination with `limit` or
 `cursor`; calls without these parameters and existing Go list methods retain
 their legacy array shapes.
 
-Existing schema-1 through schema-6 databases upgrade transactionally when the controller (or a
+Existing schema-1 through schema-8 databases upgrade transactionally when the controller (or a
 foreground execution/cleanup command) holds the workspace lock. The upgrade
 retains `.agent-workflow/state.pre-v7.db`, a consistent database-only backup
 including committed WAL records. Verify upgraded inspection and deterministic
@@ -341,6 +341,71 @@ and then contains the previous status, outputs, and steps. Repeat conditions can
 also inspect `iteration.outputs` and `iteration.status`. Reusable workflow jobs
 can repeat. The engine retains all attempt history and fails on exhaustion.
 `max-attempts` must be 1–100; the development example uses three fix cycles.
+
+Reusable jobs also support ordered dynamic iteration:
+
+```yaml
+jobs:
+  reviewers:
+    uses: workflows/reviewer.yml
+    for-each:
+      items: ${{ inputs.reviewers }}
+      key: item.id
+    with:
+      reviewer: ${{ item }}
+      ordinal: ${{ iteration.number }}
+      identity: ${{ iteration.key }}
+```
+
+`items` is a literal array or a whole expression returning an array. `key` is
+an expression returning a nonempty unique string for each item. All identities
+and call inputs are validated and pinned before starting any child. Literal item
+payloads remain data, including strings containing expression delimiters.
+`for-each` requires `uses` and cannot combine with `repeat`. YAML and Go are
+supported; the browser preserves and validates YAML without guided iteration
+controls. Each iteration job runs its children sequentially without occupying
+an execution slot while waiting for child jobs.
+
+The job exposes `outputs.items` in configured order and `outputs.complete`.
+Each item retains its key, one-based number, physical attempt and child ID,
+outputs, child jobs, failure class and reason. Outcomes are `completed`,
+`exhausted`, `provider_failure`, `interrupted`, and `pending`. Completion requires
+at least one completed item, no unresolved provider failure, and no pending or
+interrupted item. Empty and all-exhausted lists have `complete: false`;
+exhaustion remains an explicit skip. A classified provider failure fails the job
+while permitting later items; a caller can inspect the aggregate with a dependent
+job condition. `continue-on-error` never hides integrity, ownership, cleanup,
+instruction, checkout or storage failures.
+
+Adapters classify recoverable provider errors with `workflows.ErrProviderFailure`
+or `workflows.ErrUsageExhausted` (wrapped with a reason). Arbitrary errors are
+blocking failures. Registered actions supply binding and evidence guards; use
+those guards before provider work. The engine revalidates retained action
+bindings and evidence before each item and provider dispatch, and before reuse.
+It never infers evidence validity from provider text.
+
+Explicit resume reuses validated completed items and creates fresh physical
+children for exhausted, failed or interrupted items. The normal
+`--retry-uncertain` acknowledgement still applies. Successful runs containing
+exhausted skips can be reopened. Prior attempts and completed results remain
+immutable. Changed ordered lists, payloads, resolved inputs, definitions or action
+contracts require a new run; definitions are always taken from the admitted
+snapshot. Dependent aggregates are invalidated on retry. Read-only aggregation
+can refresh; changed inputs to completed mutations or commands block replay.
+Within item retries, registered mutations retain a stable logical operation
+identity: validated completed effects are reused, and uncertain effects require
+reconciliation proof of completion or no effect before proceeding.
+
+The engine advertises `ordered-dynamic-iteration-v1` through `Capabilities()` and
+controller health. Embedders must supply the optional `IterationJournal`
+extension (implemented by SQLite schema 9). It pins plans, appends item admission
+and terminal observations, binds ordinary step inputs through `BeginInput`, and
+fences every write against the originating execution owner. Nested controllers retain a
+stable logical checkpoint namespace across physical ancestor retries, preserving
+completed inner items and completed command/action effects. A committed child
+completion recovers a lost parent/item checkpoint without repeating its work.
+Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
+Legacy JSON stores cannot execute iteration workflows.
 
 Structured output uses native schemas on session backends and strict-object
 contracts on current CLI backends, followed by engine validation.

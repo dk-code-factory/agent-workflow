@@ -117,6 +117,11 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	var stdout, stderr cappedOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if ec.Ordered {
+		if err := e.iterationEvidence(ctx, RunRequest{runID: ec.RunID, Metadata: ec.Metadata}); err != nil {
+			return nil, err
+		}
+	}
 	err := cmd.Run()
 	code := -1
 	if cmd.ProcessState != nil {

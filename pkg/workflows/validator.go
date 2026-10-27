@@ -39,6 +39,17 @@ func Validate(w *Workflow) error {
 		if job.Repeat != nil && (job.Repeat.MaxAttempts < 1 || job.Repeat.MaxAttempts > 100 || strings.TrimSpace(job.Repeat.Until) == "") {
 			return fmt.Errorf("job %s: repeat requires max-attempts between 1 and 100 and until", id)
 		}
+		if job.ForEach != nil {
+			if job.Uses == "" || job.Repeat != nil || strings.TrimSpace(job.ForEach.Key) == "" {
+				return fmt.Errorf("job %s: for-each requires a reusable workflow and key, and cannot combine with repeat", id)
+			}
+			if _, ok := job.ForEach.Items.([]any); !ok {
+				text, ok := job.ForEach.Items.(string)
+				if !ok || !wholeExpression(text) {
+					return fmt.Errorf("job %s: for-each.items requires an array or a whole expression", id)
+				}
+			}
+		}
 		if job.Context != (RunContext{}) {
 			return fmt.Errorf("job %s: session/delivery context requires PicoClaw", id)
 		}

@@ -15,7 +15,9 @@ import (
 const RegisteredGoActionsV1 = "registered-go-actions-v1"
 
 // Capabilities reports library contracts, independently of configured actions.
-func Capabilities() []string { return []string{RegisteredGoActionsV1} }
+const OrderedDynamicIterationV1 = "ordered-dynamic-iteration-v1"
+
+func Capabilities() []string { return []string{RegisteredGoActionsV1, OrderedDynamicIterationV1} }
 
 type ActionEffect string
 

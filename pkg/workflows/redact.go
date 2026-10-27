@@ -33,6 +33,19 @@ func redactRun(run *Run, secrets map[string]string) *Run {
 	safe.Jobs = map[string]JobExecution{}
 	for id, job := range run.Jobs {
 		job.Error = Redact(job.Error, secrets)
+		if job.ChildJobs != nil {
+			job.ChildJobs = redactRun(&Run{Jobs: job.ChildJobs}, secrets).Jobs
+		}
+		items := make([]IterationItemResult, len(job.Items))
+		for i, item := range job.Items {
+			item.Error = Redact(item.Error, secrets)
+			if item.Jobs != nil {
+				item.Jobs = redactRun(&Run{Jobs: item.Jobs}, secrets).Jobs
+			}
+			item.Outputs, _ = redactValue(item.Outputs, secrets).(map[string]any)
+			items[i] = item
+		}
+		job.Items = items
 		job.Outputs, _ = redactValue(job.Outputs, secrets).(map[string]any)
 		steps := map[string]StepExecution{}
 		for sid, step := range job.Steps {

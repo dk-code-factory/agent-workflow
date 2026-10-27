@@ -450,7 +450,7 @@ func TestActionCredentialHandlingAndFencing(t *testing.T) {
 func TestActionMigrationFromV7(t *testing.T) {
 	ctx := context.Background()
 	_, s := durableExecutor(t, actionSource, nil)
-	if _, err := s.db.Exec("DROP TABLE action_attempts; PRAGMA user_version=7"); err != nil {
+	if _, err := s.db.Exec("DROP TABLE iteration_attempts; DROP TABLE iteration_plans; DROP TABLE action_attempts; PRAGMA user_version=7"); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := ownership.Own(s.Dir)

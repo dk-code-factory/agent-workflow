@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"strings"
@@ -13,6 +14,9 @@ func FailureClass(err error) string { return classifyFailure(err) }
 func classifyFailure(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, errIterationBlocked) {
+		return "iteration_blocked"
 	}
 	if errors.Is(err, ErrActionIntegrity) {
 		return "action_integrity"
@@ -28,6 +32,12 @@ func classifyFailure(err error) string {
 	}
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
+	}
+	if errors.Is(err, ErrProviderFailure) {
+		return "provider_failure"
+	}
+	if errors.Is(err, ErrUsageExhausted) {
+		return "usage_exhausted"
 	}
 	text := strings.ToLower(err.Error())
 	switch {
@@ -47,4 +57,19 @@ func classifyFailure(err error) string {
 		return "command"
 	}
 	return "execution"
+}
+
+func hardExecutionFailure(err error) bool {
+	switch classifyFailure(err) {
+	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":
+		return true
+	}
+	return false
+}
+
+func iterationPersistence(err error, ordered bool) error {
+	if err == nil || !ordered {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errIterationBlocked, err)
 }
