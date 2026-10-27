@@ -246,7 +246,7 @@ test('unavailable inspector paths preserve the current selection and save failur
 test('registered action syntax defers availability and schema validation to the host', async ({ page }) => {
   const ui = await open(page, 'jobs: {build: {steps: [{id: capture, uses: action/invalid.name}]}}');
   expect((await snapshot(page)).diagnostics.some((d: any) => d.severity === 'error')).toBe(true);
-  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.locator('.aw-palette').getByRole('button', { name: 'build', exact: true }).click();
   await ui.getByRole('button', { name: '1. capture', exact: true }).click();
   await field(page, 'Action target', 'action/capture');
   await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
