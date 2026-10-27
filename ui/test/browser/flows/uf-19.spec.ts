@@ -11,6 +11,7 @@ const actions = [
 for (const [action, fields] of actions) test(`author ${action} definition`, async ({ page }) => {
   const ui = await open(page); await job(page);
   await ui.getByRole('button', { name: 'Add step', exact: true }).click();
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('argv'); await dialog.accept(); });
   await ui.getByLabel('Step type', { exact: true }).selectOption(action);
   for (const [label, value] of Object.entries(fields)) await field(page, label, value);
   if (action === 'workspace/create') await ui.getByRole('checkbox', { name: 'Independent workspace', exact: true }).check();

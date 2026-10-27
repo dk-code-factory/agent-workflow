@@ -8,6 +8,7 @@ test('append templates only to sequential jobs', async ({ page }) => {
   await expect(ui.getByLabel('Step ID', { exact: true })).toHaveValue('step');
   await job(page); await ui.getByRole('button', { name: 'Add step', exact: true }).click();
   expect((await snapshot(page)).workflow.jobs.build.steps.map((s: any) => s.id)).toEqual(['greet', 'step', 'step_2']);
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('steps'); await dialog.accept(); });
   await job(page); await ui.getByLabel('Job kind', { exact: true }).selectOption('reusable');
   await expect(ui.getByRole('button', { name: 'Direct command', exact: true })).toBeDisabled();
 });

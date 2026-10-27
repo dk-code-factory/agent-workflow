@@ -179,7 +179,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Reusable conversion stores call inputs and secrets, removes steps, and supports Undo.
+- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under
@@ -187,8 +187,9 @@ fields. Escape discards an uncommitted field edit.
   **Reusable workflow**, and edit **Reusable workflow** → fill in **Call inputs
   (YAML)** and **Call secrets (YAML)** as needed.
 - **What I see:** The job shows a reusable-call badge and reference instead of
-  a step list. Changing an existing sequential job to this kind replaces its
-  steps; **Undo** restores the prior definition if needed.
+  a step list. Before replacing existing steps, a confirmation names the
+  configuration to discard. I can cancel; after confirming, **Undo** restores
+  the prior definition in one edit.
 
 ### UF-13 — Repeat a job until a condition is met
 
@@ -221,7 +222,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-15.spec.ts)
 
-- **Coverage:** Templates append unique explicit IDs and stay disabled without a sequential job.
+- **Coverage:** Templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call.
 
 - **Starting point:** I have selected a job with sequential steps.
 - **My flow:** I choose a step template from **Add to workflow**, using
@@ -272,7 +273,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-19.spec.ts)
 
-- **Coverage:** Parameterized cases author all five controller actions and inspect each configured parameter.
+- **Coverage:** Parameterized cases confirm discarding the starter command, author all five controller actions, and inspect each configured parameter.
 
 - **Starting point:** I have selected a sequential job.
 - **My flow:** I choose an action template → fill in its inspector fields →
@@ -306,14 +307,21 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Changing type clears previous command settings; Undo restores them together.
+- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters.
 
 - **Starting point:** A step already has command or action settings.
-- **My flow:** I select a different **Step type** → fill in the new type's
-  fields → inspect the YAML before continuing.
-- **What I see:** The new type gets its starting configuration. Previous
-  type-specific settings, including parameters, timeout, and working directory,
-  are replaced. I can use **Undo** to restore them.
+- **My flow:** I select a different **Step type** → review any confirmation
+  naming populated fields that will be discarded → cancel or confirm → fill
+  in the new type's fields and inspect the YAML.
+- **What I see:** Agent changes keep their parameters, including prompts.
+  Switching between direct and shell commands keeps timeout and working
+  directory. Controller actions keep parameters supported by both actions.
+  Other incompatible settings are removed only after confirmation; the new
+  type gets starting values. **Action target** follows the same rules.
+  Cancellation preserves the document. If I edit a parameter and retry the
+  pending target through keyboard **Save**, confirmation includes the latest
+  populated settings before saving the converted definition. One **Undo**
+  restores a conversion.
 
 ### UF-22 — Control conditions and error handling
 
@@ -602,15 +610,18 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-42.spec.ts)
 
-- **Coverage:** Sequential conversion removes call settings, creates a starter command, and Undo restores the call.
+- **Coverage:** The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
 
 - **Starting point:** A job currently calls a reusable workflow, and I want to
   define its steps directly.
 - **My flow:** I select the job → change **Job kind** to **Sequential steps**
-  → edit the starter command or add the steps I need → review the job outputs
+  → review the reference, inputs, and secrets to discard and confirm or cancel
+  → edit the existing local steps, or the starter command when no steps exist,
+  and add the steps I need → review the job outputs
   and any downstream references.
 - **What I see:** The reusable reference, call inputs, and call secrets are
-  removed, and an example direct-command step appears. The reusable workflow's
+  removed. Existing local steps are preserved; otherwise an example
+  direct-command step appears. The reusable workflow's
   contents are not copied into the job. **Undo** restores the previous call.
 
 ### UF-43 — Repair references after removing an item
@@ -632,7 +643,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-44.spec.ts)
 
-- **Coverage:** Correcting unavailable agent and workflow references clears catalog warnings while preserving agent parameters.
+- **Coverage:** Correcting agent references through both Action target and Step type keeps the prompt; correcting a workflow reference clears the remaining catalog warning.
 
 - **Starting point:** The host supplies catalogs, and diagnostics say a
   referenced agent or workflow is unavailable.
@@ -640,8 +651,8 @@ fields. Escape discards an uncommitted field edit.
   or **Reusable workflow** → correct the reference to an available catalog
   entry → review its parameters and diagnostics.
 - **What I see:** The warning clears when the reference matches the catalog.
-  Editing **Action target** keeps the current parameters; changing **Step type**
-  replaces type-specific settings as described in UF-21. Catalog membership
+  Both **Action target** and **Step type** keep parameters when changing agents
+  and review incompatible changes as described in UF-21. Catalog membership
   does not verify provider authentication or resolve the reusable file.
 
 ### UF-45 — Author a workflow using the keyboard

@@ -4,6 +4,41 @@ import { parseWorkflow } from '../src/validation';
 import { references } from '../src/expressions';
 const source = `# preserved header\nname: Example # inline\njobs:\n  build:\n    outputs:\n      result: \${{ steps.step_1.outputs.text }}\n    steps:\n      # prompt comment\n      - uses: agent/claude\n        with:\n          prompt: |\n            Hello\n            world \${{ inputs.task }}\n      - argv: [echo, done]\n  test:\n    needs: build\n    steps:\n      - argv: [echo, '\${{ needs.build.outputs.result }}']\n`;
 describe('document edits', () => {
+  it('keeps agent parameters, YAML comments and block prompts across provider changes', () => {
+    const doc = new WorkflowDocument({ source });
+    doc.setStepKind('build', 0, 'agent/codex');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with).toEqual(new WorkflowDocument({ source }).getSnapshot().workflow!.jobs.build.steps![0].with);
+    expect(doc.getSnapshot().source).toContain('# prompt comment');
+    expect(doc.getSnapshot().source).toContain('prompt: |');
+    expect(doc.getSnapshot().source).toContain('# preserved header');
+    doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+    doc.redo(); expect(doc.getSnapshot().workflow!.jobs.build.steps![0].uses).toBe('agent/codex');
+  });
+  it('retains common controller parameters and initializes null action parameters', () => {
+    const doc = new WorkflowDocument({ source: 'jobs: {build: {steps: [{uses: git/commit, with: {path: /work, message: Keep}}, {uses: agent/claude, with: null}]}}' });
+    doc.setStepKind('build', 0, 'github/pr');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0]).toEqual({ uses: 'github/pr', with: { path: '/work' } });
+    doc.setStepKind('build', 1, 'agent/codex');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({ uses: 'agent/codex', with: { prompt: '' } });
+  });
+  it('creates an action parameter mapping when converting a command', () => {
+    const original = 'jobs: {build: {steps: [{id: run, argv: [echo, before], timeout: 2m}]}}';
+    const doc = new WorkflowDocument({ source: original });
+    doc.setStepKind('build', 0, 'agent/claude');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0]).toEqual({ id: 'run', uses: 'agent/claude', with: { prompt: '' } });
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+  });
+  it.each(['argv', 'shell'])('initializes a usable %s command when imported command fields are empty', kind => {
+    const original = "jobs: {build: {steps: [{id: run, uses: agent/claude, with: {prompt: Hello}, argv: [], run: ''}]}}";
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics).toEqual([]);
+    doc.setStepKind('build', 0, kind);
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0]).toEqual(kind === 'argv'
+      ? { id: 'run', argv: ['echo', 'Hello'] }
+      : { id: 'run', shell: 'sh', run: 'echo Hello' });
+    expect(doc.getSnapshot().diagnostics).toEqual([]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+  });
   it('exports untouched source byte for byte, including CRLF', () => {
     const text = source.replaceAll('\n', '\r\n');
     expect(new WorkflowDocument({ source: text }).getSnapshot().source).toBe(text);
