@@ -213,7 +213,8 @@ The local run uses Chromium, two workers, no retries, and automatic waiting.
 It needs neither packed-consumer artifacts nor package builds or provider
 credentials. Each Workflow UI CI job runs the structural gate before builds and
 browser tests. PR pairing uses the actual PR base SHA with full Git
-history. Push and reusable-workflow runs validate structure and run all flows.
+history. Merge queue, push, and reusable-workflow runs validate structure and
+run all flows.
 The existing Chromium/Firefox/WebKit suite executes the UF specs once alongside
 technical embedding and packed-consumer checks, retaining traces and uploading
 browser reports when it fails. Passing the gate establishes traceability and
