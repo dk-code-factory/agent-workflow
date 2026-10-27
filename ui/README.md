@@ -83,7 +83,10 @@ availability and typed schema validation as host checks. See the
 const options = {
   source: yamlSource,
   agents: [{ id: 'claude', label: 'Claude' }],
-  workflows: [{ id: 'workflows/classify.yml', label: 'Classifier' }],
+  workflows: [{ id: 'workflows/classify.yml', label: 'Classifier', interface: {
+    inputs: { task: { type: 'string', required: true }, retries: { type: 'number', default: 3 } },
+    secrets: { token: { required: true } },
+  } }],
   validate: async (snapshot, signal) => {
     const response = await fetch('/validate', {
       method: 'POST', body: snapshot.source, signal,
@@ -98,6 +101,22 @@ const options = {
 ```
 
 `validationKey` accepts a string or number identifying the host validation context; changing it reruns validation without editing the source. Superseded validation requests receive an aborted signal and their results are ignored even if the host ignores cancellation. Hook failures become diagnostics or `saveError` and are visible in the editor. Source edits clear old save errors; a failure for an older revision is ignored. Save and export accept drafts with diagnostics. The toolbar shows Unsaved changes, Saving…, Saved, or Save failed when host saving is available. Success applies only to the exact submitted source; newer source or inspector edits remain unsaved after it finishes. Export does not acknowledge host persistence. Set `exportFilename` to customize the default `workflow.yml` download name. Saving requires an `onSave` hook and is never automatic. Treat submitted sources and host validation as untrusted input on your server.
+
+`WorkflowCatalogEntry` extends `CatalogEntry` with optional `interface.inputs`
+and `interface.secrets` metadata. Input types match the runner: `string` (default),
+`boolean`, `number`, `object`, and `array`, with optional `required` and `default`.
+Secret definitions accept `required`. ID-only catalogs remain supported and show
+an explanation of the advanced YAML fallback. Metadata supplies authoring controls;
+the host still resolves workflows and validates calls. Shown defaults are never
+inserted automatically. Named edits preserve unknown bindings and `secrets: inherit`
+until the user explicitly configures named secrets.
+
+Direct commands offer an executable and ordered argument rows, preserving empty
+arguments, spaces, and quotes. Advanced array YAML remains available. Expression
+fields offer **Use job result** to preview an output declaration, dependency, and
+text insertion. Confirmation applies one transaction and Undo restores it in one
+operation. Matching outputs are reused; conflicting names, cycles, and stale
+previews are rejected. Cancellation does not edit the document.
 
 Malformed or structurally unusable YAML retains its text and the last graph, marks the preview stale, and suspends visual edits until recovery. Syntax edits, property edits, and graph mutations share undo/redo. Uncommitted text in a form is applied on blur or Enter. YAML supports Mod-Z/Mod-Shift-Z/Mod-Y, search (Mod-F), and expression completion (Ctrl-Space) based on the cursor context. Multiline prompts and commands provide an Insert expression picker; literal metadata fields do not suggest expressions. Save and Mod-S synchronously apply pending built-in inspector fields before invoking optional save. Rejected edits keep their typed values, are marked invalid, and block saving; the first affected field is revealed and focused. Correct the edit or restore its stored value with Escape or Discard edit, then save again. Source documents with diagnostics can still be saved. Graph controls expose zoom and fit; Auto layout explicitly recalculates positions. The dependency checkboxes provide keyboard authoring without canvas gestures.
 
@@ -128,7 +147,7 @@ const actions = [{
 }];
 ```
 
-Fields support `text`, `textarea`, `boolean`, and `yaml`. Keys are relative to the step's `with` mapping. A custom renderer gets a copied `step`, the absolute document `path`, `readOnly`, and a guarded `setField` accepting paths relative to that step. Respect `readOnly` in custom controls. Cleanup runs before a replacement render and when unmounted. Host-required field policies belong in additional validation. Built-in forms cover agent prompts/output contracts, direct argv commands, explicit shell commands, all five controller actions, reusable calls, conditions, repeats, and error handling. Guided callable fields cover input types/defaults, required secrets, and outputs; YAML fields expose advanced mappings.
+Fields support `text`, `textarea`, `boolean`, `number`, and `yaml`. Keys are relative to the step's `with` mapping. Numeric edits store finite numbers. A custom renderer gets a copied `step`, the absolute document `path`, `readOnly`, and a guarded `setField` accepting paths relative to that step. Respect `readOnly` in custom controls. Cleanup runs before a replacement render and when unmounted. Host-required field policies belong in additional validation. Built-in forms cover agent prompts/output contracts, direct argv commands, explicit shell commands, all five controller actions, reusable calls, conditions, repeats, and error handling. Guided callable fields cover input types/defaults, required secrets, and outputs; text, boolean, and number controls match their types, while object/array values use field YAML. Guided fields update individual paths; advanced mapping editors explain that applying YAML replaces the entire mapping and its comments.
 
 ## Styling and layout persistence
 

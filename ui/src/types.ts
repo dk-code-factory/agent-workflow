@@ -26,7 +26,7 @@ export interface LayoutState {
   collapsed: Record<string, boolean>;
   viewport?: { x: number; y: number; zoom: number };
 }
-export interface ActionField { key: string; label: string; type?: 'text' | 'textarea' | 'boolean' | 'yaml'; required?: boolean }
+export interface ActionField { key: string; label: string; type?: 'text' | 'textarea' | 'boolean' | 'number' | 'yaml'; required?: boolean }
 export interface CustomInspectorContext {
   step: Step; path: Path; readOnly: boolean;
   setField: (path: Path, value: unknown) => void;
@@ -36,10 +36,26 @@ export interface ActionDefinition {
   renderInspector?: (element: HTMLElement, context: CustomInspectorContext) => void | (() => void);
 }
 export interface CatalogEntry { id: string; label?: string }
+export type InputType = 'string' | 'boolean' | 'number' | 'object' | 'array';
+export interface WorkflowInput { type?: InputType; required?: boolean; default?: unknown }
+export interface WorkflowCatalogEntry extends CatalogEntry {
+  interface?: { inputs?: Record<string, WorkflowInput>; secrets?: Record<string, { required?: boolean }> };
+}
+export interface JobResultRequest {
+  target: Path;
+  producer: string;
+  source: { kind: 'output'; output: string } | { kind: 'step'; step: number; output: string; name: string };
+  /** Replace this text selection, or append when omitted. */
+  selection?: { start: number; end: number };
+}
+export interface JobResultPreview {
+  revision: number; request: JobResultRequest; output: string; expression: string;
+  declaration?: string; addDependency: boolean; value: string;
+}
 export interface WorkflowOptions {
   source: string; theme?: 'light' | 'dark' | 'system';
   tokens?: Record<`--aw-${string}`, string>;
-  agents?: CatalogEntry[]; workflows?: CatalogEntry[]; actions?: ActionDefinition[];
+  agents?: CatalogEntry[]; workflows?: WorkflowCatalogEntry[]; actions?: ActionDefinition[];
   layout?: LayoutState;
   onLayoutChange?: (layout: LayoutState) => void;
   onChange?: (snapshot: Snapshot) => void;
