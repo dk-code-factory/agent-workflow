@@ -13,20 +13,28 @@ export function applyEdit(fn: () => void): ApplyResult {
   try { fn(); return { ok: true }; }
   catch (error) { return { ok: false, error: String(error) }; }
 }
-type InspectorDraft = { apply: () => boolean; discard: () => void; reveal: () => void; identifier: boolean; isPending: () => boolean };
+type InspectorDraft = { apply: () => boolean; discard: () => void; reveal: () => void; identifier: boolean; custom?: boolean; isPending: () => boolean };
 export class InspectorDrafts {
   private fields = new Set<InspectorDraft>();
   constructor(private onPendingChange: (pending: boolean) => void) {}
   changed() { this.onPendingChange([...this.fields].some(field => field.isPending())); }
   register(field: InspectorDraft) { this.fields.add(field); this.changed(); return () => { this.fields.delete(field); this.changed(); }; }
   pending() { return [...this.fields].find(field => field.isPending()); }
-  discard() { this.fields.forEach(field => field.discard()); this.changed(); }
+  discard() {
+    // Fallible host callbacks run before managed drafts are reset. Successful
+    // host callbacks are not rolled back if a later callback fails.
+    const fields = [...this.fields];
+    for (const field of [...fields.filter(field => field.custom), ...fields.filter(field => !field.custom)]) {
+      if (this.fields.has(field)) field.discard();
+    }
+    this.changed();
+  }
   apply() {
     // Apply values before converting their type or renaming containing paths;
     // nested structural fields precede parent identifiers. Blurred values are already applied.
     const fields = [...this.fields];
     for (const field of [...fields.filter(field => !field.identifier), ...fields.filter(field => field.identifier).reverse()]) {
-      if (!field.apply()) return field;
+      if (this.fields.has(field) && !field.apply()) return field;
     }
   }
 }
@@ -257,8 +265,8 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
       const current = snapshot.workflow?.jobs[job]?.steps?.[index];
       return active && generation === store.getInspectorGeneration() && !discarding && !readOnly && !snapshot.stale && !!current && current.id === step.id && current.uses === step.uses;
     };
-    const unregister = registry?.register({ identifier: false, isPending: () => pending, apply: () => true, reveal: () => {}, discard: () => {
-      if (!active || generation !== store.getInspectorGeneration()) return;
+    const unregister = registry?.register({ identifier: false, custom: true, isPending: () => pending, apply: () => true, reveal: () => {}, discard: () => {
+      if (!active || discarding || generation !== store.getInspectorGeneration()) return;
       discarding = true;
       try { if (pending) discard?.(); pending = false; }
       finally { discarding = false; registry?.changed(); }

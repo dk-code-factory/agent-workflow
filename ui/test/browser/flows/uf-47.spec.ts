@@ -60,6 +60,7 @@ test('controlled React echoes protect edits without opening a notice', async ({ 
   await page.goto('/test/browser.html?controlled');
   await field(page, 'Name', 'Controlled draft');
   await page.evaluate(() => (window as any).changePolicy());
+  await expect.poll(() => page.evaluate(() => (window as any).latest.diagnostics.map((item: any) => item.message))).toContain('Policy 1');
   await expect(page.locator('#a').getByLabel('Name', { exact: true })).toHaveValue('Controlled draft');
   await expect(page.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).latest.hasLocalChanges)).toBe(true);
@@ -71,6 +72,7 @@ test('React host replacement prompts and unchanged props do not reopen it', asyn
   await page.evaluate(source => (window as any).replaceHostSource(source), incoming);
   await page.getByRole('button', { name: 'Keep local', exact: true }).click();
   await page.evaluate(() => (window as any).rerenderHost());
+  await expect(page.locator('#a .aw-editor')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
   await expect(page.locator('#a').getByLabel('Name', { exact: true })).toHaveValue('React draft');
 });
@@ -90,7 +92,7 @@ test('clean editors and read-only viewers update immediately', async ({ page }) 
 async function rawInspector(page: import('@playwright/test').Page, viewer = false, commitOnBlur = true) {
   await page.goto('/test/browser.html' + (viewer ? '?viewer' : ''));
   await page.evaluate(commitOnBlur => {
-    const state: { contexts: import('../../../src').CustomInspectorContext[]; cleanups: number; discards: number; renders: number; failDiscard?: boolean; action?: import('../../../src').ActionDefinition } = (window as any).raw = { contexts: [], cleanups: 0, discards: 0, renders: 0 };
+    const state: { contexts: import('../../../src').CustomInspectorContext[]; cleanups: number; discards: number; renders: number; failDiscard?: boolean; onDiscard?: () => void; action?: import('../../../src').ActionDefinition } = (window as any).raw = { contexts: [], cleanups: 0, discards: 0, renders: 0 };
     const action: import('../../../src').ActionDefinition = {
       uses: 'agent/claude', label: 'Buffered renderer',
       renderInspector(element, context) {
@@ -101,6 +103,7 @@ async function rawInspector(page: import('@playwright/test').Page, viewer = fals
         const discard = () => {
           state.discards++;
           if (state.failDiscard) throw new Error('Custom discard failed');
+          state.onDiscard?.();
           input.value = initial;
           // Neither discard nor cleanup may sneak a source edit into history.
           context.setField(['with', 'prompt'], 'Discard write');
@@ -366,4 +369,62 @@ test('whole anonymous-step edits and undo invalidate the prior renderer callback
   await expect(raw).toHaveValue('Hello');
   expect((await snapshot(page)).source).not.toContain('Wrong');
   expect(await page.evaluate(() => (window as any).undoGuard)).toBe(true);
+});
+
+
+test('custom discard failure preserves rejected fields and Keep local clears only its error', async ({ page }) => {
+  const ui = await rawInspector(page);
+  await page.evaluate(() => (window as any).first.update({ onSave: () => { throw new Error('Existing save failure'); } }));
+  await ui.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(ui.locator('.aw-error')).toContainText('Existing save failure');
+  const id = ui.getByLabel('Step ID', { exact: true });
+  await id.fill('bad id'); await id.press('Tab');
+  const raw = ui.getByLabel('Raw prompt', { exact: true });
+  await raw.fill('Raw buffer to keep');
+  const before = await snapshot(page);
+  await page.evaluate(source => {
+    const host = (window as any); host.raw.failDiscard = true;
+    host.first.update({ source: source.replace('Hello', 'Incoming replacement') });
+  }, before.source);
+  await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+  await expect(ui.locator('.aw-error')).toContainText('Custom discard failed');
+  await expect(id).toHaveValue('bad id');
+  await expect(id).toHaveAttribute('aria-invalid', 'true');
+  await expect(raw).toHaveValue('Raw buffer to keep');
+  await expect(raw).toBeFocused();
+  expect((await snapshot(page)).source).toBe(before.source);
+  await ui.getByRole('button', { name: 'Keep local', exact: true }).click();
+  await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
+  await expect(ui.locator('.aw-error')).not.toContainText('Custom discard failed');
+  await expect(ui.locator('.aw-error')).toContainText('Existing save failure');
+  await expect(id).toHaveValue('bad id');
+  await expect(id).toHaveAttribute('aria-invalid', 'true');
+  await expect(raw).toHaveValue('Raw buffer to keep');
+  await expect(raw).toBeFocused();
+  const kept = await snapshot(page);
+  expect(kept.source).toBe(before.source);
+  expect(kept.revision).toBe(before.revision);
+  expect(kept.hasLocalChanges).toBe(true);
+  expect(kept.saveError).toContain('Existing save failure');
+});
+
+test('a newer source from custom discard survives the captured replacement without extra history', async ({ page }) => {
+  const ui = await rawInspector(page);
+  const raw = ui.getByLabel('Raw prompt', { exact: true });
+  const before = await snapshot(page);
+  await raw.fill('Pending raw buffer');
+  const newest = before.source.replace('Hello', 'Newest source');
+  await page.evaluate(({ first, newest }) => {
+    const host = (window as any);
+    host.first.update({ source: first });
+    host.raw.onDiscard = () => host.first.update({ source: newest });
+  }, { first: before.source.replace('Hello', 'Older source'), newest });
+  await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+  expect((await snapshot(page))).toMatchObject({ source: before.source, revision: before.revision, pendingSourceReplacement: newest });
+  await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
+  await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+  await expect(raw).toHaveValue('Newest source');
+  expect((await snapshot(page))).toMatchObject({ source: newest, revision: before.revision + 1, hasLocalChanges: false });
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page))).toMatchObject({ source: before.source, canUndo: false });
 });

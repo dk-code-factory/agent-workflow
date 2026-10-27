@@ -24,7 +24,7 @@ export class WorkflowDocument {
   private inspectorGeneration = 0;
   private protectionSource: string;
   private protectionEpoch = 0;
-  private lastIncomingSource?: string;
+  private lastProtectedSource?: string;
   private discardInspectorListeners = new Set<() => void>();
   readonly readOnly: boolean;
   layout: LayoutState;
@@ -39,16 +39,20 @@ export class WorkflowDocument {
   getOptions = () => this.options;
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  private emit() { if (!this.disposed) { this.listeners.forEach(fn => fn()); this.options.onChange?.(structuredClone(this.snapshot)); } }
+  private emit() {
+    // A clean baseline ends repeat suppression for a previously declined source.
+    if (!this.snapshot.hasLocalChanges) this.lastProtectedSource = undefined;
+    if (!this.disposed) { this.listeners.forEach(fn => fn()); this.options.onChange?.(structuredClone(this.snapshot)); }
+  }
   update(options: Partial<WorkflowOptions>) {
     const previous = this.options;
     this.options = { ...previous, ...options };
     if (options.layout) this.layout = structuredClone(options.layout);
     // Current-source echoes are acknowledgements of neither saving nor draft
-    // disposal. Remember distinct incoming candidates separately from echoes.
-    if (options.source !== undefined && options.source !== previous.source && options.source !== this.snapshot.source && options.source !== this.lastIncomingSource) {
-      this.lastIncomingSource = options.source;
+    // disposal. Repeat suppression lasts only for the current protected draft.
+    if (options.source !== undefined && options.source !== previous.source && options.source !== this.snapshot.source && (options.source !== this.lastProtectedSource || !this.snapshot.hasLocalChanges)) {
       if (!this.readOnly && this.snapshot.hasLocalChanges) {
+        this.lastProtectedSource = options.source;
         this.snapshot = { ...this.snapshot, pendingSourceReplacement: options.source };
         this.emit();
       } else this.acceptSource(options.source);
@@ -65,7 +69,11 @@ export class WorkflowDocument {
     else { this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined }; this.emit(); }
   }
   private acceptSource(source: string) {
+    const { revision, pendingSourceReplacement } = this.snapshot;
     this.discardInspectorListeners.forEach(discard => discard());
+    // Discard can synchronously notify the host. A newer edit or candidate
+    // owns the next choice; never accept the older capture over it.
+    if (this.disposed || this.snapshot.revision !== revision || this.snapshot.pendingSourceReplacement !== pendingSourceReplacement) return;
     this.inspectorDirty = false;
     this.protectionSource = source; this.protectionEpoch++;
     this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined, hasLocalChanges: this.snapshot.source !== source, dirty: this.snapshot.source !== this.savedSource };

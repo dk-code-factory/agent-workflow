@@ -421,6 +421,78 @@ describe('host source replacement protection', () => {
     doc.update({ source: local }); doc.update({ source: incoming });
     expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
   });
+  for (const saveBeforeResend of [false, true]) {
+    it(`reconsiders accepted source after an echo when ${saveBeforeResend ? 'saved clean' : 'locally protected'}`, async () => {
+      const accepted = 'name: Accepted\njobs: {}';
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.update({ source: accepted });
+      doc.setField(['name'], 'Local');
+      const local = doc.getSnapshot().source;
+      doc.update({ source: local });
+      if (saveBeforeResend) await doc.save();
+      doc.update({ source: accepted });
+      expect(doc.getSnapshot()).toMatchObject(saveBeforeResend
+        ? { source: accepted, hasLocalChanges: false, pendingSourceReplacement: undefined }
+        : { source: local, hasLocalChanges: true, pendingSourceReplacement: accepted });
+      if (saveBeforeResend) { doc.undo(); expect(doc.getSnapshot().source).toBe(local); }
+    });
+  }
+  for (const editAfterSave of [false, true]) {
+    it(`retires declined-source memory after saving${editAfterSave ? ' and another edit' : ''}`, async () => {
+      const incoming = 'name: Previously declined\njobs: {}';
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.setField(['name'], 'Local');
+      doc.update({ source: incoming }); doc.resolveSourceReplacement('keep-local');
+      doc.update({ source: doc.getSnapshot().source });
+      await doc.save();
+      if (editAfterSave) doc.setField(['name'], 'Another local edit');
+      const local = doc.getSnapshot().source;
+      doc.update({ source: incoming });
+      expect(doc.getSnapshot()).toMatchObject(editAfterSave
+        ? { source: local, hasLocalChanges: true, pendingSourceReplacement: incoming }
+        : { source: incoming, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    });
+  }
+  for (const sourceEdit of [false, true]) {
+    it(`keeps a newer host update sent when ${sourceEdit ? 'source and inspector' : 'only inspector'} drafts are discarded`, () => {
+      const first = 'name: Older incoming\njobs: {}';
+      const newest = 'name: Newest incoming\njobs: {}';
+      let armed = false;
+      const doc = new WorkflowDocument({ source, onChange: snapshot => {
+        if (armed && snapshot.hasLocalChanges === sourceEdit) { armed = false; doc.update({ source: newest }); }
+      } });
+      if (sourceEdit) doc.setField(['name'], 'Local source');
+      const local = doc.getSnapshot().source;
+      const revision = doc.getSnapshot().revision;
+      doc.onDiscardInspector(() => doc.setInspectorDirty(false));
+      doc.setInspectorDirty(true); doc.update({ source: first });
+      armed = true; doc.resolveSourceReplacement('use-incoming');
+      expect(armed).toBe(false);
+      if (sourceEdit) {
+        expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: newest, revision });
+        doc.resolveSourceReplacement('use-incoming');
+      }
+      expect(doc.getSnapshot()).toMatchObject({ source: newest, pendingSourceReplacement: undefined, hasLocalChanges: false, revision: revision + 1 });
+      doc.undo(); expect(doc.getSnapshot().source).toBe(local);
+      if (!sourceEdit) expect(doc.getSnapshot().canUndo).toBe(false);
+    });
+  }
+  it('keeps a newer candidate sent directly by a discard callback without accepting the older one', () => {
+    const first = 'name: Older incoming\njobs: {}';
+    const newest = 'name: Newest incoming\njobs: {}';
+    const doc = new WorkflowDocument({ source });
+    let armed = true;
+    doc.onDiscardInspector(() => {
+      if (armed) { armed = false; doc.update({ source: newest }); }
+      doc.setInspectorDirty(false);
+    });
+    doc.setInspectorDirty(true); doc.update({ source: first });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(doc.getSnapshot()).toMatchObject({ source, revision: 0, pendingSourceReplacement: newest, hasLocalChanges: false });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(doc.getSnapshot()).toMatchObject({ source: newest, revision: 1, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, canUndo: false });
+  });
   it('accepts clean replacements and viewers immediately', () => {
     for (const readOnly of [false, true]) {
       const doc = new WorkflowDocument({ source }, readOnly);
@@ -447,11 +519,13 @@ describe('host source replacement protection', () => {
     let finish = () => {};
     const doc = new WorkflowDocument({ source, onSave: () => new Promise<void>(resolve => { finish = resolve; }) });
     doc.setField(['name'], 'Submitted');
+    const submitted = doc.getSnapshot().source;
     const pending = doc.save();
     doc.update({ source: 'jobs: {}' }); doc.resolveSourceReplacement('use-incoming');
-    doc.setSource(source);
+    doc.undo();
+    expect(doc.getSnapshot().source).toBe(submitted);
     finish(); await pending;
-    expect(doc.getSnapshot().hasLocalChanges).toBe(true);
+    expect(doc.getSnapshot()).toMatchObject({ source: submitted, dirty: false, hasLocalChanges: true });
     doc.update({ source: 'name: Newer\njobs: {}' });
     expect(doc.getSnapshot().pendingSourceReplacement).toContain('Newer');
     doc.resolveSourceReplacement('use-incoming');
