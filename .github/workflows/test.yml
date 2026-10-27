@@ -123,6 +123,7 @@ jobs:
       - run: npm ci --prefix ui --ignore-scripts
       - name: Check flow checker and UF documentation synchronization
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           node --test ui/scripts/flows-check.test.mjs
           node ui/scripts/flows-check.mjs --ci
       - name: Check types and unit tests
