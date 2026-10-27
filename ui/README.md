@@ -151,6 +151,14 @@ npm run dev --prefix ui
 
 The playground loads all four repository examples and saves only layout to local storage. Browser tests exercise module embedding under React 19/StrictMode, plain mounts, read-only controls, custom renderer cleanup, keyboard dependencies, independent instances, themes, and container resizing, real canvas gestures, controlled hosts, host form embedding, and WCAG contrast/focus checks. Packed consumer fixtures build a React 18 application and a standalone HTML page, then exercise them in Chromium, Firefox, and WebKit. Shared `testdata/ui-compat` cases run through JavaScript checks and Go `Parse`/`Validate`. `Workflow UI` is included in CI's required aggregate job. All these checks are deterministic and use no live providers or GitHub publication.
 
+CI runs Chromium, Firefox, and WebKit in parallel jobs using the official
+Playwright image with browsers and system libraries preinstalled. This avoids
+installing browser dependencies from Ubuntu mirrors on every run. Keep the image
+version in `.github/workflows/test.yml` aligned with `@playwright/test` in
+`ui/package-lock.json` when updating Playwright. Every browser job runs the flow
+gate, unit and type checks, builds the package and consumer fixtures, and runs its
+complete browser project; the required aggregate waits for all three.
+
 ## Required flow gate
 
 Every PR, including an unrelated PR, must pass this local command before it is
@@ -201,8 +209,8 @@ Browser selection is conservative:
 
 The local run uses Chromium, two workers, no retries, and automatic waiting.
 It needs neither packed-consumer artifacts nor package builds or provider
-credentials. The Workflow UI CI job runs the structural gate before builds and
-browser installation. PR pairing uses the actual PR base SHA with full Git
+credentials. Each Workflow UI CI job runs the structural gate before builds and
+browser tests. PR pairing uses the actual PR base SHA with full Git
 history. Push and reusable-workflow runs validate structure and run all flows.
 The existing Chromium/Firefox/WebKit suite executes the UF specs once alongside
 technical embedding and packed-consumer checks, retaining traces and uploading
