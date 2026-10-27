@@ -18,6 +18,8 @@ export interface Snapshot {
   source: string; workflow?: Workflow; previewWorkflow?: Workflow; diagnostics: Diagnostic[]; stale: boolean;
   revision: number; canUndo: boolean; canRedo: boolean; validating: boolean;
   saving: boolean; saveError?: string;
+  /** Source or built-in inspector edits differ from the last successful save. */
+  dirty: boolean;
 }
 export interface LayoutState {
   positions: Record<string, { x: number; y: number }>;
@@ -42,6 +44,7 @@ export interface WorkflowOptions {
   onLayoutChange?: (layout: LayoutState) => void;
   onChange?: (snapshot: Snapshot) => void;
   onSave?: (snapshot: Snapshot) => void | Promise<void>;
+  exportFilename?: string;
   validationKey?: string | number;
   validate?: (snapshot: Snapshot, signal: AbortSignal) => Diagnostic[] | Promise<Diagnostic[]>;
 }

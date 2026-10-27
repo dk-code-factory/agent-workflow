@@ -84,7 +84,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   }, [w, term]);
   const matchingJobs = new Set(results.map(result => result.job));
   const disabled = store.readOnly || snapshot.stale;
-  const drafts = useMemo(() => new InspectorDrafts(), []);
+  const drafts = useMemo(() => new InspectorDrafts(pending => store.setInspectorDirty(pending)), [store]);
   const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (e) { setError(String(e)); } };
   // Pointer Save keeps the active field focused until this preflight. A blur
   // rename can otherwise scroll the page between pointer down and click.
@@ -247,7 +247,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   }); };
   const download = () => {
     const url = URL.createObjectURL(new Blob([snapshot.source], { type: 'application/yaml' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'workflow.yml'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const link = document.createElement('a'); link.href = url; link.download = options.exportFilename ?? 'workflow.yml'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return <section ref={root} className="aw-editor" data-theme={options.theme ?? 'system'} data-panel={panel} style={options.tokens as CSSProperties} aria-label={store.readOnly ? 'Workflow viewer' : 'Workflow editor'} onKeyDown={e => {
     if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') e.preventDefault();
@@ -260,7 +260,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   }}>
     <header className="aw-toolbar"><div className="aw-brand"><span className="aw-mark">⌘</span><strong>{w?.name || 'Workflow'}</strong><span className="aw-hint">{store.readOnly ? 'Viewer' : 'Editor'}</span></div>
       <div className="aw-mode" role="group" aria-label="Editor mode">{(['visual', 'yaml', 'split'] as const).map(value => <button type="button" key={value} aria-pressed={mode === value} onClick={() => { modeChosen.current = true; setMode(value); }}>{value === 'yaml' ? 'YAML' : value[0].toUpperCase() + value.slice(1)}</button>)}</div>
-      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <button type="button" disabled={snapshot.saving} onMouseDown={event => event.preventDefault()} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button>}</div>
+      <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <><span className="aw-save-status" role="status" aria-label="Save status" data-failed={!!snapshot.saveError}>{snapshot.saving ? 'Saving…' : snapshot.saveError ? 'Save failed' : snapshot.dirty ? 'Unsaved changes' : 'Saved'}</span><button type="button" disabled={snapshot.saving} onMouseDown={event => event.preventDefault()} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button></>}</div>
     </header>
     <nav className="aw-mobile-nav" aria-label="Panels">{(['palette', 'canvas', 'inspector'] as const).map(p => <button type="button" key={p} aria-pressed={panel === p} onClick={() => setPanel(p)}>{p}</button>)}</nav>
     {snapshot.stale && <div className="aw-stale" role="status">Stale preview — fix the YAML structure to resume visual editing.</div>}
@@ -351,7 +351,7 @@ function ReactWorkflow({ options, readOnly }: { options: WorkflowOptions; readOn
       hostSource.current = source;
       store.update({ ...next, source });
     } else store.update(next);
-  }, [store, options.source, options.theme, options.tokens, options.agents, options.workflows, options.actions, options.layout, options.validationKey, !!options.onSave, !!options.validate]);
+  }, [store, options.source, options.theme, options.tokens, options.agents, options.workflows, options.actions, options.layout, options.validationKey, options.exportFilename, !!options.onSave, !!options.validate]);
   return <WorkflowSurface store={store} />;
 }
 export function WorkflowEditor(options: WorkflowOptions) { return <ReactWorkflow options={options} readOnly={false} />; }

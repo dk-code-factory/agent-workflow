@@ -68,7 +68,7 @@ The IIFE includes React and the canvas/editor runtime. It needs no global framew
 
 ## Snapshots, validation, and saving
 
-A snapshot contains `source`, `workflow` when the current structure is usable, `previewWorkflow` for the last usable graph, `stale`, `diagnostics`, `revision`, history availability, and asynchronous save/validation state. The source remains authoritative. Opening/exporting without changes preserves every byte, including line endings. Visual edits use YAML document nodes to preserve comments, mapping order, block prompts, and unrecognized fields; formatting can be normalized when an edit is serialized. Explicitly replacing a structured field replaces that subtree, including its comments.
+A snapshot contains `source`, `workflow` when the current structure is usable, `previewWorkflow` for the last usable graph, `stale`, `diagnostics`, `revision`, history availability, and asynchronous save/validation state. `dirty` remains true until the current source matches a successful save and no built-in inspector edits remain pending; initial documents have not yet been saved through this editor. Undoing back to saved source clears `dirty`. Host source updates are edits, not save acknowledgements. The source remains authoritative. Opening/exporting without changes preserves every byte, including line endings. Visual edits use YAML document nodes to preserve comments, mapping order, block prompts, and unrecognized fields; formatting can be normalized when an edit is serialized. Explicitly replacing a structured field replaces that subtree, including its comments.
 
 Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, code, document path, and source location where available. Browser parsing enforces one document, the 4 MiB byte limit, bounded nesting, no aliases/merge keys/duplicate keys, field shapes, and unknown fields. Browser admission checks IDs, dependency integrity/cycles, command/action requirements, repeat bounds, and standalone restrictions. Unknown fields remain in the document for round trips. Duplicate dependencies are a browser warning (the runner currently accepts them), and new duplicate connections are rejected.
 
@@ -92,7 +92,7 @@ const options = {
 };
 ```
 
-`validationKey` accepts a string or number identifying the host validation context; changing it reruns validation without editing the source. Superseded validation requests receive an aborted signal and their results are ignored even if the host ignores cancellation. Hook failures become diagnostics or `saveError` and are visible in the editor. Source edits clear old save errors; a failure for an older revision is ignored. Save and export accept drafts with diagnostics. Saving requires an `onSave` hook and is never automatic. Treat submitted sources and host validation as untrusted input on your server.
+`validationKey` accepts a string or number identifying the host validation context; changing it reruns validation without editing the source. Superseded validation requests receive an aborted signal and their results are ignored even if the host ignores cancellation. Hook failures become diagnostics or `saveError` and are visible in the editor. Source edits clear old save errors; a failure for an older revision is ignored. Save and export accept drafts with diagnostics. The toolbar shows Unsaved changes, Saving…, Saved, or Save failed when host saving is available. Success applies only to the exact submitted source; newer source or inspector edits remain unsaved after it finishes. Export does not acknowledge host persistence. Set `exportFilename` to customize the default `workflow.yml` download name. Saving requires an `onSave` hook and is never automatic. Treat submitted sources and host validation as untrusted input on your server.
 
 Malformed or structurally unusable YAML retains its text and the last graph, marks the preview stale, and suspends visual edits until recovery. Syntax edits, property edits, and graph mutations share undo/redo. Uncommitted text in a form is applied on blur or Enter. YAML supports Mod-Z/Mod-Shift-Z/Mod-Y, search (Mod-F), and expression completion (Ctrl-Space) based on the cursor context. Multiline prompts and commands provide an Insert expression picker; literal metadata fields do not suggest expressions. Save and Mod-S synchronously apply pending built-in inspector fields before invoking optional save. Rejected edits keep their typed values, are marked invalid, and block saving; the first affected field is revealed and focused. Correct the edit or restore its stored value with Escape or Discard edit, then save again. Source documents with diagnostics can still be saved. Graph controls expose zoom and fit; Auto layout explicitly recalculates positions. The dependency checkboxes provide keyboard authoring without canvas gestures.
 
@@ -149,7 +149,7 @@ make test check
 npm run dev --prefix ui
 ```
 
-The playground loads all four repository examples and saves only layout to local storage. Browser tests exercise module embedding under React 19/StrictMode, plain mounts, read-only controls, custom renderer cleanup, keyboard dependencies, independent instances, themes, and container resizing, real canvas gestures, controlled hosts, host form embedding, and WCAG contrast/focus checks. Packed consumer fixtures build a React 18 application and a standalone HTML page, then exercise them in Chromium, Firefox, and WebKit. Shared `testdata/ui-compat` cases run through JavaScript checks and Go `Parse`/`Validate`. `Workflow UI` is included in CI's required aggregate job. All these checks are deterministic and use no live providers or GitHub publication.
+The playground loads all four repository examples and stores only layout in local storage. Export YAML downloads an example-named file; a visible notice explains that workflow drafts are not retained, and the playground offers no host Save action. Browser tests exercise module embedding under React 19/StrictMode, plain mounts, read-only controls, custom renderer cleanup, keyboard dependencies, independent instances, themes, and container resizing, real canvas gestures, controlled hosts, host form embedding, and WCAG contrast/focus checks. Packed consumer fixtures build a React 18 application and a standalone HTML page, then exercise them in Chromium, Firefox, and WebKit. Shared `testdata/ui-compat` cases run through JavaScript checks and Go `Parse`/`Validate`. `Workflow UI` is included in CI's required aggregate job. All these checks are deterministic and use no live providers or GitHub publication.
 
 CI runs Chromium, Firefox, and WebKit in parallel jobs using the official
 Playwright image with browsers and system libraries preinstalled. This avoids
@@ -171,7 +171,9 @@ cd ..
 make ui-pr-check BASE=origin/main
 ```
 
-Use the PR target branch for `BASE`. The checker compares its merge base with
+Use the PR target branch for `BASE`. If port 4173 is occupied, select a private
+test port with `WORKFLOW_UI_TEST_PORT=4187 make ui-pr-check BASE=origin/main`.
+The checker compares its merge base with
 HEAD against the complete working tree (committed, staged, unstaged, and
 untracked inputs). If history is missing it prints the exact fetch and rerun
 commands; it never skips pairing silently. For discovery and synchronization

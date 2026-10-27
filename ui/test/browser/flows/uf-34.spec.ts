@@ -3,15 +3,19 @@ import { expect, test } from '@playwright/test';
 test('keyboard save commits the active property draft', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ onSave: (snapshot: any) => { (window as any).savedSource = snapshot.source; (window as any).saveCalls = ((window as any).saveCalls ?? 0) + 1; return new Promise<void>(resolve => { (window as any).finishSave = resolve; }); } }));
+  const status = first.getByRole('status', { name: 'Save status', exact: true });
+  await expect(status).toHaveText('Unsaved changes');
   await first.getByRole('button', { name: 'greet', exact: false }).first().click();
   const prompt = first.getByLabel('Prompt', { exact: true }); await prompt.fill('Save this active draft');
   await prompt.press('ControlOrMeta+s');
   await expect.poll(() => page.evaluate(() => (window as any).savedSource)).toContain('Save this active draft');
   await expect(first.getByRole('button', { name: 'Saving…', exact: true })).toBeDisabled();
+  await expect(status).toHaveText('Saving…');
   await prompt.press('ControlOrMeta+s');
   expect(await page.evaluate(() => (window as any).saveCalls)).toBe(1);
   await page.evaluate(() => (window as any).finishSave());
   await expect(first.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await expect(status).toHaveText('Saved');
 });
 
 
@@ -20,10 +24,56 @@ test('failed saving dismisses and can be retried', async ({ page }) => {
   await page.evaluate(() => (window as any).first.update({ onSave: async () => { throw new Error('Cannot save now'); } }));
   await first.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(first.getByRole('alert')).toContainText('Cannot save now');
+  await expect(first.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Save failed');
   await first.getByRole('button', { name: 'Dismiss', exact: true }).click(); await expect(first.getByRole('alert')).toHaveCount(0);
+  await expect(first.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Unsaved changes');
   await page.evaluate(() => (window as any).first.update({ onSave: (snapshot: any) => { (window as any).savedSource = snapshot.source; } }));
   await first.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).savedSource)).toContain('Browser workflow');
+  await expect(first.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Saved');
+});
+
+for (const width of [1450, 600]) {
+  test(`saved status accounts for pending inspector edits during saving at width ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/test/browser.html'); const editor = page.locator('#a');
+    await page.evaluate(() => (window as any).first.update({ onSave: () => new Promise<void>(resolve => { (window as any).finishSave = resolve; }) }));
+    const status = editor.getByRole('status', { name: 'Save status', exact: true });
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    await editor.getByRole('button', { name: 'greet', exact: false }).first().click();
+    const prompt = editor.getByLabel('Prompt', { exact: true });
+    await prompt.fill('Still typing during save');
+    await page.evaluate(() => (window as any).finishSave());
+    await expect(status).toHaveText('Unsaved changes');
+    await expect(prompt).toBeFocused();
+    await prompt.press('Escape');
+    await expect(status).toHaveText('Saved');
+    await editor.getByText('Advanced parameters', { exact: true }).click();
+    const parameters = editor.getByLabel('Parameters (YAML)', { exact: true });
+    await parameters.fill('[invalid');
+    await expect(status).toHaveText('Unsaved changes');
+    await parameters.press('ControlOrMeta+s');
+    await expect(parameters).toHaveAttribute('aria-invalid', 'true');
+    await expect(status).toHaveText('Unsaved changes');
+    await editor.getByRole('button', { name: 'Discard edit', exact: true }).click();
+    await expect(status).toHaveText('Saved');
+  });
+}
+
+test('an older successful save leaves committed edits unsaved and undo restores saved status', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ onSave: () => new Promise<void>(resolve => { (window as any).finishSave = resolve; }) }));
+  const status = editor.getByRole('status', { name: 'Save status', exact: true });
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
+  await editor.getByRole('button', { name: 'Workflow properties', exact: true }).click();
+  const name = editor.getByLabel('Name', { exact: true });
+  await name.fill('Newer source'); await name.press('Enter');
+  await page.evaluate(() => (window as any).finishSave());
+  await expect(status).toHaveText('Unsaved changes');
+  await editor.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(status).toHaveText('Saved');
+  await editor.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(status).toHaveText('Unsaved changes');
 });
 
 const identifierSource = `name: Identifier fixture
@@ -151,7 +201,7 @@ test('source diagnostics remain saveable and stale preview recovery resumes draf
     (window as any).saves = [];
     (window as any).first.update({ source: 'jobs: [broken', onSave: (snapshot: any) => (window as any).saves.push(snapshot) });
   });
-  await expect(editor.getByRole('status')).toContainText('Stale preview');
+  await expect(editor.getByRole('status').filter({ hasText: 'Stale preview' })).toBeVisible();
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).saves[0].source)).toBe('jobs: [broken');

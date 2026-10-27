@@ -18,8 +18,11 @@ test('all repository workflows load in the playground and export unchanged sourc
 });
 
 
-test('playground themes save names and per-example layout survive switching', async ({ page }) => {
+test('playground downloads use example names without claiming draft persistence', async ({ page }) => {
   await page.goto('/');
+  await expect(page.getByText('Export YAML downloads your changes. Only layout is stored; workflow drafts are not retained.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status', { name: 'Save status', exact: true })).toHaveCount(0);
   for (const theme of ['dark', 'light', 'system']) {
     await page.locator('#theme').selectOption(theme);
     await expect(page.locator('.aw-editor')).toHaveAttribute('data-theme', theme);
@@ -30,7 +33,7 @@ test('playground themes save names and per-example layout survive switching', as
   await page.getByRole('button', { name: 'Workflow properties', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Playground draft');
   await page.getByLabel('Name', { exact: true }).press('Enter');
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export YAML', exact: true }).click()]);
   expect(download.suggestedFilename()).toBe('classify.yml');
   const { readFile } = await import('node:fs/promises');
   expect(await readFile((await download.path())!, 'utf8')).toContain('Playground draft');
