@@ -74,6 +74,28 @@ Job repeats retain every iteration. Completed earlier iterations reuse their
 step attempts when reconstructing a resumed repeat. Reusable children reuse
 stable IDs and admitted records. Exhausted conditions fail the workflow.
 
+Ordered dynamic iteration (`job.for-each`) pins an ordered list, stable string
+keys, payloads and resolved child inputs before child admission. Plans fingerprint
+the admitted reusable closure, application contracts, roles and execution data.
+Schema 9 adds immutable plans and append-only physical item admissions/results;
+`IterationJournal` is mandatory only for definitions using this feature. Results
+bind the plan and fingerprint their retained content. Child IDs bind parent, job,
+key and physical attempt. Each terminal observation commits before advancing;
+a successful child can repair a lost item completion without executing again.
+
+Items retain completed, exhausted, provider failure, interrupted and pending
+outcomes. Only explicit provider classifications advance after failure; guard,
+ownership, instruction, checkout, storage and cleanup failures stop execution.
+The aggregate is complete only with at least one completed item and no unresolved
+provider failure, interruption or pending item. Exhausted skips can coexist with
+completed coverage. Explicit resume retries noncompleted items with new physical
+children, retains completed records, and invalidates transitive dependent jobs.
+Ordinary steps bind rendered dispatch inputs; changed completed effect inputs
+block replay while read-only aggregation can refresh. Registered item actions use
+stable logical identities across physical children, preserving completed effects
+and requiring reconciliation for uncertain mutations. Retained action hooks check
+bindings and evidence before item/provider dispatch and checkpoint reuse.
+
 Known credentials are redacted from result data, errors, events, and artifacts;
 execution IDs/statuses are never rewritten by redaction. Snapshots containing
 credential literals are rejected rather than silently changed. Credential

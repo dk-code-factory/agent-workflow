@@ -39,21 +39,22 @@ type Snapshot struct {
 }
 
 type Attempt struct {
-	Phase         string           `json:"phase,omitempty"`
-	TaskAttemptID string           `json:"task_attempt_id,omitempty"`
-	TaskOutputs   map[string]any   `json:"task_outputs,omitempty"`
-	RepairCount   int              `json:"repair_count,omitempty"`
-	RepairOutputs []map[string]any `json:"repair_outputs,omitempty"`
-	ID            string           `json:"id"`
-	RunID         string           `json:"run_id"`
-	JobID         string           `json:"job_id"`
-	StepID        string           `json:"step_id"`
-	Iteration     int              `json:"iteration"`
-	Number        int              `json:"number"`
-	Status        string           `json:"status"`
-	StartedAt     time.Time        `json:"started_at"`
-	FinishedAt    time.Time        `json:"finished_at,omitempty"`
-	Result        StepExecution    `json:"result"`
+	InputFingerprint string           `json:"input_fingerprint,omitempty"`
+	Phase            string           `json:"phase,omitempty"`
+	TaskAttemptID    string           `json:"task_attempt_id,omitempty"`
+	TaskOutputs      map[string]any   `json:"task_outputs,omitempty"`
+	RepairCount      int              `json:"repair_count,omitempty"`
+	RepairOutputs    []map[string]any `json:"repair_outputs,omitempty"`
+	ID               string           `json:"id"`
+	RunID            string           `json:"run_id"`
+	JobID            string           `json:"job_id"`
+	StepID           string           `json:"step_id"`
+	Iteration        int              `json:"iteration"`
+	Number           int              `json:"number"`
+	Status           string           `json:"status"`
+	StartedAt        time.Time        `json:"started_at"`
+	FinishedAt       time.Time        `json:"finished_at,omitempty"`
+	Result           StepExecution    `json:"result"`
 }
 
 type Event struct {
@@ -258,6 +259,9 @@ func (s *SQLiteStore) Load(ctx context.Context, id string) (*Run, Snapshot, erro
 	return &r, snap, nil
 }
 func (s *SQLiteStore) Begin(ctx context.Context, run, job, step string, iteration int, retry bool) (Attempt, bool, error) {
+	return s.BeginInput(ctx, run, job, step, iteration, retry, "", false)
+}
+func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, iteration int, retry bool, fingerprint string, replaySafe bool) (Attempt, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Attempt{}, false, err
@@ -274,15 +278,20 @@ func (s *SQLiteStore) Begin(ctx context.Context, run, job, step string, iteratio
 			return last, false, err
 		}
 		if last.Status == RunStatusSucceeded || last.Status == RunStatusSkipped {
-			return last, true, nil
+			if fingerprint == "" || last.InputFingerprint == fingerprint {
+				return last, true, nil
+			}
+			if !replaySafe {
+				return last, false, fmt.Errorf("%w: completed effect input changed for %s/%s", ErrActionIntegrity, job, step)
+			}
 		}
-		if !retry && !schemaPhase(last.Phase) {
+		if !retry && !schemaPhase(last.Phase) && last.Status != RunStatusSucceeded && last.Status != RunStatusSkipped {
 			return last, false, fmt.Errorf("step %s/%s has %s attempt %s; explicit --retry-uncertain is required", job, step, last.Status, last.ID)
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return last, false, err
 	}
-	a := Attempt{ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
+	a := Attempt{InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
 	if schemaPhase(last.Phase) {
 		a.Phase = last.Phase
 		a.TaskAttemptID = last.TaskAttemptID

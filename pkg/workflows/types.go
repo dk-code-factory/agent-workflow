@@ -103,7 +103,15 @@ type Repeat struct {
 	Until       string `json:"until" yaml:"until"`
 }
 
+// ForEach executes a reusable workflow sequentially over a pinned array.
+// Key is evaluated against each item; payloads remain data.
+type ForEach struct {
+	Items any    `json:"items" yaml:"items"`
+	Key   string `json:"key" yaml:"key"`
+}
+
 type Job struct {
+	ForEach         *ForEach          `json:"for-each,omitempty" yaml:"for-each,omitempty"`
 	Repeat          *Repeat           `json:"repeat,omitempty" yaml:"repeat,omitempty"`
 	Name            string            `json:"name,omitempty"              yaml:"name,omitempty"`
 	RunsOn          string            `json:"runs-on,omitempty"           yaml:"runs-on,omitempty"`

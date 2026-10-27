@@ -21,6 +21,7 @@ export function references(text: string, bareExpression = false) {
 export function pathJob(path: Path): string | undefined { return path[0] === 'jobs' ? String(path[1]) : undefined; }
 export function isExpressionPath(path: Path): boolean {
   return path[0] === 'jobs' && (path.length === 3 && path[2] === 'if'
+    || path.length === 4 && path[2] === 'for-each' && path[3] === 'key'
     || path.length === 4 && path[2] === 'repeat' && path[3] === 'until'
     || path.length === 5 && path[2] === 'steps' && path[4] === 'if');
 }
@@ -31,6 +32,8 @@ export function hasExpressionReferences(path: Path): boolean {
   if (isExpressionPath(path)) return true;
   if (path.length === 5 && path[0] === 'on' && path[1] === 'workflow_call' && path[2] === 'outputs' && path[4] === 'value') return true;
   if (path[0] !== 'jobs') return false;
+  // Array item payloads are literal data. Only the whole items expression renders.
+  if (path.length === 4 && path[2] === 'for-each' && path[3] === 'items') return true;
   if ((path[2] === 'with' || path[2] === 'secrets') && path.length >= 4) return true;
   if (path[2] === 'outputs' && path.length === 4) return true;
   if (path[2] !== 'steps' || typeof path[3] !== 'number') return false;

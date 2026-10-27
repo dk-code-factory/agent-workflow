@@ -85,7 +85,7 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 	if run.Status == RunStatusQueued || run.Status == RunStatusRunning {
 		return nil, fmt.Errorf("run is already active")
 	}
-	if run.Status == RunStatusSucceeded {
+	if run.Status == RunStatusSucceeded && !iterationRetry(&run) {
 		return &run, nil
 	}
 	if run.FailureClass == "restore_uncertainty" && !retry {

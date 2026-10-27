@@ -181,7 +181,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if f, ok := ctx.Value(fenceKey{}).(executionFence); ok {
 		ac.Generation = f.generation
 	}
-	ac.OperationKey = actionHash([]any{ac.RunID, ac.JobID, ac.StepID, ac.Iteration})
+	operationRun := nativeString(ec.Metadata, "iteration_logical_run_id")
+	if operationRun == "" {
+		operationRun = ac.RunID
+	}
+	ac.OperationKey = actionHash([]any{operationRun, ac.JobID, ac.StepID, ac.Iteration})
 	result = StepExecution{ID: step.ID, Status: RunStatusFailed}
 	defer func() {
 		if err != nil && errors.Is(err, ErrActionIntegrity) {
@@ -221,7 +225,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if err != nil {
 		return fail(err)
 	}
-	records, err := j.ActionAttempts(ctx, ec.RunID)
+	recordRun := ec.RunID
+	if nativeString(ec.Metadata, "iteration_logical_run_id") != "" {
+		recordRun = nativeString(ec.Metadata, "origin_run_id")
+	}
+	records, err := j.ActionAttempts(ctx, recordRun)
 	if err != nil {
 		return fail(err)
 	}
@@ -235,10 +243,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 		if err = e.validateRetainedAction(ctx, *last); err != nil {
 			return fail(err)
 		}
-		if actionHash(input) != last.InputFingerprint {
+		sameInput := actionHash(input) == last.InputFingerprint
+		if !sameInput && a.contract.Effect == ActionExternalMutation {
 			return fail(fmt.Errorf("rendered action input changed"))
 		}
-		if last.State == "completed" {
+		if last.State == "completed" && sameInput {
 			return last.Attempt.Result, nil
 		}
 		if a.contract.Effect == ActionExternalMutation && last.State != "no_effect" {
@@ -310,6 +319,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	}
 	if err = ctx.Err(); err != nil {
 		return fail(err)
+	}
+	if ec.Ordered {
+		if err = e.iterationEvidence(ctx, RunRequest{runID: ec.RunID, Metadata: ec.Metadata}); err != nil {
+			return fail(err)
+		}
 	}
 	value, callErr := a.handler(ctx, ac, input)
 	r.Result, err = e.safeActionResult(value)

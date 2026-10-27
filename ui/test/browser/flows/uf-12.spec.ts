@@ -52,3 +52,23 @@ test('catalog metadata guides typed bindings without losing unknown inputs or in
   await field(page, 'Call secret: token', '${{ secrets.token }}');
   expect((await snapshot(page)).workflow.jobs.call.secrets).toEqual({ token: '${{ secrets.token }}' });
 });
+
+test('ordered iteration survives guided reusable input edits with literal payloads', async ({ page }) => {
+  const source = `jobs:
+  review:
+    uses: workflows/reviewer.yml
+    for-each:
+      items: [{id: first, text: '\${{ inputs.literal_payload }}'}, {id: second}]
+      key: item.id
+    with: {task: '\${{ item.text }}'}
+`;
+  const ui = await open(page, source);
+  await page.evaluate(() => (window as any).first.update({ workflows: [{ id: 'workflows/reviewer.yml', interface: { inputs: { task: { type: 'string' } } } }] }));
+  await job(page, 'review');
+  await field(page, 'Call input: task', '${{ iteration.key }}: ${{ item.text }}');
+  const result = await snapshot(page);
+  expect(result.workflow.jobs.review['for-each']).toEqual({ items: [{ id: 'first', text: '${{ inputs.literal_payload }}' }, { id: 'second' }], key: 'item.id' });
+  expect(result.workflow.jobs.review.with.task).toBe('${{ iteration.key }}: ${{ item.text }}');
+  expect(result.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await expect(ui.getByLabel('Reusable workflow', { exact: true })).toHaveValue('workflows/reviewer.yml');
+});

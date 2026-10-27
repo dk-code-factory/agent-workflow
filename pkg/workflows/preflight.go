@@ -2,12 +2,20 @@ package workflows
 
 import (
 	"context"
+	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"sort"
 	"strings"
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	for _, w := range all {
+		for _, j := range w.Jobs {
+			if j.ForEach != nil && iterationJournal(e.Store) == nil {
+				return fmt.Errorf("for-each requires a durable IterationJournal (%s)", OrderedDynamicIterationV1)
+			}
+		}
+	}
 	if err := e.configureActions(all); err != nil {
 		return err
 	}

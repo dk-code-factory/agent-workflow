@@ -17,6 +17,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   const result = Object.keys(callable?.inputs ?? {}).map(id => `inputs.${id}`);
   const job = jobID ? workflow.jobs[jobID] : undefined;
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) for (const output of Object.keys(workflow.jobs[dep]?.outputs ?? {})) result.push(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`);
+  if (job?.['for-each']) result.push('item', 'iteration.key', 'iteration.number');
   job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`)));
   return result;
 }

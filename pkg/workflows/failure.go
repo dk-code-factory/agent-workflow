@@ -14,6 +14,9 @@ func classifyFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, errIterationBlocked) {
+		return "iteration_blocked"
+	}
 	if errors.Is(err, ErrActionIntegrity) {
 		return "action_integrity"
 	}
@@ -41,10 +44,22 @@ func classifyFailure(err error) string {
 		return "integration"
 	case strings.Contains(text, "structured output"):
 		return "schema"
+	case errors.Is(err, ErrUsageExhausted):
+		return "usage_exhausted"
+	case errors.Is(err, ErrProviderFailure):
+		return "provider_failure"
 	case strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
 		return "limit"
 	case strings.Contains(text, "command failed"):
 		return "command"
 	}
 	return "execution"
+}
+
+func hardExecutionFailure(err error) bool {
+	switch classifyFailure(err) {
+	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":
+		return true
+	}
+	return false
 }
