@@ -788,6 +788,12 @@ jobs:
 				if failure == ErrUsageExhausted && err != nil {
 					t.Fatal(err)
 				}
+				if outer && failure == ErrUsageExhausted {
+					item := run.Jobs["wrapper"].Items[0]
+					if item.Error == "" || item.FailureClass != "usage_exhausted" {
+						t.Fatal("nested skip reason lost", item)
+					}
+				}
 				retry = true
 				run, err = e.Resume(context.Background(), run.ID, nil, true)
 				if err != nil || !reflect.DeepEqual(calls, []string{"ok", "retry", "retry"}) || iterationRetry(run) {
@@ -833,5 +839,26 @@ func TestOrderedIterationCommandCheckpointAcrossPhysicalAttempts(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "once\n" {
 		t.Fatal(string(data), err)
+	}
+}
+
+func TestOrderedIterationNestedContinuedProviderFailureRemainsBlocker(t *testing.T) {
+	e, _ := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { return nil, ErrProviderFailure }))
+	writeWorkflow(t, e.WorkspaceDir, "wrapper.yml", `on: {workflow_call: {}}
+jobs:
+  inner:
+    continue-on-error: true
+    uses: workflows/child.yml
+    for-each: {items: [{id: fail}], key: item.id}
+    with: {task: fail}
+`)
+	writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs:
+  outer:
+    uses: workflows/wrapper.yml
+    for-each: {items: [{id: outer}], key: item.id}
+`)
+	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	if !errors.Is(err, ErrProviderFailure) || run.Jobs["outer"].Items[0].Status != "provider_failure" || run.Jobs["outer"].Complete {
+		t.Fatal(run, err)
 	}
 }

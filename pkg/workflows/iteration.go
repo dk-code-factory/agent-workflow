@@ -335,16 +335,25 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
 		child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, nil)
 		r.Status = "completed"
-		if child != nil && iterationRetry(child) && childErr == nil {
-			r.Status = "exhausted"
-			r.FailureClass = "usage_exhausted"
-			r.Error = "nested iteration contains exhausted skips"
-		}
+
 		if child != nil {
 			r.Outputs = child.Outputs
 			r.Jobs = child.Jobs
 			r.FailureClass = child.FailureClass
 			r.Error = child.Error
+		}
+		if child != nil && iterationRetry(child) && childErr == nil {
+			r.Status = "exhausted"
+			r.FailureClass = "usage_exhausted"
+			r.Error = "nested iteration contains exhausted skips"
+		}
+		if childErr == nil && child != nil && iterationRetry(child) {
+			switch nestedIterationOutcome(child.Jobs) {
+			case "provider_failure":
+				childErr = fmt.Errorf("%w: nested iteration contains unresolved provider failures", ErrProviderFailure)
+			case "interrupted", "pending":
+				childErr = fmt.Errorf("%w: nested iteration is unfinished", errIterationBlocked)
+			}
 		}
 		stop := false
 		if childErr != nil {
@@ -636,4 +645,22 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 		return nil
 	}
 	return visit(run, snap, secrets)
+}
+
+func nestedIterationOutcome(jobs map[string]JobExecution) string {
+	severity := map[string]int{"": 0, "completed": 0, "exhausted": 1, "provider_failure": 2, "pending": 3, "interrupted": 4}
+	outcome := ""
+	retain := func(value string) {
+		if severity[value] > severity[outcome] {
+			outcome = value
+		}
+	}
+	for _, job := range jobs {
+		retain(nestedIterationOutcome(job.ChildJobs))
+		for _, item := range job.Items {
+			retain(item.Status)
+			retain(nestedIterationOutcome(item.Jobs))
+		}
+	}
+	return outcome
 }
