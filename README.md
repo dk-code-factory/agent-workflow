@@ -11,7 +11,7 @@ probe; live Claude authentication and the gateway gate remain unverified.
 
 ## Build and run
 
-Requires Go 1.25+. Install only the providers selected by your roles. The SDK
+Requires Go 1.26+. Install only the providers selected by your roles. The SDK
 bridge also requires Node 22+ and `npm ci --prefix bridge/claude`.
 
 ```sh

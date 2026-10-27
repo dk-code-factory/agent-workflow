@@ -22,15 +22,15 @@ jobs:
           - {runner: macos-15, platform: darwin/arm64}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+          go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '24.22.1'
       - run: test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}'
       - run: make test check build
       - run: npm ci --prefix bridge/claude --ignore-scripts
@@ -43,23 +43,23 @@ jobs:
   workflow-validation:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
-      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck=
+          go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=
       - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
   filesystem-conformance:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
+          go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
       - name: Exhaust only a bounded tmpfs in a private mount namespace
         run: sudo env "PATH=$PATH" AGENT_WORKFLOW_FILESYSTEM_TEST=1 go test ./pkg/workflows -run '^TestDisposableFilesystemExhaustion$' -count=1
   container-conformance:
@@ -74,12 +74,12 @@ jobs:
           - {runtime: docker, runner: ubuntu-24.04-arm, arch: arm64}
           - {runtime: podman, runner: ubuntu-24.04-arm, arch: arm64}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2' # Match go.mod toolchain and images/pins.json.
+          go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
       - name: Install Podman when selected
         if: matrix.runtime == 'podman'
         run: sudo apt-get update && sudo apt-get install -y podman

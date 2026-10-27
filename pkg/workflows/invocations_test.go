@@ -69,7 +69,7 @@ func TestInvocationRuntimeFixture(t *testing.T) {
 	case "context":
 		encode([]any{map[string]any{"Endpoints": map[string]any{"docker": map[string]any{"Host": "unix:///fixture-runtime"}}}})
 	case "image":
-		encode([]any{map[string]any{"Id": "sha256:" + strings.Repeat("b", 64), "Config": map[string]any{"Labels": map[string]string{"agent-workflow.guardian-protocol": "1", "agent-workflow.bridge-protocol": "2", "agent-workflow.claude-sdk": "0.3.301"}}}})
+		encode([]any{map[string]any{"Id": "sha256:" + strings.Repeat("b", 64), "Config": map[string]any{"Labels": map[string]string{"agent-workflow.guardian-protocol": "1", "agent-workflow.bridge-protocol": "2", "agent-workflow.claude-sdk": "0.3.311"}}}})
 	case "create":
 		object := fakeRuntimeObject{ID: strings.Repeat("a", 64)}
 		object.Config.Labels = map[string]string{}

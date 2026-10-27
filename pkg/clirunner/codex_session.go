@@ -24,7 +24,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	}
 	hasBrokerTools := req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0
 	if hasBrokerTools || agent.Tools != nil {
-		return result, fmt.Errorf("Codex managed tool subsets are not certified for upstream 0.161.0")
+		return result, fmt.Errorf("Codex managed tool subsets are not certified for upstream 0.164.0")
 	}
 	workspace := r.Workspace
 	if agent.Workspace != "" {

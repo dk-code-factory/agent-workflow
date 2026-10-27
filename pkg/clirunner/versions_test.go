@@ -8,17 +8,17 @@ import (
 )
 
 func TestCodexPinnedVersionAndHandshake(t *testing.T) {
-	for _, value := range []string{"", "0.160.0", "0.161.01", "0.161.0.1", "0.161.0-dev", "0.161.0+local", "codex_cli_rs/0.162.0"} {
+	for _, value := range []string{"", "0.160.0", "0.164.01", "0.164.0.1", "0.164.0-dev", "0.164.0+local", "codex_cli_rs/0.162.0"} {
 		if err := verifyCodexHandshake(value); err == nil {
 			t.Fatalf("accepted unsupported handshake %q", value)
 		}
 	}
-	for _, value := range []string{"0.161.0", "codex_cli_rs/0.161.0 (linux; fixture)"} {
+	for _, value := range []string{"0.164.0", "codex_cli_rs/0.164.0 (linux; fixture)"} {
 		if err := verifyCodexHandshake(value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, version := range []string{"0.161.0", "0.160.0", "0.161.01"} {
+	for _, version := range []string{"0.164.0", "0.160.0", "0.164.01"} {
 		command := filepath.Join(t.TempDir(), "codex")
 		script := "#!/bin/sh\n[ \"$1\" = --version ] || exit 97\nprintf 'codex-cli " + version + "\\n'\n"
 		if err := os.WriteFile(command, []byte(script), 0700); err != nil {
