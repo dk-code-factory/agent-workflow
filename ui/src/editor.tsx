@@ -90,13 +90,15 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const drafts = useMemo(() => new InspectorDrafts(pending => store.setInspectorDirty(pending)), [store]);
   useEffect(() => store.onDiscardInspector(() => drafts.discard()), [store, drafts]);
   const discardFailure = useRef<{ revision: number; candidate?: string; message: string } | undefined>(undefined);
-  useEffect(() => {
+  // Observe completed choices before a host callback can restage the same
+  // incoming bytes and React batches away the intermediate cleared candidate.
+  useEffect(() => store.subscribe(() => {
     const failure = discardFailure.current; const current = store.getSnapshot();
     if (failure && (current.revision !== failure.revision || current.pendingSourceReplacement !== failure.candidate)) {
       discardFailure.current = undefined;
       setError(value => value === failure.message ? '' : value);
     }
-  }, [store, snapshot.revision, snapshot.pendingSourceReplacement]);
+  }), [store]);
   const attempt = (fn: () => void, replacement = false) => {
     discardFailure.current = undefined;
     try { fn(); setError(''); }

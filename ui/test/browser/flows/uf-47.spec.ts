@@ -661,6 +661,54 @@ for (const choice of ['keep-local', 'use-incoming'] as const) {
   });
 }
 
+for (const newerFailure of [false, true]) {
+  test(`Keep local observes a completed choice before same-source restaging${newerFailure ? ' and preserves a newer failure' : ''}`, async ({ page }, testInfo) => {
+    const ui = await rawInspector(page, false, false);
+    await page.evaluate(() => (window as any).first.update({ onSave: () => { throw new Error('Existing save failure'); } }));
+    await ui.getByRole('button', { name: 'Save', exact: true }).click();
+    const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.fill('Original failed buffer'); const before = await snapshot(page);
+    const candidate = before.source.replace('Hello', 'Same incoming source');
+    await page.evaluate(source => {
+      const host = (window as any); host.raw.failDiscard = true; host.first.update({ source });
+      host.retainedRaw = document.querySelector('#a input[aria-label="Raw prompt"]');
+    }, candidate);
+    await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+    await expect(ui.locator('.aw-error')).toContainText('Custom discard failed');
+    const transition = await page.evaluate(({ candidate, newerFailure }) => {
+      const host = (window as any); const states: any[] = []; let handled = false;
+      const original = host.first.getSnapshot();
+      host.first.update({ onChange: (current: any) => {
+        states.push({ candidate: current.pendingSourceReplacement, protected: current.hasLocalChanges });
+        if (handled || current.pendingSourceReplacement !== undefined) return;
+        handled = true;
+        // Clearing the sole raw draft ends declined-source suppression before a
+        // fresh draft admits the identical incoming bytes as a new choice.
+        const input = host.retainedRaw as HTMLInputElement;
+        input.value = 'Hello'; input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.value = 'Fresh protected buffer'; input.dispatchEvent(new Event('input', { bubbles: true }));
+        host.first.update({ source: candidate });
+        if (newerFailure) {
+          // The fresh failure deliberately has the same text as the old one.
+          (document.querySelector('#a .aw-source-replacement button:last-child') as HTMLButtonElement).click();
+        }
+      } });
+      host.first.resolveSourceReplacement('keep-local');
+      return { states, original, current: host.first.getSnapshot(), sameDOM: host.retainedRaw === document.querySelector('#a input[aria-label="Raw prompt"]'), cleanups: host.raw.cleanups, discards: host.raw.discards };
+    }, { candidate, newerFailure });
+    await testInfo.attach('same-source-transition', { body: JSON.stringify(transition, null, 2), contentType: 'application/json' });
+    expect(transition.states).toContainEqual({ candidate: undefined, protected: false });
+    expect(transition.sameDOM).toBe(true); expect(transition.cleanups).toBe(0);
+    expect(transition.discards).toBe(newerFailure ? 2 : 1);
+    await expect(raw).toHaveValue('Fresh protected buffer');
+    await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
+    expect(await snapshot(page)).toMatchObject({ source: before.source, revision: before.revision, canUndo: before.canUndo, canRedo: before.canRedo, hasLocalChanges: true, pendingSourceReplacement: candidate, saveError: before.saveError });
+    if (!newerFailure) await expect(ui.locator('.aw-error')).not.toContainText('Custom discard failed');
+    await expect(ui.locator('.aw-error')).toContainText(newerFailure ? 'Custom discard failed' : 'Existing save failure');
+    expect((await snapshot(page)).saveError).toContain('Existing save failure');
+  });
+}
+
 test('a new reentrant discard failure stays visible until imperative resolution', async ({ page }) => {
   const ui = await rawInspector(page); const raw = ui.getByLabel('Raw prompt', { exact: true });
   await raw.fill('Buffered draft'); const original = (await snapshot(page)).source;
