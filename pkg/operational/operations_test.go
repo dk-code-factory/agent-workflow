@@ -9,20 +9,21 @@ import (
 
 func TestFilesystemThresholdsAreIndependent(t *testing.T) {
 	path := t.TempDir()
-	state, err := StatFilesystem(path)
+	_, err := StatFilesystem(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tooManyBytes := state.FreeBytes + 1
+	tooManyBytes := ^uint64(0)
 	zero := uint64(0)
 	if _, err = (Config{MinFreeBytes: &tooManyBytes, MinFreeInodes: &zero}).Check(path); err == nil {
 		t.Fatal("byte exhaustion not detected")
 	}
-	tooManyInodes := state.FreeInodes + 1
+	tooManyInodes := ^uint64(0)
 	if _, err = (Config{MinFreeBytes: &zero, MinFreeInodes: &tooManyInodes}).Check(path); err == nil {
 		t.Fatal("inode exhaustion not detected")
 	}
-	// This uses observed thresholds, never fills the developer's filesystem.
+	// Impossible thresholds are stable even when other processes free resources.
+	// Never fill the developer's filesystem.
 	if _, err = (Config{MinFreeBytes: &zero, MinFreeInodes: &zero}).Check(path); err != nil {
 		t.Fatal(err)
 	}
