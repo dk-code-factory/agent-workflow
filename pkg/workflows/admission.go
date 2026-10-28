@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -14,16 +13,11 @@ const RunStatusQueued = "queued"
 func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	copy := *e
 	e = &copy
-	req.Execution = e.CommandExecution
-	if source, ok := e.Agents.(interface {
-		AdmittedRoles(context.Context) (json.RawMessage, error)
-	}); ok {
-		roles, err := source.AdmittedRoles(ctx)
-		if err != nil {
-			return nil, err
-		}
-		e.Roles = roles
+	if err := e.pinExecution(ctx); err != nil {
+		return nil, err
 	}
+	req.Execution = e.CommandExecution
+
 	journal, ok := e.Store.(Journal)
 	if !ok {
 		return nil, fmt.Errorf("durable store required")

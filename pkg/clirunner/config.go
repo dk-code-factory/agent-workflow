@@ -13,6 +13,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/development"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
@@ -20,20 +21,22 @@ import (
 var roleIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 type Execution struct {
-	Cleanup      string `yaml:"cleanup"`
-	UID          *int   `yaml:"uid"`
-	GID          *int   `yaml:"gid"`
-	runID        string
-	invocationID string
-	ownerRoot    string
-	Mode         string `yaml:"mode"`
-	Image        string `yaml:"image"`
-	Runtime      string `yaml:"runtime"`
-	Writable     bool   `yaml:"writable"`
+	NetworkRuntime string             `yaml:"network-runtime"`
+	Network        *network.Reference `yaml:"-" json:",omitempty"`
+	Cleanup        string             `yaml:"cleanup"`
+	UID            *int               `yaml:"uid"`
+	GID            *int               `yaml:"gid"`
+	runID          string
+	invocationID   string
+	ownerRoot      string
+	Mode           string `yaml:"mode"`
+	Image          string `yaml:"image"`
+	Runtime        string `yaml:"runtime"`
+	Writable       bool   `yaml:"writable"`
 }
 
 func (e Execution) policy() runtimeexec.Policy {
-	return runtimeexec.Policy{Mode: e.Mode, Image: e.Image, Runtime: e.Runtime, Writable: e.Writable, Cleanup: e.Cleanup, UID: e.UID, GID: e.GID}
+	return runtimeexec.Policy{NetworkRuntime: e.NetworkRuntime, Network: e.Network, Mode: e.Mode, Image: e.Image, Runtime: e.Runtime, Writable: e.Writable, Cleanup: e.Cleanup, UID: e.UID, GID: e.GID}
 }
 
 type Authentication struct {
@@ -104,10 +107,22 @@ func LoadConfig(path string) (Config, error) {
 	for id, agent := range cfg.Agents {
 		if agent.Execution.Mode == "" && agent.Execution.Image == "" && agent.Execution.Runtime == "" && !agent.Execution.Writable && agent.Execution.UID == nil && agent.Execution.GID == nil {
 			cleanup := agent.Execution.Cleanup
+			selected, ref := agent.Execution.NetworkRuntime, agent.Execution.Network
 			agent.Execution = cfg.Execution
+			if selected != "" {
+				agent.Execution.NetworkRuntime = selected
+				agent.Execution.Network = ref
+			}
 			if cleanup != "" {
 				agent.Execution.Cleanup = cleanup
 			}
+		}
+		if cfg.Execution.NetworkRuntime != "" {
+			if agent.Execution.NetworkRuntime != "" && agent.Execution.NetworkRuntime != cfg.Execution.NetworkRuntime {
+				return cfg, fmt.Errorf("agent %s cannot override global network-runtime", id)
+			}
+			agent.Execution.NetworkRuntime = cfg.Execution.NetworkRuntime
+			agent.Execution.Network = cfg.Execution.Network
 		}
 		if cfg.Execution.Cleanup == "strict" {
 			if agent.Execution.Cleanup != "" && agent.Execution.Cleanup != "strict" {
@@ -158,6 +173,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("at least one agent must be configured")
 	}
 	for id, agent := range c.Agents {
+		if c.Execution.NetworkRuntime != "" && agent.Execution.NetworkRuntime != c.Execution.NetworkRuntime {
+			return fmt.Errorf("agent %s must inherit global network-runtime", id)
+		}
 		if err := agent.Execution.policy().Validate(); err != nil {
 			return fmt.Errorf("agent %s: %w", id, err)
 		}
@@ -173,7 +191,7 @@ func (c Config) Validate() error {
 				return fmt.Errorf("agent %s: turn-timeout must be positive", id)
 			}
 		}
-		if agent.Authentication.CredentialEnv == "GH_TOKEN" || agent.Authentication.CredentialEnv == "GITHUB_TOKEN" || agent.Authentication.CredentialEnv == "SSH_AUTH_SOCK" || agent.Authentication.CredentialEnv == "DOCKER_HOST" {
+		if agent.Authentication.CredentialEnv == "GH_TOKEN" || agent.Authentication.CredentialEnv == "GITHUB_TOKEN" || agent.Authentication.CredentialEnv == "SSH_AUTH_SOCK" || agent.Authentication.CredentialEnv == "DOCKER_HOST" || agent.Authentication.CredentialEnv == "CONTAINER_HOST" || agent.Authentication.CredentialEnv == "DOCKER_CONTEXT" || agent.Authentication.CredentialEnv == "CONTAINER_CONNECTION" || agent.Authentication.CredentialEnv == "AGENT_WORKFLOW_NETWORK_RUNTIME" {
 			return fmt.Errorf("agent %s: controller credential/environment reference cannot be forwarded to a provider", id)
 		}
 		if agent.Execution.Mode != "" && agent.Execution.Mode != "local" && agent.Execution.Mode != "container" {

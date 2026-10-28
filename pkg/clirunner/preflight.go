@@ -38,7 +38,7 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 				command = "codex"
 			}
 		}
-		if err := a.Execution.policy().Validate(); err != nil {
+		if err := runtimeexec.CheckPolicy(ctx, a.Execution.policy()); err != nil {
 			return err
 		}
 		if a.Execution.Mode == "container" {
@@ -51,7 +51,7 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 			return fmt.Errorf("agent %s backend: %w", id, err)
 		}
 		if a.Provider == "codex-app-server" && a.Execution.Mode != "container" {
-			if err := verifyCodexCLI(ctx, command); err != nil {
+			if err := verifyCodexCLI(ctx, command, a.Execution.policy()); err != nil {
 				return fmt.Errorf("agent %s: %w", id, err)
 			}
 		}

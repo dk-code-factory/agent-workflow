@@ -17,6 +17,7 @@ import (
 
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 )
 
 const GuardianProtocol = "1"
@@ -56,7 +57,10 @@ func CheckImage(ctx context.Context, policy Policy, bridge bool, requiredLabels 
 	if err != nil {
 		return err
 	}
-	data, err := containerapi.Output(ctx, runtime, "image", "inspect", policy.Image)
+	if err := CheckPolicy(ctx, policy); err != nil {
+		return err
+	}
+	data, err := containerapi.OutputAt(ctx, runtime, policy.Network, "image", "inspect", policy.Image)
 	if err != nil {
 		return err
 	}
@@ -112,7 +116,7 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 	for _, key := range keys {
 		args = append(args, "--label", key+"="+owner.Labels[key])
 	}
-	if policy.Runtime == "" || policy.Runtime == "podman" {
+	if policy.Network == nil && (policy.Runtime == "" || policy.Runtime == "podman") {
 		args = append(args, "--userns=keep-id")
 	}
 	uid, gid := os.Getuid(), os.Getgid()
@@ -223,7 +227,7 @@ func PrepareContainer(ctx context.Context, cmd *exec.Cmd, policy Policy, options
 	if err != nil {
 		return nil, err
 	}
-	identity, err := containerapi.Identity(ctx, runtime)
+	identity, err := containerapi.IdentityAt(ctx, runtime, policy.Network)
 	if err != nil {
 		return nil, err
 	}
@@ -245,8 +249,9 @@ func PrepareContainer(ctx context.Context, cmd *exec.Cmd, policy Policy, options
 		return nil, err
 	}
 	hash := sha256.Sum256([]byte(root))
-	owner := containerapi.Owner{Runtime: runtime, Identity: identity, Name: "agent-workflow-" + i.Record.ID, Labels: map[string]string{"agent-workflow.managed": "true", "agent-workflow.run": i.Record.RunID, "agent-workflow.generation": strconv.FormatInt(i.Record.Generation, 10), "agent-workflow.invocation": i.Record.ID, "agent-workflow.workspace": hex.EncodeToString(hash[:]), "agent-workflow.token": i.Record.Token}}
+	owner := containerapi.Owner{Network: policy.Network, Runtime: runtime, Identity: identity, Name: "agent-workflow-" + i.Record.ID, Labels: map[string]string{"agent-workflow.managed": "true", "agent-workflow.run": i.Record.RunID, "agent-workflow.generation": strconv.FormatInt(i.Record.Generation, 10), "agent-workflow.invocation": i.Record.ID, "agent-workflow.workspace": hex.EncodeToString(hash[:]), "agent-workflow.token": i.Record.Token}}
 	i.Record.Container = &owner
+	i.Record.Network = policy.Network
 	if err = i.Save(ctx, "intent"); err != nil {
 		return nil, err
 	}
@@ -259,8 +264,18 @@ func PrepareContainer(ctx context.Context, cmd *exec.Cmd, policy Policy, options
 		_ = i.Save(context.WithoutCancel(ctx), "cleaned")
 		return nil, err
 	}
+	if policy.Network != nil {
+		if err = network.Reserve(ctx, *policy.Network, i.Record.ID); err != nil {
+			i.StopHeartbeat()
+			_ = i.Save(context.WithoutCancel(ctx), "uncertain")
+			return nil, err
+		}
+	}
 	// The runtime creates an inert object first. Its identity is durable before
 	// the attached start can launch a provider or command.
+	if policy.Network != nil {
+		args = append([]string{"--remote", "--url", policy.Network.Endpoint}, args...)
+	}
 	create := exec.CommandContext(ctx, runtime, args...)
 	create.Env = runtimeEnvironment(cmd.Env, options.CredentialEnv)
 	var out limitedCreateOutput
@@ -295,6 +310,9 @@ func PrepareContainer(ctx context.Context, cmd *exec.Cmd, policy Policy, options
 	cmd.Path = runtime
 	cmd.Err = nil
 	cmd.Args = []string{filepath.Base(runtime), "start", "--attach", "--interactive", owner.ID}
+	if policy.Network != nil {
+		cmd.Args = append([]string{filepath.Base(runtime), "--remote", "--url", policy.Network.Endpoint}, cmd.Args[1:]...)
+	}
 	cmd.Env = runtimeEnvironment(cmd.Env, options.CredentialEnv)
 	encoded, _ := json.Marshal(owner)
 	stop, err := i.Supervise(ctx, cmd, []string{"__container_cleanup_v2", string(encoded)})

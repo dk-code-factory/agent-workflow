@@ -35,7 +35,7 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
             raise SystemExit("empty archive or duplicate members")
         prefix = members[0].name.split("/")[0]
         names = {entry.name.removeprefix(prefix + "/") for entry in members}
-        for required in ["agent-workflow", "agent-workflow-guardian", "workflow-conformance", "agents.yml", "LICENSE", "NOTICE", "licenses/index.json", "bridge/claude/bridge.mjs", "bridge/claude/package-lock.json", "build.json"]:
+        for required in ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance", "agents.yml", "LICENSE", "NOTICE", "licenses/index.json", "bridge/claude/bridge.mjs", "bridge/claude/package-lock.json", "build.json"]:
             if required not in names:
                 raise SystemExit("archive missing " + required)
         for entry in members:

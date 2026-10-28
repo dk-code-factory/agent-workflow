@@ -1,6 +1,7 @@
 .PHONY: build test check dist
 build:
 	go build -o bin/agent-workflow ./cmd/agent-workflow
+	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
 test:
 	go test -race ./...
 check: release-tooling-test

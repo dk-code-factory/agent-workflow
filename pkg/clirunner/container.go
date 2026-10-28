@@ -28,7 +28,7 @@ func containerCommand(cmd *exec.Cmd, a Agent, workspace, state string, bridge bo
 }
 func superviseContainer(ctx context.Context, cmd *exec.Cmd, a Agent, workspace, state string, bridge bool) (func(), error) {
 	if a.Execution.Mode != "container" {
-		return runtimeexec.Supervise(ctx, cmd)
+		return runtimeexec.SupervisePolicy(ctx, cmd, a.Execution.policy())
 	}
 	if a.Execution.ownerRoot == "" {
 		return nil, fmt.Errorf("container execution requires an originating workspace owner")

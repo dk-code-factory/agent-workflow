@@ -9,17 +9,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 	"os"
 	"os/exec"
 	"strings"
 )
 
 type Owner struct {
-	Runtime  string            `json:"runtime"`
-	Identity string            `json:"identity"`
-	Name     string            `json:"name"`
-	ID       string            `json:"id,omitempty"`
-	Labels   map[string]string `json:"labels"`
+	Network  *network.Reference `json:"network_runtime,omitempty"`
+	Runtime  string             `json:"runtime"`
+	Identity string             `json:"identity"`
+	Name     string             `json:"name"`
+	ID       string             `json:"id,omitempty"`
+	Labels   map[string]string  `json:"labels"`
 }
 
 type limitedBuffer struct{ bytes.Buffer }
@@ -31,7 +33,19 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func Output(ctx context.Context, runtime string, args ...string) ([]byte, error) {
+	return OutputAt(ctx, runtime, nil, args...)
+}
+func OutputAt(ctx context.Context, runtime string, ref *network.Reference, args ...string) ([]byte, error) {
+	if ref != nil {
+		if err := network.Check(ctx, *ref); err != nil {
+			return nil, err
+		}
+		args = append([]string{"--remote", "--url", ref.Endpoint}, args...)
+	}
 	cmd := exec.CommandContext(ctx, runtime, args...)
+	if ref != nil {
+		cmd.Env = network.Environment(nil, *ref)
+	}
 	var out limitedBuffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -44,7 +58,10 @@ func Output(ctx context.Context, runtime string, args ...string) ([]byte, error)
 
 // Identity pins both the daemon/store identity and the selected endpoint.
 func Identity(ctx context.Context, runtime string) (string, error) {
-	data, err := Output(ctx, runtime, "info", "--format", "{{json .}}")
+	return IdentityAt(ctx, runtime, nil)
+}
+func IdentityAt(ctx context.Context, runtime string, ref *network.Reference) (string, error) {
+	data, err := OutputAt(ctx, runtime, ref, "info", "--format", "{{json .}}")
 	if err != nil {
 		return "", err
 	}
@@ -62,6 +79,17 @@ func Identity(ctx context.Context, runtime string) (string, error) {
 	}
 	if err = json.Unmarshal(data, &info); err != nil {
 		return "", fmt.Errorf("invalid runtime identity response")
+	}
+	if ref != nil {
+		if info.Host.Hostname == "" || info.Store.GraphRoot == "" {
+			return "", fmt.Errorf("runtime has no supported rootful daemon/store identity")
+		}
+		stable, _ := json.Marshal(struct {
+			Info      any
+			Reference *network.Reference
+		}{info, ref})
+		hash := sha256.Sum256(stable)
+		return hex.EncodeToString(hash[:]), nil
 	}
 	var endpoint []byte
 	if info.ID != "" {
@@ -98,16 +126,16 @@ type inspected struct {
 }
 
 func Inspect(ctx context.Context, owner Owner) (id string, exists bool, err error) {
-	identity, err := Identity(ctx, owner.Runtime)
+	identity, err := IdentityAt(ctx, owner.Runtime, owner.Network)
 	if err != nil {
 		return "", false, err
 	}
 	if identity != owner.Identity {
 		return "", false, fmt.Errorf("container runtime identity changed")
 	}
-	data, inspectErr := Output(ctx, owner.Runtime, "container", "inspect", owner.Name)
+	data, inspectErr := OutputAt(ctx, owner.Runtime, owner.Network, "container", "inspect", owner.Name)
 	if inspectErr != nil {
-		listing, listErr := Output(ctx, owner.Runtime, "ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}")
+		listing, listErr := OutputAt(ctx, owner.Runtime, owner.Network, "ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}")
 		if listErr != nil {
 			return "", false, fmt.Errorf("container absence cannot be confirmed: %w", listErr)
 		}
@@ -153,7 +181,7 @@ func Remove(ctx context.Context, owner Owner) error {
 	if !exists {
 		return nil
 	}
-	_, removeErr := Output(ctx, owner.Runtime, "rm", "--force", id)
+	_, removeErr := OutputAt(ctx, owner.Runtime, owner.Network, "rm", "--force", id)
 	owner.ID = id
 	_, exists, err = Inspect(ctx, owner)
 	if err != nil {

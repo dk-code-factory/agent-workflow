@@ -41,3 +41,10 @@ private. Commit only reviewed sanitized evidence summaries; no credentials or ra
 private transcripts belong in this repository. Failed/unverified assertions stay
 false. Protocol observations useful as regressions should be redacted into
 deterministic fixtures before committing them.
+
+## Shared network runtime
+
+The Linux/rootful Podman and normal-Chrome HTTP/2 check is a separate explicit
+opt-in: `node conformance/network-runtime/acceptance.mjs --run-privileged`.
+It uses uniquely owned fixtures, no models and no GitHub publication. See
+[network runtime verification](../docs/NETWORK_RUNTIME.md#verification).

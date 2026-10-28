@@ -96,6 +96,9 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 	default:
 		return nil, fmt.Errorf("unknown provider %q", agent.Provider)
 	}
+	if agent.Provider == "codex" || agent.Provider == "codex-cli" {
+		args = append(args, networkShellArgs(agent.Execution)...)
+	}
 	args = append(args, agent.Args...)
 	if req.RepairOnly {
 		return nil, fmt.Errorf("CLI compatibility adapters have no verified tool-free repair mode; use claude-sdk or output.repair-attempts: 0")
@@ -128,7 +131,7 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
-	cleanup, superviseErr := runtimeexec.Supervise(ctx, cmd)
+	cleanup, superviseErr := runtimeexec.SupervisePolicy(ctx, cmd, agent.Execution.policy())
 	if superviseErr != nil {
 		return nil, superviseErr
 	}
@@ -302,7 +305,12 @@ func (r *Runner) providerVersion(ctx context.Context, a Agent) string {
 	var output boundedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	cleanup, err := process.Supervise(cmd)
+	var cleanup func()
+	if a.Execution.NetworkRuntime != "" {
+		cleanup, err = runtimeexec.SupervisePolicy(versionCtx, cmd, a.Execution.policy())
+	} else {
+		cleanup, err = process.Supervise(cmd)
+	}
 	if err != nil {
 		return "unavailable"
 	}

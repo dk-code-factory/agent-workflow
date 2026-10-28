@@ -136,7 +136,7 @@ func (r *Runner) mcpSession(ctx context.Context, name string) (*mcp.ClientSessio
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 		var err error
-		cleanup, err = runtimeexec.Supervise(ctx, cmd)
+		cleanup, err = runtimeexec.SupervisePolicy(ctx, cmd, r.Config.Execution.policy())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -318,11 +318,15 @@ func (r *Runner) discoverMCP(ctx context.Context) ([]workflows.ToolDefinition, e
 
 func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err error) {
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
-	catalog, err := r.discoverMCP(ctx)
+	cfg, err := r.Config.PinRuntimes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cfg := r.Config
+	pinned := &Runner{Config: cfg, Workspace: r.Workspace}
+	catalog, err := pinned.discoverMCP(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cfg.ToolCatalog = catalog
 	encoded, _ := json.Marshal(catalog)
 	hash := sha256.Sum256(encoded)

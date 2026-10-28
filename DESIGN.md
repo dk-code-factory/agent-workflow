@@ -139,6 +139,41 @@ invocation ownership. The command policy is pinned in the admitted snapshot.
 Strict cleanup on macOS requires containers; native macOS provides process-group
 cleanup. Runtime/image/UID/VM conformance is a separate release evidence gate.
 
+## Shared network containment
+
+A named network runtime is independent of local/container execution mode. Global
+selection applies to agents, commands and controller-launched stdio MCP servers.
+Admission pins a typed identity/generation/endpoint reference in command policy
+and role snapshots. Resume checks that reference without resolving a replacement.
+Container ownership retains it for every image/create/start/inspect/remove call.
+Each generation has a distinct API socket, closing check/restart endpoint races.
+
+An explicitly prepared root-owned registry owns the installed launcher, enrolled
+existing rootful Podman operators, durable membership receipts and forwarding.
+The host controller authenticates through Unix peer credentials. A root-owned
+supervisor enters pinned kernel namespace handles, drops to the original account
+before interpreting workload commands/environment, and runs the existing lifetime
+guardian. Caller streams are passed as descriptors; launch environments use
+sealed anonymous memory rather than persistent credential files. Caller loss
+closes only that invocation's lifetime channel. Root-owned completion receipts
+survive controller death; missing receipts preserve uncertainty.
+
+The runtime uses persistent Linux network/mount namespaces, private Netavark,
+Aardvark and network-definition mounts, a private resolver, and slirp outbound
+networking. Original rootful image storage and container metadata remain shared.
+Container mount/credential restrictions remain applicable. Explicit IPv4 TCP
+forwarding binds host 127.0.0.1 and can reach runtime loopback; only the runtime
+TAP enables route_localnet. Namespace, DNS, API, slirp and forwarding prerequisite
+failure closes admission. Docker and non-Linux containment are unsupported.
+
+Stop and membership admission serialize under one owner. Container creation
+reserves membership durably before effects and cleanup releases it only after
+verified removal. Busy/uncertain stop is refused. Restart reconciles native
+completion receipts; unknown launches and unresolved reservations require operator
+inspection. It never substitutes another generation, prunes shared workloads or
+uses a retained PID as cleanup authority. Code Factory direct launches require
+explicit adoption of the exported Go launcher boundary in its own repository.
+
 ## Providers and workers
 
 AgentRunner remains the workflow compatibility interface. SessionRunner adds

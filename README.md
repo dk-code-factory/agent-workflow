@@ -134,6 +134,22 @@ Agent-level relative workspaces resolve against the configuration directory;
 `instructions`, `tools`, and `authentication` management apply to session
 backends; legacy CLI configuration continues to be provider-owned.
 
+### Shared network runtime
+
+On Linux, an explicitly prepared rootful Podman runtime can contain network
+effects for both local and container execution:
+
+```yaml
+execution:
+  network-runtime: development
+```
+
+A global selection also applies to stdio MCP servers and cannot be weakened by
+role execution overrides. Admission pins the runtime identity across resume;
+missing or unhealthy runtimes fail closed. The standalone
+`agent-workflow-runtime` launcher uses the same Go boundary for ordinary Codex
+sessions. See [operator setup, forwarding, storage sharing and recovery](docs/NETWORK_RUNTIME.md).
+
 ### Containers
 
 Session backends can select:
