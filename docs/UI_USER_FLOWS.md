@@ -255,7 +255,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-17.spec.ts)
 
-- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
+- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Narrow setup waits for the inspector heading focus that completes the responsive transition before typing, and verifies the executable in both its control and stored source before argument operations. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
 
 - **Starting point:** I add **Direct command** or choose it under Step type.
 - **My flow:** I enter **Executable**, edit each argument row, and use **Add
