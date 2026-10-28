@@ -111,7 +111,9 @@ test('reset confirms disposal, isolates examples, and retains layout and theme',
   await page.locator('#example').selectOption('parallel-review');
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Parallel draft');
   await page.reload();
-  await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Classify draft');
+  await page.locator('#example').selectOption('parallel-review');
+  await expect(page.getByLabel('Name', { exact: true })).not.toHaveValue('Parallel draft');
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
 });
 
 test('detaching an example retains actual selection and displayed canvas viewport', async ({ page }) => {

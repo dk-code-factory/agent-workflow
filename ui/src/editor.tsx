@@ -279,7 +279,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const activateDiagnostic = (diagnostic: Diagnostic) => {
     const pending = drafts.pending();
     if (pending) {
-      setNavigationNotice('Complete the pending inspector edit or press Escape to discard it, then activate the diagnostic again.');
+      setNavigationNotice('Complete the pending inspector edit or discard it using its controls, then activate the diagnostic again.');
       setPanel('inspector'); pending.reveal(); return;
     }
     setNavigationNotice('');
@@ -342,7 +342,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <><span className="aw-save-status" role="status" aria-label="Save status" data-failed={!!snapshot.saveError}>{snapshot.saving ? 'Saving…' : snapshot.saveError ? 'Save failed' : snapshot.dirty ? 'Unsaved changes' : 'Saved'}</span><button type="button" disabled={snapshot.saving} onMouseDown={event => event.preventDefault()} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button></>}</div>
     </header>
     {snapshot.pendingSourceReplacement !== undefined && <div className="aw-source-replacement" role="region" aria-label="Incoming source replacement">
-      <p role="status">The host sent new source. Your local changes are still open. Use incoming replaces the source and discards unapplied fields.</p>
+      <p role="status">The host sent new source. Choose whether to keep the current source or use the incoming source and discard unapplied fields.</p>
       <div className="aw-button-row"><button type="button" onPointerDown={event => event.preventDefault()} onClick={event => { const restoreFocus = event.currentTarget.parentElement?.contains(document.activeElement); attempt(() => { store.resolveSourceReplacement('keep-local'); if (restoreFocus) root.current?.querySelector<HTMLElement>('.aw-toolbar button')?.focus(); }); }}>Keep local</button><button type="button" onPointerDown={event => event.preventDefault()} onClick={() => attempt(() => { store.resolveSourceReplacement('use-incoming'); root.current?.querySelector<HTMLElement>('.aw-toolbar button')?.focus(); }, true)}>Use incoming</button></div>
     </div>}
     <nav className="aw-mobile-nav" aria-label="Panels">{(['palette', 'canvas', 'inspector'] as const).map(p => <button type="button" key={p} aria-pressed={panel === p} onClick={() => setPanel(p)}>{p}</button>)}</nav>

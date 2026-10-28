@@ -21,6 +21,7 @@ export class WorkflowDocument {
   private lastEditTime = 0;
   private savedSource?: string;
   private inspectorDirty = false;
+  private inspectorDraftEpoch = 0;
   private inspectorGeneration = 0;
   private protectionSource: string;
   private protectionEpoch = 0;
@@ -72,10 +73,11 @@ export class WorkflowDocument {
   }
   private acceptSource(source: string) {
     const { revision, pendingSourceReplacement } = this.snapshot;
+    const inspectorDraftEpoch = this.inspectorDraftEpoch;
     this.discardInspectorListeners.forEach(discard => discard());
-    // Discard can synchronously notify the host. A newer edit or candidate
-    // owns the next choice; never accept the older capture over it.
-    if (this.disposed || this.snapshot.revision !== revision || this.snapshot.pendingSourceReplacement !== pendingSourceReplacement) return;
+    // Discard can synchronously notify the host. A newer source edit, candidate
+    // or reported inspector draft owns the next choice.
+    if (this.disposed || this.snapshot.revision !== revision || this.snapshot.pendingSourceReplacement !== pendingSourceReplacement || this.inspectorDraftEpoch !== inspectorDraftEpoch) return;
     this.inspectorDirty = false;
     this.protectionSource = source; this.protectionEpoch++;
     this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined, hasLocalChanges: this.snapshot.source !== source, dirty: this.snapshot.source !== this.savedSource };
@@ -390,6 +392,7 @@ export class WorkflowDocument {
   setInspectorDirty(dirty: boolean) {
     if (this.disposed || this.inspectorDirty === dirty) return;
     this.inspectorDirty = dirty;
+    if (dirty) this.inspectorDraftEpoch++;
     this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource, hasLocalChanges: dirty || this.snapshot.source !== this.protectionSource };
     this.emit();
   }

@@ -584,6 +584,26 @@ describe('host source replacement protection', () => {
       if (!sourceEdit) expect(doc.getSnapshot().canUndo).toBe(false);
     });
   }
+  it('keeps inspector drafts reported by the final discard notification until another choice', () => {
+    const incoming = 'name: Incoming\njobs: {}';
+    let armed = false;
+    const doc = new WorkflowDocument({ source, onChange: snapshot => {
+      if (armed && !snapshot.hasLocalChanges) { armed = false; doc.setInspectorDirty(true); }
+    } });
+    const discard = vi.fn(() => doc.setInspectorDirty(false));
+    doc.onDiscardInspector(discard);
+    doc.setInspectorDirty(true); doc.update({ source: incoming });
+    const before = doc.getSnapshot(); const generation = doc.getInspectorGeneration();
+    armed = true; doc.resolveSourceReplacement('use-incoming');
+    expect(armed).toBe(false);
+    expect(doc.getSnapshot()).toEqual(before);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    expect(discard).toHaveBeenCalledTimes(1);
+    doc.resolveSourceReplacement('use-incoming');
+    expect(discard).toHaveBeenCalledTimes(2);
+    expect(doc.getSnapshot()).toMatchObject({ source: incoming, revision: before.revision + 1, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, canUndo: false });
+  });
   it('keeps a newer candidate sent directly by a discard callback without accepting the older one', () => {
     const first = 'name: Older incoming\njobs: {}';
     const newest = 'name: Newest incoming\njobs: {}';

@@ -408,6 +408,47 @@ test('custom discard failure preserves rejected fields and Keep local clears onl
   expect(kept.saveError).toContain('Existing save failure');
 });
 
+for (const narrow of [false, true]) {
+  test(`a fresh raw buffer from discard notification survives at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page }) => {
+    const ui = await rawInspector(page, false, false);
+    if (narrow) await ui.evaluate(element => { element.style.width = '620px'; });
+    const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.fill('Original raw draft');
+    const before = await snapshot(page);
+    await page.evaluate(source => {
+      const host = (window as any);
+      host.first.update({ source: source.replace('Hello', 'Incoming after notification') });
+      host.freshRawInput = document.querySelector('#a input[aria-label="Raw prompt"]');
+      host.beforeFreshCleanups = host.raw.cleanups;
+      let armed = true;
+      host.first.update({ onChange: (snapshot: import('../../../src').Snapshot) => {
+        if (armed && !snapshot.hasLocalChanges) {
+          armed = false;
+          host.freshRawInput.value = 'Fresh raw draft';
+          host.freshRawInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      } });
+    }, before.source);
+    const staged = await snapshot(page);
+    const notice = ui.getByRole('region', { name: 'Incoming source replacement' });
+    await notice.getByRole('button', { name: 'Use incoming', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(raw).toHaveValue('Fresh raw draft');
+    expect(await snapshot(page)).toEqual(staged);
+    expect(await raw.evaluate(element => element === (window as any).freshRawInput)).toBe(true);
+    expect(await page.evaluate(() => (window as any).raw.cleanups)).toBe(await page.evaluate(() => (window as any).beforeFreshCleanups));
+    expect(await page.evaluate(() => (window as any).raw.discards)).toBe(1);
+    await expect(notice).toBeVisible();
+    await notice.getByRole('button', { name: 'Use incoming', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(raw).toHaveValue('Incoming after notification');
+    expect(await page.evaluate(() => (window as any).raw.discards)).toBe(2);
+    expect((await snapshot(page))).toMatchObject({ revision: before.revision + 1, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+    expect(await snapshot(page)).toMatchObject({ source: before.source, canUndo: before.canUndo });
+  });
+}
+
 test('a newer source from custom discard survives the captured replacement without extra history', async ({ page }) => {
   const ui = await rawInspector(page);
   const raw = ui.getByLabel('Raw prompt', { exact: true });
@@ -533,7 +574,7 @@ for (const narrow of [false, true]) {
     const cleanups = await page.evaluate(() => (window as any).raw.cleanups);
     await diagnostic.click();
     await expect(raw).toHaveValue('Buffered during diagnostic navigation');
-    await expect(ui.locator('.aw-diagnostics [role=status]')).toContainText('Complete the pending inspector edit');
+    await expect(ui.locator('.aw-diagnostics [role=status]')).toContainText('Complete the pending inspector edit or discard it using its controls');
     expect(await snapshot(page)).toEqual(before);
     await diagnostic.focus(); await diagnostic.press('Enter');
     await expect(raw).toBeVisible();
