@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -66,6 +67,15 @@ func validateSavedRouting(environment []string) error {
 	return validateSavedRoutingWithDefaults(environment, home, []string{"/usr/share/containers", "/etc/containers"})
 }
 
+type routingSource uint8
+
+const (
+	containersConfig routingSource = iota
+	podmanConnections
+	dockerConfig
+	dockerContext
+)
+
 func validateSavedRoutingWithDefaults(environment []string, userHome string, system []string) error {
 	env := map[string]string{}
 	for _, entry := range environment {
@@ -77,13 +87,13 @@ func validateSavedRoutingWithDefaults(environment []string, userHome string, sys
 	// A provider may filter any of these overrides. Check the defaults it can
 	// reveal as well as the explicitly selected locations, including account home.
 	type routingFile struct {
-		path string
-		json bool
+		path   string
+		source routingSource
 	}
 	var files []routingFile
 	seen := map[routingFile]bool{}
-	add := func(path string, json bool) {
-		file := routingFile{filepath.Clean(path), json}
+	add := func(path string, source routingSource) {
+		file := routingFile{filepath.Clean(path), source}
 		if !seen[file] {
 			seen[file] = true
 			files = append(files, file)
@@ -107,29 +117,59 @@ func validateSavedRoutingWithDefaults(environment []string, userHome string, sys
 	for config := range configs {
 		containerDirs = append(containerDirs, filepath.Join(config, "containers"))
 	}
-	for _, dir := range containerDirs {
-		add(filepath.Join(dir, "containers.conf"), false)
-		dropins := filepath.Join(dir, "containers.conf.d")
-		entries, err := routingDirectory(dropins)
+	addDropins := func(path string) error {
+		entries, err := routingDirectory(path)
 		if err != nil {
 			return err
 		}
 		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".conf") {
-				add(filepath.Join(dropins, entry.Name()), false)
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".conf") {
+				add(filepath.Join(path, entry.Name()), containersConfig)
+			}
+		}
+		return nil
+	}
+	for _, dir := range containerDirs {
+		add(filepath.Join(dir, "containers.conf"), containersConfig)
+		if err := addDropins(filepath.Join(dir, "containers.conf.d")); err != nil {
+			return err
+		}
+	}
+	// system is ordered from distribution defaults to the administrator's
+	// directory. Only the latter supplies native rootless-specific overrides.
+	if len(system) > 0 {
+		uids := map[int]bool{os.Getuid(): os.Getuid() > 0}
+		if uid, err := strconv.Atoi(env["_CONTAINERS_ROOTLESS_UID"]); err == nil && uid > 0 {
+			uids[uid] = true
+		}
+		for uid, applicable := range uids {
+			if !applicable {
+				continue
+			}
+			path := filepath.Join(system[len(system)-1], "containers.rootless.conf")
+			add(path, containersConfig)
+			if err := addDropins(path + ".d"); err != nil {
+				return err
+			}
+			if err := addDropins(filepath.Join(path+".d", strconv.Itoa(uid))); err != nil {
+				return err
 			}
 		}
 	}
 	for config := range configs {
-		add(filepath.Join(config, "containers/podman-connections.json"), true)
+		add(filepath.Join(config, "containers/podman-connections.json"), podmanConnections)
 	}
 	for _, key := range []string{"CONTAINERS_CONF", "CONTAINERS_CONF_OVERRIDE", "PODMAN_CONNECTIONS_CONF"} {
 		if env[key] != "" {
-			add(env[key], key == "PODMAN_CONNECTIONS_CONF")
+			source := containersConfig
+			if key == "PODMAN_CONNECTIONS_CONF" {
+				source = podmanConnections
+			}
+			add(env[key], source)
 		}
 	}
 	for docker := range dockers {
-		add(filepath.Join(docker, "config.json"), true)
+		add(filepath.Join(docker, "config.json"), dockerConfig)
 		meta := filepath.Join(docker, "contexts/meta")
 		entries, err := routingDirectory(meta)
 		if err != nil {
@@ -137,13 +177,32 @@ func validateSavedRoutingWithDefaults(environment []string, userHome string, sys
 		}
 		for _, entry := range entries {
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-				add(filepath.Join(meta, entry.Name(), "meta.json"), true)
+				add(filepath.Join(meta, entry.Name(), "meta.json"), dockerContext)
 			}
 		}
 	}
-	for _, file := range files {
-		if err := validateRoutingFile(file.path, file.json); err != nil {
+	for i := 0; i < len(files); i++ {
+		file := files[i]
+		assignments, err := validateRoutingFile(file.path, file.source)
+		if err != nil {
 			return fmt.Errorf("saved container routing %s: %w", file.path, err)
+		}
+		// setupEnv runs after TOML loading, before connectionsConfigFile.
+		// These defaults can therefore select existing connection JSON, but
+		// do not cause another TOML configuration to be loaded in this process.
+		for _, assignment := range assignments {
+			key, value, ok := strings.Cut(assignment, "=")
+			if !ok || value == "" {
+				continue
+			}
+			switch key {
+			case "PODMAN_CONNECTIONS_CONF":
+				add(value, podmanConnections)
+			case "XDG_CONFIG_HOME":
+				add(filepath.Join(value, "containers/podman-connections.json"), podmanConnections)
+			case "HOME":
+				add(filepath.Join(value, ".config/containers/podman-connections.json"), podmanConnections)
+			}
 		}
 	}
 	return nil
@@ -160,98 +219,128 @@ func routingDirectory(path string) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
-func validateRoutingFile(path string, jsonFormat bool) error {
+// Return engine.env assignments only for containers.conf sources. JSON sources
+// cannot add further selectors, so following saved defaults is finite.
+func validateRoutingFile(path string, source routingSource) ([]string, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	const limit = 4 << 20
 	if !info.Mode().IsRegular() || info.Size() > limit {
-		return errors.New("routing configuration must be a regular file of at most 4 MiB")
+		return nil, errors.New("routing configuration must be a regular file of at most 4 MiB")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(data) > limit {
-		return errors.New("routing configuration grew beyond limit")
+		return nil, errors.New("routing configuration grew beyond limit")
 	}
-	var document map[string]any
-	if jsonFormat {
-		err = json.Unmarshal(data, &document)
-	} else {
-		err = toml.Unmarshal(data, &document)
-	}
-	if err != nil {
-		return errors.New("cannot parse routing configuration")
-	}
-	if !jsonFormat {
-		if engine, ok := document["engine"].(map[string]any); ok {
-			if assignments, ok := engine["env"].([]any); ok {
-				for _, assignment := range assignments {
-					if text, ok := assignment.(string); ok {
-						key, endpoint, _ := strings.Cut(text, "=")
-						if key == "CONTAINER_HOST" {
-							if err := validateDestinations(map[string]any{"uri": endpoint}); err != nil {
-								return err
-							}
-						}
-					}
-				}
+	switch source {
+	case containersConfig:
+		var document map[string]any
+		if err := toml.Unmarshal(data, &document); err != nil {
+			return nil, errors.New("cannot parse routing configuration")
+		}
+		return validateContainerConfig(document)
+	case podmanConnections:
+		var document struct {
+			Connection struct {
+				Connections map[string]struct{ URI string }
 			}
 		}
+		if err := json.Unmarshal(data, &document); err != nil {
+			return nil, errors.New("cannot parse routing configuration")
+		}
+		for _, destination := range document.Connection.Connections {
+			if err := validateContainerEndpoint(destination.URI); err != nil {
+				return nil, err
+			}
+		}
+	case dockerContext:
+		var document struct {
+			Endpoints map[string]json.RawMessage
+		}
+		if err := json.Unmarshal(data, &document); err != nil {
+			return nil, errors.New("cannot parse routing configuration")
+		}
+		if data, ok := document.Endpoints["docker"]; ok {
+			var endpoint struct{ Host string }
+			if err := json.Unmarshal(data, &endpoint); err != nil {
+				return nil, errors.New("cannot parse routing configuration")
+			}
+			if err := validateContainerEndpoint(endpoint.Host); err != nil {
+				return nil, err
+			}
+		}
+	case dockerConfig:
+		// Docker's CLI configuration has selection and authentication metadata;
+		// API hosts are stored in context Endpoints["docker"].Host instead.
+		var document map[string]any
+		if err := json.Unmarshal(data, &document); err != nil {
+			return nil, errors.New("cannot parse routing configuration")
+		}
 	}
-	return validateDestinations(document)
+	return nil, nil
 }
 
-func validateDestinations(value any) error {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, child := range v {
-			switch strings.ToLower(key) {
-			case "uri":
-				if endpoint, ok := child.(string); ok && endpoint != "" {
-					if !strings.HasPrefix(endpoint, "unix:///") || strings.ContainsAny(endpoint, "\x00\n\r") {
-						return errors.New("saved non-Unix container API transport is unsupported with socket containment")
+func validateContainerConfig(document map[string]any) ([]string, error) {
+	var assignments []string
+	// Native Podman TOML struct fields are case insensitive. Keep map entry
+	// names intact and inspect only Engine.Env and Engine.ServiceDestinations.
+	for key, value := range document {
+		if !strings.EqualFold(key, "engine") {
+			continue
+		}
+		engine, _ := value.(map[string]any)
+		for field, value := range engine {
+			switch {
+			case strings.EqualFold(field, "env"):
+				environment, _ := value.([]any)
+				for _, value := range environment {
+					assignment, ok := value.(string)
+					if !ok {
+						continue
+					}
+					assignments = append(assignments, assignment)
+					if key, endpoint, ok := strings.Cut(assignment, "="); ok && key == "CONTAINER_HOST" {
+						if err := validateContainerEndpoint(endpoint); err != nil {
+							return nil, err
+						}
 					}
 				}
-			case "endpoints":
-				if endpoints, ok := child.(map[string]any); ok {
-					for name, endpoint := range endpoints {
-						if !strings.EqualFold(name, "docker") {
-							continue
-						}
-						if docker, ok := endpoint.(map[string]any); ok {
-							for field, host := range docker {
-								if strings.EqualFold(field, "host") {
-									if err := validateDestinations(map[string]any{"uri": host}); err != nil {
-										return err
-									}
-								}
+			case strings.EqualFold(field, "service_destinations"):
+				destinations, _ := value.(map[string]any)
+				for _, value := range destinations {
+					destination, _ := value.(map[string]any)
+					for field, value := range destination {
+						if strings.EqualFold(field, "uri") {
+							endpoint, _ := value.(string)
+							if err := validateContainerEndpoint(endpoint); err != nil {
+								return nil, err
 							}
 						}
 					}
 				}
 			}
-			if err := validateDestinations(child); err != nil {
-				return err
-			}
 		}
-	case []any:
-		for _, child := range v {
-			if err := validateDestinations(child); err != nil {
-				return err
-			}
-		}
+	}
+	return assignments, nil
+}
+
+func validateContainerEndpoint(endpoint string) error {
+	if endpoint != "" && (!strings.HasPrefix(endpoint, "unix:///") || strings.ContainsAny(endpoint, "\x00\n\r")) {
+		return errors.New("saved non-Unix container API transport is unsupported with socket containment")
 	}
 	return nil
 }

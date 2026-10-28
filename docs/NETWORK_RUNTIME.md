@@ -122,11 +122,16 @@ configuration remain in place; restricted containers still receive no host
 socket or home mounts, including these authentication exceptions.
 
 Before executing the workload, a helper running as the caller inspects Podman's
-system/user `containers.conf`, drop-ins and `podman-connections.json`, plus
-Docker's saved context metadata. Configuration overrides `CONTAINERS_CONF`,
-`CONTAINERS_CONF_OVERRIDE`, `PODMAN_CONNECTIONS_CONF`, `XDG_CONFIG_HOME` and
-`DOCKER_CONFIG` are respected. All saved container destinations must use absolute
-Unix endpoints, including unselected connections/contexts. Non-Unix saved
+system/user `containers.conf`, caller-specific rootless files and drop-ins,
+`podman-connections.json`, and Docker's saved context metadata. It checks known
+account/home defaults alongside configuration overrides so filtering a selector
+cannot reveal an unchecked saved route. Native source roles determine JSON or
+TOML parsing even for custom filenames. Saved `engine.env` endpoint defaults and
+connection-file selectors are inspected as well. Configuration overrides
+`CONTAINERS_CONF`, `CONTAINERS_CONF_OVERRIDE`, `PODMAN_CONNECTIONS_CONF`,
+`XDG_CONFIG_HOME` and `DOCKER_CONFIG` are respected. All saved container
+destinations must use absolute Unix endpoints, including unselected
+connections/contexts. Non-Unix saved
 transports and unreadable/malformed configurations fail admission to execution.
 Move unsupported saved connections out of the selected configuration explicitly;
 the launcher never rewrites them. This check covers saved selection at launch,

@@ -1353,6 +1353,10 @@ func runClient() error {
 }
 
 func workload() error {
+	return workloadWithRouting(validateSavedRouting)
+}
+
+func workloadWithRouting(validate func([]string) error) error {
 	requestFile := os.NewFile(4, "request")
 	var req Request
 	if err := decodePayload(requestFile, &req); err != nil {
@@ -1368,7 +1372,7 @@ func workload() error {
 			return err
 		}
 	}
-	if err := validateSavedRouting(req.Env); err != nil {
+	if err := validate(req.Env); err != nil {
 		return err
 	}
 	binary, err := os.Executable()

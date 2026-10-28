@@ -27,6 +27,16 @@ func TestSavedContainerTransportAdmission(t *testing.T) {
 		{"podman-engine-env-ssh", ".config/containers/containers.conf", "[engine]\nenv=['CONTAINER_HOST=ssh://outside']\n", true},
 		{"podman-engine-env-unix", ".config/containers/containers.conf", "[engine]\nenv=['CONTAINER_HOST=unix:///saved/custom.sock']\n", false},
 		{"podman-engine-env-provider-assignments", ".config/containers/containers.conf", "[engine]\nenv=['HTTPS_PROXY=https://proxy', 'GIT_SSH_COMMAND=ssh provider', 'PROVIDER_URL=https://provider?key=value']\n", false},
+		{"podman-mixed-case-engine-env-tcp", ".config/containers/containers.conf", "[Engine]\nEnv=['CONTAINER_HOST=tcp://outside:2375']\n", true},
+		{"podman-mixed-case-engine-env-unix", ".config/containers/containers.conf", "[eNgInE]\nEnV=['CONTAINER_HOST=unix:///saved/custom.sock', 'PROVIDER_URI=ssh://provider', {append=true}]\n", false},
+		{"podman-mixed-case-destination-ssh", ".config/containers/containers.conf", "[Engine.Service_Destinations.saved]\nUrI='ssh://outside'\n", true},
+		{"podman-mixed-case-destination-unix", ".config/containers/containers.conf", "[eNgInE.SERVICE_DESTINATIONS.saved]\nuRi='unix:///saved/custom.sock'\n", false},
+		{"podman-container-env-is-unrelated", ".config/containers/containers.conf", "[containers]\nenv=['CONTAINER_HOST=tcp://inside-container:2375']\n[engine]\nuri='provider-metadata'\n", false},
+		{"podman-connection-metadata-uri", ".config/containers/podman-connections.json", `{"URI":"provider-metadata","Connection":{"Connections":{"saved":{"URI":"unix:///safe.sock","Metadata":{"Uri":"ci-job"}}}},"Farm":{"Uri":"farm-metadata"}}`, false},
+		{"podman-connection-mixed-case-uri", ".config/containers/podman-connections.json", `{"connection":{"connections":{"saved":{"uRi":"tcp://outside:2375"}}}}`, true},
+		{"docker-http-headers-uri", ".docker/config.json", `{"HttpHeaders":{"Uri":"ci-job-123","Host":"provider-metadata"},"Uri":"unrelated"}`, false},
+		{"docker-context-metadata-uri", ".docker/contexts/meta/custom/meta.json", `{"Uri":"ci-job-123","Metadata":{"Uri":"context-metadata"},"Endpoints":{"docker":{"Host":"unix:///safe.sock","Uri":"endpoint-metadata"},"kubernetes":{"Uri":"unrelated","Host":{"native":"metadata"}},"Docker":{"Host":"tcp://unselected-metadata:2375"}}}`, false},
+		{"docker-context-unsafe-with-metadata", ".docker/contexts/meta/custom/meta.json", `{"Uri":"ci-job-123","Endpoints":{"docker":{"Host":"ssh://outside"}}}`, true},
 		{"podman-local-selection", ".config/containers/containers.conf", "[engine]\nremote=false\n", false},
 		{"podman-remote-selection", ".config/containers/containers.conf", "[engine]\nremote=true\nactive_service='host'\n[engine.service_destinations.host]\nuri='unix:///saved/custom.sock'\n", false},
 		{"podman-saved-toml-tcp", ".config/containers/containers.conf", "[engine.service_destinations.host]\nuri='tcp://host:1234'\n", true},
@@ -74,7 +84,10 @@ func TestSavedRoutingOverridesAndBounds(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
 			}
-			body := `{"URI":"tcp://outside:2375"}`
+			body := `{"Connection":{"Connections":{"saved":{"URI":"tcp://outside:2375"}}}}`
+			if key == "DOCKER_CONFIG" {
+				body = `{"Endpoints":{"docker":{"Host":"tcp://outside:2375"}}}`
+			}
 			if key == "CONTAINERS_CONF" || key == "CONTAINERS_CONF_OVERRIDE" {
 				body = "[engine.service_destinations.saved]\nuri='tcp://outside:2375'\n"
 			}
@@ -90,10 +103,10 @@ func TestSavedRoutingOverridesAndBounds(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Repeat(" ", (4<<20)+1)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if validateRoutingFile(path, true) == nil {
+	if _, err := validateRoutingFile(path, podmanConnections); err == nil {
 		t.Fatal("unbounded routing file accepted")
 	}
-	if validateRoutingFile(dir, true) == nil {
+	if _, err := validateRoutingFile(dir, podmanConnections); err == nil {
 		t.Fatal("non-file configuration accepted")
 	}
 }
@@ -219,8 +232,10 @@ func TestSavedRoutingFilteredOverridesRevealDefaults(t *testing.T) {
 			}
 			path := paths[location]
 			body := "[engine]\nenv=['CONTAINER_HOST=ssh://outside']\n"
-			if strings.HasSuffix(path, ".json") {
-				body = `{"URI":"tcp://outside:2375"}`
+			if location == "account-connections" {
+				body = `{"Connection":{"Connections":{"saved":{"URI":"tcp://outside:2375"}}}}`
+			} else if location == "account-docker" || location == "home-docker" {
+				body = `{"Endpoints":{"docker":{"Host":"tcp://outside:2375"}}}`
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
@@ -354,5 +369,137 @@ func TestRoutingAdmissionNativeAggregateAndMembership(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.dir, "status.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected routing wrote durable membership: %v", err)
+	}
+}
+
+func TestSavedRoutingRootlessCallerSources(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("rootless defaults apply to non-root caller")
+	}
+	for _, relative := range []string{"containers.rootless.conf", "containers.rootless.conf.d/10-caller.conf", fmt.Sprintf("containers.rootless.conf.d/%d/20-caller.conf", os.Getuid())} {
+		for _, endpoint := range []string{"unix:///caller.sock", "tcp://outside:2375", "ssh://outside"} {
+			t.Run(relative+"/"+endpoint, func(t *testing.T) {
+				home := t.TempDir()
+				system := t.TempDir()
+				path := filepath.Join(system, relative)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("[Engine.Service_Destinations.saved]\nUri='"+endpoint+"'\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				// An unsafe file for another UID is unrelated to this caller.
+				other := filepath.Join(system, fmt.Sprintf("containers.rootless.conf.d/%d/99-other.conf", os.Getuid()+1))
+				if err := os.MkdirAll(filepath.Dir(other), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(other, []byte("[engine]\nenv=['CONTAINER_HOST=ssh://other-caller']\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				err := validateSavedRoutingWithDefaults([]string{"HOME=" + home}, home, []string{system})
+				if strings.HasPrefix(endpoint, "unix:///") {
+					if err != nil {
+						t.Fatalf("safe caller source rejected: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "saved non-Unix") {
+					t.Fatalf("caller source escaped validation: %v", err)
+				}
+			})
+		}
+	}
+
+	for _, relative := range []string{"containers.rootless.conf.d", fmt.Sprintf("containers.rootless.conf.d/%d", os.Getuid())} {
+		t.Run("unreadable/"+relative, func(t *testing.T) {
+			home, system := t.TempDir(), t.TempDir()
+			path := filepath.Join(system, relative)
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.Chmod(path, 0700); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := os.Chmod(path, 0100); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateSavedRoutingWithDefaults(nil, home, []string{system}); !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), path) {
+				t.Fatalf("rootless discovery suppressed caller error: %v", err)
+			}
+		})
+	}
+}
+
+func TestSavedRoutingEngineEnvironmentConnectionSelectors(t *testing.T) {
+	for _, key := range []string{"PODMAN_CONNECTIONS_CONF", "XDG_CONFIG_HOME", "HOME"} {
+		for _, endpoint := range []string{"unix:///selected.sock", "tcp://outside:2375", "ssh://outside"} {
+			t.Run(key+"/"+endpoint, func(t *testing.T) {
+				home := t.TempDir()
+				saved := t.TempDir()
+				value, path := saved, filepath.Join(saved, "containers/podman-connections.json")
+				if key == "HOME" {
+					path = filepath.Join(saved, ".config/containers/podman-connections.json")
+				} else if key == "PODMAN_CONNECTIONS_CONF" {
+					path = filepath.Join(saved, "connections.arbitrary-suffix")
+					value = path
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"Connection":{"Default":"saved","Connections":{"saved":{"URI":%q}}}}`, endpoint)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				config := filepath.Join(home, "containers.conf")
+				if err := os.WriteFile(config, []byte(fmt.Sprintf("[Engine]\nEnv=[%q]\n", key+"="+value)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				safe := filepath.Join(home, "safe-connections.json")
+				if err := os.WriteFile(safe, []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				for _, masks := range [][]string{nil, {"PODMAN_CONNECTIONS_CONF=" + safe, "XDG_CONFIG_HOME=" + home}} {
+					env := append([]string{"HOME=" + home, "CONTAINERS_CONF=" + config}, masks...)
+					err := routingPayloadForTest(Request{Env: env}, home)
+					if strings.HasPrefix(endpoint, "unix:///") {
+						if err != nil {
+							t.Fatalf("safe engine-selected connection rejected: %v", err)
+						}
+					} else if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "saved non-Unix") {
+						t.Fatalf("saved connection selector escaped admission: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRoutingSavedConnectionSelectorPrecedesMembership(t *testing.T) {
+	home := t.TempDir()
+	selected := filepath.Join(home, "saved-connections")
+	if err := os.WriteFile(selected, []byte(`{"Connection":{"Connections":{"saved":{"URI":"ssh://outside"}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, "containers.conf")
+	if err := os.WriteFile(config, []byte(fmt.Sprintf("[Engine]\nEnv=[%q]\n", "PODMAN_CONNECTIONS_CONF="+selected)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, socket := fixtureService(t)
+	launches := 0
+	s.memberCommand = func(string) *exec.Cmd {
+		launches++
+		return exec.Command("/bin/false")
+	}
+	s.checkRouting = func(req Request, _ *unix.Ucred, _ []uint32) error { return routingPayloadForTest(req, home) }
+	_, out := requestAt(t, socket, Request{Operation: "exec", Reference: s.status.Reference, ID: randomID(), Path: "/bin/true", Env: []string{"HOME=" + home, "CONTAINERS_CONF=" + config}}, true)
+	if out.Error == "" || !strings.Contains(out.Error, "saved non-Unix") {
+		t.Fatalf("engine-selected connection reached execution: %+v", out)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if launches != 0 || len(s.status.Members) != 0 {
+		t.Fatalf("engine-selected connection reached membership: launches=%d members=%d", launches, len(s.status.Members))
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "status.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected selector wrote durable membership: %v", err)
 	}
 }

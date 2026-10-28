@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -19,6 +20,23 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/socketfence"
 	"golang.org/x/sys/unix"
 )
+
+func TestMain(m *testing.M) {
+	// Only the test binary recognizes this entrypoint. Production workload()
+	// always inspects the caller account and system routing defaults.
+	if len(os.Args) == 3 && os.Args[1] == "__network_runtime_workload_fixture_v1" {
+		root := os.Args[2]
+		err := workloadWithRouting(func(env []string) error {
+			return validateSavedRoutingWithDefaults(env, filepath.Join(root, "account"), []string{filepath.Join(root, "system")})
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(125)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // This fake runs only under the deterministic test binary. It exercises the
 // production Unix protocol and lifetime fd without privileges or provider calls.

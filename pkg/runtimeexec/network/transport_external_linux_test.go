@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,7 +163,15 @@ func TestWorkloadGuardianCleanAckExit125AndDescriptorPrivacy(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer dummy.Close()
-			cmd.Args = []string{cmd.Path, "__network_runtime_workload_v1", "fixture"}
+			cmd.Args = []string{cmd.Path, "__network_runtime_workload_fixture_v1", t.TempDir()}
+			ambient := t.TempDir()
+			config := filepath.Join(ambient, "containers.conf")
+			if err := os.WriteFile(config, []byte("[engine.service_destinations.saved]\nuri='ssh://outside'\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Launch environment is intentionally hostile; only the sealed
+			// request and disposable native defaults may select routing inputs.
+			cmd.Env = append(cmd.Env, "HOME="+ambient, "CONTAINERS_CONF="+config)
 			if !trusted {
 				cmd.Path = "/bin/sh"
 				cmd.Args = []string{"/bin/sh", "-c", "exit 125"}
