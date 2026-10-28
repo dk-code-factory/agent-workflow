@@ -303,7 +303,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/shutdown" && r.Method == "POST" {
-		encode(map[string]bool{"stopping": true})
+		const response = "{\"stopping\":true}\n"
+		// Close may run before the handler returns and finishes chunked framing.
+		w.Header().Set("Content-Length", strconv.Itoa(len(response)))
+		_, _ = w.Write([]byte(response))
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
