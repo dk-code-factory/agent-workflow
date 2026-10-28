@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { once } from 'node:events';
+import { checkAPIFencing } from './api-fencing.mjs';
 const require = createRequire(resolve('ui/package.json'));
 if (!process.argv.includes('--run-privileged')) throw new Error('requires --run-privileged; uses sudo/rootful Podman and normal Chrome, no models');
 const { chromium } = require('@playwright/test');
@@ -79,12 +80,16 @@ try {
   run('sudo', ['-n', runtime, 'prepare', name, '--uid', String(process.getuid())]);
   run('sudo', ['-n', runtime, 'start', name]); started = true;
   ref = status().reference;
+  assert(status().capabilities.includes('container-api-fencing-v1'), 'installed runtime lacks container API fencing; drain, stop, prepare and restart with the current launcher');
   assert.equal(inside('podman', 'info', '--format', '{{.Store.GraphRoot}}'), hostStore);
   assert.equal(podman('image', 'inspect', image, '--format', '{{.Id}}').replace(/^sha256:/, ''), image.replace(/^sha256:/, ''));
   const identity = JSON.parse(inside(fixture, 'identity'));
   assert.equal(identity.uid, process.getuid()); assert.equal(identity.gid, process.getgid()); assert.equal(identity.endpoint, ref.endpoint);
   assert.notEqual(identity.netns, run('readlink', ['/proc/self/ns/net']));
   evidence.checks.push('identity, endpoint and cached rootful image store');
+  evidence.apiFencing = await checkAPIFencing({ runtime, name, dir, reference: ref, image, netns: identity.netns, ownedNetworks, ownedContainers });
+  await settled();
+  evidence.checks.push('actual Podman saved connections and Docker saved/default contexts remain runtime-bound without routing environment or hooks; original auth/helper access and explicit local Podman namespace preserved');
 
   assert.throws(() => inside('/bin/sh', '-c', 'exit 125'), { status: 125 });
   await settled();

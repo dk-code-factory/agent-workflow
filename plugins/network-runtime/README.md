@@ -67,11 +67,25 @@ termination: baseline and plugin both let a long command continue after a turn
 interrupt. Agent Workflow's invocation guardian remains a separate lifetime
 boundary. Engine-controlled stdio MCP is separately supervised.
 
-When selectors disappear, a saved client connection can reach an API outside the
-runtime even while the client remains namespaced. The hook is a routing
-guardrail, not mandatory enforcement of every execution path. Stronger API
-fencing and fallback closure are tracked for the whole PR in
-https://github.com/dk-code-factory/agent-workflow/issues/38. Restricted provider
+The hook restores public selectors, while the runtime launcher separately fences
+supported saved/default Podman and Docker API routing. Require
+`container-api-fencing-v1` in `agent-workflow-runtime status NAME` before new
+admission. Drain and stop an older service, prepare the matching launcher, then
+start and inspect status; replacing files alone does not upgrade a running
+service. Retained cleanup can still drain an older service.
+
+The launcher installs invocation-private read-only views of supported Podman
+configuration, connections and modules, Docker configuration/context metadata
+and default Unix API sockets. This survives stripped routing variables and
+absent, disabled or bypassed hooks. Authentication fields, authfiles and
+credential-helper paths retain access to the caller's original authentication.
+Explicit Podman `--remote=false` remains in the runtime namespaces. Unsupported
+selectors or unsafe configuration layouts reject launch. See the
+[supported configuration and upgrade details](../../docs/NETWORK_RUNTIME.md#container-api-configuration-boundary).
+
+The hook remains a routing guardrail; it supplies no additional authority over
+deliberately selected arbitrary API destinations or host-root escape. Fencing
+does not retroactively revoke previously accepted upgraded API streams. Restricted provider
 containers retain their socket/mount exclusions and receive no rootful API
 authority from this plugin. POSIX/local tool coverage does not imply remote
 executor or non-POSIX coverage.

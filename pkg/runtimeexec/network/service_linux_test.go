@@ -47,7 +47,7 @@ func fixtureService(t *testing.T) (*service, string) {
 	}
 	ref := Reference{Name: "test", Identity: randomID(), Generation: 1}
 	ref.Endpoint = Endpoint(ref.Name, ref.Identity)
-	s := &service{probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Healthy: true, Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
+	s := &service{probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Capabilities: []string{ContainerAPIFencing}, Healthy: true, Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +122,10 @@ func TestConcurrentMembershipDisconnectAndBusyStop(t *testing.T) {
 	s, socket := fixtureService(t)
 	// The production helper deliberately receives only fixed root environment.
 	// Inject the fixture selector through the command's argument via test flags.
+	s.mu.Lock()
 	original := s.memberCommand
 	s.memberCommand = func(p string) *exec.Cmd { cmd := original(p); cmd.Args = append(cmd.Args, "--", "fixture"); return cmd }
+	s.mu.Unlock()
 	// Test helper uses a fixed selector because production removes inherited env.
 
 	var clients []*net.UnixConn

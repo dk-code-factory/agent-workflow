@@ -28,6 +28,10 @@ const launchEnvironment = "AGENT_WORKFLOW_NETWORK_REQUEST"
 // including worst-case escaping. Payloads never travel in a socket packet.
 const maxLaunchPayload = 64 << 20
 
+// ContainerAPIFencing is required for new admissions. Older generations remain
+// usable for exact owned cleanup, but cannot launch workloads through this client.
+const ContainerAPIFencing = "container-api-fencing-v1"
+
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$`)
 
 type Reference struct {
@@ -75,7 +79,21 @@ type Status struct {
 	ForwardCount      int                   `json:"forward_count"`
 	MembersTruncated  bool                  `json:"members_truncated"`
 	ForwardsTruncated bool                  `json:"forwards_truncated"`
+	Capabilities      []string              `json:"capabilities,omitempty"`
 }
+
+func (s Status) admissionReady() error {
+	if !s.Healthy {
+		return errors.New("network runtime is unhealthy")
+	}
+	for _, capability := range s.Capabilities {
+		if capability == ContainerAPIFencing {
+			return s.Reference.Validate()
+		}
+	}
+	return errors.New("network runtime requires container-api-fencing-v1; drain, stop, prepare the upgraded launcher and start explicitly")
+}
+
 type Request struct {
 	Operation string    `json:"operation"`
 	Reference Reference `json:"reference"`
@@ -146,8 +164,8 @@ func Resolve(ctx context.Context, name string) (Reference, error) {
 	if err != nil {
 		return Reference{}, err
 	}
-	if !out.Status.Healthy {
-		return Reference{}, errors.New("network runtime is unhealthy")
+	if err := out.Status.admissionReady(); err != nil {
+		return Reference{}, err
 	}
 	return out.Status.Reference, out.Status.Reference.Validate()
 }
@@ -159,10 +177,10 @@ func Check(ctx context.Context, ref Reference) error {
 	if err != nil {
 		return err
 	}
-	if !out.Status.Healthy {
-		return errors.New("network runtime is unhealthy")
+	if out.Status.Reference != ref {
+		return errors.New("network runtime identity/generation changed")
 	}
-	return nil
+	return out.Status.admissionReady()
 }
 
 // CheckRetained fences owned recovery against replacement without admitting new work.
@@ -248,6 +266,9 @@ func Wrap(cmd *exec.Cmd, ref Reference, id string) (func(), error) {
 // Reserve fences container creation against busy stop. Recovery releases this
 // durable reservation only after exact container ownership/absence is proved.
 func Reserve(ctx context.Context, ref Reference, id string) error {
+	if err := Check(ctx, ref); err != nil {
+		return err
+	}
 	_, err := Call(ctx, ref.Name, Request{Operation: "reserve", Reference: ref, ID: id})
 	return err
 }

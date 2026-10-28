@@ -283,6 +283,12 @@ func init() {
 		err = probeNamespace(os.Args[2])
 	case "__network_runtime_workload_v1":
 		err = workload()
+	case "__network_runtime_fence_v1":
+		err = fenceWorkload()
+	case "__network_runtime_routing_plan_v1":
+		err = writeRoutingPlan(false)
+	case "__network_runtime_routing_verify_v1":
+		err = writeRoutingPlan(true)
 	case "__network_runtime_daemon_v1":
 		err = serve(os.Args[2])
 	case "__network_runtime_keeper_v1":
@@ -493,7 +499,7 @@ func serve(name string) error {
 	if err != nil {
 		return err
 	}
-	s := &service{netNS: netNS, mountNS: mountNS, config: cfg, dir: dir, run: run, binary: binary, keeper: keep, stop: make(chan struct{}), status: Status{Reference: Reference{Name: name, Identity: identity, Generation: cfg.Generation, Endpoint: Endpoint(name, identity)}, NetworkNamespace: networkNamespace, Members: map[string]Membership{}, Forwards: prior.Forwards}}
+	s := &service{netNS: netNS, mountNS: mountNS, config: cfg, dir: dir, run: run, binary: binary, keeper: keep, stop: make(chan struct{}), status: Status{Reference: Reference{Name: name, Identity: identity, Generation: cfg.Generation, Endpoint: Endpoint(name, identity)}, Capabilities: []string{ContainerAPIFencing}, NetworkNamespace: networkNamespace, Members: map[string]Membership{}, Forwards: prior.Forwards}}
 	configure := exec.Command("/usr/bin/nsenter", "--net=/proc/self/fd/3", "--mount=/proc/self/fd/4", "--", binary, "__network_runtime_configure_v1", run)
 	configure.ExtraFiles = []*os.File{netNS, mountNS}
 	configure.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
@@ -895,6 +901,11 @@ func (s *service) handle(c *net.UnixConn) {
 		respond(Response{Status: out}, errors.New("network runtime unhealthy or stopping"))
 		return
 	}
+	if err = s.status.admissionReady(); err != nil {
+		s.mu.Unlock()
+		respond(Response{}, err)
+		return
+	}
 	if err = s.health(); err != nil {
 		s.status.Healthy = false
 		s.mu.Unlock()
@@ -1055,25 +1066,19 @@ func runMember(path string) error {
 	if err := decodeSealedPayload(config, &launch); err != nil {
 		return err
 	}
-	// nsenter joins only mount/network namespaces. setpriv drops to the peer's
-	// account before the trusted guardian interprets any caller command or env.
+	// Join pinned namespaces, then establish invocation-private routing mounts
+	// before dropping to the peer's account and invoking the process guardian.
 	config.Close()
-	groups := ""
-	for _, g := range launch.Groups {
-		if groups != "" {
-			groups += ","
-		}
-		groups += strconv.FormatUint(uint64(g), 10)
+	args := []string{"--net=/proc/self/fd/5", "--mount=/proc/self/fd/6", "--", launch.Binary, "__network_runtime_fence_v1", path}
+	// Carry sealed admission metadata, never a caller-controlled root environment.
+	data, _ := json.Marshal(launch)
+	staging := filepath.Join(filepath.Dir(launch.Receipt), "fence-"+launch.Request.ID)
+	if err := os.Mkdir(staging, 0700); err != nil {
+		return err
 	}
-	args := []string{"--net=/proc/self/fd/5", "--mount=/proc/self/fd/6", "--", "/usr/bin/setpriv", "--reuid", strconv.FormatUint(uint64(launch.UID), 10), "--regid", strconv.FormatUint(uint64(launch.GID), 10)}
-	if groups == "" {
-		args = append(args, "--clear-groups")
-	} else {
-		args = append(args, "--groups", groups)
-	}
-	args = append(args, launch.Binary, "__network_runtime_workload_v1", path)
-	// The launch file is root-only. Pass its data over fd4 after dropping UID.
-	data, _ := json.Marshal(launch.Request)
+	// Only this supervisor owns the freshly created directory. All mounts live
+	// in its child's namespace, which ends after guardian descendant cleanup.
+	defer os.Remove(staging)
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1167,6 +1172,9 @@ func runClient() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if err := Check(ctx, req.Reference); err != nil {
+		return err
+	}
 	c, err := connect(ctx, req.Reference.Name)
 	if err != nil {
 		return err
@@ -1242,6 +1250,7 @@ func workload() error {
 func cloneStatus(in Status) Status {
 	const limit = 128
 	out := in
+	out.Capabilities = append([]string(nil), in.Capabilities...)
 	out.MemberCount, out.ForwardCount = len(in.Members), len(in.Forwards)
 	ids := make([]string, 0, len(in.Members))
 	for id := range in.Members {
