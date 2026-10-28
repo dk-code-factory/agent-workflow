@@ -16,9 +16,15 @@ const RunStatusInterrupted = "interrupted"
 
 var ErrExternalInput = errors.New("external input conflict")
 
-// Preserve conflict classification for callers while identifying only a pause
-// that prevents consumption of an otherwise accepted answer.
-var errInputPaused = fmt.Errorf("%w: execution paused", ErrExternalInput)
+// ErrExternalInputPaused identifies a durable pause that prevented consumption
+// of an accepted answer. It wraps ErrExternalInput. Journals may wrap this signal;
+// joining a genuine failure preserves that failure instead of suspending it.
+var ErrExternalInputPaused = fmt.Errorf("%w: execution paused", ErrExternalInput)
+
+// ErrExternalInputCanceled identifies a durable Cancel that alone prevented
+// answer consumption. It wraps ErrExternalInput; journals may wrap the signal,
+// while joined genuine failures must remain observable.
+var ErrExternalInputCanceled = fmt.Errorf("%w: execution canceled", ErrExternalInput)
 
 // ExternalInputAnswer is data interpreted and validated by the host application.
 // AnswerID is unique across the journal, including canceled and consumed gates.
@@ -65,6 +71,10 @@ type ExternalInputJournal interface {
 	EnsureInputGate(context.Context, ExternalInputGate) (ExternalInputGate, error)
 	Inputs(context.Context, string) ([]ExternalInputGate, error)
 	AcceptInput(context.Context, string, string, ExternalInputAnswer) (ExternalInputGate, error)
+	// ConsumeInput returns ErrExternalInputPaused or ErrExternalInputCanceled
+	// when a durable pause or Cancel alone prevents consumption. Pause preserves
+	// accepted state; Cancel preserves retained answer/history while invalidating
+	// its gate. Return genuine failures too if control alone did not explain denial.
 	ConsumeInput(context.Context, string) (ExternalInputGate, error)
 	InputControl(context.Context, string) (ExternalInputControl, error)
 	// QueueResume controls the root handle: unanswered gates remain suspended
@@ -288,10 +298,10 @@ func (s *SQLiteStore) ConsumeInput(ctx context.Context, id string) (ExternalInpu
 		return g, err
 	}
 	if c.Canceled {
-		return g, fmt.Errorf("%w: execution canceled", ErrExternalInput)
+		return g, ErrExternalInputCanceled
 	}
 	if c.Paused {
-		return g, errInputPaused
+		return g, ErrExternalInputPaused
 	}
 	if g.State == "consumed" {
 		return g, nil
@@ -486,7 +496,7 @@ func (e *Executor) executeInputWait(ctx context.Context, step Step, ec expressio
 		return result, err
 	}
 	g, err = j.ConsumeInput(ctx, g.ID)
-	if errors.Is(err, errInputPaused) {
+	if onlyError(err, ErrExternalInputPaused) || onlyError(err, ErrExternalInputCanceled) {
 		return result, nil
 	}
 	if err != nil {
@@ -538,14 +548,17 @@ func (e *Executor) validateInputRecovery(ctx context.Context, origin string) err
 }
 
 // recoverInputWaits runs only under exclusive workspace ownership, after
-// generic owner-loss recovery. No uncertain physical effect is replayed.
+// generic owner-loss recovery. Safe lifecycle cancellation also retains its
+// gate, while explicit Cancel and uncertain physical effects remain blocked.
 func (s *SQLiteStore) recoverInputWaits(ctx context.Context) error {
-	runs, err := s.listRecords(ctx, `SELECT r.record,r.generation,r.owner FROM runs r WHERE r.status='needs_attention' AND EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id) AND r.origin_id=r.id`)
+	runs, err := s.listRecords(ctx, `SELECT r.record,r.generation,r.owner FROM runs r WHERE r.status IN ('needs_attention','canceled') AND EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id) AND r.origin_id=r.id`)
 	if err != nil {
 		return err
 	}
 	for _, r := range runs {
-		if r.FailureClass != "owner_loss" {
+		ownerLost := r.Status == RunStatusNeedsAttention && r.FailureClass == "owner_loss"
+		lifecycleCanceled := r.Status == RunStatusCanceled && r.FailureClass == "canceled"
+		if !ownerLost && !lifecycleCanceled {
 			continue
 		}
 		if err = s.CheckInvocationCleanup(ctx, r.ID); err != nil {
@@ -578,7 +591,11 @@ func (s *SQLiteStore) recoverInputWait(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
-	if c.Canceled {
+	var cancellations int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM cancellations WHERE run_id=?", r.ID).Scan(&cancellations); err != nil {
+		return err
+	}
+	if c.Canceled || cancellations > 0 {
 		return nil
 	}
 	r.Status = RunStatusWaiting

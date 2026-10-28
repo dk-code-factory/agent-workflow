@@ -1111,7 +1111,8 @@ func TestExternalInputPauseDeniedConsumption(t *testing.T) {
 			if failure == "cancel" {
 				want = RunStatusCanceled
 			}
-			if result == nil || result.Status != want || (failure == "pause" && err != nil) || (failure != "pause" && err == nil) {
+			pureControl := failure == "pause" || failure == "cancel"
+			if result == nil || result.Status != want || (pureControl && err != nil) || (!pureControl && err == nil) {
 				t.Fatalf("consumption result %+v %v", result, err)
 			}
 			stored, _, loadErr := s.Load(ctx, run.ID)

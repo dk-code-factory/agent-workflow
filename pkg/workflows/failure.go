@@ -62,9 +62,17 @@ func classifyFailure(err error) string {
 // cancellationOnly distinguishes an interrupted operation from independent
 // failures joined with its cancellation. Wrappers retain their normal identity;
 // every branch of an aggregate must be cancellation before diagnostics may clear.
-func cancellationOnly(err error) bool {
+func cancellationOnly(err error) bool { return onlyError(err, context.Canceled) }
+
+// onlyError permits clearing a known signal only when every aggregate branch
+// is that signal. Match its exact identity before unwrapping: pause denial
+// itself wraps the broader external-input conflict family.
+func onlyError(err, target error) bool {
 	if err == nil {
 		return false
+	}
+	if err == target {
+		return true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		found := false
@@ -73,16 +81,16 @@ func cancellationOnly(err error) bool {
 				continue
 			}
 			found = true
-			if !cancellationOnly(cause) {
+			if !onlyError(cause, target) {
 				return false
 			}
 		}
 		return found
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		return cancellationOnly(wrapped.Unwrap())
+		return onlyError(wrapped.Unwrap(), target)
 	}
-	return errors.Is(err, context.Canceled)
+	return errors.Is(err, target)
 }
 
 // executionFailureStatus arbitrates errors before their owning step or job is

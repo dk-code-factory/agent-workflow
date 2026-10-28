@@ -569,8 +569,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		childReq.actionContracts = req.actionContracts
 		childReq.SecretRefs = req.SecretRefs
 		childReq.RetryUncertain = req.RetryUncertain
-		hash := sha256.Sum256([]byte(req.runID + "/" + id + fmt.Sprint(req.iteration)))
-		childReq.runID = hex.EncodeToString(hash[:16])
+		childReq.runID = reusableChildID(req.runID, id, req.iteration)
 		if logical := nativeString(req.Metadata, "iteration_logical_run_id"); req.ordered {
 			if logical == "" {
 				logical = req.runID
@@ -597,8 +596,24 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		child, err := e.execute(ctx, ref, childReq, all, slots, depth+1, existing)
 		if err != nil {
 			result := fail(err)
-			if child != nil && child.Status == RunStatusNeedsAttention {
-				result.Status = RunStatusNeedsAttention
+			if child != nil {
+				result.ChildRunID, result.ChildJobs = child.ID, child.Jobs
+				result.Outputs = child.Outputs
+				if child.Status == RunStatusNeedsAttention {
+					result.Status = RunStatusNeedsAttention
+				}
+			}
+			suspended, proofErr := e.inputSuspension(context.WithoutCancel(ctx), child, err, req)
+			if proofErr != nil {
+				combined := errors.Join(err, proofErr)
+				result.Error, result.FailureClass = combined.Error(), classifyFailure(combined)
+				if result.Status != RunStatusNeedsAttention {
+					result.Status = executionFailureStatus(ctx, combined)
+				}
+				return result
+			}
+			if suspended {
+				result.Status, result.Error, result.FailureClass = RunStatusInterrupted, "", ""
 			}
 			return result
 		}

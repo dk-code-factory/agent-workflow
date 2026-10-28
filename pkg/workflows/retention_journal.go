@@ -44,6 +44,11 @@ func (s *SQLiteStore) BeginRetention(ctx context.Context, record Retention, owne
 		if existing.Root != record.Root {
 			return record, fmt.Errorf("retention workspace identity changed")
 		}
+		if existing.State != "complete" {
+			if _, err := s.OriginRuns(ctx, record.OriginID); err != nil {
+				return record, err
+			}
+		}
 		return existing, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return record, err
@@ -98,8 +103,12 @@ func (s *SQLiteStore) FinishRetention(ctx context.Context, record Retention, own
 	}
 	defer tx.Rollback()
 	for _, run := range runs {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted')", run.ID); err != nil {
-			return err
+		result, deleteErr := tx.ExecContext(ctx, retentionDeleteRun, run.ID, run.ID)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		if count, _ := result.RowsAffected(); count != 1 {
+			return fmt.Errorf("run changed during retention cleanup")
 		}
 	}
 	record.State = "complete"

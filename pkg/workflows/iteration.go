@@ -266,12 +266,13 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			// A canceled child can have committed its gate before publishing a
 			// waiting result. Reuse that physical attempt only for a pure
 			// interruption; genuine failures still take the retry guard below.
-			interruptedWait := last.Status == "interrupted" && last.FailureClass == "canceled" && child != nil && child.Status == RunStatusCanceled && child.FailureClass == "canceled"
-			waitOutcome := child != nil && child.Status != RunStatusFailed && (child.Status != RunStatusNeedsAttention || child.FailureClass == "owner_loss")
-			if loadErr == nil && waitOutcome && (last.Status == "pending" || last.Status == "waiting" || interruptedWait) && child.Status != RunStatusSucceeded {
-				waiting, waitErr := e.childInputWait(ctx, child, req)
+			if loadErr == nil && child.Status != RunStatusSucceeded && (last.Status == "pending" || last.Status == "waiting" || last.Status == "interrupted") {
+				waiting, waitErr := e.inputSuspension(ctx, child, nil, req)
 				if waitErr != nil {
 					return fail(waitErr)
+				}
+				if !waiting && child.Status == RunStatusWaiting {
+					waiting = true
 				}
 				if waiting {
 					waitingChild = child
@@ -365,24 +366,11 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		// Safe gate suspensions remain nonterminal observations. Reserving a
 		// terminal interrupted result here would prevent a later pause of this
 		// same child/attempt from recording its next durable question.
-		suspended, waiting := cancellationOnly(childErr) && child != nil && child.Status == RunStatusCanceled, false
-		if suspended {
-			for _, job := range child.Jobs {
-				waiting = waiting || job.Status == RunStatusWaiting
-				if job.Status != RunStatusSucceeded && job.Status != RunStatusSkipped && job.Status != RunStatusWaiting {
-					suspended = false
-				}
-			}
+		suspended, proofErr := e.inputSuspension(context.WithoutCancel(ctx), child, childErr, req)
+		if proofErr != nil {
+			return fail(errors.Join(childErr, proofErr))
 		}
-		if suspended && waiting {
-			retained, waitErr := e.childInputWait(context.WithoutCancel(ctx), child, req)
-			if waitErr != nil {
-				return fail(errors.Join(childErr, waitErr))
-			}
-			suspended = retained
-		} else {
-			suspended = false
-		}
+		suspended = suspended && child.Status != RunStatusWaiting
 		if suspended || (childErr == nil && child != nil && child.Status == RunStatusWaiting) {
 			r.Status = "waiting"
 			r.Error = ""
@@ -414,7 +402,24 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		if childErr != nil {
 			r.Error = childErr.Error()
 			r.FailureClass = classifyFailure(childErr)
+			// Provider/usage skips cannot admit another item after an
+			// acknowledged Cancel while the owner context is still healthy.
+			canceled := false
+			if input := externalInputJournal(e.Store); input != nil && (r.FailureClass == "provider_failure" || r.FailureClass == "usage_exhausted") {
+				origin := nativeString(req.Metadata, "origin_run_id")
+				if origin == "" {
+					origin = req.runID
+				}
+				control, controlErr := input.InputControl(context.WithoutCancel(ctx), origin)
+				if controlErr != nil {
+					return fail(errors.Join(childErr, controlErr))
+				}
+				canceled = control.Canceled
+			}
 			switch {
+			case canceled:
+				r.Status = "interrupted"
+				stop = true
 			case child != nil && child.Status == RunStatusNeedsAttention:
 				r.Status = "interrupted"
 				stop = true

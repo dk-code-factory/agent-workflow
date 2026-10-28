@@ -487,7 +487,7 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	if err := s.CheckInvocationCleanup(ctx, id); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted') AND NOT EXISTS(SELECT 1 FROM runs origin WHERE origin.id=runs.origin_id AND origin.status IN ('waiting','interrupted'))", id)
+	res, err := s.db.ExecContext(ctx, retentionDeleteRun+" AND NOT EXISTS(SELECT 1 FROM runs origin WHERE origin.id=runs.origin_id AND origin.status IN ('waiting','interrupted'))", id, id)
 	if err != nil {
 		return err
 	}
