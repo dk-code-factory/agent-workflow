@@ -2,7 +2,7 @@
 // unpredictable owned name; cleanup never prunes or resets shared Podman state.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readlinkSync, readdirSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -40,6 +40,27 @@ const spawnInside = (...args) => { const c = spawn(runtime, ['exec', name, '--',
 const settled = async () => { for (let n = 0; n < 100; n++) { if (Object.values(status().members).every(m => m.state === 'cleaned')) return; await sleep(100); } throw new Error('members did not clean'); };
 const snapshot = () => ['link', 'address', 'route'].map(kind => JSON.parse(run('ip', ['-j', kind, 'show'])));
 const stable = data => JSON.stringify(data, (key, value) => ['valid_life_time', 'preferred_life_time'].includes(key) ? undefined : value);
+const subscribedMonitor = async child => {
+  // Match the child's actual NETLINK_ROUTE socket inode and multicast groups.
+  // A spawned process alone does not establish that monitoring is subscribed.
+  const required = 0x551; // RTMGRP_LINK, IPv4/IPv6 IFADDR and ROUTE.
+  for (let attempt = 0; attempt < 200; attempt++) {
+    assert.equal(child.exitCode, null, 'host monitor exited before subscribing');
+    assert.equal(child.signalCode, null, 'host monitor was signalled before subscribing');
+    try {
+      const sockets = new Set(readdirSync(`/proc/${child.pid}/fd`).flatMap(fd => {
+        try { return [readlinkSync(`/proc/${child.pid}/fd/${fd}`).match(/^socket:\[(\d+)\]$/)?.[1]].filter(Boolean); }
+        catch { return []; }
+      }));
+      for (const row of readFileSync(`/proc/${child.pid}/net/netlink`, 'utf8').trim().split('\n').slice(1)) {
+        const fields = row.trim().split(/\s+/), groups = Number.parseInt(fields[3], 16);
+        if (fields[1] === '0' && sockets.has(fields[9]) && (groups & required) === required) return fields[3];
+      }
+    } catch {}
+    await sleep(10);
+  }
+  throw new Error('host monitor multicast subscription unconfirmed');
+};
 const evidence = { runtime: name, checks: [], browserRequests: 0 };
 try {
   for (const [output, source] of [[runtime, './cmd/agent-workflow-runtime'], [workflow, './cmd/agent-workflow'], [fixture, './conformance/network-runtime/fixture'], [join(dir, 'guardian'), './cmd/agent-workflow-guardian']]) run('go', ['build', '-o', output, source], { env: { ...process.env, CGO_ENABLED: '0' } });
@@ -53,6 +74,7 @@ try {
   monitor.stdout.on('data', data => { monitorOutput += data; });
   monitor.stderr.on('data', data => { monitorErrors += data; });
   await once(monitor, 'spawn');
+  const subscriptionMask = await subscribedMonitor(monitor);
   const before = stable(snapshot());
   run('sudo', ['-n', runtime, 'prepare', name, '--uid', String(process.getuid())]);
   run('sudo', ['-n', runtime, 'start', name]); started = true;
@@ -63,6 +85,23 @@ try {
   assert.equal(identity.uid, process.getuid()); assert.equal(identity.gid, process.getgid()); assert.equal(identity.endpoint, ref.endpoint);
   assert.notEqual(identity.netns, run('readlink', ['/proc/self/ns/net']));
   evidence.checks.push('identity, endpoint and cached rootful image store');
+
+  const hookInput = join(dir, 'hook-input.json');
+  writeFileSync(hookInput, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'printf "%s\\n" "$DOCKER_HOST" "$CONTAINER_HOST" "$AGENT_WORKFLOW_NETWORK_RUNTIME"; exit 7', fixture_option: 'kept' } }));
+  const hook = join(root, 'plugins/network-runtime/hooks/pre-tool-use.sh');
+  const rewritten = JSON.parse(inside('/bin/sh', '-c', 'DOCKER_HOST=unix:///stale.sock; CONTAINER_HOST=unix:///stale.sock; export DOCKER_HOST CONTAINER_HOST; /bin/sh "$1" < "$2"', 'hook-fixture', hook, hookInput));
+  assert.equal(rewritten.hookSpecificOutput.permissionDecision, 'allow');
+  assert.equal(rewritten.hookSpecificOutput.updatedInput.fixture_option, 'kept');
+  const executed = spawn(runtime, ['exec', name, '--', '/bin/sh', '-c', rewritten.hookSpecificOutput.updatedInput.command], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(executed);
+  let hookOutput = ''; executed.stdout.on('data', data => { hookOutput += data; });
+  const [hookCode] = await once(executed, 'close'); assert.equal(hookCode, 7);
+  assert.deepEqual(hookOutput.trim().split('\n'), [ref.endpoint, ref.endpoint, name]);
+  const staleRef = { ...ref, generation: ref.generation + 1 };
+  const denied = JSON.parse(inside('/bin/sh', '-c', 'AGENT_WORKFLOW_NETWORK_REFERENCE="$1"; export AGENT_WORKFLOW_NETWORK_REFERENCE; /bin/sh "$2" < "$3"', 'hook-stale', JSON.stringify(staleRef), hook, hookInput));
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  const outside = JSON.parse(run('/bin/sh', [hook], { input: readFileSync(hookInput), env: { PATH: process.env.PATH, DOCKER_HOST: ref.endpoint, CONTAINER_HOST: ref.endpoint, AGENT_WORKFLOW_NETWORK_RUNTIME: name, AGENT_WORKFLOW_NETWORK_REFERENCE: JSON.stringify(ref) } }));
+  assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny', 'host namespace spoof accepted');
+  evidence.checks.push('production trampoline and real runtime/helper repair stale selectors, preserve exit/options and reject generation/namespace mismatch');
 
   // Each frontend has its own umask; the service must never apply it globally.
   run('python3', ['-c', `import concurrent.futures,os,stat,subprocess
@@ -139,6 +178,7 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   evidence.browserRequests = responses.length;
   assert.equal(stable(snapshot()), before, 'host links/addresses/routes changed');
   assert.equal(monitor.exitCode, null, 'host network monitor stopped early');
+  assert.equal(monitor.signalCode, null, 'host network monitor was signalled early');
   assert.equal(monitorOutput.trim(), '', 'transient host link/address/route change');
   evidence.checks.push('normal Chrome overlapping HTTP/2 and unchanged host links/addresses/routes');
   await browser.close(); browser = undefined;
@@ -225,10 +265,11 @@ else:raise AssertionError('active daemon-loss cleanup/receipt unconfirmed')`]);
   await sleep(100);
   assert.equal(stable(snapshot()), before, 'host links/addresses/routes changed during restart');
   assert.equal(monitor.exitCode, null, 'host network monitor stopped early');
+  assert.equal(monitor.signalCode, null, 'host network monitor was signalled early');
   const monitorExit = once(monitor, 'exit'); monitor.kill('SIGTERM'); await monitorExit;
   assert.equal(monitorErrors.trim(), '', 'host network monitor failed');
   assert.equal(monitorOutput.trim(), '', 'transient host link/address/route change');
-  evidence.hostMonitor = { command: 'ip monitor link address route', events: monitorOutput, stderr: monitorErrors, snapshotsUnchanged: true };
+  evidence.hostMonitor = { command: 'ip monitor link address route', subscriptionMask, events: monitorOutput, stderr: monitorErrors, snapshotsUnchanged: true };
   evidence.checks.push('continuous host network monitor reports no transient link/address/route changes');
   console.log('PASS', JSON.stringify(evidence));
 } finally {

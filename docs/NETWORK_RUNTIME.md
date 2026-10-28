@@ -1,7 +1,7 @@
 # Shared Linux network runtime
 
-`execution.network-runtime` keeps agent and command networking effects in an
-explicitly prepared, persistent runtime. It applies to local and container
+`execution.network-runtime` places agent and command processes and the selected
+Podman service in an explicitly prepared, persistent runtime. It applies to local and container
 execution. A top-level selection also contains controller-launched stdio MCP
 processes; roles cannot override that selection by choosing local execution or
 another runtime. HTTP MCP transport remains a controller connection.
@@ -18,13 +18,18 @@ agents:
 The runtime supports **Linux, rootful Podman, Netavark/Aardvark and slirp4netns**.
 Docker Engine and other platforms are rejected when containment is selected.
 Configurations without a selection retain their existing execution behavior.
-This separates network effects; it is not a security sandbox against arbitrary
-host-root access, an explicitly selected host Docker API, or an unrestricted
-privileged container. Host-interface tests require a separate execution policy.
+Networking operations made through that service remain in its namespaces.
+Pathname Unix sockets are not redirected by network namespaces: lost routing
+values can select a saved API outside the runtime. Stronger API fencing is
+tracked in [#38](https://github.com/dk-code-factory/agent-workflow/issues/38).
+This is not a security sandbox against host-root access, other API destinations
+or unrestricted privileged containers.
 
 ## Operator preparation
 
-Build with `make build`, then explicitly enroll the existing operator and start:
+Build with `make build`, or use the `agent-workflow-runtime` executable from an
+extracted distribution in place of the source-build `./bin/` paths below. Then
+explicitly enroll the existing operator and start:
 
 ```sh
 sudo ./bin/agent-workflow-runtime prepare development --uid "$(id -u)"
@@ -44,7 +49,9 @@ The host needs `/usr/bin/podman`, `/usr/bin/slirp4netns`, `/usr/bin/nsenter`,
 `/usr/bin/setpriv`, `/usr/sbin/ip`, and namespace/mount privileges. Rootless
 Podman, Docker, and macOS are outside this runtime's compatibility boundary.
 Workflows never prepare or start the service automatically. Missing, changed,
-or unhealthy runtime identity fails admission and launch without host fallback.
+or unhealthy runtime identity rejects engine admission and launch without a
+replacement runtime. This does not fence every API selection made by arbitrary
+workload clients; see [Codex plugin coverage](#codex-routing-plugin).
 
 Root-owned registration, generation, membership receipts, forwarding ownership
 and the installed launcher live in `/var/lib/agent-workflow/runtimes/NAME`.
@@ -122,10 +129,76 @@ those separate-repository launches.
 
 Local workload environments receive `DOCKER_HOST`, `CONTAINER_HOST` and
 `AGENT_WORKFLOW_NETWORK_RUNTIME`. Conflicting context selectors are removed.
-Codex CLI/app-server shell filtering explicitly retains these values. The
-engine's container policy continues to exclude the runtime socket, host homes,
+The Codex plugin below repairs these values for covered shell tool calls after
+native filtering/login/snapshot preparation. Provider configuration arguments
+are passed through unchanged. The engine's container policy continues to exclude the runtime socket, host homes,
 SSH agents and controller credentials from container mounts. Selecting a
 runtime does not grant a restricted container access to the rootful API.
+
+## Codex routing plugin
+
+Install the bundled plugin from the source checkout or extracted distribution:
+
+```sh
+codex plugin marketplace add /absolute/path/to/agent-workflow
+codex plugin add network-runtime@agent-workflow
+```
+
+Explicitly enable the plugin and its native plugin/hook features, then use
+`/hooks` in Codex to review and trust its current definition. Installation alone
+does not trust hooks; changed definitions require another review. These are
+operator actions. Agent Workflow does not install or trust plugins in your
+normal Codex configuration automatically. See the
+[native installation](https://developers.openai.com/plugins/build/plugins) and
+[hook trust](https://learn.chatgpt.com/docs/hooks) instructions.
+
+Start a fresh local Codex session through the prepared runtime:
+
+```sh
+agent-workflow-runtime exec development -- codex --enable plugins --enable hooks
+agent-workflow-runtime exec development -- codex --enable plugins --enable hooks exec --profile work 'Run the tests'
+```
+
+Native profiles, authentication, approval and sandbox rules remain applicable.
+The new command prefix changes approval-rule matching, so an existing allow rule
+may require fresh approval. The plugin registers no approval-request hook and
+must not be used to bypass native approval or trust review.
+
+The POSIX trampoline validates the runtime name and invokes the protected
+`/var/lib/agent-workflow/runtimes/NAME/launcher` shared Go hook handler. Use a
+matching launcher build when preparing the runtime; an old/missing helper is
+normally denied by the wrapper. The independent, nonsecret admitted-reference
+marker preserves identity/generation even if login or snapshot setup changes
+the public selectors. The handler checks the exact healthy runtime and current
+network namespace before returning a rewrite. It executes no tool or privileged
+launch service. Codex runs the command in its original shell/sandbox with the
+original options and success-path exit status. The prefix sets exactly the three
+routing values and stops before the original command if export fails.
+
+The tested Codex 0.164.0 coverage includes direct shell tools, code-mode nested
+dispatch, native named profiles, restrictive allowlists, snapshot/login setup,
+unrelated filtered values, approval denial and sandbox restrictions. Outside
+reserved runtime context the globally installed plugin is a no-op. Covered
+ordinary malformed-context, runtime-probe and helper failures return valid deny
+responses where the handler/wrapper can process the failure. Production use
+requires Go launcher and POSIX shell availability, not Python.
+
+Raw hook termination/timeouts, untrusted/disabled/modified hooks, a later
+competing rewrite, direct `command/exec` RPC and native Codex-managed MCP startup
+can bypass repair. Engine-controlled stdio MCP remains separately supervised.
+Private `codex-app-server` roles do not inherit user plugins/config/trust from
+normal `CODEX_HOME`; their hook coverage is not automatic. Do not copy that user
+state into managed provider directories or relax managed-worker/tool-subset
+certification gates. Use the native `codex-cli`/standalone setup above for the
+documented operator installation path.
+
+The hook is a POSIX/local routing guardrail, not mandatory enforcement of every
+execution path. The recorded turn-interrupt experiment let long commands
+continue in both baseline and plugin variants, so it proves no new per-turn
+descendant termination. The Go invocation guardian remains the separate lifetime
+boundary. Saved outside-API fallback, hook bypass and stronger fencing are
+PR-wide [follow-up #38](https://github.com/dk-code-factory/agent-workflow/issues/38),
+not a security claim established by successful covered calls.
 
 ## Shared storage and forwarding
 
@@ -167,9 +240,12 @@ Failed admission health still permits inspection and cleanup of an existing
 owned container through its retained identity, generation and endpoint. Recovery
 checks the same daemon/store identity, exact container ID and ownership labels
 before removal, then proves absence before releasing the reservation. The
-unhealthy API proxy permits only recovery reads and deletion by full container
-ID, checking every HTTP request; admission, launch, forwarding and general API
-operations remain blocked. Unavailable API evidence or failed inspection/listing
+API connections accepted after health loss permit only recovery reads and
+deletion by full container ID, checking every HTTP request. Connections accepted
+while healthy retain byte-stream forwarding for attached execution and protocol
+upgrades; a later health failure does not retroactively filter those streams.
+Engine admission, launch and forwarding remain health-gated. Stronger API
+revocation/fencing belongs to follow-up #38. Unavailable API evidence or failed inspection/listing
 retains uncertainty and never counts as absence.
 
 A clean restart or daemon crash produces a new identity/generation and a new
@@ -204,4 +280,15 @@ never publishes GitHub resources. It checks three independent callers, DNS,
 HTTPS, API access, published ports, runtime-loopback forwarding, cached-image
 reuse, integrated local agent/command and container command execution, restart,
 crash recovery, and overlapping Chrome HTTP/2 requests while checking unchanged
-host links, addresses and routes. Root-owned receipts remain for operator audit.
+host links, addresses and routes. The monitor's actual netlink multicast
+subscription is confirmed before runtime churn. It also invokes the production
+plugin trampoline/Go helper against the real runtime, including stale public
+selectors and rejection of changed-generation or host-namespace context.
+Root-owned receipts remain for operator audit.
+
+The separate [production plugin experiment](../conformance/network-runtime/codex-plugin.md)
+uses installed Codex with disposable configuration/trust/auth state, production
+assets, local fake services and no external network route. Its root-authenticated
+runtime control/status is a fixture, not the real Podman runtime. Together these
+checks establish the respective native-hook and actual-runtime interactions;
+neither establishes mandatory API fencing or live model certification.

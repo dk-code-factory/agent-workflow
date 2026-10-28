@@ -96,7 +96,7 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 	default:
 		return nil, fmt.Errorf("unknown provider %q", agent.Provider)
 	}
-	args = append(args, providerArgs(agent)...)
+	args = append(args, agent.Args...)
 	if req.RepairOnly {
 		return nil, fmt.Errorf("CLI compatibility adapters have no verified tool-free repair mode; use claude-sdk or output.repair-attempts: 0")
 	}

@@ -16,6 +16,7 @@ dist:
 release-check: release-tooling-test
 	python3 scripts/validate-release.py "$(TAG)"
 release-tooling-test:
+	go mod download
 	python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
 .PHONY: ui-install ui-check ui-test ui-build ui-browser-test

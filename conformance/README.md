@@ -48,3 +48,11 @@ The Linux/rootful Podman and normal-Chrome HTTP/2 check is a separate explicit
 opt-in: `node conformance/network-runtime/acceptance.mjs --run-privileged`.
 It uses uniquely owned fixtures, no models and no GitHub publication. See
 [network runtime verification](../docs/NETWORK_RUNTIME.md#verification).
+
+The separate [production Codex plugin experiment](network-runtime/codex-plugin.md)
+uses installed Codex, production assets and the real Go helper with disposable
+configuration/trust, local fake Responses/API services and no external route.
+Its root-authenticated control/status fixture is fake; the Podman harness above
+separately verifies the production helper against an actual prepared runtime.
+Hook skip/failure/bypass and saved outside-API fallback remain documented
+[#38](https://github.com/dk-code-factory/agent-workflow/issues/38) follow-up limits.

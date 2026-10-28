@@ -191,7 +191,7 @@ func (c Config) Validate() error {
 				return fmt.Errorf("agent %s: turn-timeout must be positive", id)
 			}
 		}
-		if agent.Authentication.CredentialEnv == "GH_TOKEN" || agent.Authentication.CredentialEnv == "GITHUB_TOKEN" || agent.Authentication.CredentialEnv == "SSH_AUTH_SOCK" || agent.Authentication.CredentialEnv == "DOCKER_HOST" || agent.Authentication.CredentialEnv == "CONTAINER_HOST" || agent.Authentication.CredentialEnv == "DOCKER_CONTEXT" || agent.Authentication.CredentialEnv == "CONTAINER_CONNECTION" || agent.Authentication.CredentialEnv == "AGENT_WORKFLOW_NETWORK_RUNTIME" {
+		if agent.Authentication.CredentialEnv == "GH_TOKEN" || agent.Authentication.CredentialEnv == "GITHUB_TOKEN" || agent.Authentication.CredentialEnv == "SSH_AUTH_SOCK" || agent.Authentication.CredentialEnv == "DOCKER_HOST" || agent.Authentication.CredentialEnv == "CONTAINER_HOST" || agent.Authentication.CredentialEnv == "DOCKER_CONTEXT" || agent.Authentication.CredentialEnv == "CONTAINER_CONNECTION" || agent.Authentication.CredentialEnv == "AGENT_WORKFLOW_NETWORK_RUNTIME" || agent.Authentication.CredentialEnv == network.ReferenceEnvironment {
 			return fmt.Errorf("agent %s: controller credential/environment reference cannot be forwarded to a provider", id)
 		}
 		if agent.Execution.Mode != "" && agent.Execution.Mode != "local" && agent.Execution.Mode != "container" {

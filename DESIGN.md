@@ -166,6 +166,24 @@ forwarding binds host 127.0.0.1 and can reach runtime loopback; only the runtime
 TAP enables route_localnet. Namespace, DNS, API, slirp and forwarding prerequisite
 failure closes admission. Docker and non-Linux containment are unsupported.
 
+Stock Codex keeps native configuration, profiles, authentication, approvals and
+sandbox handling. An explicitly installed, enabled and trusted PreToolUse/Bash
+plugin restores the three admitted routing values inside covered local POSIX
+tool commands. A shared Go handler validates an independent admitted-reference
+marker and the healthy runtime namespace; the trampoline invokes the protected
+prepared launcher. Original provider arguments stay unchanged. Native permission
+requests remain native, although the added prefix changes approval-rule matching.
+Normal handler failures deny covered work where a valid response can be emitted.
+
+This plugin is a routing guardrail. Forced/skipped hook failure, later rewrites,
+direct command RPC and native Codex-managed MCP startup can bypass it. Pathname
+Unix sockets remain accessible according to existing host authority, so lost
+selectors can reach a saved API outside the namespace. Mandatory API fencing and
+fallback closure are PR-wide follow-up
+[#38](https://github.com/dk-code-factory/agent-workflow/issues/38). Private managed
+provider state does not inherit user plugin/trust/configuration; managed policy
+and restricted container socket exclusions remain unchanged.
+
 Stop and membership admission serialize under one owner. Container creation
 reserves membership durably before effects and cleanup releases it only after
 verified removal. Busy/uncertain stop is refused. Restart reconciles native

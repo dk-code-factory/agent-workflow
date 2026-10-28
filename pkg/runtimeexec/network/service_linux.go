@@ -489,7 +489,11 @@ func serve(name string) error {
 	if err = waitReady(sr); err != nil {
 		return fmt.Errorf("outbound networking initialization failed: %w", err)
 	}
-	s := &service{netNS: netNS, mountNS: mountNS, config: cfg, dir: dir, run: run, binary: binary, keeper: keep, stop: make(chan struct{}), status: Status{Reference: Reference{Name: name, Identity: identity, Generation: cfg.Generation, Endpoint: Endpoint(name, identity)}, Members: map[string]Membership{}, Forwards: prior.Forwards}}
+	networkNamespace, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", netNS.Fd()))
+	if err != nil {
+		return err
+	}
+	s := &service{netNS: netNS, mountNS: mountNS, config: cfg, dir: dir, run: run, binary: binary, keeper: keep, stop: make(chan struct{}), status: Status{Reference: Reference{Name: name, Identity: identity, Generation: cfg.Generation, Endpoint: Endpoint(name, identity)}, NetworkNamespace: networkNamespace, Members: map[string]Membership{}, Forwards: prior.Forwards}}
 	configure := exec.Command("/usr/bin/nsenter", "--net=/proc/self/fd/3", "--mount=/proc/self/fd/4", "--", binary, "__network_runtime_configure_v1", run)
 	configure.ExtraFiles = []*os.File{netNS, mountNS}
 	configure.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}

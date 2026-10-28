@@ -8,6 +8,15 @@ import sys
 import tarfile
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else "dist").resolve()
+source_root = Path(__file__).resolve().parents[1]
+plugin_assets = {
+    ".agents/plugins/marketplace.json": 0o644,
+    "plugins/network-runtime/.codex-plugin/plugin.json": 0o644,
+    "plugins/network-runtime/hooks/hooks.json": 0o644,
+    "plugins/network-runtime/hooks/pre-tool-use.sh": 0o755,
+    "plugins/network-runtime/README.md": 0o644,
+}
+helpers = ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance"]
 def digest_file(path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -41,6 +50,20 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
         for entry in members:
             if not (entry.isfile() or entry.isdir()) or entry.name.startswith("/") or ".." in Path(entry.name).parts or "node_modules" in Path(entry.name).parts or ".agent-workflow" in Path(entry.name).parts:
                 raise SystemExit("archive contains unsafe/private/unlocked content")
+        for name, mode in plugin_assets.items():
+            if name not in names:
+                raise SystemExit("archive missing " + name)
+            entry = source.getmember(prefix + "/" + name)
+            if not entry.isfile() or entry.mode != mode or source.extractfile(entry).read() != (source_root / name).read_bytes():
+                raise SystemExit("archive plugin content/mode mismatch: " + name)
+        bundled_plugin_files = {entry.name.removeprefix(prefix + "/") for entry in members if entry.isfile()
+                                and entry.name.startswith(prefix + "/plugins/network-runtime/")}
+        if bundled_plugin_files != {name for name in plugin_assets if name.startswith("plugins/")}:
+            raise SystemExit("archive plugin asset set mismatch")
+        for name in helpers:
+            entry = source.getmember(prefix + "/" + name)
+            if not entry.isfile() or entry.mode != 0o755 or entry.size == 0:
+                raise SystemExit("archive helper content/mode mismatch: " + name)
         metadata = json.load(source.extractfile(prefix + "/build.json"))
         if metadata["source_fingerprint"] == "unrecorded":
             raise SystemExit("archive lacks exact source fingerprint")

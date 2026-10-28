@@ -19,6 +19,9 @@ import (
 const Registry = "/var/lib/agent-workflow/runtimes"
 const RunRoot = "/run/agent-workflow-runtimes"
 
+// ReferenceEnvironment carries the nonsecret reference admitted before provider launch.
+const ReferenceEnvironment = "AGENT_WORKFLOW_NETWORK_REFERENCE"
+
 const launchEnvironment = "AGENT_WORKFLOW_NETWORK_REQUEST"
 
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$`)
@@ -59,10 +62,11 @@ type Forward struct {
 	ID        int    `json:"id"`
 }
 type Status struct {
-	Reference Reference             `json:"reference"`
-	Healthy   bool                  `json:"healthy"`
-	Members   map[string]Membership `json:"members"`
-	Forwards  []Forward             `json:"forwards"`
+	Reference        Reference             `json:"reference"`
+	Healthy          bool                  `json:"healthy"`
+	NetworkNamespace string                `json:"network_namespace"`
+	Members          map[string]Membership `json:"members"`
+	Forwards         []Forward             `json:"forwards"`
 }
 type Request struct {
 	Operation string    `json:"operation"`
@@ -178,16 +182,17 @@ func Environment(env []string, ref Reference) []string {
 	if env == nil {
 		env = os.Environ()
 	}
-	out := make([]string, 0, len(env)+3)
+	out := make([]string, 0, len(env)+4)
 	for _, v := range env {
 		k, _, _ := strings.Cut(v, "=")
 		switch k {
-		case "DOCKER_HOST", "CONTAINER_HOST", "DOCKER_CONTEXT", "CONTAINER_CONNECTION", "AGENT_WORKFLOW_NETWORK_RUNTIME", launchEnvironment, "AGENT_WORKFLOW_NETWORK_TERMINAL":
+		case "DOCKER_HOST", "CONTAINER_HOST", "DOCKER_CONTEXT", "CONTAINER_CONNECTION", "AGENT_WORKFLOW_NETWORK_RUNTIME", ReferenceEnvironment, launchEnvironment, "AGENT_WORKFLOW_NETWORK_TERMINAL":
 			continue
 		}
 		out = append(out, v)
 	}
-	return append(out, "DOCKER_HOST="+ref.Endpoint, "CONTAINER_HOST="+ref.Endpoint, "AGENT_WORKFLOW_NETWORK_RUNTIME="+ref.Name)
+	data, _ := json.Marshal(ref) // Reference contains only strings and an integer.
+	return append(out, "DOCKER_HOST="+ref.Endpoint, "CONTAINER_HOST="+ref.Endpoint, "AGENT_WORKFLOW_NETWORK_RUNTIME="+ref.Name, ReferenceEnvironment+"="+string(data))
 }
 
 // Wrap rewrites an unstarted command to the shared launch client. Its streams,

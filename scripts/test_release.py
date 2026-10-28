@@ -1,13 +1,16 @@
 """Deterministic release rejection tests; no live services or maintainer keys."""
 import copy
 import fnmatch
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -22,6 +25,166 @@ def module(name):
 
 gate = module('validate-release')
 publisher = module('publish-release')
+
+class NetworkPluginTests(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1]
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='network-plugin-')
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        # Only the test copy changes the fixed protected registry prefix.
+        self.registry = self.directory / 'fixture registry'
+        self.plugin = self.directory / "plugin space ' literal $(touch SHOULD_NOT_EXIST)"
+        shutil.copytree(self.root / 'plugins/network-runtime', self.plugin)
+        wrapper = self.plugin / 'hooks/pre-tool-use.sh'
+        production = wrapper.read_text()
+        self.assertEqual(production.count('/var/lib/agent-workflow/runtimes/'), 1)
+        wrapper.write_text(production.replace('/var/lib/agent-workflow/runtimes/', str(self.registry) + '/'))
+        self.input_path = self.directory / 'input'
+        self.environment = {'PATH': '/nonexistent', 'PLUGIN_ROOT': str(self.plugin),
+                            'FIXTURE_INPUT': str(self.input_path)}
+        hooks = json.loads((self.plugin / 'hooks/hooks.json').read_text())['hooks']
+        self.assertEqual(set(hooks), {'PreToolUse'})
+        registration, = hooks['PreToolUse']
+        self.assertEqual(registration['matcher'], '^Bash$')
+        handler, = registration['hooks']
+        self.assertEqual(handler['type'], 'command')
+        self.assertFalse(handler.get('async', False))
+        self.assertGreaterEqual(handler['timeout'], 10)
+        self.command = handler['command']
+        self.assertEqual(self.command, '/bin/sh "$PLUGIN_ROOT/hooks/pre-tool-use.sh"')
+
+    def run_hook(self, payload=b'{"tool_name":"Bash","tool_input":{"command":"printf original","yield_time_ms":20}}\n', **environment):
+        result = subprocess.run(['/bin/sh', '-c', self.command], input=payload, capture_output=True,
+                                cwd=self.directory, env=dict(self.environment, **environment), timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, b'')
+        self.assertFalse((self.directory / 'SHOULD_NOT_EXIST').exists())
+        self.assertLess(len(result.stdout), 1024 * 1024 + 1)
+        return json.loads(result.stdout)
+
+    def helper(self, body, name='selected'):
+        launcher = self.registry / name / 'launcher'
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.write_text('#!/bin/sh\n' + body)
+        launcher.chmod(0o755)
+
+    def assert_denied(self, **environment):
+        output = self.run_hook(**environment)
+        self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertNotIn('updatedInput', output['hookSpecificOutput'])
+
+    def test_host_noop_and_native_catalog(self):
+        self.assertEqual(self.run_hook(DOCKER_HOST='unix:///ordinary-host', CONTAINER_HOST='ssh://ordinary'), {})
+        manifest = json.loads((self.plugin / '.codex-plugin/plugin.json').read_text())
+        catalog = json.loads((self.root / '.agents/plugins/marketplace.json').read_text())
+        self.assertEqual(manifest['name'], 'network-runtime')
+        self.assertEqual(catalog['name'], 'agent-workflow')
+        entry, = catalog['plugins']
+        self.assertEqual(entry['name'], manifest['name'])
+        self.assertEqual(entry['source'], {'source': 'local', 'path': './plugins/network-runtime'})
+        self.assertEqual(entry['policy']['installation'], 'AVAILABLE')
+        self.assertFalse(self.input_path.exists())
+
+    def test_partial_empty_and_unsafe_context_denies_before_helper(self):
+        self.helper('/bin/cat > "$FIXTURE_INPUT"\nexit 9\n')
+        for environment in [dict(AGENT_WORKFLOW_NETWORK_RUNTIME='selected'),
+                            dict(AGENT_WORKFLOW_NETWORK_REFERENCE='{}'),
+                            dict(AGENT_WORKFLOW_NETWORK_RUNTIME='', AGENT_WORKFLOW_NETWORK_REFERENCE=''),
+                            *[dict(AGENT_WORKFLOW_NETWORK_RUNTIME=name, AGENT_WORKFLOW_NETWORK_REFERENCE='{}')
+                              for name in ['../selected', '/selected', 'x/../selected', '-selected', '_selected',
+                                           'x' * 25, 'é', 'selected\n', 'selected;id']]]:
+            with self.subTest(environment=environment):
+                self.assert_denied(**environment)
+        self.assertFalse(self.input_path.exists())
+
+    def test_missing_old_nonzero_and_unrecognized_helpers_deny(self):
+        selected = dict(AGENT_WORKFLOW_NETWORK_RUNTIME='selected', AGENT_WORKFLOW_NETWORK_REFERENCE='{}')
+        self.assert_denied(**selected)
+        for body in ['exit 0\n', "printf '%s\\n' 'usage: old launcher'\n",
+                     "printf '%s\\n' 'unsafe diagnostic' >&2\nexit 9\n",
+                     "printf '%s\\n' '{malformed'\n",
+                     "printf '%s\\n' 'AGENT_WORKFLOW_CODEX_HOOK_V1'\n",
+                     "printf '%s\\n' 'AGENT_WORKFLOW_CODEX_HOOK_V1' '{}'\nexit 1\n"]:
+            with self.subTest(body=body):
+                self.helper(body)
+                self.assert_denied(**selected)
+
+    def test_matching_helper_receives_original_stdin_and_mode(self):
+        expected = {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
+                                        'updatedInput': {'command': "export DOCKER_HOST='unix:///selected'; printf original", 'yield_time_ms': 20}}}
+        body = '[ "$1" = __agent_workflow_codex_hook_v1 ] && [ "$#" = 1 ] || exit 3\n'
+        body += '/bin/cat > "$FIXTURE_INPUT"\n'
+        body += "printf '%s\\n' AGENT_WORKFLOW_CODEX_HOOK_V1 " + shlex.quote(json.dumps(expected)) + '\n'
+        payload = b' { "tool_name": "Bash", "tool_input": {"command":"printf original", "yield_time_ms":20} } \n'
+        for name in ['selected', 'A', 'a_0-' + 'x' * 20]:
+            self.helper(body, name)
+            for selectors in [{}, dict(DOCKER_HOST='unix:///stale', CONTAINER_HOST='unix:///missing')]:
+                with self.subTest(name=name, selectors=selectors):
+                    output = self.run_hook(payload, AGENT_WORKFLOW_NETWORK_RUNTIME=name,
+                                           AGENT_WORKFLOW_NETWORK_REFERENCE='{}', **selectors)
+                    self.assertEqual(output, expected)
+                    self.assertEqual(self.input_path.read_bytes(), payload)
+
+    def test_oversized_helper_output_is_bounded_denial(self):
+        self.helper("printf '%s\\n' AGENT_WORKFLOW_CODEX_HOOK_V1 " + shlex.quote('x' * (1024 * 1024 + 100)) + '\n')
+        self.assert_denied(AGENT_WORKFLOW_NETWORK_RUNTIME='selected', AGENT_WORKFLOW_NETWORK_REFERENCE='{}')
+
+
+class PluginArchiveTests(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1]
+    assets = {'.agents/plugins/marketplace.json': 0o644,
+              'plugins/network-runtime/.codex-plugin/plugin.json': 0o644,
+              'plugins/network-runtime/hooks/hooks.json': 0o644,
+              'plugins/network-runtime/hooks/pre-tool-use.sh': 0o755,
+              'plugins/network-runtime/README.md': 0o644}
+
+    def verify_fixture(self, directory, change=None):
+        directory = Path(directory)
+        for os_name in ['linux', 'darwin']:
+            for arch in ['amd64', 'arm64']:
+                files = {name: ((self.root / name).read_bytes(), mode) for name, mode in self.assets.items()}
+                for name in ['agent-workflow', 'agent-workflow-runtime', 'agent-workflow-guardian', 'workflow-conformance']:
+                    files[name] = (b'fixture executable', 0o755)
+                for name in ['agents.yml', 'LICENSE', 'NOTICE', 'licenses/index.json', 'bridge/claude/bridge.mjs', 'bridge/claude/package-lock.json']:
+                    files[name] = (b'fixture', 0o644)
+                files['build.json'] = (json.dumps({'source_fingerprint': 'a' * 64, 'os': os_name, 'arch': arch}).encode(), 0o644)
+                if change:
+                    change(files)
+                archive = directory / f'agent-workflow-fixture-{os_name}-{arch}.tar.gz'
+                with tarfile.open(archive, 'w:gz') as bundle:
+                    prefix = tarfile.TarInfo('fixture')
+                    prefix.type = tarfile.DIRTYPE
+                    bundle.addfile(prefix)
+                    for name, (data, mode) in files.items():
+                        entry = tarfile.TarInfo('fixture/' + name)
+                        entry.size, entry.mode = len(data), mode
+                        bundle.addfile(entry, io.BytesIO(data))
+        (directory / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n'
+                                                    for p in sorted(directory.glob('*.tar.gz'))))
+        return subprocess.run(['python3', str(self.root / 'scripts/verify-release.py'), str(directory)], capture_output=True, text=True)
+
+    def test_all_platform_assets_and_helper_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.verify_fixture(directory)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(json.loads(result.stdout)['verified_archives']), 4)
+
+    def test_reject_missing_changed_extra_and_nonexecutable_assets(self):
+        hook = 'plugins/network-runtime/hooks/pre-tool-use.sh'
+        changes = [lambda files: files.pop(hook),
+                   lambda files: files.__setitem__(hook, (b'changed', 0o755)),
+                   lambda files: files.__setitem__(hook, (files[hook][0], 0o644)),
+                   lambda files: files.__setitem__('plugins/network-runtime/unexpected', (b'extra', 0o644)),
+                   lambda files: files.__setitem__('agent-workflow-runtime', (b'fixture', 0o644)),
+                   lambda files: files.pop('agent-workflow-runtime'),
+                   lambda files: files.__setitem__('agent-workflow', (b'', 0o755))]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                result = self.verify_fixture(directory, change)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('archive ', result.stderr)
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
@@ -161,8 +324,10 @@ class WorkerPackagingTests(unittest.TestCase):
                         shutil.copy2(source, destination / source.name)
                     copies += 1
             self.assertGreater(copies, 0, 'guardian stage must copy its build sources')
+            # The copied Docker context has no Git metadata. Ignore unrelated
+            # ancestor repositories while testing its offline dependency closure.
             result = subprocess.run(
-                ['go', 'build', '-trimpath', '-o', str(Path(directory) / 'guardian'), './cmd/agent-workflow-guardian'],
+                ['go', 'build', '-trimpath', '-buildvcs=false', '-o', str(Path(directory) / 'guardian'), './cmd/agent-workflow-guardian'],
                 cwd=context, capture_output=True, text=True, timeout=120,
                 env=dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH='amd64',
                          GOWORK='off', GOPROXY='off', GOTOOLCHAIN='auto'))

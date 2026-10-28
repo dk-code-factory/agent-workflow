@@ -270,8 +270,9 @@ func TestReferenceAndEnvironment(t *testing.T) {
 	if changed.Validate() == nil {
 		t.Fatal("reused endpoint accepted")
 	}
-	env := Environment([]string{"HOME=/caller", "DOCKER_HOST=unix:///host", "CONTAINER_CONNECTION=host", "GH_TOKEN=preserved-for-command"}, ref)
-	expected := map[string]bool{"HOME=/caller": true, "DOCKER_HOST=" + ref.Endpoint: true, "CONTAINER_HOST=" + ref.Endpoint: true, "AGENT_WORKFLOW_NETWORK_RUNTIME=test": true, "GH_TOKEN=preserved-for-command": true}
+	env := Environment([]string{"HOME=/caller", "DOCKER_HOST=unix:///host", "CONTAINER_CONNECTION=host", "GH_TOKEN=preserved-for-command", ReferenceEnvironment + "=stale-reference"}, ref)
+	refData, _ := json.Marshal(ref)
+	expected := map[string]bool{ReferenceEnvironment + "=" + string(refData): true, "HOME=/caller": true, "DOCKER_HOST=" + ref.Endpoint: true, "CONTAINER_HOST=" + ref.Endpoint: true, "AGENT_WORKFLOW_NETWORK_RUNTIME=test": true, "GH_TOKEN=preserved-for-command": true}
 	for _, v := range env {
 		if !expected[v] {
 			t.Fatal(v)
@@ -364,5 +365,20 @@ func TestUnauthorizedPeerAndServerAreRejected(t *testing.T) {
 	var b [1]byte
 	if _, err = c.Read(b[:]); err == nil {
 		t.Fatal("unenrolled peer accepted")
+	}
+}
+
+func TestStatusExposesHeldNetworkNamespace(t *testing.T) {
+	s, socket := fixtureService(t)
+	s.mu.Lock()
+	s.status.NetworkNamespace = "net:[12345]"
+	ref := s.status.Reference
+	s.mu.Unlock()
+	for _, operation := range []string{"status", "check"} {
+		connection, response := requestAt(t, socket, Request{Operation: operation, Reference: ref}, false)
+		connection.Close()
+		if response.Error != "" || response.Status.NetworkNamespace != "net:[12345]" || response.Status.Reference != ref || !response.Status.Healthy {
+			t.Fatalf("namespace status missing: %+v", response)
+		}
 	}
 }
