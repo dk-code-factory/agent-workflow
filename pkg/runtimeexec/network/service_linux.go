@@ -52,6 +52,7 @@ type service struct {
 	dir, run, binary string
 	keeper           *exec.Cmd
 	stopping         bool
+	statusPending    bool
 	stop             chan struct{}
 }
 
@@ -116,6 +117,37 @@ func trustedDir(path string) error {
 	return nil
 }
 
+// publicDir corrects only explicitly selected managed traversal directories.
+// Validate trust before granting access, including when umask masked creation.
+func publicDir(path string) error {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return err
+	}
+	if err := trustedDir(path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0755)
+}
+func publicLauncher(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
+		return errors.New("runtime launcher must be root owned and not group/world writable")
+	}
+	return f.Chmod(0755)
+}
+
+func writeResolver(path string) error {
+	if err := os.WriteFile(path, []byte("nameserver 10.0.2.3\noptions timeout:2 attempts:2\n"), 0644); err != nil {
+		return err
+	}
+	// Mounted as /etc/resolv.conf for callers after the credential drop.
+	return os.Chmod(path, 0644)
+}
+
 // Prepare enrolls only an existing rootful Podman authority. Starting a rootful
 // API is equivalent to unrestricted service-user execution; narrow Podman read
 // permissions are insufficient. No login or privilege refresh is performed.
@@ -134,19 +166,13 @@ func Prepare(name string, uid uint32) error {
 			return errors.New("enrollment requires existing sudo authority to start the rootful Podman API")
 		}
 	}
-	for _, path := range []string{Registry, RunRoot} {
-		if err = os.MkdirAll(path, 0755); err != nil {
-			return err
-		}
-		if err = trustedDir(path); err != nil {
+	for _, path := range []string{filepath.Dir(Registry), Registry, RunRoot} {
+		if err = publicDir(path); err != nil {
 			return err
 		}
 	}
 	dir := filepath.Join(Registry, name)
-	if err = os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	if err = trustedDir(dir); err != nil {
+	if err = publicDir(dir); err != nil {
 		return err
 	}
 	lock, err := lockRuntime(dir)
@@ -176,8 +202,16 @@ func Prepare(name string, uid uint32) error {
 	}
 	defer in.Close()
 	temp := filepath.Join(dir, "launcher.partial")
-	out, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	out, err := os.OpenFile(temp, os.O_CREATE|os.O_WRONLY|unix.O_NOFOLLOW, 0755)
 	if err != nil {
+		return err
+	}
+	if err = publicLauncher(out); err != nil {
+		out.Close()
+		return err
+	}
+	if err = out.Truncate(0); err != nil {
+		out.Close()
 		return err
 	}
 	_, err = io.Copy(out, in)
@@ -408,18 +442,12 @@ func serve(name string) error {
 		return err
 	}
 	runParent := filepath.Join(RunRoot, name)
-	if err = os.MkdirAll(runParent, 0755); err != nil {
-		return err
-	}
-	if err = trustedDir(runParent); err != nil {
+	if err = publicDir(runParent); err != nil {
 		return err
 	}
 	identity := randomID()
 	run := filepath.Join(runParent, identity)
-	if err = os.MkdirAll(run, 0755); err != nil {
-		return err
-	}
-	if err = trustedDir(run); err != nil {
+	if err = publicDir(run); err != nil {
 		return err
 	}
 	for _, part := range []string{"networks", "netconfig", "netns"} {
@@ -427,7 +455,7 @@ func serve(name string) error {
 			return err
 		}
 	}
-	if err = os.WriteFile(filepath.Join(run, "resolv.conf"), []byte("nameserver 10.0.2.3\noptions timeout:2 attempts:2\n"), 0644); err != nil {
+	if err = writeResolver(filepath.Join(run, "resolv.conf")); err != nil {
 		return err
 	}
 	// Only these service-owned sockets are replaced while holding the root lock.
@@ -519,7 +547,7 @@ func serve(name string) error {
 		f.ID = id
 	}
 	s.status.Healthy = true
-	if err = save(filepath.Join(dir, "status.json"), s.status); err != nil {
+	if err = s.saveStatus(); err != nil {
 		return err
 	}
 	control, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: filepath.Join(runParent, "control.sock"), Net: "unixpacket"})
@@ -560,16 +588,12 @@ func serve(name string) error {
 			s.mu.Lock()
 			s.stopping = true
 			s.status.Healthy = false
-			_ = save(filepath.Join(dir, "status.json"), s.status)
+			_ = s.saveStatus()
 			s.mu.Unlock()
 			return nil
 		case <-ticker.C:
 			s.mu.Lock()
-			if err = s.health(); err != nil {
-				s.status.Healthy = false
-			}
-			s.reconcile()
-			_ = save(filepath.Join(dir, "status.json"), s.status)
+			_ = s.refreshStatus()
 			s.mu.Unlock()
 		}
 	}
@@ -748,11 +772,31 @@ func (s *service) proxyCleanup(c *net.UnixConn) {
 	}
 }
 
+func (s *service) saveStatus() error {
+	err := save(filepath.Join(s.dir, "status.json"), s.status)
+	s.statusPending = err != nil
+	return err
+}
+
+// refreshStatus persists transitions and retries failed writes, without rewriting
+// unchanged retained history. The caller holds mu, as with mutation owners.
+func (s *service) refreshStatus() error {
+	if s.status.Healthy && s.health() != nil {
+		s.status.Healthy = false
+		s.statusPending = true
+	}
+	s.reconcile()
+	if s.statusPending {
+		return s.saveStatus()
+	}
+	return nil
+}
 func (s *service) reconcile() {
 	for id, m := range s.status.Members {
 		if m.State != "cleaned" {
 			var receipt Membership
-			if load(filepath.Join(s.dir, "member-"+id+".done"), &receipt) == nil && receipt.ID == id && receipt.UID == m.UID {
+			if load(filepath.Join(s.dir, "member-"+id+".done"), &receipt) == nil && receipt.ID == id && receipt.UID == m.UID && receipt != m {
+				s.statusPending = true
 				s.status.Members[id] = receipt
 			}
 		}
@@ -834,7 +878,7 @@ func (s *service) handle(c *net.UnixConn) {
 		if ok {
 			m.State = "cleaned"
 			s.status.Members[req.ID] = m
-			err = save(filepath.Join(s.dir, "status.json"), s.status)
+			err = s.saveStatus()
 		}
 		s.mu.Unlock()
 		respond(Response{}, err)
@@ -853,6 +897,7 @@ func (s *service) handle(c *net.UnixConn) {
 	if req.Operation == "status" {
 		if s.status.Healthy && s.health() != nil {
 			s.status.Healthy = false
+			s.statusPending = true
 		}
 		out := cloneStatus(s.status)
 		s.mu.Unlock()
@@ -880,7 +925,7 @@ func (s *service) handle(c *net.UnixConn) {
 			return
 		}
 		s.status.Healthy = false
-		err = save(filepath.Join(s.dir, "status.json"), s.status)
+		err = s.saveStatus()
 		if err == nil {
 			s.stopping = true
 			close(s.stop)
@@ -897,6 +942,7 @@ func (s *service) handle(c *net.UnixConn) {
 	}
 	if err = s.health(); err != nil {
 		s.status.Healthy = false
+		s.statusPending = true
 		s.mu.Unlock()
 		respond(Response{}, err)
 		return
@@ -914,7 +960,7 @@ func (s *service) handle(c *net.UnixConn) {
 			return
 		}
 		s.status.Members[req.ID] = Membership{ID: req.ID, UID: cred.Uid, State: "reserved"}
-		err = save(filepath.Join(s.dir, "status.json"), s.status)
+		err = s.saveStatus()
 		s.mu.Unlock()
 		respond(Response{}, err)
 	case "status", "check":
@@ -947,9 +993,10 @@ func (s *service) handle(c *net.UnixConn) {
 			f.ID, err = s.addForward(f)
 			if err == nil {
 				s.status.Forwards = append(s.status.Forwards, f)
-				err = save(filepath.Join(s.dir, "status.json"), s.status)
+				err = s.saveStatus()
 				if err != nil {
 					s.status.Healthy = false
+					s.statusPending = true
 				}
 			}
 		}
@@ -969,7 +1016,7 @@ func (s *service) handle(c *net.UnixConn) {
 		}
 		m := Membership{ID: req.ID, UID: cred.Uid, State: "launching", ExitCode: 125}
 		s.status.Members[req.ID] = m
-		if err = save(filepath.Join(s.dir, "status.json"), s.status); err != nil {
+		if err = s.saveStatus(); err != nil {
 			s.mu.Unlock()
 			respond(Response{}, err)
 			return
@@ -978,7 +1025,7 @@ func (s *service) handle(c *net.UnixConn) {
 		beforeStartFailure := func(cause error) {
 			m.State = "cleaned"
 			s.status.Members[req.ID] = m
-			if e := save(filepath.Join(s.dir, "status.json"), s.status); e != nil {
+			if e := s.saveStatus(); e != nil {
 				m.State = "launching"
 				s.status.Members[req.ID] = m
 				cause = errors.Join(cause, fmt.Errorf("pre-start cleanup persistence unconfirmed: %w", e))
@@ -1058,20 +1105,6 @@ func runMember(path string) error {
 	// nsenter joins only mount/network namespaces. setpriv drops to the peer's
 	// account before the trusted guardian interprets any caller command or env.
 	config.Close()
-	groups := ""
-	for _, g := range launch.Groups {
-		if groups != "" {
-			groups += ","
-		}
-		groups += strconv.FormatUint(uint64(g), 10)
-	}
-	args := []string{"--net=/proc/self/fd/5", "--mount=/proc/self/fd/6", "--", "/usr/bin/setpriv", "--reuid", strconv.FormatUint(uint64(launch.UID), 10), "--regid", strconv.FormatUint(uint64(launch.GID), 10)}
-	if groups == "" {
-		args = append(args, "--clear-groups")
-	} else {
-		args = append(args, "--groups", groups)
-	}
-	args = append(args, launch.Binary, "__network_runtime_workload_v1", path)
 	// The launch file is root-only. Pass its data over fd4 after dropping UID.
 	data, _ := json.Marshal(launch.Request)
 	r, w, err := os.Pipe()
@@ -1088,7 +1121,7 @@ func runMember(path string) error {
 	}
 	defer ackR.Close()
 	defer ackW.Close()
-	cmd := exec.Command("/usr/bin/nsenter", args...)
+	cmd := memberWorkloadCommand(launch, path)
 	cmd.ExtraFiles = []*os.File{life, r, os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace"), ackW}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -1106,6 +1139,15 @@ func runMember(path string) error {
 	}
 	ackW.Close()
 	return completeMember(launch, err, ackR)
+}
+
+func memberWorkloadCommand(launch memberLaunch, path string) *exec.Cmd {
+	args := []string{"--net=/proc/self/fd/5", "--mount=/proc/self/fd/6", "--", "/usr/bin/setpriv", "--reuid", strconv.FormatUint(uint64(launch.UID), 10), "--regid", strconv.FormatUint(uint64(launch.GID), 10), "--keep-groups", launch.Binary, "__network_runtime_workload_v1", path}
+	cmd := exec.Command("/usr/bin/nsenter", args...)
+	// Apply the captured supplementary set in Go's child, before nsenter. Keep
+	// root for namespace entry; setpriv retains these groups when dropping UID/GID.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 0, Gid: uint32(os.Getegid()), Groups: launch.Groups}}
+	return cmd
 }
 
 func completeMember(launch memberLaunch, err error, ack io.Reader) error {

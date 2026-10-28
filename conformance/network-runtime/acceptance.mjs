@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { once } from 'node:events';
+import { readinessLine } from './readiness.mjs';
 const require = createRequire(resolve('ui/package.json'));
 if (!process.argv.includes('--run-privileged')) throw new Error('requires --run-privileged; uses sudo/rootful Podman and normal Chrome, no models');
 const { chromium } = require('@playwright/test');
@@ -31,6 +32,7 @@ const ownedContainers = [];
 const ownedNetworks = [];
 const run = (cmd, args, options = {}) => execFileSync(cmd, args, { cwd: root, encoding: 'utf8', timeout: 120000, ...options }).trim();
 const runtimeRun = (...args) => run(runtime, args);
+const operator = (...args) => run('sudo', ['-n', '/bin/sh', '-c', 'umask 077; exec "$@"', 'runtime-operator', runtime, ...args]);
 const inside = (...args) => runtimeRun('exec', name, '--', ...args);
 const podman = (...args) => inside('podman', ...args);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -76,8 +78,11 @@ try {
   await once(monitor, 'spawn');
   const subscriptionMask = await subscribedMonitor(monitor);
   const before = stable(snapshot());
-  run('sudo', ['-n', runtime, 'prepare', name, '--uid', String(process.getuid())]);
-  run('sudo', ['-n', runtime, 'start', name]); started = true;
+  const authority = join(root, 'conformance/network-runtime/authority.py');
+  const authorityArgs = [runtime, name, String(process.getuid()), String(process.getgid()), JSON.stringify(process.getgroups())];
+  evidence.coldOperator = JSON.parse(run('sudo', ['-n', 'unshare', '--mount', '--propagation', 'private', '/usr/bin/python3', authority, 'cold-prepare', ...authorityArgs, run('readlink', ['/proc/self/ns/mnt'])]));
+  operator('prepare', name, '--uid', String(process.getuid()));
+  operator('start', name); started = true;
   ref = status().reference;
   assert.equal(inside('podman', 'info', '--format', '{{.Store.GraphRoot}}'), hostStore);
   assert.equal(podman('image', 'inspect', image, '--format', '{{.Id}}').replace(/^sha256:/, ''), image.replace(/^sha256:/, ''));
@@ -85,6 +90,9 @@ try {
   assert.equal(identity.uid, process.getuid()); assert.equal(identity.gid, process.getgid()); assert.equal(identity.endpoint, ref.endpoint);
   assert.notEqual(identity.netns, run('readlink', ['/proc/self/ns/net']));
   evidence.checks.push('identity, endpoint and cached rootful image store');
+  evidence.nativeGroups = JSON.parse(run('sudo', ['-n', '/usr/bin/python3', authority, 'groups', ...authorityArgs, identity.netns]));
+  await settled();
+  evidence.checks.push('restrictive operator umask preserves cold managed traversal/launcher, nonroot admission/DNS and every native supplementary group through actual nsenter/setpriv');
 
   // Bytes are passed by Python directly to Linux exec; the fixture reports hex
   // before JSON so invalid UTF-8 cannot be replaced on both sides of the oracle.
@@ -199,7 +207,7 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   evidence.checks.push('integrated local command, agent and container command policies');
 
   const h2 = spawn(fixture, ['h2'], { stdio: ['ignore', 'pipe', 'pipe'] }); children.push(h2);
-  const url = await new Promise((resolve, reject) => { h2.stdout.once('data', data => resolve(String(data).trim())); h2.once('error', reject); });
+  const url = await readinessLine(h2, 'H2 fixture');
   browser = await chromium.launch({ channel: 'chrome', headless: true });
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage(); const failures = []; page.on('requestfailed', request => failures.push(request.failure()?.errorText));
@@ -217,7 +225,7 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   await browser.close(); browser = undefined;
   podman('rm', '-f', peer); ownedContainers.splice(0); podman('network', 'rm', network); ownedNetworks.splice(0);
   await settled(); runtimeRun('stop', name); started = false;
-  run('sudo', ['-n', runtime, 'start', name]); started = true;
+  operator('start', name); started = true;
   assert.notEqual(status().reference.identity, ref.identity);
   const restored = spawnInside(fixture, 'serve', `127.0.0.1:${loopback}`); await sleep(200);
   assert.equal(run('curl', ['--fail', '--silent', '--max-time', '10', `http://127.0.0.1:${hostLoopback}/`]), 'runtime-service');
@@ -252,13 +260,13 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   const retainedNames = run('podman', ['--remote', '--url', recoveryRef.endpoint, 'ps', '--all', '--format', '{{.Names}}']);
   assert(!retainedNames.split(/\s+/).includes(recoveryContainer));
   runtimeRun('stop', name); started = false;
-  run('sudo', ['-n', runtime, 'start', name]); started = true;
+  operator('start', name); started = true;
   assert.notEqual(status().reference.identity, recoveryRef.identity);
   evidence.checks.push('unhealthy admission refuses new work while exact owned container cleanup releases reservation');
 
   const old = status().reference;
   const crashCaller = spawnInside('/bin/sh', '-c', 'sleep 60 & echo "$$ $!"; wait');
-  const crashPIDs = await new Promise((resolve, reject) => { crashCaller.stdout.once('data', data => resolve(String(data).trim().split(/\s+/).map(Number))); crashCaller.once('error', reject); });
+  const crashPIDs = (await readinessLine(crashCaller, 'crash caller')).split(/\s+/).map(Number);
   assert.equal(crashPIDs.length, 2); assert(crashPIDs.every(pid => Number.isInteger(pid) && pid > 1));
   const activeMembers = Object.values(status().members).filter(m => m.state !== 'cleaned').map(m => m.id);
   assert(activeMembers.length > 0);

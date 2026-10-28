@@ -1026,8 +1026,16 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		}
 		e.Actions = actions
 	}
-	if e.RoleRunner != nil {
-		runner, err := e.RoleRunner(snap.Roles)
+	roleRunner := e.RoleRunner
+	if roleRunner == nil {
+		if source, ok := e.Agents.(interface {
+			RunnerForRoles(json.RawMessage) (AgentRunner, error)
+		}); ok {
+			roleRunner = source.RunnerForRoles
+		}
+	}
+	if roleRunner != nil {
+		runner, err := roleRunner(snap.Roles)
 		if err != nil {
 			return nil, err
 		}
