@@ -1,0 +1,6 @@
+jobs:
+  decision:
+    steps:
+      - id: question
+        uses: input/wait
+        with: {prompt: Choose}

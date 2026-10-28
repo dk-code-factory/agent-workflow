@@ -100,6 +100,23 @@ func Validate(w *Workflow) error {
 			if step.Shell != "" || step.Timeout != "" || step.WorkingDirectory != "" {
 				return fmt.Errorf("step %s: command fields require argv or run", sid)
 			}
+			if step.Uses == "input/wait" {
+				for key := range step.With {
+					if key != "prompt" && key != "evidence-id" && key != "payload" {
+						return fmt.Errorf("step %s: unsupported input/wait parameter %q", sid, key)
+					}
+				}
+				for _, key := range []string{"prompt", "evidence-id"} {
+					v, ok := step.With[key].(string)
+					if !ok || strings.TrimSpace(v) == "" {
+						return fmt.Errorf("step %s: input/wait requires string %s", sid, key)
+					}
+				}
+				if step.Context != (RunContext{}) {
+					return fmt.Errorf("step %s: input/wait cannot use session context", sid)
+				}
+				continue
+			}
 			if isApplicationAction(step.Uses) {
 				if !idPattern.MatchString(strings.TrimPrefix(step.Uses, "action/")) {
 					return fmt.Errorf("step %s: invalid registered action name", sid)

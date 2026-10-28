@@ -436,5 +436,35 @@
     "file": "iteration-null.yml",
     "parse": true,
     "valid": true
+  },
+  {
+    "name": "input-wait",
+    "file": "input-wait.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "input-wait-missing-evidence",
+    "file": "input-wait-missing-evidence.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "input-wait-empty-prompt",
+    "file": "input-wait-empty-prompt.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "input-wait-invalid-evidence",
+    "file": "input-wait-invalid-evidence.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "input-wait-extra",
+    "file": "input-wait-extra.yml",
+    "parse": true,
+    "valid": false
   }
 ]

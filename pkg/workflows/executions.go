@@ -31,6 +31,9 @@ func (s *SQLiteStore) ResumeRequest(ctx context.Context, id, requestID string, r
 // QueueResume atomically admits a new execution without modifying the snapshot
 // or any attempt. Duplicate request identities refer to the original generation.
 func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, retry bool, maxQueued int) (*Run, error) {
+	return s.queueResume(ctx, id, requestID, retry, maxQueued, false)
+}
+func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, retry bool, maxQueued int, automatic bool) (*Run, error) {
 	if len(requestID) > 128 {
 		return nil, fmt.Errorf("request_id exceeds 128 bytes")
 	}
@@ -82,14 +85,48 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 	if origin != id {
 		return nil, fmt.Errorf("control the originating run %s", origin)
 	}
+	control, err := inputControlTx(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if automatic && (run.Status != RunStatusWaiting || control.Paused || control.Canceled || !control.Continuation) {
+		return &run, nil
+	}
+	if control.Canceled {
+		var gates int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=?", id).Scan(&gates); err != nil {
+			return nil, err
+		}
+		if gates > 0 {
+			return nil, fmt.Errorf("canceled input gates require a new run")
+		}
+	}
 	if run.Status == RunStatusQueued || run.Status == RunStatusRunning {
 		return nil, fmt.Errorf("run is already active")
 	}
 	if run.Status == RunStatusSucceeded && !iterationRetry(&run) {
 		return &run, nil
 	}
+	// Only authoritative per-origin retry guards may park automatic admission.
+	// Storage, global cleanup and capacity errors remain errors, without changing
+	// this origin. The transaction also fences a concurrent pause or generation.
+	retryRequired := func(diagnostic string) (*Run, error) {
+		if !automatic {
+			return nil, errors.New(diagnostic)
+		}
+		run.Status = RunStatusNeedsAttention
+		run.Error = diagnostic
+		if run.FailureClass != "restore_uncertainty" {
+			run.FailureClass = "needs_attention"
+		}
+		run.FinishedAt = time.Now().UTC()
+		if err = saveRunTx(ctx, tx, &run); err != nil {
+			return nil, err
+		}
+		return &run, tx.Commit()
+	}
 	if run.FailureClass == "restore_uncertainty" && !retry {
-		return nil, fmt.Errorf("restored effects require explicit retry_uncertain acknowledgement")
+		return retryRequired("restored effects require explicit retry_uncertain acknowledgement")
 	}
 	if !retry {
 		var uncertain int
@@ -97,20 +134,47 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain attempts")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain attempts")
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id WHERE w.run_id=? AND m.status IN ('running','failed','interrupted')`, id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain worker turns")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain worker turns")
 		}
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE run_id=? AND status IN ('dispatched','uncertain')", id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain tool effects")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain tool effects")
 		}
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=? AND state='pending'", id).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0 WHERE run_id=?", id); err != nil {
+			return nil, err
+		}
+		run.Status = RunStatusWaiting
+		run.FinishedAt = time.Time{}
+		run.Error = ""
+		run.FailureClass = ""
+		b, err = json.Marshal(run)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE runs SET status=?,record=? WHERE id=?", run.Status, b, id); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE executions SET status=?,record=? WHERE run_id=? AND generation=?", run.Status, b, id, run.Generation); err != nil {
+			return nil, err
+		}
+		if err = addEvent(ctx, tx, id, "run.waiting", run); err != nil {
+			return nil, err
+		}
+		return &run, tx.Commit()
 	}
 	if maxQueued > 0 {
 		var queued int
@@ -120,6 +184,9 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 		if queued >= maxQueued {
 			return nil, fmt.Errorf("queued run limit reached")
 		}
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0,canceled=0,continuation=0 WHERE run_id=?", id); err != nil {
+		return nil, err
 	}
 	previous := run.Status
 	run.Generation++
@@ -175,8 +242,16 @@ func (s *SQLiteStore) BeginFinalization(ctx context.Context, run *Run) error {
 	return nil
 }
 func (s *SQLiteStore) CheckWorkerAdmission(ctx context.Context, run string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
+		return err
+	}
 	var allowed int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.status='running' AND e.finalizing=0`, run).Scan(&allowed)
+	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.status='running' AND e.finalizing=0`, run).Scan(&allowed)
 	if err != nil {
 		return err
 	}

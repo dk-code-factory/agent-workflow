@@ -268,6 +268,23 @@ artifacts. Admission rejects credential literals in definitions or nonsecret
 inputs instead of modifying their replay semantics. State files and sockets use
 0600; newly created state directories use 0700.
 
+## Durable external input
+
+Use `uses: input/wait` with required `with.prompt` and `with.evidence-id` and an
+optional JSON `with.payload` to ask a durable question. Engines advertise
+`durable-external-input-v1` through Go capabilities and controller health.
+Waiting releases execution and controller capacity after independent work drains.
+Accepted answers automatically queue continuation; `interrupt` preserves questions
+and answers while pausing continuation until `resume`. `cancel` invalidates gates.
+
+Inspect with `agent-workflow inputs RUN_ID` and submit JSON with
+`agent-workflow answer --gate GATE --evidence-id EVIDENCE --answer-id DELIVERY
+--answer-file answer.json RUN_ID` (`-` reads stdin). Synchronous execution prints
+the suspended handle and exits with status 2. Steps expose `answer`, `answer_id`,
+`gate_id`, and `evidence_id`. See [durable external input](docs/EXTERNAL_INPUT.md)
+for the controller API, embedding contract, evidence revalidation, restart and
+backup semantics, and the preparation → wait → re-preparation pattern.
+
 ## Retention and recovery backups
 
 `cleanup RUN_ID` records removal intent/progress before removing owned Git

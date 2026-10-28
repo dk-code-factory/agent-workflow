@@ -183,6 +183,9 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	if err = checkFence(ctx, tx); err != nil {
 		return err
 	}
+	if err = checkEffectAdmission(ctx, tx, originID(r, snap)); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO runs(id,status,record,snapshot,updated,origin_id,generation,owner,admitted) VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano), originID(r, snap), r.Generation, r.Owner, time.Now().UTC().UnixNano()); err != nil {
 		return err
 	}
@@ -200,16 +203,49 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	return tx.Commit()
 }
 func (s *SQLiteStore) Save(ctx context.Context, r *Run) error {
-	b, err := json.Marshal(r)
-	if err != nil {
-		return err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	// Publish final outcomes under the same transaction as input controls. A
+	// control acknowledged after the executor's last observation must still win.
+	final := *r
+	if final.Status != RunStatusRunning && final.Status != RunStatusQueued && final.Status != RunStatusNeedsAttention {
+		var origin string
+		if err = tx.QueryRowContext(ctx, "SELECT origin_id FROM runs WHERE id=?", r.ID).Scan(&origin); err != nil {
+			return err
+		}
+		control, controlErr := inputControlTx(ctx, tx, origin)
+		if controlErr != nil {
+			return controlErr
+		}
+		if control.Canceled {
+			final.Status = RunStatusCanceled
+			final.FinishedAt = time.Now().UTC()
+		} else if origin == r.ID && control.Paused && (final.FailureClass == "" || final.FailureClass == "canceled") {
+			final.Status = RunStatusInterrupted
+			final.Error, final.FailureClass = "", ""
+			final.FinishedAt = time.Time{}
+		}
+	}
+	if err = saveRunTx(ctx, tx, &final); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*r = final
+	return nil
+}
+
+// saveRunTx lets recovery publish its outcome and continuation intent together.
+func saveRunTx(ctx context.Context, tx *sql.Tx, r *Run) error {
+	b, err := json.Marshal(r)
+	if err != nil {
 		return err
 	}
 	owner := r.Owner
@@ -228,9 +264,6 @@ func (s *SQLiteStore) Save(ctx context.Context, r *Run) error {
 		return err
 	}
 	if err = addEvent(ctx, tx, r.ID, "run."+r.Status, r); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
 		return err
 	}
 	r.Owner = owner
@@ -297,6 +330,9 @@ func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, ite
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return last, false, err
+	}
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
+		return Attempt{}, false, err
 	}
 	a := Attempt{InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
 	if schemaPhase(last.Phase) {
@@ -451,13 +487,13 @@ func (s *SQLiteStore) Recover(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return s.recoverInputWaits(ctx)
 }
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	if err := s.CheckInvocationCleanup(ctx, id); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention')", id)
+	res, err := s.db.ExecContext(ctx, retentionDeleteRun+" AND NOT EXISTS(SELECT 1 FROM runs origin WHERE origin.id=runs.origin_id AND origin.status IN ('waiting','interrupted'))", id, id)
 	if err != nil {
 		return err
 	}
@@ -482,6 +518,9 @@ func (s *SQLiteStore) Claim(ctx context.Context, r *Run, previous string) error 
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, r.ID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=?,owner=? WHERE id=? AND status=? AND generation=? AND owner=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), r.Owner, r.ID, previous, r.Generation, oldOwner)
 	if err != nil {
 		return err
@@ -561,6 +600,68 @@ func (s *SQLiteStore) RequestCancelGeneration(ctx context.Context, id string, ge
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE executions SET cancellation_requested=1 WHERE run_id=? AND generation=(SELECT generation FROM runs WHERE id=?)", id, id); err != nil {
 		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO input_controls(run_id,canceled) VALUES(?,1) ON CONFLICT(run_id) DO UPDATE SET canceled=1,continuation=0", id); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM input_gates WHERE origin_id=? AND state IN ('pending','accepted')", id)
+	if err != nil {
+		return err
+	}
+	var gates []string
+	for rows.Next() {
+		var gate string
+		if err = rows.Scan(&gate); err != nil {
+			rows.Close()
+			return err
+		}
+		gates = append(gates, gate)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, gate := range gates {
+		g, loadErr := loadInput(ctx, tx, gate)
+		if loadErr != nil {
+			return loadErr
+		}
+		inputObservation(&g, "canceled", current)
+		if err = writeInput(ctx, tx, g); err != nil {
+			return err
+		}
+	}
+	// Suspended children have no active effects to stop. Retire them with their
+	// gates so retention cannot remain blocked by an unreachable waiting child.
+	rows, err = tx.QueryContext(ctx, "SELECT record,generation,owner FROM runs WHERE origin_id=? AND status IN ('waiting','interrupted')", id)
+	if err != nil {
+		return err
+	}
+	var suspended []Run
+	for rows.Next() {
+		var r Run
+		var b []byte
+		if err = rows.Scan(&b, &r.Generation, &r.Owner); err == nil {
+			err = decodeJSONWithNumbers(b, &r)
+		}
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		suspended = append(suspended, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, r := range suspended {
+		r.Status = RunStatusCanceled
+		r.FinishedAt = time.Now().UTC()
+		if err = saveRunTx(ctx, tx, &r); err != nil {
+			return err
+		}
 	}
 	if err = addEvent(ctx, tx, id, "run.cancellation_requested", map[string]string{"id": id}); err != nil {
 		return err
