@@ -353,7 +353,8 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 			t.Fatal("fresh v10 lacks eligibility index")
 		}
 		seedZeroIntentWaits(t, s, 10000)
-		rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT EXISTS(SELECT 1 FROM input_controls c CROSS JOIN runs r ON r.id=c.run_id WHERE c.continuation=1 AND c.paused=0 AND c.canceled=0 AND r.status='waiting' AND r.owner='')`)
+		// Explain the exact no-active query assembled by continuation admission.
+		rows, err := s.db.Query("EXPLAIN QUERY PLAN " + inputContinuationIntentProbe + ")")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -497,8 +498,8 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 		if err = s.Migrate(ctx, lock); err != nil {
 			t.Fatal(err)
 		}
-		if !inputContinuationIndexPresent(t, s.db) {
-			t.Fatal("v9 upgrade lacks eligibility index")
+		if !inputContinuationIndexPresent(t, s.db) || !inputGateRunIndexPresent(t, s.db) {
+			t.Fatal("v9 upgrade lacks required input indexes")
 		}
 		backup, err := openBackupSource(ctx, filepath.Join(s.Dir, "state.pre-v10.db"))
 		if err != nil {
@@ -510,4 +511,245 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 			t.Fatal(version, err)
 		}
 	})
+}
+
+func inputGateRunIndexPresent(t *testing.T, db *sql.DB) bool {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='input_gates_run'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count == 1
+}
+
+func TestInputGateRunIndexCoversRetention(t *testing.T) {
+	ctx := context.Background()
+	e, s := durableExecutor(t, `jobs: {left: {uses: workflows/child.yml}, right: {uses: workflows/child.yml}}`, nil)
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
+jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`)
+	closure, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates, err := s.Inputs(ctx, closure.ID)
+	if err != nil || len(gates) != 2 {
+		t.Fatal(gates, err)
+	}
+	if err = s.RequestCancel(ctx, closure.ID); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := &Run{ID: randomID(), Status: RunStatusSucceeded, Version: 1, Jobs: map[string]JobExecution{}}
+	if err = s.Admit(ctx, ordinary, Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	seedZeroIntentWaits(t, s, 10000)
+	for _, id := range []string{ordinary.ID, closure.ID, gates[0].RunID, gates[1].RunID} {
+		rows, err := s.db.QueryContext(ctx, `EXPLAIN QUERY PLAN DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted')`, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var details []string
+		for rows.Next() {
+			var node, parent, unused int
+			var detail string
+			if err = rows.Scan(&node, &parent, &unused, &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gateDetails []string
+		for _, detail := range details {
+			if strings.Contains(detail, "input_gates") {
+				gateDetails = append(gateDetails, detail)
+			}
+		}
+		t.Log(id, gateDetails)
+		joined := strings.Join(gateDetails, "\n")
+		if strings.Contains(joined, "SCAN input_gates") || !strings.Contains(joined, "USING COVERING INDEX input_gates_run (run_id=?)") {
+			t.Error("run FK deletion scans unrelated gates", gateDetails)
+		}
+	}
+	if err = s.DeleteOrigin(ctx, ordinary.ID); err != nil {
+		t.Fatal("ordinary retention", err)
+	}
+	if err = s.DeleteOrigin(ctx, closure.ID); err != nil {
+		t.Fatal("closure retention", err)
+	}
+	for _, id := range []string{ordinary.ID, closure.ID, gates[0].RunID, gates[1].RunID} {
+		if _, _, err = s.Load(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("retained deleted member", id, err)
+		}
+	}
+	var remaining int
+	if err = s.db.QueryRow(`SELECT count(*) FROM input_gates`).Scan(&remaining); err != nil || remaining != 10000 {
+		t.Fatal("cascade touched unrelated history", remaining, err)
+	}
+	if inputGate(t, s, "unanswered-00000").State != "pending" {
+		t.Fatal("unrelated question changed")
+	}
+}
+
+func TestInputGateRequiredIndexesRepairCurrentBackup(t *testing.T) {
+	for _, missing := range []string{"physical FK only", "both indexes"} {
+		t.Run(missing, func(t *testing.T) {
+			ctx := context.Background()
+			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+			first, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			answerGate(t, s, inputGate(t, s, first.ID))
+			// Simulate an earlier v10 eligibility-index repair, whose retained backup
+			// predates subsequently committed accepted answers.
+			if _, err = s.db.Exec(`DROP INDEX input_controls_continuations`); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := ownership.Own(s.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err = s.Migrate(ctx, lock); err != nil {
+				t.Fatal(err)
+			}
+			earlier, err := filepath.Glob(filepath.Join(s.Dir, "state.pre-v10-input-continuations*.db"))
+			if err != nil || len(earlier) != 1 {
+				t.Fatal(earlier, err)
+			}
+			originalBackup, err := os.ReadFile(earlier[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			answerGate(t, s, inputGate(t, s, current.ID))
+			if _, err = s.db.Exec(`DROP INDEX IF EXISTS input_gates_run`); err != nil {
+				t.Fatal(err)
+			}
+			if missing == "both indexes" {
+				if _, err = s.db.Exec(`DROP INDEX input_controls_continuations`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := s.Dir
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			inspection, err := OpenSQLiteInspection(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inputGateRunIndexPresent(t, inspection.db) {
+				t.Fatal("inspection repaired physical index")
+			}
+			if inputGate(t, inspection, current.ID).State != "accepted" {
+				t.Fatal("inspection changed current answer")
+			}
+			inspection.Close()
+			opened, err := OpenSQLite(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer opened.Close()
+			if inputGateRunIndexPresent(t, opened.db) {
+				t.Fatal("ordinary open repaired physical index")
+			}
+			if _, err = opened.Inputs(ctx, current.ID); err != nil {
+				t.Fatal("missing physical index broke functional inspection", err)
+			}
+			if err = opened.Migrate(ctx, nil); err == nil {
+				t.Fatal("repair allowed without ownership")
+			}
+			if err = opened.Migrate(ctx, lock); err != nil {
+				t.Fatal(err)
+			}
+			if !inputGateRunIndexPresent(t, opened.db) || !inputContinuationIndexPresent(t, opened.db) {
+				t.Fatal("owned repair omitted required v10 index")
+			}
+			backups, err := filepath.Glob(filepath.Join(dir, "state.pre-v10-input-continuations*.db"))
+			if err != nil || len(backups) != 2 {
+				t.Fatal("repair did not retain CURRENT backup", backups, err)
+			}
+			latest := backups[0]
+			if latest == earlier[0] {
+				latest = backups[1]
+			}
+			previousAfter, err := os.ReadFile(earlier[0])
+			if err != nil || string(previousAfter) != string(originalBackup) {
+				t.Fatal("prior repair backup overwritten", err)
+			}
+			source, err := openBackupSource(ctx, latest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inputGateRunIndexPresent(t, source) {
+				t.Fatal("backup is not pre-repair")
+			}
+			if (missing == "both indexes") == inputContinuationIndexPresent(t, source) {
+				t.Fatal("backup eligibility state differs from current pre-repair state")
+			}
+			var raw []byte
+			if err = source.QueryRow(`SELECT record FROM input_gates WHERE origin_id=?`, current.ID).Scan(&raw); err != nil {
+				t.Fatal("current accepted answer absent from fresh backup", err)
+			}
+			var backedGate ExternalInputGate
+			if err = json.Unmarshal(raw, &backedGate); err != nil || backedGate.State != "accepted" || backedGate.Answer == nil || len(backedGate.History) != 2 {
+				t.Fatal("fresh backup lost current answer/history", backedGate, err)
+			}
+			source.Close()
+			latestBytes, err := os.ReadFile(latest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = opened.Migrate(ctx, lock); err != nil {
+				t.Fatal(err)
+			}
+			noOpBackups, _ := filepath.Glob(filepath.Join(dir, "state.pre-v10-input-continuations*.db"))
+			if len(noOpBackups) != 2 {
+				t.Fatal("complete-index migration was not a no-op", noOpBackups)
+			}
+			if err = opened.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = RestoreDatabase(ctx, dir, latest, lock); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := OpenSQLite(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			if inputGateRunIndexPresent(t, restored.db) {
+				t.Fatal("ordinary restore open repaired schema")
+			}
+			if err = restored.Migrate(ctx, lock); err != nil {
+				t.Fatal(err)
+			}
+			if !inputGateRunIndexPresent(t, restored.db) || !inputContinuationIndexPresent(t, restored.db) {
+				t.Fatal("restored repair omitted required indexes")
+			}
+			gate := inputGate(t, restored, current.ID)
+			if gate.State != "accepted" || gate.Answer == nil || len(gate.History) != 2 {
+				t.Fatal("restore lost later accepted history", gate)
+			}
+			for path, want := range map[string][]byte{earlier[0]: originalBackup, latest: latestBytes} {
+				got, readErr := os.ReadFile(path)
+				if readErr != nil || string(got) != string(want) {
+					t.Fatal("restore repair overwrote previous backup", path, readErr)
+				}
+			}
+			all, _ := filepath.Glob(filepath.Join(dir, "state.pre-v10-input-continuations*.db"))
+			if len(all) != 3 {
+				t.Fatal("restore repair lacks fresh retained backup", all)
+			}
+		})
+	}
 }

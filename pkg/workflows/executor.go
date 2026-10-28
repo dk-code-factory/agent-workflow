@@ -474,10 +474,7 @@ func (e *Executor) executeJob(ctx context.Context, id string, job Job, inputs ma
 		}
 		allowed, err := evalIf(job.Repeat.Until, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: result.Steps, Iteration: map[string]any{"number": iteration, "previous": previous, "outputs": result.Outputs, "status": result.Status}})
 		if err != nil {
-			result.Status = RunStatusFailed
-			if ctx.Err() != nil {
-				result.Status = RunStatusCanceled
-			}
+			result.Status = executionFailureStatus(ctx, err)
 			result.FailureClass = classifyFailure(err)
 			result.Error = err.Error()
 			return result
@@ -507,13 +504,7 @@ func stepsAsMap(steps map[string]StepExecution) map[string]any {
 func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, previous map[string]any) (out JobExecution) {
 	out = JobExecution{ID: id, Status: RunStatusSucceeded, Steps: map[string]StepExecution{}, Outputs: map[string]any{}}
 	fail := func(err error) JobExecution {
-		out.Status = RunStatusFailed
-		if ctx.Err() != nil {
-			out.Status = RunStatusCanceled
-		}
-		if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-			out.Status = RunStatusNeedsAttention
-		}
+		out.Status = executionFailureStatus(ctx, err)
 		out.Error = err.Error()
 		out.FailureClass = classifyFailure(err)
 		return out
@@ -608,7 +599,6 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			result := fail(err)
 			if child != nil && child.Status == RunStatusNeedsAttention {
 				result.Status = RunStatusNeedsAttention
-				result.FailureClass = "needs_attention"
 			}
 			return result
 		}
@@ -658,15 +648,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
 				result.FinishedAt = time.Now().UTC()
 				if err != nil {
-					result.Status = RunStatusFailed
+					result.Status = executionFailureStatus(ctx, err)
 					result.Error = err.Error()
 					result.FailureClass = classifyFailure(err)
-					if ctx.Err() != nil {
-						result.Status = RunStatusCanceled
-					}
-					if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-						result.Status = RunStatusNeedsAttention
-					}
 				}
 				if durable {
 					err = errors.Join(err, iterationPersistence(journal.Complete(context.WithoutCancel(ctx), attempt, result), req.ordered))
@@ -674,14 +658,8 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			}
 		}
 		if err != nil {
-			result.Status = RunStatusFailed
-			if ctx.Err() != nil {
-				result.Status = RunStatusCanceled
-			}
+			result.Status = executionFailureStatus(ctx, err)
 			result.FailureClass = classifyFailure(err)
-			if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-				result.Status = RunStatusNeedsAttention
-			}
 			result.Error = err.Error()
 		}
 		out.Steps[sid] = result

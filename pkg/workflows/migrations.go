@@ -75,9 +75,12 @@ const schemaV10 = `
 CREATE TABLE input_controls(run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,paused INTEGER NOT NULL DEFAULT 0,canceled INTEGER NOT NULL DEFAULT 0,continuation INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE input_gates(id TEXT PRIMARY KEY,origin_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,state TEXT NOT NULL,answer_id TEXT UNIQUE,record BLOB NOT NULL);
 CREATE INDEX input_gates_origin ON input_gates(origin_id,state);
-` + schemaV10InputContinuationsIndex
+` + schemaV10InputIndexes
 
-const schemaV10InputContinuationsIndex = `CREATE INDEX IF NOT EXISTS input_controls_continuations ON input_controls(run_id) WHERE continuation=1 AND paused=0 AND canceled=0;`
+const schemaV10InputIndexes = `
+CREATE INDEX IF NOT EXISTS input_controls_continuations ON input_controls(run_id) WHERE continuation=1 AND paused=0 AND canceled=0;
+CREATE INDEX IF NOT EXISTS input_gates_run ON input_gates(run_id);
+`
 
 // Migrate must be called while holding exclusive workspace ownership. Existing
 // snapshots and attempt history are never rewritten. The consistent pre-upgrade
@@ -96,14 +99,14 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 	backupName := fmt.Sprintf("state.pre-v%d.db", schemaVersion)
 	if version == schemaVersion {
 		var indexed int
-		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='input_controls_continuations'").Scan(&indexed); err != nil {
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('input_controls_continuations','input_gates_run')").Scan(&indexed); err != nil {
 			return err
 		}
-		if indexed != 0 {
+		if indexed == 2 {
 			return nil
 		}
 		// Same-version repair remains explicit and owned. Preserve each pre-repair
-		// state, including after restoring an earlier v10 backup without this index.
+		// state, including after restoring an earlier v10 backup without these indexes.
 		backupName = "state.pre-v10-input-continuations.db"
 		if _, err := os.Stat(filepath.Join(s.Dir, backupName)); err == nil {
 			backupName = "state.pre-v10-input-continuations-" + newID() + ".db"
@@ -163,7 +166,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 	}
 	defer tx.Rollback()
 	if version == schemaVersion {
-		if _, err = tx.ExecContext(ctx, schemaV10InputContinuationsIndex); err != nil {
+		if _, err = tx.ExecContext(ctx, schemaV10InputIndexes); err != nil {
 			return err
 		}
 		return tx.Commit()

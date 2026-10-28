@@ -85,6 +85,19 @@ func cancellationOnly(err error) bool {
 	return errors.Is(err, context.Canceled)
 }
 
+// executionFailureStatus arbitrates errors before their owning step or job is
+// persisted. A canceled context cannot turn a genuine returned failure into a
+// canceled result that aggregation would discard. Deadline behavior is retained.
+func executionFailureStatus(ctx context.Context, err error) string {
+	if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
+		return RunStatusNeedsAttention
+	}
+	if ctx.Err() != nil && (ctx.Err() != context.Canceled || cancellationOnly(err)) {
+		return RunStatusCanceled
+	}
+	return RunStatusFailed
+}
+
 func hardExecutionFailure(err error) bool {
 	switch classifyFailure(err) {
 	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":

@@ -137,7 +137,7 @@ jobs:
 				t.Fatalf("incoherent persisted interruption: %+v %+v %v %v", saved, control, loadErr, controlErr)
 			}
 			records, recordErr := s.IterationAttempts(context.Background(), run.ID, "review")
-			if recordErr != nil || len(records) != 2 || records[1].Status != "interrupted" {
+			if recordErr != nil || len(records) != 2 || records[1].Status != "waiting" {
 				t.Fatalf("boundary not reproduced: %+v %+v %v %v", run, records, err, recordErr)
 			}
 			original := inputGate(t, s, run.ID)
@@ -282,7 +282,11 @@ jobs: {independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}}
 				if mode != "uncertain" {
 					return nil
 				}
-				<-started
+				select {
+				case <-started:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				return interrupt(ctx, g.OriginID, g.Generation)
 			}
 			wrapper.afterSave = func(ctx context.Context, r *Run) error {
@@ -323,5 +327,233 @@ jobs: {independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}}
 				}
 			}
 		})
+	}
+}
+
+func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
+	for _, boundary := range []string{"step", "repeat", "reusable"} {
+		for _, cause := range []struct {
+			name   string
+			err    error
+			status string
+		}{
+			{"provider", ErrProviderFailure, RunStatusFailed}, {"generic", errors.New("genuine late diagnostic"), RunStatusFailed},
+			{"provider-bare", ErrProviderFailure, RunStatusFailed}, {"generic-bare", errors.New("genuine late diagnostic"), RunStatusFailed},
+			{"cleanup", process.ErrCleanup, RunStatusNeedsAttention}, {"integrity", ErrActionIntegrity, RunStatusNeedsAttention}, {"pure", nil, RunStatusInterrupted},
+		} {
+			t.Run(boundary+"/"+cause.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				started := make(chan struct{})
+				job := `{steps: [{uses: agent/a, with: {prompt: effect}}]}`
+				if boundary == "repeat" {
+					job = `{repeat: {max-attempts: 2, until: 'iteration.number == 2'}, steps: [{uses: agent/a, with: {prompt: effect}}]}`
+				}
+				if boundary == "reusable" {
+					job = `{uses: workflows/child.yml}`
+				}
+				e, s := durableExecutor(t, "jobs:\n  question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}\n  effect: "+job+"\n", agentFunc(func(ctx context.Context, _ AgentRequest) (map[string]any, error) {
+					close(started)
+					<-ctx.Done()
+					if strings.HasSuffix(cause.name, "-bare") {
+						return nil, cause.err
+					}
+					return nil, errors.Join(cause.err, ctx.Err())
+				}))
+				if boundary == "reusable" {
+					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {effect: {steps: [{uses: agent/a, with: {prompt: effect}}]}}")
+				}
+				wrapper := &executionBoundaryJournal{SQLiteStore: s}
+				wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
+					select {
+					case <-started:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if err := s.InterruptInput(context.WithoutCancel(ctx), g.OriginID, g.Generation); err != nil {
+						return err
+					}
+					cancel()
+					return nil
+				}
+				e.Store = wrapper
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				if run == nil || run.Status != cause.status {
+					t.Fatalf("incorrect outcome: %+v %v", run, err)
+				}
+				if cause.err == nil {
+					if err != nil || run.Error != "" || run.FailureClass != "" {
+						t.Fatalf("pure cancellation became failure: %+v %v", run, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), cause.err.Error()) || !strings.Contains(run.Error, cause.err.Error()) || run.FailureClass == "canceled" {
+					t.Fatalf("genuine failure lost: %+v %v", run, err)
+				}
+				if errors.Is(cause.err, ErrProviderFailure) && run.FailureClass != "provider_failure" {
+					t.Fatalf("provider class lost: %+v", run)
+				}
+				if errors.Is(cause.err, ErrActionIntegrity) && run.FailureClass != "action_integrity" {
+					t.Fatalf("integrity class lost: %+v", run)
+				}
+				attempts, attemptsErr := s.Attempts(context.Background(), run.ID)
+				if attemptsErr != nil || len(attempts) != 1 {
+					t.Fatalf("attempts: %+v %v", attempts, attemptsErr)
+				}
+				wantAttempt := cause.status
+				if cause.err == nil {
+					wantAttempt = RunStatusCanceled
+				}
+				if attempts[0].Status != wantAttempt || (cause.err != nil && attempts[0].Result.FailureClass == "canceled") {
+					t.Fatalf("step outcome discarded failure: %+v", attempts[0])
+				}
+				saved, _, loadErr := s.Load(context.Background(), run.ID)
+				control, controlErr := s.InputControl(context.Background(), run.ID)
+				if loadErr != nil || controlErr != nil || saved.Status != run.Status || saved.Error != run.Error || !control.Paused || inputGate(t, s, run.ID).State != "pending" {
+					t.Fatalf("durable outcome lost: %+v %+v %v %v", saved, control, loadErr, controlErr)
+				}
+			})
+		}
+	}
+}
+
+func TestExternalInputRepeatedOrderedInterruptions(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
+			var calls atomic.Int32
+			e, s := durableExecutor(t, `jobs: {review: {uses: workflows/child.yml, for-each: {items: [{id: a}], key: item.id}}}`, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+				calls.Add(1)
+				return map[string]any{}, nil
+			}))
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
+jobs:
+  x:
+    steps:
+      - {uses: agent/a, with: {prompt: before}}
+      - {id: q1, uses: input/wait, with: {prompt: one, evidence-id: e1}}
+      - {uses: agent/a, with: {prompt: middle-one}}
+      - {id: q2, uses: input/wait, with: {prompt: two, evidence-id: e2}}
+      - {uses: agent/a, with: {prompt: middle-two}}
+      - {id: q3, uses: input/wait, with: {prompt: three, evidence-id: e3}}
+      - {uses: agent/a, with: {prompt: after}}
+`)
+			wrapper := &executionBoundaryJournal{SQLiteStore: s}
+			e.Store = wrapper
+			var run *Run
+			var childID, legacyFingerprint string
+			for index := 0; index < 3; index++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
+					if g.State != "pending" {
+						return nil
+					}
+					if err := s.InterruptInput(context.WithoutCancel(ctx), g.OriginID, g.Generation); err != nil {
+						return err
+					}
+					cancel()
+					return nil
+				}
+				var err error
+				if index == 0 {
+					run, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				} else {
+					run, err = e.Resume(ctx, run.ID, nil, false)
+				}
+				cancel()
+				if err != nil || run == nil || run.Status != RunStatusInterrupted || run.Error != "" {
+					t.Fatalf("interrupt %d: %+v %v", index+1, run, err)
+				}
+				gate := inputGate(t, s, run.ID)
+				if childID == "" {
+					childID = gate.RunID
+				}
+				if gate.RunID != childID || gate.StepID != fmt.Sprint("q", index+1) || gate.State != "pending" || calls.Load() != int32(index+1) {
+					t.Fatalf("gate/checkpoint changed: %+v calls=%d", gate, calls.Load())
+				}
+				if legacy && index == 0 {
+					records, err := s.IterationAttempts(context.Background(), run.ID, "review")
+					if err != nil {
+						t.Fatal(err)
+					}
+					last := records[len(records)-1]
+					if last.Status != "interrupted" {
+						last.Status = "interrupted"
+						last.FailureClass = "canceled"
+						last.Error = context.Canceled.Error()
+						last.Fingerprint = iterationResultHash(last)
+						legacyFingerprint = last.Fingerprint
+						if err := s.AppendIteration(context.Background(), run.ID, "review", last); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				// Unanswered resume and another pause preserve this gate without admitting
+				// another execution owner or reserving another item outcome.
+				generation := run.Generation
+				unanswered, err := e.Resume(context.Background(), run.ID, nil, false)
+				if err != nil || unanswered.Status != RunStatusWaiting || unanswered.Generation != generation {
+					t.Fatalf("unanswered resume: %+v %v", unanswered, err)
+				}
+				if err := s.InterruptInput(context.Background(), run.ID, generation); err != nil {
+					t.Fatal(err)
+				}
+				if again := inputGate(t, s, run.ID); again.ID != gate.ID || len(again.History) != 1 {
+					t.Fatal("same question changed", again)
+				}
+				answerGate(t, s, gate)
+			}
+			wrapper.afterGate = nil
+			done, err := e.Resume(context.Background(), run.ID, nil, false)
+			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 4 {
+				t.Fatalf("completion: %+v %v calls=%d", done, err, calls.Load())
+			}
+			gates, err := s.Inputs(context.Background(), run.ID)
+			if err != nil || len(gates) != 3 {
+				t.Fatalf("gates: %+v %v", gates, err)
+			}
+			for _, gate := range gates {
+				if gate.RunID != childID || gate.State != "consumed" || len(gate.History) != 3 {
+					t.Fatalf("answer history changed: %+v", gate)
+				}
+			}
+			records, err := s.IterationAttempts(context.Background(), run.ID, "review")
+			if err != nil {
+				t.Fatal(err)
+			}
+			completed, interrupted := 0, 0
+			for _, record := range records {
+				if record.ChildID != childID || record.Attempt != 1 {
+					t.Fatalf("attempt identity changed: %+v", records)
+				}
+				if record.Status == "completed" {
+					completed++
+				}
+				if record.Status == "interrupted" {
+					interrupted++
+					if record.Fingerprint != legacyFingerprint {
+						t.Fatal("legacy terminal history changed", record)
+					}
+				}
+			}
+			wantInterrupted := 0
+			if legacy {
+				wantInterrupted = 1
+			}
+			if completed != 1 || interrupted != wantInterrupted {
+				t.Fatalf("terminal history changed: %+v", records)
+			}
+		})
+	}
+}
+
+func TestExternalInputDeadlineOutcomeCompatibility(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	e := &Executor{}
+	definitions := map[string]*Workflow{"main": {Jobs: map[string]Job{"x": {Steps: []Step{{Uses: "agent/a"}}}}}}
+	run, err := e.execute(ctx, "main", RunRequest{Ref: "main"}, definitions, make(chan struct{}, 1), 0, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || run == nil || run.Status != RunStatusCanceled || run.FailureClass != "timeout" {
+		t.Fatalf("deadline run outcome changed: %+v %v", run, err)
+	}
+	if job := run.Jobs["x"]; job.Status != RunStatusCanceled || job.FailureClass != "timeout" {
+		t.Fatalf("deadline job outcome changed: %+v", job)
 	}
 }
