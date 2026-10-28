@@ -3,10 +3,16 @@ package runtimeexec
 import (
 	"context"
 	"encoding/json"
-	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 )
 
 func TestStrictMacOSCleanupRequiresContainers(t *testing.T) {
@@ -81,5 +87,105 @@ func TestNetworkPolicyIsIndependentAndFailsClosed(t *testing.T) {
 	}
 	if _, err = Reconcile(context.Background(), Record{ID: NewID(), State: "launching", Network: p.Network}); err == nil {
 		t.Fatal("unconfirmed runtime cleanup treated as absent")
+	}
+}
+
+type networkPreparationJournal struct {
+	record     Record
+	states     []string
+	failState  string
+	failure    error
+	cancel     context.CancelFunc
+	cleanupCtx error
+}
+
+func (j *networkPreparationJournal) AdmitInvocation(_ context.Context, record Record) error {
+	j.record = record
+	j.states = append(j.states, record.State)
+	return nil
+}
+
+func (j *networkPreparationJournal) UpdateInvocation(ctx context.Context, record Record) error {
+	j.states = append(j.states, record.State)
+	if record.State == "launching" && j.cancel != nil {
+		j.cancel()
+	}
+	if record.State == "cleaned" {
+		j.cleanupCtx = ctx.Err()
+	}
+	if record.State == j.failState {
+		return j.failure
+	}
+	j.record = record
+	return nil
+}
+
+func TestNetworkPreparationFailuresCleanUnstartedInvocation(t *testing.T) {
+	for _, failure := range []string{"missing-relative-command", "extra-files"} {
+		for _, cleanupSaveFails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cleanup-save-fails=%t", failure, cleanupSaveFails), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				journal := &networkPreparationJournal{cancel: cancel}
+				persistErr := errors.New("cleanup persistence failed")
+				if cleanupSaveFails {
+					journal.failState, journal.failure = "cleaned", persistErr
+				}
+				ctx = WithBinding(ctx, Binding{Journal: journal, Dir: t.TempDir()})
+				cmd := exec.Command("missing-workflow-command-" + NewID())
+				if failure == "missing-relative-command" {
+					if !errors.Is(cmd.Err, exec.ErrNotFound) {
+						t.Fatalf("fixture command unexpectedly available: %v", cmd.Err)
+					}
+				} else {
+					cmd = exec.Command(os.Args[0])
+					file, err := os.Open(os.DevNull)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer file.Close()
+					cmd.ExtraFiles = []*os.File{file}
+				}
+				ref := network.Reference{Name: "unit-no-runtime", Identity: strings.Repeat("a", 32), Generation: 1}
+				ref.Endpoint = network.Endpoint(ref.Name, ref.Identity)
+				// Exercise preparation after the public admission health check.
+				// Real Wrap errors need no runtime service or fake health response.
+				stop, err := superviseNetwork(ctx, cmd, ref)
+				if err == nil || stop != nil || cmd.Process != nil {
+					t.Fatalf("invalid setup launched or succeeded: stop=%v err=%v process=%v", stop != nil, err, cmd.Process)
+				}
+				if failure == "missing-relative-command" && !errors.Is(err, exec.ErrNotFound) {
+					t.Fatalf("original command error lost: %v", err)
+				}
+				if !reflect.DeepEqual(journal.states, []string{"intent", "launching", "cleaned"}) || journal.cleanupCtx != nil || ctx.Err() != context.Canceled {
+					t.Fatalf("cleanup order/context: states=%v cleanup=%v caller=%v", journal.states, journal.cleanupCtx, ctx.Err())
+				}
+				if cleanupSaveFails {
+					if !errors.Is(err, persistErr) || !errors.Is(err, process.ErrCleanup) || journal.record.State != "launching" {
+						t.Fatalf("failed cleanup persistence erased uncertainty: record=%+v err=%v", journal.record, err)
+					}
+				} else {
+					if journal.record.State != "cleaned" || errors.Is(err, process.ErrCleanup) {
+						t.Fatalf("proven unstarted invocation retained uncertainty: %+v %v", journal.record, err)
+					}
+					if record, err := Reconcile(context.Background(), journal.record); err != nil || record.State != "cleaned" {
+						t.Fatalf("cleaned setup queried a nonexistent runtime member: %+v %v", record, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestNetworkLaunchingSaveFailureDoesNotStart(t *testing.T) {
+	persistErr := errors.New("launching persistence failed")
+	journal := &networkPreparationJournal{failState: "launching", failure: persistErr}
+	ctx := WithBinding(context.Background(), Binding{Journal: journal, Dir: t.TempDir()})
+	ref := network.Reference{Name: "unit-no-runtime", Identity: strings.Repeat("a", 32), Generation: 1}
+	ref.Endpoint = network.Endpoint(ref.Name, ref.Identity)
+	cmd := exec.Command(os.Args[0])
+	stop, err := superviseNetwork(ctx, cmd, ref)
+	if !errors.Is(err, persistErr) || errors.Is(err, process.ErrCleanup) || stop != nil || cmd.Process != nil || journal.record.State != "cleaned" {
+		t.Fatalf("failed launch journal admitted work or blocked proven cleanup: %+v %v", journal.record, err)
 	}
 }

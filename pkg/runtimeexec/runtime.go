@@ -239,19 +239,35 @@ func SupervisePolicy(ctx context.Context, cmd *exec.Cmd, p Policy) (func(), erro
 	if p.Network == nil {
 		return Supervise(ctx, cmd)
 	}
+	return superviseNetwork(ctx, cmd, *p.Network)
+}
+
+// superviseNetwork prepares an already checked reference; only the caller's
+// subsequent Cmd.Start can send a launch request to the runtime.
+func superviseNetwork(ctx context.Context, cmd *exec.Cmd, ref network.Reference) (_ func(), returnErr error) {
 	i, err := Admit(ctx, "network")
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if returnErr != nil && i != nil {
+			finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			if err := i.Save(finish, "cleaned"); err != nil {
+				i.Record.State = "uncertain"
+				returnErr = errors.Join(returnErr, process.ErrCleanup, err)
+			}
+		}
+	}()
 	id := NewID()
 	if i != nil {
 		id = i.Record.ID
-		i.Record.Network = p.Network
+		i.Record.Network = &ref
 		if err = i.Save(ctx, "launching"); err != nil {
 			return nil, err
 		}
 	}
-	if err = network.Wrap(cmd, *p.Network, id); err != nil {
+	if err = network.Wrap(cmd, ref, id); err != nil {
 		return nil, err
 	}
 	// This outer guardian owns only the launch client. The runtime's root-owned
@@ -267,7 +283,7 @@ func SupervisePolicy(ctx context.Context, cmd *exec.Cmd, p Policy) (func(), erro
 			defer cancel()
 			state := "cleaned"
 			if cmd.Process != nil {
-				if err := network.Completed(finish, *p.Network, id); err != nil {
+				if err := network.Completed(finish, ref, id); err != nil {
 					state = "uncertain"
 				}
 			}
