@@ -755,3 +755,340 @@ func TestTerminalStderrTerminalIdentity(t *testing.T) {
 		})
 	}
 }
+
+func terminalPair(t *testing.T) (*os.File, *os.File, *unix.Termios) {
+	t.Helper()
+	master, slave, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { master.Close(); slave.Close() })
+	modes, err := unix.IoctlGetTermios(terminalFD(slave), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return master, slave, modes
+}
+
+func terminalSetOutput(t *testing.T, file *os.File, flags uint32) *unix.Termios {
+	t.Helper()
+	modes, err := unix.IoctlGetTermios(terminalFD(file), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes.Oflag = flags
+	if err := unix.IoctlSetTermios(terminalFD(file), unix.TCSETS, modes); err != nil {
+		t.Fatal(err)
+	}
+	return modes
+}
+
+func terminalAssertModes(t *testing.T, file *os.File, want *unix.Termios) {
+	t.Helper()
+	got, err := unix.IoctlGetTermios(terminalFD(file), unix.TCGETS)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("terminal %s modes = %+v, want %+v; error %v", file.Name(), got, want, err)
+	}
+}
+
+// Called only after a completed workload/drain, when all expected writes have
+// reached this owned PTY. A finite poll also captures unexpected extra bytes.
+func terminalReadBuffered(t *testing.T, master *os.File) []byte {
+	t.Helper()
+	var got []byte
+	for {
+		fds := []unix.PollFd{{Fd: int32(terminalFD(master)), Events: unix.POLLIN}}
+		_, err := unix.Poll(fds, 20)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fds[0].Revents&unix.POLLIN == 0 {
+			return got
+		}
+		buf := make([]byte, 4096)
+		n, err := unix.Read(terminalFD(master), buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, buf[:n]...)
+	}
+}
+
+func TestTerminalOutputBytesMatchNative(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		for _, inputPost := range []bool{false, true} {
+			for _, outputPost := range []bool{false, true} {
+				if same && inputPost != outputPost {
+					continue // One terminal has one shared set of output modes.
+				}
+				for _, dynamic := range []bool{false, true} {
+					name := fmt.Sprintf("same=%t/input-post=%t/output-post=%t/dynamic=%t", same, inputPost, outputPost, dynamic)
+					t.Run(name, func(t *testing.T) {
+						capture := func(bridged bool) []byte {
+							outMaster, output, _ := terminalPair(t)
+							input := output
+							if !same {
+								_, input, _ = terminalPair(t)
+							}
+							inputFlags, outputFlags := uint32(unix.ONLCR), uint32(unix.ONLCR)
+							if inputPost {
+								inputFlags |= unix.OPOST
+							}
+							if outputPost {
+								outputFlags |= unix.OPOST
+								if !same {
+									outputFlags |= unix.OCRNL
+								}
+							}
+							savedInput := terminalSetOutput(t, input, inputFlags)
+							savedOutput := terminalSetOutput(t, output, outputFlags)
+							ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+							defer cancel()
+							script := "printf 'first\r\n'"
+							if dynamic {
+								script += "; stty -opost <&1; printf 'raw\r\n'; stty opost onlcr <&1; printf 'processed\r\n'"
+							}
+							cmd := exec.CommandContext(ctx, "sh", "-c", script)
+							cmd.Stdin, cmd.Stdout = input, output
+							if bridged {
+								finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+								if err != nil {
+									t.Fatal(err)
+								}
+								defer finish()
+								if err := cmd.Run(); err != nil {
+									t.Fatal(err)
+								}
+								if err := finish(); err != nil {
+									t.Fatal(err)
+								}
+								terminalAssertModes(t, input, savedInput)
+								terminalAssertModes(t, output, savedOutput)
+							} else if err := cmd.Run(); err != nil {
+								t.Fatal(err)
+							}
+							return terminalReadBuffered(t, outMaster)
+						}
+						native, bridged := capture(false), capture(true)
+						if !bytes.Equal(bridged, native) {
+							t.Fatalf("bridge output %q (%x), native %q (%x)", bridged, bridged, native, native)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+// Fill only a disposable PTY through a separately opened nonblocking writer;
+// flags on the descriptors supplied to bridgeTerminal never change.
+func terminalFillOutput(t *testing.T, output *os.File) []byte {
+	t.Helper()
+	fd, err := unix.Open(output.Name(), unix.O_WRONLY|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	var filled []byte
+	buf := bytes.Repeat([]byte("."), 1024)
+	for len(filled) < 1024*1024 {
+		n, err := unix.Write(fd, buf)
+		if err == unix.EAGAIN {
+			// The PTY flip-buffer worker may still move accepted bytes to
+			// its bounded reader queue. Wait for that work before deciding
+			// the destination applies steady backpressure.
+			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
+			if n, err := unix.Poll(fds, 50); err == unix.EINTR {
+				continue
+			} else if err != nil {
+				t.Fatal(err)
+			} else if n == 0 {
+				return filled
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		filled = append(filled, buf[:n]...)
+	}
+	t.Fatal("owned PTY did not apply bounded backpressure")
+	return nil
+}
+
+func TestTerminalOutputDrainRestoresModesAfterFinalNewline(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		t.Run(fmt.Sprintf("same=%t", same), func(t *testing.T) {
+			master, output, savedOutput := terminalPair(t)
+			input, savedInput := output, savedOutput
+			if !same {
+				_, input, savedInput = terminalPair(t)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			payload := strings.Repeat("final\n", 2048)
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\"; exit 37", "fixture", payload)
+			cmd.Stdin, cmd.Stdout = input, output
+			finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			filler := terminalFillOutput(t, output)
+			if err := cmd.Run(); err == nil || err.(*exec.ExitError).ExitCode() != 37 {
+				t.Fatalf("workload exit = %v", err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- finish() }()
+			select {
+			case err := <-done:
+				t.Fatalf("backpressured drain returned early: %v", err)
+			case <-time.After(1200 * time.Millisecond):
+			}
+			modes, err := unix.IoctlGetTermios(terminalFD(output), unix.TCGETS)
+			if err != nil || modes.Oflag&unix.OPOST != 0 {
+				t.Fatalf("outer output processing enabled before drain: %+v, %v", modes, err)
+			}
+			inputModes := *savedInput
+			if same {
+				inputModes.Oflag &^= unix.OPOST
+			}
+			terminalAssertModes(t, input, &inputModes)
+			want := append(filler, []byte(strings.ReplaceAll(payload, "\n", "\r\n"))...)
+			if err := master.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, len(want))
+			if _, err := io.ReadFull(master, got); err != nil {
+				t.Fatal(err)
+			}
+			if err := awaitTerminalDrain(t, done); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, terminalReadBuffered(t, master)...)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("final output = %q, want %q", got[len(filler):], want[len(filler):])
+			}
+			terminalAssertModes(t, input, savedInput)
+			terminalAssertModes(t, output, savedOutput)
+		})
+	}
+}
+
+func TestTerminalBlockedOutputCancellationRestoresBothTerminals(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		t.Run(fmt.Sprintf("same=%t", same), func(t *testing.T) {
+			_, output, savedOutput := terminalPair(t)
+			input, savedInput := output, savedOutput
+			if !same {
+				_, input, _ = terminalPair(t)
+				savedInput = terminalSetOutput(t, input, unix.ONLCR)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\"", "fixture", strings.Repeat("final\n", 2048))
+			cmd.Stdin, cmd.Stdout = input, output
+			finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			_ = terminalFillOutput(t, output)
+			if err := cmd.Run(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- finish() }()
+			select {
+			case err := <-done:
+				t.Fatalf("blocked drain returned before cancellation: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			inputModes := *savedInput
+			if same {
+				inputModes.Oflag &^= unix.OPOST
+			}
+			terminalAssertModes(t, input, &inputModes) // ISIG/ICANON/ECHO restored during drain.
+			cancel()
+			if err := awaitTerminalDrain(t, done); !errors.Is(err, context.Canceled) {
+				t.Fatalf("blocked TTY drain cancellation = %v", err)
+			}
+			terminalAssertModes(t, input, savedInput)
+			terminalAssertModes(t, output, savedOutput)
+		})
+	}
+}
+
+func TestTerminalSetupAndLaunchFailuresPreserveBothModes(t *testing.T) {
+	_, output, savedOutput := terminalPair(t)
+	inputR, inputW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inputR.Close()
+	defer inputW.Close()
+	cmd := exec.Command("true")
+	cmd.Stdin, cmd.Stdout = inputR, output
+	if _, err := bridgeTerminal(context.Background(), func() {}, cmd, inputR, output); err == nil {
+		t.Fatal("nonterminal input was accepted by terminal-only bridge")
+	}
+	if cmd.Stdin != inputR || cmd.Stdout != output {
+		t.Fatal("initial setup failure changed command streams")
+	}
+	terminalAssertModes(t, output, savedOutput)
+	_, input, _ := terminalPair(t)
+	savedInput := terminalSetOutput(t, input, unix.ONLCR)
+	cmd = exec.Command(filepath.Join(t.TempDir(), "missing"))
+	cmd.Stdin, cmd.Stdout = input, output
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	if err := cmd.Run(); err == nil {
+		t.Fatal("missing command succeeded")
+	}
+	cancel()
+	if err := finish(); err != nil {
+		t.Fatal(err)
+	}
+	terminalAssertModes(t, input, savedInput)
+	terminalAssertModes(t, output, savedOutput)
+}
+
+func TestTerminalDistinctInputRetainsDirectStderrOutputModes(t *testing.T) {
+	inputMaster, input, savedInput := terminalPair(t)
+	outputMaster, output, _ := terminalPair(t)
+	savedOutput := terminalSetOutput(t, output, unix.ONLCR)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'stdout\n'; printf 'stderr\n' >&2")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, input
+	finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	if cmd.Stderr != input {
+		t.Fatal("stderr targeting distinct stdin terminal was replaced")
+	}
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := finish(); err != nil {
+		t.Fatal(err)
+	}
+	if got := terminalReadBuffered(t, outputMaster); string(got) != "stdout\n" {
+		t.Fatalf("raw stdout = %q", got)
+	}
+	if got := terminalReadBuffered(t, inputMaster); string(got) != "stderr\r\n" {
+		t.Fatalf("processed stderr on input terminal = %q", got)
+	}
+	terminalAssertModes(t, input, savedInput)
+	terminalAssertModes(t, output, savedOutput)
+}

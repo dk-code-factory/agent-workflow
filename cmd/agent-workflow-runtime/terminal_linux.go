@@ -56,6 +56,10 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	if err != nil {
 		return nil, err
 	}
+	savedOutput, outputErr := unix.IoctlGetTermios(terminalFD(output), unix.TCGETS)
+	outputDevice, outputDeviceErr := unix.IoctlGetInt(terminalFD(output), unix.TIOCGDEV)
+	inputDevice, inputDeviceErr := unix.IoctlGetInt(terminalFD(input), unix.TIOCGDEV)
+	distinctOutput := outputDeviceErr == nil && inputDeviceErr == nil && outputDevice != inputDevice
 	master, slave, err := openTerminal()
 	if err != nil {
 		return nil, err
@@ -73,9 +77,13 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 		wakeW.Close()
 		return nil, err
 	}
-	// The inner terminal starts with the caller's ordinary line discipline.
-	// Only the host relay runs raw so every key reaches that discipline.
-	if err = unix.IoctlSetTermios(terminalFD(slave), unix.TCSETS, saved); err != nil {
+	// Input discipline comes from stdin, output processing from stdout. The
+	// workload may change its private terminal's modes while it runs.
+	inner := *saved
+	if outputErr == nil {
+		inner.Oflag = savedOutput.Oflag
+	}
+	if err = unix.IoctlSetTermios(terminalFD(slave), unix.TCSETS, &inner); err != nil {
 		return fail(err)
 	}
 	resize := func() {
@@ -86,19 +94,44 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	resize()
 	raw := *saved
 	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-	raw.Oflag &^= unix.OPOST
 	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
 	raw.Cflag &^= unix.CSIZE | unix.PARENB
 	raw.Cflag |= unix.CS8
 	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
+	restoreModes := func() error {
+		var restoreErr error
+		if err := unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, saved); err != nil {
+			restoreErr = fmt.Errorf("restore caller input terminal: %w", err)
+		}
+		if outputErr == nil {
+			if err := unix.IoctlSetTermios(terminalFD(output), unix.TCSETS, savedOutput); err != nil {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("restore caller output terminal: %w", err))
+			}
+		}
+		return restoreErr
+	}
+	rollback := func(err error) (func() error, error) {
+		return fail(errors.Join(err, restoreModes()))
+	}
 	if err = unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, &raw); err != nil {
-		return fail(err)
+		return rollback(err)
+	}
+	if outputErr == nil {
+		// Read after setting input raw: stdin and stdout may be aliases of
+		// one terminal. Disable only outer output processing in either case.
+		relayOutput, err := unix.IoctlGetTermios(terminalFD(output), unix.TCGETS)
+		if err != nil {
+			return rollback(err)
+		}
+		relayOutput.Oflag &^= unix.OPOST
+		if err := unix.IoctlSetTermios(terminalFD(output), unix.TCSETS, relayOutput); err != nil {
+			return rollback(err)
+		}
 	}
 	// Only diagnostics targeting the original stdout terminal share the new
 	// PTY. A different terminal is an explicit stream redirection.
-	outputDevice, outputErr := unix.IoctlGetInt(terminalFD(output), unix.TIOCGDEV)
 	cmd.Stdin, cmd.Stdout = slave, slave
-	if diagnostics, ok := cmd.Stderr.(*os.File); ok && outputErr == nil {
+	if diagnostics, ok := cmd.Stderr.(*os.File); ok && outputDeviceErr == nil {
 		diagnosticDevice, err := unix.IoctlGetInt(terminalFD(diagnostics), unix.TIOCGDEV)
 		if err == nil && diagnosticDevice == outputDevice {
 			cmd.Stderr = slave
@@ -160,8 +193,15 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 			wakeW.Close()
 			<-inputDone
 			wakeR.Close()
-			if err := unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, saved); err != nil {
-				restoreErr = fmt.Errorf("restore caller terminal: %w", err)
+			// Restore caller keyboard controls before a potentially blocked
+			// drain. Shared output must still bypass outer processing; only
+			// proved distinct input keeps its original output modes now.
+			inputModes := *saved
+			if outputErr == nil && !distinctOutput {
+				inputModes.Oflag &^= unix.OPOST
+			}
+			if err := unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, &inputModes); err != nil {
+				restoreErr = fmt.Errorf("restore caller input terminal: %w", err)
 			}
 			slave.Close()
 			// Closing the final slave drains buffered output before EIO on
@@ -191,6 +231,7 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 				restoreErr = errors.Join(restoreErr, fmt.Errorf("drain terminal output: %w", drainErr))
 			}
 			master.Close()
+			restoreErr = errors.Join(restoreErr, restoreModes())
 		})
 		return restoreErr
 	}, nil
