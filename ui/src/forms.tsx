@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { controllerParameters, dependencies, effectiveStepID } from './validation';
 import { parseDocument, stringify } from 'yaml';
 import type { WorkflowDocument } from './document';
@@ -251,6 +251,8 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
   const [, refresh] = useState(0);
   const rendered = useRef<{ step: string; generation: number; render: ActionDefinition['renderInspector']; job: string; index: number; uses: string | undefined; id: string | undefined; readOnly: boolean; pending: () => boolean; dispose: () => void } | undefined>(undefined);
   const step = (store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow)!.jobs[job].steps![index];
+  // Document source edits replace parsed steps; layout and option updates retain them.
+  const text = useMemo(() => JSON.stringify(step), [step]);
   const readOnly = store.readOnly || store.getSnapshot().stale;
   const generation = store.getInspectorGeneration();
   useEffect(() => () => { rendered.current?.dispose(); rendered.current = undefined; }, [store, registry]);
@@ -258,7 +260,6 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
   // destroy raw host buffers before a replacement choice could protect them.
   useEffect(() => {
     const previous = rendered.current;
-    const text = JSON.stringify(step);
     if (previous && previous.generation === generation && previous.job === job && previous.index === index && previous.uses === step.uses && previous.id === step.id && previous.readOnly === readOnly &&
       (previous.pending() || (previous.step === text && previous.render === definition.renderInspector))) return;
     rendered.current = undefined; previous?.dispose();

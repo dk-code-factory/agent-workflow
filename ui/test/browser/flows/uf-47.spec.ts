@@ -200,6 +200,52 @@ test('raw contributions aggregate with fields and survive sibling edits, catalog
   expect((await snapshot(page)).hasLocalChanges).toBe(false);
 });
 
+test('layout renders reuse large custom step content and source edits invalidate it', async ({ page }, testInfo) => {
+  const ui = await rawInspector(page, false, false);
+  const metadata = 'layout-metadata-'.repeat(18_000);
+  const source = (await snapshot(page)).source.replace('with: {prompt: Hello}', `with: {prompt: Hello}\n        x-layout-metadata: ${metadata}`);
+  expect(new TextEncoder().encode(source).length).toBeLessThan(4 * 1024 * 1024);
+  await page.evaluate(source => (window as any).first.update({ source }), source);
+  const raw = ui.getByLabel('Raw prompt', { exact: true });
+  await expect(raw).toHaveValue('Hello');
+  await page.evaluate(() => {
+    const host = window as any; const stringify = JSON.stringify;
+    host.stepSerializations = 0; host.rawElement = document.querySelector('#a [aria-label="Raw prompt"]');
+    JSON.stringify = ((value: any, ...args: any[]) => {
+      if (value?.id === 'greet' && typeof value['x-layout-metadata'] === 'string') host.stepSerializations++;
+      return (stringify as any)(value, ...args);
+    }) as typeof JSON.stringify;
+    host.restoreStringify = () => { JSON.stringify = stringify; };
+    host.first.update({ onLayoutChange: (layout: any) => { host.observedLayout = layout; } });
+  });
+  const initial = await snapshot(page);
+  const renders = await page.evaluate(() => (window as any).raw.renders);
+  const collapse = ui.getByRole('button', { name: 'Expand build', exact: true });
+  await collapse.click(); await expect(collapse).toHaveAttribute('aria-expanded', 'false');
+  expect(await page.evaluate(() => (window as any).observedLayout.collapsed.build)).toBe(true);
+  const cleanCount = await page.evaluate(() => (window as any).stepSerializations);
+  await raw.fill('Pending across layout');
+  await collapse.click(); await expect(collapse).toHaveAttribute('aria-expanded', 'true');
+  expect(await page.evaluate(() => (window as any).observedLayout.collapsed.build)).toBe(false);
+  await expect(raw).toHaveValue('Pending across layout');
+  expect(await page.evaluate(() => document.querySelector('#a [aria-label="Raw prompt"]') === (window as any).rawElement)).toBe(true);
+  expect(await page.evaluate(() => (window as any).raw.renders)).toBe(renders);
+  expect((await snapshot(page)).source).toBe(initial.source);
+  expect((await snapshot(page)).revision).toBe(initial.revision);
+  const counts = { cleanLayout: cleanCount, throughPendingLayout: await page.evaluate(() => (window as any).stepSerializations), metadataBytes: metadata.length };
+  await testInfo.attach('step-serialization-counts', { body: JSON.stringify(counts), contentType: 'application/json' });
+  expect(counts).toMatchObject({ cleanLayout: 0, throughPendingLayout: 0 });
+  await page.evaluate(() => (window as any).raw.contexts.at(-1).setField(['x-layout-metadata'], 'Updated metadata'));
+  await expect.poll(() => page.evaluate(() => (window as any).stepSerializations)).toBeGreaterThan(0);
+  await expect(raw).toHaveValue('Pending across layout');
+  expect(await page.evaluate(() => (window as any).raw.renders)).toBe(renders);
+  await raw.fill('Hello');
+  await expect.poll(() => page.evaluate(() => (window as any).raw.contexts.at(-1).step['x-layout-metadata'])).toBe('Updated metadata');
+  await page.evaluate(() => (window as any).raw.contexts.at(-1).setField(['with', 'prompt'], 'Updated prompt'));
+  await expect(raw).toHaveValue('Updated prompt');
+  await page.evaluate(() => (window as any).restoreStringify());
+});
+
 test('renderer replacement and destruction release only their own pending contribution', async ({ page }) => {
   const ui = await rawInspector(page);
   const raw = ui.getByLabel('Raw prompt', { exact: true });
