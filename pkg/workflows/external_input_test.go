@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -548,17 +549,35 @@ func TestExternalInputDrainsIndependentWorkAndActiveInterrupt(t *testing.T) {
 				}
 			}))
 			e.Slots = make(chan struct{}, 1)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			type result struct {
 				run *Run
 				err error
 			}
 			done := make(chan result, 1)
-			go func() { r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); done <- result{r, err} }()
-			<-started
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				done <- result{r, err}
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-finished:
+				case <-time.After(5 * time.Second):
+					t.Error("executor did not stop after cancellation")
+				}
+			})
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("independent invocation did not start")
+			}
 			var gate ExternalInputGate
 			deadline := time.After(5 * time.Second)
+			poll := time.NewTicker(time.Millisecond)
+			defer poll.Stop()
 			for gate.ID == "" {
 				runs, err := s.List(context.Background())
 				if err != nil {
@@ -576,7 +595,7 @@ func TestExternalInputDrainsIndependentWorkAndActiveInterrupt(t *testing.T) {
 				select {
 				case <-deadline:
 					t.Fatal("question not committed")
-				default:
+				case <-poll.C:
 				}
 			}
 			if len(e.Slots) != 1 {
@@ -603,7 +622,12 @@ func TestExternalInputDrainsIndependentWorkAndActiveInterrupt(t *testing.T) {
 				}
 				close(release)
 			}
-			r := <-done
+			var r result
+			select {
+			case r = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("executor did not finish")
+			}
 			expected := RunStatusWaiting
 			if interrupt {
 				expected = RunStatusInterrupted
@@ -896,5 +920,287 @@ func TestExternalInputPendingResumePreservesUncertainty(t *testing.T) {
 	r, _, _ = s.Load(ctx, run.ID)
 	if r.Status != RunStatusInterrupted || r.Generation != run.Generation {
 		t.Fatal("uncertain run automatically admitted", r)
+	}
+}
+
+func TestExternalInputCancellationControlDoesNotLeakGenerations(t *testing.T) {
+	ctx := context.Background()
+	var calls atomic.Int32
+	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: agent/a, with: {prompt: resume}}]}}`, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+		calls.Add(1)
+		return map[string]any{}, nil
+	}))
+	run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RequestCancelGeneration(ctx, run.ID, run.Generation); err != nil {
+		t.Fatal(err)
+	}
+	run.Status = RunStatusCanceled
+	if err = s.Save(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	// Admission failure must leave the previous generation's cancellation intact.
+	if _, err = s.db.Exec(`CREATE TRIGGER fail_resume BEFORE INSERT ON executions WHEN NEW.generation=2 BEGIN SELECT RAISE(ABORT,'admission fault'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.QueueResume(ctx, run.ID, "", false, 128); err == nil {
+		t.Fatal("admission fault not observed")
+	}
+	control, err := s.InputControl(ctx, run.ID)
+	canceled, cancelErr := s.CancellationRequested(ctx, run.ID)
+	if err != nil || cancelErr != nil || !control.Canceled || !canceled {
+		t.Fatalf("failed admission cleared cancellation: %+v %v %v", control, err, cancelErr)
+	}
+	if _, err = s.db.Exec("DROP TRIGGER fail_resume"); err != nil {
+		t.Fatal(err)
+	}
+	done, err := e.Resume(ctx, run.ID, nil, false)
+	if err != nil || done.Status != RunStatusSucceeded || done.Generation != run.Generation+1 || calls.Load() != 1 {
+		t.Fatalf("cancellation leaked to resumed generation: %+v %v calls=%d", done, err, calls.Load())
+	}
+	control, err = s.InputControl(ctx, run.ID)
+	if err != nil || control.Canceled {
+		t.Fatal(control, err)
+	}
+
+	wait, waitStore := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+	suspended, err := wait.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = waitStore.RequestCancel(ctx, suspended.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = waitStore.QueueResume(ctx, suspended.ID, "", true, 128); err == nil {
+		t.Fatal("canceled gates resumed")
+	}
+	if inputGate(t, waitStore, suspended.ID).State != "canceled" {
+		t.Fatal("canceled gate changed")
+	}
+}
+
+func TestExternalInputContinuationCapacityBoundsWork(t *testing.T) {
+	ctx := context.Background()
+	t.Run("full queue skips discovery", func(t *testing.T) {
+		s, run := executionStore(t)
+		if _, err := s.QueueResume(ctx, run.ID, "", false, 1); err != nil {
+			t.Fatal(err)
+		}
+		// The candidate source is deliberately unavailable. A full queue must return
+		// using only its indexed capacity check, without touching that source.
+		if _, err := s.db.Exec("ALTER TABLE input_controls RENAME TO unavailable_controls"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := s.db.Exec("ALTER TABLE unavailable_controls RENAME TO input_controls"); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := s.QueueInputContinuations(ctx, 1); err != nil {
+			t.Fatal("full queue performed candidate discovery", err)
+		}
+	})
+	t.Run("active oldest does not consume free slot", func(t *testing.T) {
+		e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+		var runs []*Run
+		for i := 0; i < 3; i++ {
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			answerGate(t, s, inputGate(t, s, run.ID))
+			runs = append(runs, run)
+		}
+		// The third record must not be decoded/admitted while only one slot is free.
+		// Its durable intent must survive until a later pass has available capacity.
+		original, err := json.Marshal(runs[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.db.Exec("UPDATE runs SET record='unavailable-record' WHERE id=?", runs[2].ID); err != nil {
+			t.Fatal(err)
+		}
+		if err = s.QueueInputContinuationsExcept(ctx, 1, runs[0].ID); err != nil {
+			t.Fatal("work exceeded available queue capacity", err)
+		}
+		active, _, err := s.Load(ctx, runs[0].ID)
+		if err != nil || active.Status != RunStatusWaiting || active.Generation != runs[0].Generation {
+			t.Fatal("active owner changed", active, err)
+		}
+		queued, _, err := s.Load(ctx, runs[1].ID)
+		if err != nil || queued.Status != RunStatusQueued || queued.Generation != runs[1].Generation+1 {
+			t.Fatal("active exclusion starved free slot", queued, err)
+		}
+		if _, err = s.db.Exec("UPDATE runs SET record=? WHERE id=?", original, runs[2].ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, run := range []*Run{runs[1], runs[2], runs[0]} {
+			if err = s.QueueInputContinuationsExcept(ctx, 1, runs[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			if run.ID == runs[0].ID {
+				if err = s.QueueInputContinuations(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done, err := e.Resume(ctx, run.ID, nil, false)
+			if err != nil || done.Status != RunStatusSucceeded {
+				t.Fatal("durable intent lost", done, err)
+			}
+		}
+	})
+}
+
+type consumeBoundaryJournal struct {
+	*SQLiteStore
+	beforeConsume func(context.Context, string) error
+}
+
+func (s *consumeBoundaryJournal) ConsumeInput(ctx context.Context, id string) (ExternalInputGate, error) {
+	if err := s.beforeConsume(ctx, id); err != nil {
+		return ExternalInputGate{}, err
+	}
+	return s.SQLiteStore.ConsumeInput(ctx, id)
+}
+
+func TestExternalInputPauseDeniedConsumption(t *testing.T) {
+	for _, failure := range []string{"pause", "genuine conflict", "integrity", "cancel"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			var calls atomic.Int32
+			e, s := durableExecutor(t, `jobs:
+  ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
+  dependent: {needs: ask, steps: [{uses: agent/a, with: {prompt: dependent}}]}
+`, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+				calls.Add(1)
+				return map[string]any{}, nil
+			}))
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			answerGate(t, s, inputGate(t, s, run.ID))
+			e.Store = &consumeBoundaryJournal{SQLiteStore: s, beforeConsume: func(ctx context.Context, id string) error {
+				current, _, err := s.Load(ctx, run.ID)
+				if err != nil {
+					return err
+				}
+				if err = s.InterruptInput(ctx, run.ID, current.Generation); err != nil {
+					return err
+				}
+				switch failure {
+				case "genuine conflict":
+					return fmt.Errorf("%w: unrelated conflict", ErrExternalInput)
+				case "integrity":
+					return ErrActionIntegrity
+				case "cancel":
+					return s.RequestCancel(ctx, run.ID)
+				}
+				return nil
+			}}
+			result, err := e.Resume(ctx, run.ID, nil, false)
+			want := RunStatusInterrupted
+			if failure == "genuine conflict" {
+				want = RunStatusFailed
+			}
+			if failure == "integrity" {
+				want = RunStatusNeedsAttention
+			}
+			if failure == "cancel" {
+				want = RunStatusCanceled
+			}
+			if result == nil || result.Status != want || (failure == "pause" && err != nil) || (failure != "pause" && err == nil) {
+				t.Fatalf("consumption result %+v %v", result, err)
+			}
+			stored, _, loadErr := s.Load(ctx, run.ID)
+			if loadErr != nil || stored.Status != want || calls.Load() != 0 {
+				t.Fatal("dependent dispatched or outcome changed", stored, loadErr, calls.Load())
+			}
+			gate := inputGate(t, s, run.ID)
+			if failure == "cancel" {
+				if gate.State != "canceled" {
+					t.Fatal(gate)
+				}
+			} else if gate.State != "accepted" || gate.Answer == nil || len(gate.History) != 2 {
+				t.Fatal("pause consumed/lost answer", gate)
+			}
+			if failure == "pause" {
+				if _, err = s.ConsumeInput(ctx, gate.ID); !errors.Is(err, ErrExternalInput) {
+					t.Fatal("pause conflict classification changed", err)
+				}
+				if err = s.QueueInputContinuations(ctx, 128); err != nil {
+					t.Fatal(err)
+				}
+				stored, _, _ = s.Load(ctx, run.ID)
+				if stored.Status != RunStatusInterrupted || stored.Generation != run.Generation+1 {
+					t.Fatal("paused answer automatically continued", stored)
+				}
+			}
+		})
+	}
+}
+
+func TestExternalInputInspectionUsesOriginLookup(t *testing.T) {
+	ctx := context.Background()
+	e, s := durableExecutor(t, `jobs: {left: {uses: workflows/child.yml}, right: {uses: workflows/child.yml}}`, nil)
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
+jobs:
+  a: {steps: [{uses: input/wait, with: {prompt: a, evidence-id: e}}]}
+  b: {steps: [{uses: input/wait, with: {prompt: b, evidence-id: e}}]}
+`)
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates, err := s.Inputs(ctx, run.ID)
+	if err != nil || len(gates) != 4 {
+		t.Fatal(gates, err)
+	}
+	identities := map[string]bool{run.ID: true, "unknown-run": true}
+	for _, gate := range gates {
+		identities[gate.RunID] = true
+	}
+	for id := range identities {
+		inspected, err := s.Inputs(ctx, id)
+		var expected []ExternalInputGate
+		for _, gate := range gates {
+			if id == run.ID || gate.RunID == id {
+				expected = append(expected, gate)
+			}
+		}
+		if err != nil || len(inspected) != len(expected) {
+			t.Fatal(id, inspected, err)
+		}
+		for i, g := range inspected {
+			if g.ID != expected[i].ID {
+				t.Fatal("inspection order changed", inspected)
+			}
+		}
+		rows, err := s.db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+inputInspectionQuery, id, id, id, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexed := false
+		for rows.Next() {
+			var node, parent, unused int
+			var detail string
+			if err = rows.Scan(&node, &parent, &unused, &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			t.Log(id, detail)
+			if strings.Contains(detail, "SCAN input_gates") {
+				rows.Close()
+				t.Fatal("inspection scans unrelated gate history", detail)
+			}
+			indexed = indexed || strings.Contains(detail, "SEARCH input_gates USING INDEX input_gates_origin")
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil || !indexed {
+			t.Fatal("origin lookup is not indexed", err)
+		}
 	}
 }

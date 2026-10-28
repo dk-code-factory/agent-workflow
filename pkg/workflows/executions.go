@@ -167,7 +167,7 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 			return nil, fmt.Errorf("queued run limit reached")
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0,continuation=0 WHERE run_id=?", id); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0,canceled=0,continuation=0 WHERE run_id=?", id); err != nil {
 		return nil, err
 	}
 	previous := run.Status

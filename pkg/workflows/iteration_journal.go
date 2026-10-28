@@ -222,7 +222,13 @@ func (s *SQLiteStore) AppendIteration(ctx context.Context, run, job string, r It
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO iteration_attempts VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING", run, job, r.Key, r.Attempt, phase, b); err != nil {
+	insert := "INSERT INTO iteration_attempts VALUES(?,?,?,?,?,?)"
+	// A suspended child can report the same waiting observation again. Other
+	// phases retain one immutable write per attempt and reject conflicting writes.
+	if r.Status == RunStatusWaiting {
+		insert += " ON CONFLICT DO NOTHING"
+	}
+	if _, err = tx.ExecContext(ctx, insert, run, job, r.Key, r.Attempt, phase, b); err != nil {
 		return err
 	}
 	if err = addEvent(ctx, tx, run, "iteration."+r.Status, r); err != nil {

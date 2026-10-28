@@ -16,6 +16,10 @@ const RunStatusInterrupted = "interrupted"
 
 var ErrExternalInput = errors.New("external input conflict")
 
+// Preserve conflict classification for callers while identifying only a pause
+// that prevents consumption of an otherwise accepted answer.
+var errInputPaused = fmt.Errorf("%w: execution paused", ErrExternalInput)
+
 // ExternalInputAnswer is data interpreted and validated by the host application.
 // AnswerID is unique across the journal, including canceled and consumed gates.
 type ExternalInputAnswer struct {
@@ -191,8 +195,13 @@ func (s *SQLiteStore) EnsureInputGate(ctx context.Context, g ExternalInputGate) 
 	}
 	return g, tx.Commit()
 }
+
+// Resolve a physical child through its immutable origin before filtering its
+// gates. Both root and child inspection use the existing origin index.
+const inputInspectionQuery = `SELECT record FROM input_gates WHERE origin_id=COALESCE((SELECT origin_id FROM runs WHERE id=?),?) AND (origin_id=? OR run_id=?) ORDER BY rowid`
+
 func (s *SQLiteStore) Inputs(ctx context.Context, run string) ([]ExternalInputGate, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT record FROM input_gates WHERE origin_id=? OR run_id=? ORDER BY rowid", run, run)
+	rows, err := s.db.QueryContext(ctx, inputInspectionQuery, run, run, run, run)
 	if err != nil {
 		return nil, err
 	}
@@ -273,8 +282,11 @@ func (s *SQLiteStore) ConsumeInput(ctx context.Context, id string) (ExternalInpu
 	if err != nil {
 		return g, err
 	}
-	if c.Paused || c.Canceled {
-		return g, fmt.Errorf("%w: execution paused or canceled", ErrExternalInput)
+	if c.Canceled {
+		return g, fmt.Errorf("%w: execution canceled", ErrExternalInput)
+	}
+	if c.Paused {
+		return g, errInputPaused
 	}
 	if g.State == "consumed" {
 		return g, nil
@@ -352,11 +364,30 @@ func (s *SQLiteStore) QueueInputContinuations(ctx context.Context, maxQueued int
 // QueueInputContinuationsExcept excludes active controller owners until cleanup
 // finishes, even after the executor has published waiting and released its lease.
 func (s *SQLiteStore) QueueInputContinuationsExcept(ctx context.Context, maxQueued int, active ...string) error {
-	excluded := make(map[string]bool, len(active))
-	for _, id := range active {
-		excluded[id] = true
+	// A full queue must not discover waiting origins while controller controls
+	// are blocked behind its ownership mutex. Zero retains unlimited admission.
+	available := -1
+	if maxQueued > 0 {
+		queued, err := s.QueueDepth(ctx)
+		if err != nil {
+			return err
+		}
+		available = maxQueued - queued
+		if available <= 0 {
+			return nil
+		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.id FROM runs r JOIN input_controls c ON c.run_id=r.id WHERE r.status='waiting' AND r.owner='' AND c.continuation=1 AND c.paused=0 AND c.canceled=0 AND NOT EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id AND g.state IN ('pending','canceled','replaced')) ORDER BY r.admitted,r.id`)
+	query := `SELECT r.id FROM runs r JOIN input_controls c ON c.run_id=r.id WHERE r.status='waiting' AND r.owner='' AND c.continuation=1 AND c.paused=0 AND c.canceled=0 AND NOT EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id AND g.state IN ('pending','canceled','replaced'))`
+	args := make([]any, 0, len(active)+1)
+	if len(active) > 0 {
+		query += " AND r.id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(active)), ",") + ")"
+		for _, id := range active {
+			args = append(args, id)
+		}
+	}
+	query += " ORDER BY r.admitted,r.id LIMIT ?"
+	args = append(args, available)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -375,9 +406,6 @@ func (s *SQLiteStore) QueueInputContinuationsExcept(ctx context.Context, maxQueu
 		return err
 	}
 	for _, id := range ids {
-		if excluded[id] {
-			continue
-		}
 		if _, err = s.queueResume(ctx, id, "", false, maxQueued, true); err != nil {
 			return err
 		}
@@ -436,6 +464,9 @@ func (e *Executor) executeInputWait(ctx context.Context, step Step, ec expressio
 		return result, err
 	}
 	g, err = j.ConsumeInput(ctx, g.ID)
+	if errors.Is(err, errInputPaused) {
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
