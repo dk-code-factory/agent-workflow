@@ -1148,20 +1148,27 @@ func (s *service) handle(c *net.UnixConn) {
 			beforeStartFailure(e)
 			return
 		}
+		completionR, completionW, e := os.Pipe()
+		if e != nil {
+			lifeR.Close()
+			lifeW.Close()
+			beforeStartFailure(e)
+			return
+		}
+		defer completionR.Close()
 		cmd := exec.Command(s.binary, "__network_runtime_member_v1", launchPath)
 		if s.memberCommand != nil {
 			cmd = s.memberCommand(launchPath)
 		}
-		cmd.ExtraFiles = []*os.File{lifeR, launchFD, s.netNS, s.mountNS}
-		if s.memberCommand != nil {
-			cmd.ExtraFiles = cmd.ExtraFiles[:2]
-		}
+		// fd7 belongs only to the root member, independently of its child's ack.
+		cmd.ExtraFiles = []*os.File{lifeR, launchFD, s.netNS, s.mountNS, completionW}
 		cmd.Stdin = files[0]
 		cmd.Stdout = files[1]
 		cmd.Stderr = files[2]
 		cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
 		err = cmd.Start()
 		lifeR.Close()
+		completionW.Close()
 		if err != nil {
 			lifeW.Close()
 			beforeStartFailure(err)
@@ -1172,7 +1179,10 @@ func (s *service) handle(c *net.UnixConn) {
 		respond(Response{Member: m}, nil)
 		done := make(chan struct{})
 		go func() { _, _ = io.Copy(io.Discard, c); lifeW.Close(); close(done) }()
-		_ = cmd.Wait()
+		// Reap once, independently of completion: an uncertain member may keep
+		// inode references after its final receipt and client response.
+		go func() { _ = cmd.Wait() }()
+		_, _ = io.Copy(io.Discard, completionR)
 		lifeW.Close()
 		var result Membership
 		e = load(launch.Receipt, &result)
@@ -1189,6 +1199,8 @@ func runMember(path string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("member supervisor requires root")
 	}
+	completion := memberCompletion()
+	defer completion.Close()
 	var launch memberLaunch
 	config := os.NewFile(4, "launch")
 	if err := decodeSealedPayload(config, &launch); err != nil {
@@ -1204,6 +1216,7 @@ func runMember(path string) error {
 	if err != nil {
 		return fmt.Errorf("restore socket boundary: %w", err)
 	}
+	// finishMember reports completion before retaining uncertain identities.
 	defer boundary.Close()
 	// The launch file is root-only. Pass its data over fd4 after dropping UID.
 	data, _ := json.Marshal(launch.Request)
@@ -1224,7 +1237,8 @@ func runMember(path string) error {
 	cmd := memberWorkloadCommand(launch, path)
 	cmd.SysProcAttr.UseCgroupFD = true
 	cmd.SysProcAttr.CgroupFD = int(boundary.Group.Fd())
-	cmd.ExtraFiles = []*os.File{life, r, os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace"), ackW}
+	netNS, mountNS := os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace")
+	cmd.ExtraFiles = []*os.File{life, r, netNS, mountNS, ackW}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1240,7 +1254,8 @@ func runMember(path string) error {
 		w.Close()
 	}
 	ackW.Close()
-	return completeMember(launch, err, ackR)
+	return finishMember(launch, err, ackR, completion, boundary.WaitEmpty,
+		[]*os.File{os.Stdin, os.Stdout, os.Stderr, life, netNS, mountNS, ackR})
 }
 
 func memberWorkloadCommand(launch memberLaunch, path string) *exec.Cmd {
@@ -1252,7 +1267,30 @@ func memberWorkloadCommand(launch memberLaunch, path string) *exec.Cmd {
 	return cmd
 }
 
-func completeMember(launch memberLaunch, err error, ack io.Reader) error {
+// memberCompletion is root-only; the child's fd7 is a different cleanup pipe.
+func memberCompletion() *os.File {
+	unix.CloseOnExec(7)
+	return os.NewFile(7, "member-completion")
+}
+
+// finishMember separates caller completion from uncertain reference ownership.
+// waitEmpty is the retained Boundary method; the seam permits unprivileged
+// lifecycle fixtures without substituting receipt/notification behavior.
+func finishMember(launch memberLaunch, waitErr error, ack io.Reader, completion *os.File, waitEmpty func(), invocation []*os.File) error {
+	result, err := completeMember(launch, waitErr, ack)
+	for _, f := range invocation {
+		_ = f.Close()
+	}
+	// EOF reports both persisted completion and persistence failure promptly.
+	// Only the root member owns this writer, which is never inherited by users.
+	_ = completion.Close()
+	if result.State != "cleaned" {
+		waitEmpty()
+	}
+	return err
+}
+
+func completeMember(launch memberLaunch, err error, ack io.Reader) (Membership, error) {
 	code := 0
 	if err != nil {
 		code = 125
@@ -1266,7 +1304,8 @@ func completeMember(launch memberLaunch, err error, ack io.Reader) error {
 	if n, e := io.ReadFull(ack, confirmed[:]); n == 1 && e == io.ErrUnexpectedEOF && confirmed[0] == 1 {
 		state = "cleaned"
 	}
-	return save(launch.Receipt, Membership{ID: launch.Request.ID, UID: launch.UID, State: state, ExitCode: code})
+	result := Membership{ID: launch.Request.ID, UID: launch.UID, State: state, ExitCode: code}
+	return result, save(launch.Receipt, result)
 }
 func (s *service) slirp(request map[string]any) (json.RawMessage, error) {
 	c, err := net.DialTimeout("unix", filepath.Join(s.run, "slirp.sock"), 2*time.Second)

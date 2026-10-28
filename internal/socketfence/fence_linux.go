@@ -10,9 +10,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -344,6 +347,65 @@ func (b *Boundary) Check() error {
 		}
 	}
 	return nil
+}
+
+// empty checks the retained cgroup descriptor, never a replacement pathname.
+func (b *Boundary) empty() (bool, error) {
+	if b == nil || b.Group == nil {
+		return false, errors.New("retained cgroup missing")
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(int(b.Group.Fd()), &st); err != nil {
+		return false, err
+	}
+	if st.Ino != b.State.CgroupID {
+		return false, errors.New("retained cgroup identity changed")
+	}
+	fd, err := unix.Openat(int(b.Group.Fd()), "cgroup.events", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return false, err
+	}
+	f := os.NewFile(uintptr(fd), "cgroup.events")
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 4097))
+	if err != nil {
+		return false, err
+	}
+	if len(data) > 4096 || !strings.HasSuffix(string(data), "\n") {
+		return false, errors.New("invalid cgroup events")
+	}
+	found, empty := false, false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return false, errors.New("invalid cgroup event")
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return false, err
+		}
+		if fields[0] == "populated" {
+			if found || value > 1 {
+				return false, errors.New("invalid cgroup population")
+			}
+			found, empty = true, value == 0
+		}
+	}
+	if !found {
+		return false, errors.New("cgroup population missing")
+	}
+	return empty, nil
+}
+
+// WaitEmpty retains ownership through uncertain cleanup, including service loss.
+// Errors cannot prove emptiness and deliberately do not cancel this wait.
+func (b *Boundary) WaitEmpty() {
+	for {
+		if empty, err := b.empty(); err == nil && empty {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 func (b *Boundary) Close() {

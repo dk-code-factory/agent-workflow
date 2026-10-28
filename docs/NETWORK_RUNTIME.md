@@ -144,7 +144,17 @@ directory retains kernel object identities. Launch rechecks those identities
 and refuses missing, replaced, stale or uninitialized enforcement. Clean
 shutdown detaches only after the kernel confirms an empty cgroup and removes it
 atomically against new launches. Uncertain or populated groups retain their
-pins and receipts; preserve them for operator inspection. A host reboot ends
+pins and receipts; preserve them for operator inspection. After an unacknowledged
+guardian exit, the existing root member supervisor also retains the original
+socket inode handles independently of the service, including service SIGKILL.
+It records the uncertain outcome and closes its invocation streams and lifetime
+channel before notifying the caller. The caller can finish or cancel without
+waiting for this reference retention. Only kernel proof of an empty retained
+cgroup releases those handles; missing or malformed observations keep them.
+Because the cgroup is shared, another active member can conservatively keep an
+uncertain supervisor and its descriptors alive indefinitely. Successful cleanup
+acknowledgements still complete promptly without waiting for unrelated members.
+A host reboot ends
 protected processes and clears kernel pins; no retained invocation is silently
 transferred into a new generation.
 

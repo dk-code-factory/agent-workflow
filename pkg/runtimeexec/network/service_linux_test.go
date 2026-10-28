@@ -447,22 +447,24 @@ func TestStatusExposesHeldNetworkNamespace(t *testing.T) {
 func TestSocketEnforcementFailuresPreventLaunchAndReservations(t *testing.T) {
 	for _, failure := range []string{"missing", "disabled", "unsupported-kernel", "initialization-failure", "stale-map", "replaced-link", "service-crash", "timeout"} {
 		t.Run(failure, func(t *testing.T) {
-			s, socket := fixtureService(t)
-			s.mu.Lock()
-			s.checkBoundary = func() error { return errors.New(failure) }
-			launches := 0
-			s.memberCommand = func(string) *exec.Cmd { launches++; return exec.Command("/bin/false") }
-			s.mu.Unlock()
 			for _, operation := range []string{"exec", "reserve"} {
-				_, out := requestAt(t, socket, Request{Operation: operation, Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, operation == "exec")
-				if out.Error == "" {
-					t.Fatalf("%s admitted without enforcement", operation)
-				}
-			}
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if launches != 0 || len(s.status.Members) != 0 {
-				t.Fatal("workload effects preceded enforcement")
+				t.Run(operation, func(t *testing.T) {
+					s, socket := fixtureService(t)
+					s.mu.Lock()
+					checks, launches := 0, 0
+					s.checkBoundary = func() error { checks++; return errors.New(failure) }
+					s.memberCommand = func(string) *exec.Cmd { launches++; return exec.Command("/bin/false") }
+					s.mu.Unlock()
+					_, out := requestAt(t, socket, Request{Operation: operation, Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, operation == "exec")
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					if out.Error != failure || checks != 1 {
+						t.Fatalf("unavailable enforcement did not reject %s: error=%q checks=%d", operation, out.Error, checks)
+					}
+					if launches != 0 || len(s.status.Members) != 0 {
+						t.Fatal("workload effects preceded enforcement")
+					}
+				})
 			}
 		})
 	}

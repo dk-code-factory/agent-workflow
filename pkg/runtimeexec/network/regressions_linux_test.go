@@ -214,7 +214,7 @@ func TestCompletionReceiptUsesCleanAckIndependentlyOfExit125(t *testing.T) {
 	exit := exec.Command("/bin/sh", "-c", "exit 125").Run()
 	for _, ack := range []string{"\x01", "", "\x00", "\x01\x01"} {
 		launch := memberLaunch{Request: Request{ID: randomID()}, UID: uint32(os.Getuid()), Receipt: filepath.Join(t.TempDir(), "receipt")}
-		if err := completeMember(launch, exit, strings.NewReader(ack)); err != nil {
+		if _, err := completeMember(launch, exit, strings.NewReader(ack)); err != nil {
 			t.Fatal(err)
 		}
 		var receipt Membership
