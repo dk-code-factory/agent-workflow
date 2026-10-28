@@ -183,6 +183,9 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	if err = checkFence(ctx, tx); err != nil {
 		return err
 	}
+	if err = checkEffectAdmission(ctx, tx, originID(r, snap)); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO runs(id,status,record,snapshot,updated,origin_id,generation,owner,admitted) VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano), originID(r, snap), r.Generation, r.Owner, time.Now().UTC().UnixNano()); err != nil {
 		return err
 	}
@@ -327,6 +330,9 @@ func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, ite
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return last, false, err
+	}
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
+		return Attempt{}, false, err
 	}
 	a := Attempt{InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
 	if schemaPhase(last.Phase) {
@@ -512,6 +518,9 @@ func (s *SQLiteStore) Claim(ctx context.Context, r *Run, previous string) error 
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, r.ID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,record=?,updated=?,owner=? WHERE id=? AND status=? AND generation=? AND owner=?", r.Status, b, time.Now().UTC().Format(time.RFC3339Nano), r.Owner, r.ID, previous, r.Generation, oldOwner)
 	if err != nil {
 		return err

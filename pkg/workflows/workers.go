@@ -228,11 +228,14 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 	if run.Status != RunStatusRunning {
 		return Worker{}, fmt.Errorf("workers require an active originating run")
 	}
-	if err = m.Store.CheckWorkerAdmission(ctx, spec.RunID); err != nil {
-		return Worker{}, err
-	}
 	if spec.Owner != "" && spec.Owner != run.Owner {
 		return Worker{}, fmt.Errorf("parent execution ownership changed")
+	}
+	// Preserve existing stable receipts and their normal factory/policy checks.
+	// A pure Cancel denial is deferred to the transactional new-admission guard.
+	admissionErr := m.Store.CheckWorkerAdmission(ctx, spec.RunID)
+	if admissionErr != nil && !onlyError(admissionErr, ErrExternalInputCanceled) {
+		return Worker{}, admissionErr
 	}
 	runner, tools, _, err := m.Factory(ctx, spec.RunID, spec.Role, spec.Tools)
 	if err != nil {
@@ -336,11 +339,17 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			if err = decodeJSONWithNumbers(b, &existing); err != nil {
 				return Worker{}, err
 			}
+			if admissionErr != nil && (existing.ParentID != spec.ParentID || existing.CreatorInvocation != spec.CreatorInvocation) {
+				return Worker{}, fmt.Errorf("stable worker creator identity changed")
+			}
 			return existing, nil
 		}
 		if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return Worker{}, lookupErr
 		}
+	}
+	if err = checkEffectAdmission(ctx, tx, spec.RunID); err != nil {
+		return Worker{}, err
 	}
 	var currentGeneration int64
 	var currentStatus string
@@ -513,6 +522,9 @@ func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt str
 		return msg, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return WorkerMessage{}, err
+	}
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
 		return WorkerMessage{}, err
 	}
 	var allowed int
@@ -707,6 +719,10 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		w.Status = RunStatusNeedsAttention
 		w.Error = "worker turn budget exhausted"
 		_ = m.saveWorker(context.WithoutCancel(ctx), w)
+		return
+	}
+	if err = checkEffectAdmission(ctx, tx, w.RunID); err != nil {
+		tx.Rollback()
 		return
 	}
 	var runStatus string
@@ -950,6 +966,9 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
+		return err
+	}
 	var allowed int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.status='running' AND e.finalizing=0`, run).Scan(&allowed); err != nil {
 		return err

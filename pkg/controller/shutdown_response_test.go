@@ -31,7 +31,7 @@ func TestShutdownResponseCompletesBeforeConnectionClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// With no output destination, Call reads the entire response, including
-	// HTTP framing, just as the CLI and the durable shutdown tests do.
+	// HTTP framing, as the durable shutdown tests do.
 	if err := client.Call(ctx, http.MethodPost, "/shutdown", nil, nil); err != nil {
 		t.Fatalf("shutdown response was incomplete: %v", err)
 	}

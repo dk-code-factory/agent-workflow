@@ -261,6 +261,13 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 		}
 		ac.Attempt = last.Attempt.Number
 	}
+	if err = e.checkEffectAdmission(ctx, ec.RunID); err != nil {
+		if onlyError(err, ErrExternalInputCanceled) {
+			result.Status = RunStatusWaiting
+			return result, nil
+		}
+		return fail(err)
+	}
 	ac.Attempt++
 	ac.AttemptID = newID()
 	bindings, err := a.bindings(ctx, ac, input)
@@ -274,6 +281,10 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	r := ActionAttempt{Context: ac, Contract: a.contract, Input: input, Bindings: bindings, InputFingerprint: actionHash(input), BindingsFingerprint: actionHash(bindings), State: "admitted", Revision: 1,
 		Attempt: Attempt{ID: ac.AttemptID, RunID: ac.RunID, JobID: ac.JobID, StepID: ac.StepID, Iteration: ac.Iteration, Number: ac.Attempt, Status: RunStatusRunning, StartedAt: time.Now().UTC()}}
 	if err = j.AdmitAction(ctx, r); err != nil {
+		if onlyError(err, ErrExternalInputCanceled) {
+			result.Status = RunStatusWaiting
+			return result, nil
+		}
 		return fail(err)
 	}
 	if err = ctx.Err(); err != nil {

@@ -40,7 +40,9 @@ func TestInputLifecycleCancellationRecoversBoundaries(t *testing.T) {
 			if boundary == "gate" || boundary == "accepted" {
 				e.Store = &executionBoundaryJournal{SQLiteStore: s, afterGate: func(ctx context.Context, g ExternalInputGate) error {
 					if boundary == "accepted" {
-						answerGate(t, s, g)
+						if _, err := s.AcceptInput(ctx, g.OriginID, g.ID, ExternalInputAnswer{AnswerID: "answer-" + g.ID, EvidenceID: g.EvidenceID, Value: json.RawMessage(`"approved"`)}); err != nil {
+							return err
+						}
 					}
 					cancel()
 					return nil

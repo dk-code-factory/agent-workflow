@@ -192,6 +192,10 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		return out
 	}
 	fail := func(err error) JobExecution {
+		if onlyError(err, ErrExternalInputCanceled) {
+			out.Status = RunStatusInterrupted
+			return finish()
+		}
 		out.Status = RunStatusNeedsAttention
 		out.Error = err.Error()
 		out.FailureClass = classifyFailure(err)
@@ -199,6 +203,9 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 	}
 	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
 	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
 		return fail(err)
 	}
 	for dep, r := range needs {
@@ -249,6 +256,9 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 	}
 	for i, item := range p.Items {
 		if err = ctx.Err(); err != nil {
+			return fail(err)
+		}
+		if err = e.checkEffectAdmission(ctx, req.runID); err != nil {
 			return fail(err)
 		}
 		if err = e.iterationEvidence(ctx, req); err != nil {

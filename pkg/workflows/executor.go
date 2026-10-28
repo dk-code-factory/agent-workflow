@@ -221,6 +221,12 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if depth > 8 {
 		return nil, fmt.Errorf("reusable workflow depth exceeds 8")
 	}
+	if depth > 0 {
+		origin := nativeString(req.Metadata, "origin_run_id")
+		if err := e.checkEffectAdmission(ctx, origin); err != nil {
+			return nil, err
+		}
+	}
 	w := all[ref]
 	req.ordered = req.ordered || hasOrderedIteration(all)
 	inputs, err := resolveInputs(w.On.WorkflowCall, req.Inputs, req.Secrets)
@@ -435,6 +441,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			run.Status = RunStatusNeedsAttention
 			run.Error = runErr.Error()
 		}
+		if controlErr == nil && control.Canceled && run.Status != RunStatusNeedsAttention {
+			run.Status = RunStatusCanceled
+		}
 		if controlErr == nil && control.Paused && !control.Canceled && run.Status != RunStatusNeedsAttention && (runErr == nil || cancellationOnly(runErr)) {
 			run.Status = RunStatusInterrupted
 			runErr = nil
@@ -504,6 +513,10 @@ func stepsAsMap(steps map[string]StepExecution) map[string]any {
 func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, previous map[string]any) (out JobExecution) {
 	out = JobExecution{ID: id, Status: RunStatusSucceeded, Steps: map[string]StepExecution{}, Outputs: map[string]any{}}
 	fail := func(err error) JobExecution {
+		if onlyError(err, ErrExternalInputCanceled) {
+			out.Status = RunStatusWaiting
+			return out
+		}
 		out.Status = executionFailureStatus(ctx, err)
 		out.Error = err.Error()
 		out.FailureClass = classifyFailure(err)
@@ -511,6 +524,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 	}
 	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
 	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
 		return fail(err)
 	}
 	for _, result := range needs {
@@ -631,6 +647,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
+		if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
+			return fail(err)
+		}
 		allowed, err := evalIf(step.If, ec)
 		if err == nil && !allowed {
 			result.Status = RunStatusSkipped
@@ -662,6 +681,10 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				}
 				result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
 				result.FinishedAt = time.Now().UTC()
+				if onlyError(err, ErrExternalInputCanceled) {
+					result.Status = RunStatusWaiting
+					err = nil
+				}
 				if err != nil {
 					result.Status = executionFailureStatus(ctx, err)
 					result.Error = err.Error()
@@ -671,6 +694,12 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 					err = errors.Join(err, iterationPersistence(journal.Complete(context.WithoutCancel(ctx), attempt, result), req.ordered))
 				}
 			}
+		}
+		if onlyError(err, ErrExternalInputCanceled) {
+			result.Status = RunStatusWaiting
+			result.Error = ""
+			result.FailureClass = ""
+			err = nil
 		}
 		if err != nil {
 			result.Status = executionFailureStatus(ctx, err)
@@ -706,6 +735,9 @@ func allMustJob(all map[string]*Workflow, ref, id string) Job {
 
 func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := e.checkEffectAdmission(ctx, ec.RunID); err != nil {
 		return nil, err
 	}
 	if e.Ready != nil {

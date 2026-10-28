@@ -242,8 +242,16 @@ func (s *SQLiteStore) BeginFinalization(ctx context.Context, run *Run) error {
 	return nil
 }
 func (s *SQLiteStore) CheckWorkerAdmission(ctx context.Context, run string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, run); err != nil {
+		return err
+	}
 	var allowed int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.status='running' AND e.finalizing=0`, run).Scan(&allowed)
+	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.status='running' AND e.finalizing=0`, run).Scan(&allowed)
 	if err != nil {
 		return err
 	}

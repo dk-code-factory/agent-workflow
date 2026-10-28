@@ -43,11 +43,13 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 		iteration      int
 	}
 	correlated := map[gateKey]ExternalInputGate{}
+	byRun := map[string][]ExternalInputGate{}
 	for _, gate := range gates {
 		if gate.OriginID != origin || gate.Fingerprint != inputFingerprint(gate) {
 			return false, fmt.Errorf("%w: retained input request changed", ErrActionIntegrity)
 		}
 		correlated[gateKey{gate.RunID, gate.JobID, gate.StepID, gate.Iteration}] = gate
+		byRun[gate.RunID] = append(byRun[gate.RunID], gate)
 	}
 	found := false
 	seen := map[string]bool{}
@@ -82,6 +84,115 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 		workflow := snapshot.Definitions[run.WorkflowRef]
 		if workflow == nil {
 			return false, fmt.Errorf("%w: suspended child definition missing", ErrActionIntegrity)
+		}
+		// Index each declared step once. The same index validates committed
+		// gates and retained observations, including implicit step IDs.
+		steps := map[string]map[string]Step{}
+		for jobID, definition := range workflow.Jobs {
+			steps[jobID] = map[string]Step{}
+			for index, step := range definition.Steps {
+				steps[jobID][stepID(step, index)] = step
+			}
+		}
+		// A process may stop after the gate transaction and before publishing
+		// any job result. The committed request is evidence of that input,
+		// never evidence that preceding physical effects completed.
+		for _, gate := range byRun[run.ID] {
+			definition, ok := workflow.Jobs[gate.JobID]
+			step, input := steps[gate.JobID][gate.StepID]
+			limit := 1
+			if definition.Repeat != nil {
+				limit = definition.Repeat.MaxAttempts
+			}
+			validState := gate.State == "pending" || gate.State == "accepted" || gate.State == "consumed" || (gate.State == "canceled" && control.Canceled)
+			if !ok || !input || step.Uses != "input/wait" || gate.Iteration < 1 || gate.Iteration > limit || gate.ID != actionHash([]any{run.ID, gate.JobID, gate.StepID, gate.Iteration}) || !validState {
+				return false, nil
+			}
+			if _, observed := run.Jobs[gate.JobID]; !observed {
+				inputs, err := resolveInputs(workflow.On.WorkflowCall, snapshot.Inputs, req.Secrets)
+				if err != nil {
+					return false, err
+				}
+				needs := map[string]JobExecution{}
+				for _, dep := range definition.Needs {
+					needs[dep] = run.Jobs[dep]
+				}
+				args, err := renderMap(step.With, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: snapshot.Event, Needs: needs, Metadata: snapshot.Metadata, Iteration: map[string]any{"number": gate.Iteration}})
+				if err != nil {
+					return false, err
+				}
+				raw, err := e.actionIdentityJSON(mustInputJSON(args))
+				if err != nil {
+					return false, err
+				}
+				if err := decodeJSONWithNumbers(raw, &args); err != nil {
+					return false, err
+				}
+				expected := gate
+				expected.Prompt, _ = args["prompt"].(string)
+				expected.EvidenceID, _ = args["evidence-id"].(string)
+				expected.Payload = nil
+				if payload, ok := args["payload"]; ok {
+					expected.Payload, err = actionJSON(payload)
+					if err != nil {
+						return false, err
+					}
+				}
+				if expected.Prompt == "" || expected.EvidenceID == "" || inputFingerprint(expected) != gate.Fingerprint {
+					return false, nil
+				}
+				found = true
+			}
+		}
+		// Descendant admission is durable before the wrapper job result. Follow
+		// only children that were actually admitted; never create a replacement.
+		for jobID, definition := range workflow.Jobs {
+			if _, observed := run.Jobs[jobID]; observed || definition.Uses == "" {
+				continue
+			}
+			if definition.ForEach != nil {
+				iterations := iterationJournal(e.Store)
+				if iterations == nil {
+					return false, nil
+				}
+				checkpoint, err := iterations.IterationRun(ctx, run.ID, nativeString(snapshot.Metadata, "iteration_logical_run_id"), jobID)
+				if err != nil {
+					return false, err
+				}
+				records, err := iterations.IterationAttempts(ctx, checkpoint, jobID)
+				if err != nil {
+					return false, err
+				}
+				latest := map[string]IterationItemResult{}
+				for _, record := range records {
+					latest[record.Key] = record
+				}
+				for _, record := range latest {
+					safe, err := visit(record.ChildID)
+					if err != nil || !safe {
+						return false, err
+					}
+				}
+				continue
+			}
+			limit := 1
+			if definition.Repeat != nil {
+				limit = definition.Repeat.MaxAttempts
+			}
+			for number := 1; number <= limit; number++ {
+				id := reusableChildID(run.ID, jobID, number)
+				_, _, err := journal.Load(ctx, id)
+				if errors.Is(err, sql.ErrNoRows) {
+					break
+				}
+				if err != nil {
+					return false, err
+				}
+				safe, err := visit(id)
+				if err != nil || !safe {
+					return false, err
+				}
+			}
 		}
 		for jobID, result := range run.Jobs {
 			definition, ok := workflow.Jobs[jobID]
@@ -147,12 +258,10 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 					if step.Status == RunStatusSkipped {
 						continue
 					}
-					input := false
-					for index, definition := range definition.Steps {
-						if sid == stepID(definition, index) && definition.Uses == "input/wait" {
-							input = true
-							break
-						}
+					definition, declared := steps[jobID][sid]
+					input := declared && definition.Uses == "input/wait"
+					if !declared {
+						return false, nil
 					}
 					if step.Status == RunStatusSucceeded && !input {
 						continue

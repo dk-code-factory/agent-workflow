@@ -65,7 +65,9 @@ type ExternalInputControl struct {
 
 // ExternalInputJournal is optional for existing stores. Workflows containing
 // input/wait require it before admission. Writes must fence the current owner;
-// acceptance and continuation intent must commit in one transaction.
+// acceptance and continuation intent must commit in one transaction. New effect
+// admissions must reject durable Cancel; completed results/checkpoints and
+// cleanup persistence remain writable after cancellation.
 type ExternalInputJournal interface {
 	Journal
 	EnsureInputGate(context.Context, ExternalInputGate) (ExternalInputGate, error)
@@ -175,7 +177,7 @@ func (s *SQLiteStore) EnsureInputGate(ctx context.Context, g ExternalInputGate) 
 		return g, err
 	}
 	if c.Canceled || canceled > 0 {
-		return g, fmt.Errorf("%w: run canceled", ErrExternalInput)
+		return g, ErrExternalInputCanceled
 	}
 	if strings.TrimSpace(g.Prompt) == "" || strings.TrimSpace(g.EvidenceID) == "" {
 		return g, fmt.Errorf("input/wait requires nonempty prompt and evidence-id")
@@ -500,6 +502,13 @@ func (e *Executor) executeInputWait(ctx context.Context, step Step, ec expressio
 		return result, nil
 	}
 	if err != nil {
+		return result, err
+	}
+	// Cancel may commit after consumption but before the journal returns it.
+	// Preserve the consumed checkpoint while stopping further effect admission.
+	if err = e.checkEffectAdmission(ctx, origin); onlyError(err, ErrExternalInputCanceled) {
+		return result, nil
+	} else if err != nil {
 		return result, err
 	}
 	var value any
