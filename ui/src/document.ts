@@ -420,7 +420,9 @@ export class WorkflowDocument {
     finally { if (!this.disposed) { this.snapshot = { ...this.snapshot, saving: false }; this.emit(); } }
   }
   async validate() {
-    this.validation?.abort(); const controller = new AbortController(); this.validation = controller; const epoch = ++this.epoch;
+    if (this.disposed) return;
+    const previous = this.validation; const controller = new AbortController(); this.validation = controller; const epoch = ++this.epoch; previous?.abort();
+    if (this.disposed || controller.signal.aborted || epoch !== this.epoch) return;
     let diagnostics: Diagnostic[] = [];
     const w = this.parsed.workflow;
     if (w) for (const [id, job] of Object.entries(w.jobs)) {
@@ -430,7 +432,8 @@ export class WorkflowDocument {
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();
-    if (!this.options.validate) return;
+    // Notification and abort callbacks can dispose or supersede this request.
+    if (this.disposed || controller.signal.aborted || epoch !== this.epoch || !this.options.validate) return;
     try { diagnostics = [...diagnostics, ...await this.options.validate(structuredClone(this.snapshot), controller.signal)]; }
     catch (error) { if (!controller.signal.aborted) diagnostics.push({ code: 'host-validation', message: String(error), path: [], severity: 'error', source: 'host' }); }
     if (!this.disposed && epoch === this.epoch) { this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: false }; this.emit(); }

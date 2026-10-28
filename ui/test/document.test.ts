@@ -339,6 +339,58 @@ describe('source cursor context', () => {
 
 
 describe('asynchronous host lifecycle', () => {
+  it('does not start validation after source notification disposes the document, and can start again', async () => {
+    let armed = false; const signals: AbortSignal[] = [];
+    const next = '# next\n' + source;
+    const document = new WorkflowDocument({ source, validate: (_snapshot, signal) => { signals.push(signal); return []; }, onChange: snapshot => {
+      if (armed && snapshot.source === next) { armed = false; document.destroy(); }
+    } });
+    await document.validate(); const old = signals[0]; signals.length = 0;
+    armed = true; document.setSource(next); await Promise.resolve();
+    expect(old.aborted).toBe(true); expect(signals).toHaveLength(0);
+    document.start(); await Promise.resolve();
+    expect(signals).toHaveLength(1); expect(signals[0].aborted).toBe(false);
+    expect(document.getSnapshot().validating).toBe(false);
+  });
+  it('does not dispatch a controller disposed by its validating notification', async () => {
+    let armed = true; let notifications = 0; const validate = vi.fn(() => []);
+    const document = new WorkflowDocument({ source, validate, onChange: snapshot => {
+      if (armed && snapshot.validating) { armed = false; notifications++; document.destroy(); }
+    } });
+    await document.validate();
+    expect(notifications).toBe(1); expect(validate).not.toHaveBeenCalled();
+  });
+  it('dispatches only the latest request started during a validating notification', async () => {
+    let armed = true;
+    const requests: { key: unknown; signal: AbortSignal; finish: (value: []) => void }[] = [];
+    const document = new WorkflowDocument({ source, validationKey: 'initial', validate: (_snapshot, signal) => new Promise<[]>(finish => {
+      requests.push({ key: document.getOptions().validationKey, signal, finish });
+    }), onChange: snapshot => {
+      if (armed && snapshot.validating) { armed = false; document.update({ validationKey: 'latest' }); }
+    } });
+    const obsolete = document.validate();
+    expect(requests).toHaveLength(1); expect(requests[0].key).toBe('latest'); expect(requests[0].signal.aborted).toBe(false);
+    requests[0].finish([]); await obsolete;
+    expect(document.getSnapshot().validating).toBe(false);
+  });
+  it('retains a newer nested validation started by an aborted request listener', async () => {
+    let armed = false; const notifications: { key: unknown; validating: boolean }[] = [];
+    const requests: { key: unknown; signal: AbortSignal; finish: (value: import('../src/types').Diagnostic[]) => void }[] = [];
+    const document = new WorkflowDocument({ source, validationKey: 'initial', validate: (_snapshot, signal) => new Promise<import('../src/types').Diagnostic[]>(finish => {
+      requests.push({ key: document.getOptions().validationKey, signal, finish });
+      signal.addEventListener('abort', () => { if (armed) { armed = false; document.update({ validationKey: 'latest' }); } }, { once: true });
+    }), onChange: snapshot => { notifications.push({ key: document.getOptions().validationKey, validating: snapshot.validating }); } });
+    const initial = document.validate(); notifications.length = 0; armed = true; const obsolete = document.validate();
+    expect(requests).toHaveLength(2); expect(requests[0].signal.aborted).toBe(true);
+    expect(notifications).toEqual([{ key: 'latest', validating: true }]);
+    expect(requests[1].key).toBe('latest'); expect(requests[1].signal.aborted).toBe(false);
+    requests[1].finish([{ source: 'host', code: 'latest', message: 'Latest result', severity: 'info', path: [] }]); await obsolete;
+    expect(document.getSnapshot().validating).toBe(false);
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'latest')).toBe(true);
+    requests[0].finish([{ source: 'host', code: 'old', message: 'Late result', severity: 'error', path: [] }]); await initial;
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'old')).toBe(false);
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'latest')).toBe(true);
+  });
   it('aborts superseded validation and ignores late results after destroy', async () => {
     const requests: { signal: AbortSignal; resolve: (value: import('../src/types').Diagnostic[]) => void }[] = [];
     const changed = vi.fn();
