@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -88,7 +87,13 @@ func requestAt(t *testing.T, socket string, req Request, files bool) (*net.UnixC
 			t.Fatal(err)
 		}
 		defer f.Close()
-		_, _, err = c.WriteMsgUnix(data, unix.UnixRights(int(f.Fd()), int(f.Fd()), int(f.Fd())), nil)
+		payload, e := sealedPayload(req)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer payload.Close()
+		envelope, _ := json.Marshal(Request{Operation: req.Operation, Reference: req.Reference, ID: req.ID})
+		_, _, err = c.WriteMsgUnix(envelope, unix.UnixRights(int(f.Fd()), int(f.Fd()), int(f.Fd()), int(payload.Fd())), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,20 +290,16 @@ func TestReferenceAndEnvironment(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "/bin/echo", "hello")
 	cmd.Env = env
 	cmd.Dir = t.TempDir()
-	if err := Wrap(cmd, ref, randomID()); err != nil {
+	cleanup, err := Wrap(cmd, ref, randomID())
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	var req Request
 	if len(cmd.Args) != 2 {
 		t.Fatal("request exposed in helper argv", cmd.Args)
 	}
-	var data string
-	for _, value := range cmd.Env {
-		if strings.HasPrefix(value, launchEnvironment+"=") {
-			data = strings.TrimPrefix(value, launchEnvironment+"=")
-		}
-	}
-	if err := json.Unmarshal([]byte(data), &req); err != nil {
+	if err := decodePayload(cmd.ExtraFiles[0], &req); err != nil {
 		t.Fatal(err)
 	}
 	if req.Path != "/bin/echo" || req.Dir != cmd.Dir || req.Args[0] != "hello" {

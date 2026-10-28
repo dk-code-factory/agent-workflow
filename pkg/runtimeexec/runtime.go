@@ -267,17 +267,20 @@ func superviseNetwork(ctx context.Context, cmd *exec.Cmd, ref network.Reference)
 			return nil, err
 		}
 	}
-	if err = network.Wrap(cmd, ref, id); err != nil {
+	transportCleanup, err := network.Wrap(cmd, ref, id)
+	if err != nil {
 		return nil, err
 	}
 	// This outer guardian owns only the launch client. The runtime's root-owned
 	// receipt proves the inner guardian has stopped the actual descendants.
-	stop, err := process.Supervise(cmd)
+	stop, err := process.SuperviseWithOptions(cmd, process.SupervisionOptions{InheritDescriptors: []int{3}})
 	if err != nil {
+		transportCleanup()
 		return nil, err
 	}
 	return func() {
 		stop()
+		transportCleanup()
 		if i != nil && (cmd.ProcessState != nil || cmd.Process == nil) {
 			finish, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()

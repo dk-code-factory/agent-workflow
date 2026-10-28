@@ -24,6 +24,10 @@ const ReferenceEnvironment = "AGENT_WORKFLOW_NETWORK_REFERENCE"
 
 const launchEnvironment = "AGENT_WORKFLOW_NETWORK_REQUEST"
 
+// Linux native argv/environment aggregate limits fit within this JSON bound,
+// including worst-case escaping. Payloads never travel in a socket packet.
+const maxLaunchPayload = 64 << 20
+
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$`)
 
 type Reference struct {
@@ -62,11 +66,15 @@ type Forward struct {
 	ID        int    `json:"id"`
 }
 type Status struct {
-	Reference        Reference             `json:"reference"`
-	Healthy          bool                  `json:"healthy"`
-	NetworkNamespace string                `json:"network_namespace"`
-	Members          map[string]Membership `json:"members"`
-	Forwards         []Forward             `json:"forwards"`
+	Reference         Reference             `json:"reference"`
+	Healthy           bool                  `json:"healthy"`
+	NetworkNamespace  string                `json:"network_namespace"`
+	Members           map[string]Membership `json:"members"`
+	Forwards          []Forward             `json:"forwards"`
+	MemberCount       int                   `json:"member_count"`
+	ForwardCount      int                   `json:"forward_count"`
+	MembersTruncated  bool                  `json:"members_truncated"`
+	ForwardsTruncated bool                  `json:"forwards_truncated"`
 }
 type Request struct {
 	Operation string    `json:"operation"`
@@ -197,25 +205,26 @@ func Environment(env []string, ref Reference) []string {
 
 // Wrap rewrites an unstarted command to the shared launch client. Its streams,
 // environment, directory and context remain owned by exec.Cmd. The service uses
-// SO_PEERCRED, never caller-supplied user IDs.
-func Wrap(cmd *exec.Cmd, ref Reference, id string) error {
+// SO_PEERCRED, never caller-supplied user IDs. Run the returned cleanup after
+// Wait/Run, including when Start fails.
+func Wrap(cmd *exec.Cmd, ref Reference, id string) (func(), error) {
 	if cmd.Err != nil {
-		return cmd.Err
+		return nil, cmd.Err
 	}
 	if len(cmd.ExtraFiles) > 0 {
-		return errors.New("contained launch does not support extra inherited descriptors")
+		return nil, errors.New("contained launch does not support extra inherited descriptors")
 	}
 	if err := ref.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if cmd.Dir == "" {
 		cmd.Dir, err = os.Getwd()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	req := Request{Operation: "exec", Reference: ref, ID: id, Path: cmd.Path, Args: append([]string(nil), cmd.Args[1:]...), Env: Environment(cmd.Env, ref), Dir: cmd.Dir}
@@ -224,15 +233,16 @@ func Wrap(cmd *exec.Cmd, ref Reference, id string) error {
 			req.Terminal = true
 		}
 	}
-	data, err := json.Marshal(req)
+	payload, err := sealedPayload(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cmd.Env = append(Environment(cmd.Env, ref), launchEnvironment+"="+string(data))
+	cmd.Env = Environment(cmd.Env, ref)
+	cmd.ExtraFiles = []*os.File{payload}
 	cmd.Path = executable
 	cmd.Err = nil
 	cmd.Args = []string{executable, "__network_runtime_client_v1"}
-	return nil
+	return func() { _ = payload.Close() }, nil
 }
 
 // Reserve fences container creation against busy stop. Recovery releases this

@@ -141,6 +141,8 @@ func terminalWorkload() int {
 type terminalFixture struct {
 	master, slave *os.File
 	cmd           *exec.Cmd
+	done          chan struct{}
+	waitErr       error
 	pidFile       string
 	saved         *unix.Termios
 	output        strings.Builder
@@ -175,13 +177,30 @@ func startTerminalFixtureWithStderr(t *testing.T, diagnostics *os.File) *termina
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	f := &terminalFixture{master: master, slave: slave, cmd: cmd, pidFile: pidFile, saved: saved, done: make(chan struct{})}
+	go func() {
+		f.waitErr = cmd.Wait()
+		close(f.done)
+	}()
 	t.Cleanup(func() {
-		if cmd.ProcessState == nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
+		select {
+		case <-f.done:
+			return
+		default:
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-f.done:
+			return
+		case <-time.After(5 * time.Second):
+		}
+		_ = cmd.Process.Kill()
+		select {
+		case <-f.done:
+		case <-time.After(5 * time.Second):
+			t.Error("terminal fixture did not exit after kill")
 		}
 	})
-	f := &terminalFixture{master: master, slave: slave, cmd: cmd, pidFile: pidFile, saved: saved}
 	f.expect(t, "READY 24 80")
 	return f
 }
@@ -216,7 +235,12 @@ func (f *terminalFixture) expect(t *testing.T, want string) {
 
 func (f *terminalFixture) finish(t *testing.T, code int) {
 	t.Helper()
-	err := f.cmd.Wait()
+	select {
+	case <-f.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("terminal fixture did not finish within 10 seconds")
+	}
+	err := f.waitErr
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != code {
 		t.Fatalf("exit = %v, want %d", err, code)
 	}

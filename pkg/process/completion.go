@@ -13,9 +13,11 @@ type Completion struct {
 	Error   string `json:"error,omitempty"`
 }
 type SupervisionOptions struct {
-	Cleanup        []string
-	CompletionPath string
-	Token          string
+	// InheritDescriptors explicitly forwards contiguous descriptors starting at fd3.
+	InheritDescriptors []int
+	Cleanup            []string
+	CompletionPath     string
+	Token              string
 }
 
 func writeCompletion(path, token string, cleanupErr error) error {

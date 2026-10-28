@@ -23,7 +23,11 @@ import (
 // workload() still consumes the production fd4 request and applies its mask.
 func init() {
 	if len(os.Args) > 4 && os.Args[1] == "__agent_workflow_guardian_v1" && os.Getenv("AW_AUTHORITY_FIXTURE") == "1" {
-		if err := syscall.Exec(os.Args[3], os.Args[3:], os.Environ()); err != nil {
+		target := 3
+		if os.Args[target] == "--clean-ack" {
+			target += 2
+		}
+		if err := syscall.Exec(os.Args[target], os.Args[target:], os.Environ()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(125)
 		}
@@ -161,18 +165,21 @@ func TestLaunchTransportExcludesSecretsAndSelectorsFromWorkload(t *testing.T) {
 	ref.Endpoint = Endpoint(ref.Name, ref.Identity)
 	cmd := exec.Command("/bin/true")
 	cmd.Env = []string{"FAKE_PROVIDER_CREDENTIAL=credential-only-in-private-environment", launchEnvironment + "=obsolete-secret", "AGENT_WORKFLOW_NETWORK_TERMINAL=1"}
-	if err := Wrap(cmd, ref, randomID()); err != nil {
+	cleanup, err := Wrap(cmd, ref, randomID())
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	if strings.Contains(strings.Join(cmd.Args, " "), "credential") || len(cmd.Args) != 2 {
 		t.Fatal(cmd.Args)
 	}
 	var request Request
+	if err := decodePayload(cmd.ExtraFiles[0], &request); err != nil {
+		t.Fatal(err)
+	}
 	for _, value := range cmd.Env {
 		if strings.HasPrefix(value, launchEnvironment+"=") {
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(value, launchEnvironment+"=")), &request); err != nil {
-				t.Fatal(err)
-			}
+			t.Fatal("payload in environment")
 		}
 	}
 	if !request.Terminal {

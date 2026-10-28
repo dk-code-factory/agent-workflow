@@ -86,6 +86,16 @@ try {
   assert.notEqual(identity.netns, run('readlink', ['/proc/self/ns/net']));
   evidence.checks.push('identity, endpoint and cached rootful image store');
 
+  assert.throws(() => inside('/bin/sh', '-c', 'exit 125'), { status: 125 });
+  await settled();
+  const largeEnvironment = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`AW21_LARGE_${i}`, 'v'.repeat(1024)]));
+  const aggregate = run(runtime, ['exec', name, '--', '/usr/bin/python3', '-c',
+    'import os,sys; assert [len(v) for v in sys.argv[1:]] == [70000,70000]; assert all(len(os.environ["AW21_LARGE_"+str(i)]) == 1024 for i in range(200)); print("aggregate-preserved")',
+    'a'.repeat(70000), 'b'.repeat(70000)], { env: { ...process.env, ...largeEnvironment } });
+  assert.equal(aggregate, 'aggregate-preserved');
+  await settled();
+  evidence.checks.push('ordinary exit125 cleans membership and native aggregate arguments/environment survive the actual root-member path');
+
   const hookInput = join(dir, 'hook-input.json');
   writeFileSync(hookInput, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'printf "%s\\n" "$DOCKER_HOST" "$CONTAINER_HOST" "$AGENT_WORKFLOW_NETWORK_RUNTIME"; exit 7', fixture_option: 'kept' } }));
   const hook = join(root, 'plugins/network-runtime/hooks/pre-tool-use.sh');

@@ -19,6 +19,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ type service struct {
 	netNS, mountNS   *os.File
 	probe            func() error
 	memberCommand    func(string) *exec.Cmd
+	authority        func(*unix.Ucred) ([]uint32, int, error)
 	mu               sync.Mutex
 	status           Status
 	config           registration
@@ -264,9 +266,7 @@ func Start(name string) error {
 }
 func init() {
 	if len(os.Args) == 2 && os.Args[1] == "__network_runtime_client_v1" {
-		data := os.Getenv(launchEnvironment)
-		_ = os.Unsetenv(launchEnvironment)
-		if err := runClient(data); err != nil {
+		if err := runClient(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(125)
 		}
@@ -766,7 +766,7 @@ func (s *service) handle(c *net.UnixConn) {
 		return
 	}
 	buf := make([]byte, 1<<20)
-	oob := make([]byte, unix.CmsgSpace(3*4))
+	oob := make([]byte, unix.CmsgSpace(4*4))
 	n, on, flags, _, err := c.ReadMsgUnix(buf, oob)
 	if err != nil {
 		return
@@ -796,6 +796,14 @@ func (s *service) handle(c *net.UnixConn) {
 	var req Request
 	if flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 || json.Unmarshal(buf[:n], &req) != nil {
 		return
+	}
+	// Exec requests carry only a small envelope and a private payload fd.
+	if req.Operation == "exec" && len(files) == 4 {
+		var payload Request
+		if decodeSealedPayload(files[3], &payload) != nil || payload.Operation != "exec" || payload.Reference != req.Reference || payload.ID != req.ID {
+			return
+		}
+		req = payload
 	}
 	respond := func(out Response, err error) {
 		if err != nil {
@@ -852,6 +860,11 @@ func (s *service) handle(c *net.UnixConn) {
 		return
 	}
 	if req.Operation == "stop" {
+		if s.stopping {
+			s.mu.Unlock()
+			respond(Response{}, nil)
+			return
+		}
 		busy := false
 		for _, m := range s.status.Members {
 			if m.State != "cleaned" {
@@ -866,10 +879,10 @@ func (s *service) handle(c *net.UnixConn) {
 			respond(Response{}, errors.New("runtime is busy; stop refused"))
 			return
 		}
-		s.stopping = true
 		s.status.Healthy = false
 		err = save(filepath.Join(s.dir, "status.json"), s.status)
 		if err == nil {
+			s.stopping = true
 			close(s.stop)
 		}
 		s.mu.Unlock()
@@ -905,7 +918,10 @@ func (s *service) handle(c *net.UnixConn) {
 		s.mu.Unlock()
 		respond(Response{}, err)
 	case "status", "check":
-		out := cloneStatus(s.status)
+		out := s.status
+		out.Members, out.Forwards = nil, nil
+		out.MemberCount, out.ForwardCount = len(s.status.Members), len(s.status.Forwards)
+		out.MembersTruncated, out.ForwardsTruncated = out.MemberCount > 0, out.ForwardCount > 0
 		s.mu.Unlock()
 		respond(Response{Status: out}, nil)
 	case "forward":
@@ -941,7 +957,7 @@ func (s *service) handle(c *net.UnixConn) {
 		s.mu.Unlock()
 		respond(Response{Status: out}, err)
 	case "exec":
-		if len(files) != 3 || len(req.ID) != 32 || !hexID(req.ID) || req.Path == "" || len(req.Env) > 10000 {
+		if (len(files) != 3 && len(files) != 4) || len(req.ID) != 32 || !hexID(req.ID) || req.Path == "" || len(req.Env) > 10000 {
 			s.mu.Unlock()
 			respond(Response{}, errors.New("invalid launch request"))
 			return
@@ -959,26 +975,38 @@ func (s *service) handle(c *net.UnixConn) {
 			return
 		}
 		launch := memberLaunch{Request: req, UID: cred.Uid, GID: cred.Gid, Keeper: s.keeper.Process.Pid, Binary: s.binary, Receipt: filepath.Join(s.dir, "member-"+req.ID+".done")}
-		launch.Groups, launch.Request.Umask, err = peerAuthority(cred)
-		if err != nil {
+		beforeStartFailure := func(cause error) {
+			m.State = "cleaned"
+			s.status.Members[req.ID] = m
+			if e := save(filepath.Join(s.dir, "status.json"), s.status); e != nil {
+				m.State = "launching"
+				s.status.Members[req.ID] = m
+				cause = errors.Join(cause, fmt.Errorf("pre-start cleanup persistence unconfirmed: %w", e))
+			}
 			s.mu.Unlock()
-			respond(Response{}, err)
+			respond(Response{}, cause)
+		}
+		authority := peerAuthority
+		if s.authority != nil {
+			authority = s.authority
+		}
+		launch.Groups, launch.Request.Umask, err = authority(cred)
+		if err != nil {
+			beforeStartFailure(err)
 			return
 		}
 
 		launchPath := req.ID
 		launchFD, e := launchFile(launch)
 		if e != nil {
-			s.mu.Unlock()
-			respond(Response{}, e)
+			beforeStartFailure(e)
 			return
 		}
 		defer launchFD.Close()
 
 		lifeR, lifeW, e := os.Pipe()
 		if e != nil {
-			s.mu.Unlock()
-			respond(Response{}, e)
+			beforeStartFailure(e)
 			return
 		}
 		cmd := exec.Command(s.binary, "__network_runtime_member_v1", launchPath)
@@ -997,11 +1025,7 @@ func (s *service) handle(c *net.UnixConn) {
 		lifeR.Close()
 		if err != nil {
 			lifeW.Close()
-			m.State = "cleaned"
-			s.status.Members[req.ID] = m
-			_ = save(filepath.Join(s.dir, "status.json"), s.status)
-			s.mu.Unlock()
-			respond(Response{}, err)
+			beforeStartFailure(err)
 			return
 		}
 		s.mu.Unlock()
@@ -1028,7 +1052,7 @@ func runMember(path string) error {
 	}
 	var launch memberLaunch
 	config := os.NewFile(4, "launch")
-	if err := json.NewDecoder(io.LimitReader(config, 1<<20)).Decode(&launch); err != nil {
+	if err := decodeSealedPayload(config, &launch); err != nil {
 		return err
 	}
 	// nsenter joins only mount/network namespaces. setpriv drops to the peer's
@@ -1056,13 +1080,22 @@ func runMember(path string) error {
 	}
 	life := os.NewFile(3, "lifetime")
 	unix.CloseOnExec(3)
+	ackR, ackW, err := os.Pipe()
+	if err != nil {
+		r.Close()
+		w.Close()
+		return err
+	}
+	defer ackR.Close()
+	defer ackW.Close()
 	cmd := exec.Command("/usr/bin/nsenter", args...)
-	cmd.ExtraFiles = []*os.File{life, r, os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace")}
+	cmd.ExtraFiles = []*os.File{life, r, os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace"), ackW}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
 	if err = cmd.Start(); err == nil {
+		ackW.Close()
 		r.Close()
 		_, _ = w.Write(data)
 		w.Close()
@@ -1071,6 +1104,11 @@ func runMember(path string) error {
 		r.Close()
 		w.Close()
 	}
+	ackW.Close()
+	return completeMember(launch, err, ackR)
+}
+
+func completeMember(launch memberLaunch, err error, ack io.Reader) error {
 	code := 0
 	if err != nil {
 		code = 125
@@ -1078,9 +1116,11 @@ func runMember(path string) error {
 			code = e.ExitCode()
 		}
 	}
-	state := "cleaned"
-	if code == 125 || code < 0 {
-		state = "uncertain"
+	state := "uncertain"
+	var confirmed [2]byte
+	// The trusted guardian alone holds the writer; EOF after Wait is bounded.
+	if n, e := io.ReadFull(ack, confirmed[:]); n == 1 && e == io.ErrUnexpectedEOF && confirmed[0] == 1 {
+		state = "cleaned"
 	}
 	return save(launch.Receipt, Membership{ID: launch.Request.ID, UID: launch.UID, State: state, ExitCode: code})
 }
@@ -1117,9 +1157,12 @@ func (s *service) addForward(f Forward) (int, error) {
 	err = json.Unmarshal(data, &out)
 	return out.ID, err
 }
-func runClient(data string) error {
+func runClient() error {
+	payload := os.NewFile(3, "launch-payload")
+	defer payload.Close()
+	unix.CloseOnExec(3)
 	var req Request
-	if err := json.Unmarshal([]byte(data), &req); err != nil {
+	if err := decodeSealedPayload(payload, &req); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1129,7 +1172,14 @@ func runClient(data string) error {
 		return err
 	}
 	defer c.Close()
-	if _, _, err = c.WriteMsgUnix([]byte(data), unix.UnixRights(0, 1, 2), nil); err != nil {
+	if _, err = payload.Seek(0, 0); err != nil {
+		return err
+	}
+	data, err := json.Marshal(Request{Operation: "exec", Reference: req.Reference, ID: req.ID})
+	if err != nil {
+		return err
+	}
+	if _, _, err = c.WriteMsgUnix(data, unix.UnixRights(0, 1, 2, 3), nil); err != nil {
 		return err
 	}
 	read := func() (Response, error) {
@@ -1161,7 +1211,7 @@ func runClient(data string) error {
 func workload() error {
 	requestFile := os.NewFile(4, "request")
 	var req Request
-	if err := json.NewDecoder(io.LimitReader(requestFile, 1<<20)).Decode(&req); err != nil {
+	if err := decodePayload(requestFile, &req); err != nil {
 		return err
 	}
 	requestFile.Close()
@@ -1180,29 +1230,82 @@ func workload() error {
 	}
 	// The existing guardian retains fd3, then marks it close-on-exec before
 	// launching the workload. Descendants therefore cannot prolong membership.
-	args := []string{binary, "__agent_workflow_guardian_v1", "3"}
+	args := []string{binary, "__agent_workflow_guardian_v1", "3", "--clean-ack", "7"}
 	if req.Terminal {
 		args = append(args, "--terminal")
 	}
 	return syscall.Exec(binary, append(append(args, req.Path), req.Args...), req.Env)
 }
 
+// Wire previews are deterministic and bounded; durable membership and per-ID
+// lookup retain every entry. Active/uncertain entries precede cleaned history.
 func cloneStatus(in Status) Status {
+	const limit = 128
 	out := in
-	out.Members = make(map[string]Membership, len(in.Members))
-	for k, v := range in.Members {
-		out.Members[k] = v
+	out.MemberCount, out.ForwardCount = len(in.Members), len(in.Forwards)
+	ids := make([]string, 0, len(in.Members))
+	for id := range in.Members {
+		ids = append(ids, id)
 	}
-	out.Forwards = append([]Forward(nil), in.Forwards...)
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := in.Members[ids[i]].State != "cleaned", in.Members[ids[j]].State != "cleaned"
+		if a != b {
+			return a
+		}
+		return ids[i] < ids[j]
+	})
+	out.MembersTruncated = len(ids) > limit
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out.Members = make(map[string]Membership, len(ids))
+	for _, id := range ids {
+		out.Members[id] = in.Members[id]
+	}
+	forwards := in.Forwards
+	out.ForwardsTruncated = len(forwards) > limit
+	if len(forwards) > limit {
+		forwards = forwards[:limit]
+	}
+	out.Forwards = append([]Forward(nil), forwards...)
 	return out
 }
-func launchFile(launch memberLaunch) (*os.File, error) {
+
+// Read immutable finite payloads by offset: SCM_RIGHTS shares file offsets with
+// the peer, so neither its seek position nor an open pipe can control this read.
+func decodeSealedPayload(f *os.File, value any) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	seals, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
+	required := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > maxLaunchPayload || seals&required != required {
+		return errors.New("invalid sealed launch payload")
+	}
+	return decodePayload(io.NewSectionReader(f, 0, info.Size()), value)
+}
+func decodePayload(r io.Reader, value any) error {
+	data, err := io.ReadAll(io.LimitReader(r, maxLaunchPayload+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxLaunchPayload {
+		return errors.New("launch payload exceeds supported limit")
+	}
+	return json.Unmarshal(data, value)
+}
+func launchFile(launch memberLaunch) (*os.File, error) { return sealedPayload(launch) }
+func sealedPayload(value any) (*os.File, error) {
 	fd, err := unix.MemfdCreate("runtime-launch", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 	if err != nil {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), "launch")
-	data, err := json.Marshal(launch)
+	data, err := json.Marshal(value)
+	if len(data) > maxLaunchPayload {
+		err = errors.New("launch payload exceeds supported limit")
+	}
 	if err == nil {
 		_, err = f.Write(data)
 	}
@@ -1279,12 +1382,16 @@ func peerAuthority(cred *unix.Ucred) ([]uint32, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	return parsePeerAuthority(data, cred)
+}
+func parsePeerAuthority(data []byte, cred *unix.Ucred) ([]uint32, int, error) {
+	var err error
 	var groups []uint32
 	var mask uint64
 	uidOK, gidOK, groupsOK, maskOK := false, false, false, false
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) == 0 {
 			continue
 		}
 		if fields[0] == "Uid:" && len(fields) >= 3 {
@@ -1293,7 +1400,7 @@ func peerAuthority(cred *unix.Ucred) ([]uint32, int, error) {
 		if fields[0] == "Gid:" && len(fields) >= 3 {
 			gidOK = fields[2] == strconv.FormatUint(uint64(cred.Gid), 10)
 		}
-		if fields[0] == "Umask:" {
+		if fields[0] == "Umask:" && len(fields) == 2 {
 			mask, err = strconv.ParseUint(fields[1], 8, 9)
 			maskOK = err == nil
 		}

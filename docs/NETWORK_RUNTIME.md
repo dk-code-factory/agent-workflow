@@ -60,6 +60,12 @@ Logs are in `service.log`. Unix sockets and private networking state live under
 both launch and API proxy connections. Only enrolled UIDs and root can connect;
 caller messages cannot supply another workload UID.
 
+Status replies preview at most 128 memberships and 128 forwards, with total
+counts and explicit truncation markers. Active and uncertain memberships take
+priority over completed history. The root-owned `status.json` and per-invocation
+completion receipts retain the full audit record; truncating a reply never
+changes ownership, admission or busy-stop decisions.
+
 The controller stays on the host. The workload and rootful Podman service join
 persistent network and mount namespaces. Private mounts cover
 `/run/containers/networks`, `/etc/containers/networks`, `/run/netns` and the
@@ -89,9 +95,10 @@ normal completion, cancellation or caller loss stops its descendants without
 stopping the runtime or another invocation. Cleanup uncertainty remains visible.
 The authenticated launch peer supplies its own umask; only its isolated workload
 helper applies it, so concurrent callers cannot change the shared service mask.
-Launch metadata travels through a consumed helper environment entry and a sealed
-root-member memory file. Credentials stay out of helper/guardian arguments and
-persistent membership records; transport entries never reach the workload.
+Launch metadata travels through private sealed memory descriptors, without
+flattening the caller's arguments and environment into one executable argument
+or environment entry. Credentials stay out of helper/guardian arguments and
+persistent membership records; transport descriptors never reach the workload.
 Extra inherited file descriptors beyond standard streams are rejected.
 
 When stdin and stdout are terminals, standalone `exec` allocates a
