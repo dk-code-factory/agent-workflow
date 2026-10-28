@@ -458,11 +458,11 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-31.spec.ts)
 
-- **Coverage:** Opening Advanced command YAML and correcting an invalid command array clears browser errors; rejected host validation appears in diagnostics. Correcting an invalid registered action name clears browser errors and exposes the host registration/schema check without requiring agent parameters.
+- **Coverage:** Diagnostic buttons support mouse, Enter, and Space activation in Visual, Split, and YAML modes at desktop and narrow widths. They reveal inspector fields, expand cards and collapsed controls, or focus YAML ranges with CRLF normalization, including an exact EOF caret assertion for stale parser errors. Job-output reference diagnostics focus the consuming Output value while identifier diagnostics at the same path focus its Identifier. Host diagnostics also reveal guided command arguments and typed callable defaults. Long diagnostic identifiers use bounded visible labels while retaining full paths and working navigation. Whole-job configuration diagnostics use YAML instead of Job ID in Visual and Split modes; scalar action diagnostics still focus Action target, and identifier problems focus Job ID. Unsupported fields use YAML; narrow inspector-to-YAML fallback waits until the source pane becomes interactive before selecting and focusing the range, including repeated activation; unavailable locations explain the problem without moving selection; failed pointer navigation keeps the diagnostic focused for keyboard reactivation even when restoring a formerly focused inspector. Navigation preserves document state, save failures, inspector selection for unavailable fields, and independent editors, works for viewers, and protects active or rejected inspector drafts until completion or explicit discard; pending-edit cases select the starting step through its inspector link to keep canvas motion outside the recovery assertions. Opening Advanced command YAML and correcting an invalid command array clears browser errors; rejected host validation appears in diagnostics. The registered-action recovery case selects its job through the palette and its step through the inspector link to avoid initial canvas-selection timing; correcting the invalid name still clears browser errors and exposes the host registration/schema check without requiring agent parameters.
 
 - **Starting point:** The diagnostics area reports warnings or errors.
 - **My flow:** I expand diagnostics → read the message, document path, source,
-  and line/column when available → locate the field or YAML → correct it.
+  and line/column when available → activate the diagnostic to reveal its field or YAML range → correct it. If an inspector edit is pending, I complete it or press Escape to discard it before navigating again.
 - **What I see:** Diagnostics and the YAML error count update. If host
   validation is configured, I may see **Validating…** while it runs. A host
   validation failure is reported as a diagnostic; browser checks alone do not
@@ -501,7 +501,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
+- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Hidden-rejection cases choose the starting step through palette job navigation and the inspector link, keeping initial canvas timing outside the save and focus assertions. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
@@ -643,11 +643,11 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-43.spec.ts)
 
-- **Coverage:** Deleting a referenced step reports its consuming path; editing the remaining prompt clears the reference diagnostic.
+- **Coverage:** Deleting a referenced step reports its consuming path and contextual repair guidance; activating the diagnostic focuses the remaining prompt, and repairing it clears the error. Recognized needs references to an existing producer missing from Dependencies produce one advisory per consuming field and producer, including repeated references in a prompt. Activating it reveals the consumer’s Dependencies without editing; explicitly checking the producer adds the edge and clears the warning. Viewers focus an enabled Dependencies navigation wrapper on pointer or keyboard activation while its checkboxes remain disabled.
 
 - **Starting point:** I confirmed deletion of a referenced job, step, input,
   secret, or output, and diagnostics now identify remaining references.
-- **My flow:** I read the affected paths → navigate to each expression →
+- **My flow:** I read the affected paths and repair guidance → activate each diagnostic to reveal its consuming expression →
   replace the reference with a valid input or output, remove the expression,
   or undo the deletion if I still need the original item.
 - **What I see:** Diagnostics update as I repair references. If I replace a

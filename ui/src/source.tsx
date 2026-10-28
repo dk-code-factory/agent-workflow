@@ -21,9 +21,9 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`)));
   return result;
 }
-export function SourceEditor({ store, jobID, stepIndex, navigationKey }: { store: WorkflowDocument; jobID?: string; stepIndex?: number; navigationKey?: number }) {
+export function SourceEditor({ store, jobID, stepIndex, navigationKey, target }: { store: WorkflowDocument; jobID?: string; stepIndex?: number; navigationKey?: number; target?: { from: number; to: number; revision: number } }) {
   const element = useRef<HTMLDivElement>(null);
-  const selection = useRef({ jobID, stepIndex }); selection.current = { jobID, stepIndex };
+  const selection = useRef({ jobID, stepIndex, target }); selection.current = { jobID, stepIndex, target };
   const revealSelection = useRef<() => void>(() => {});
   useEffect(() => {
     const complete = (context: CompletionContext) => {
@@ -46,24 +46,26 @@ export function SourceEditor({ store, jobID, stepIndex, navigationKey }: { store
     const view = new EditorView({ parent: element.current!, state: EditorState.create({
       doc: store.getSnapshot().source,
       extensions: [lineNumbers(), highlightActiveLine(), drawSelection(), yaml(), syntaxHighlighting(classHighlighter), search(), autocompletion({ override: [complete] }),
-        EditorState.readOnly.of(store.readOnly), EditorView.editable.of(!store.readOnly), EditorView.contentAttributes.of({ 'aria-label': 'Workflow YAML', role: 'textbox', 'aria-multiline': 'true' }),
+        EditorState.readOnly.of(store.readOnly), EditorView.editable.of(!store.readOnly), EditorView.contentAttributes.of({ 'aria-label': 'Workflow YAML', role: 'textbox', 'aria-multiline': 'true', tabindex: '0' }),
         keymap.of([{ key: 'Mod-z', run: () => { store.undo(); return true; } }, { key: 'Mod-Shift-z', run: () => { store.redo(); return true; } }, { key: 'Mod-y', run: () => { store.redo(); return true; } }, ...searchKeymap, ...defaultKeymap]),
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => { if (update.docChanged && !syncing) { editing = true; try { store.setSource(update.state.doc.toString(), 'yaml'); } finally { editing = false; } } }),
       ],
     }) });
     revealSelection.current = () => {
-      const { jobID, stepIndex } = selection.current;
-      if (jobID === undefined) return;
-      const path = stepIndex === undefined ? ['jobs', jobID] : ['jobs', jobID, 'steps', stepIndex];
-      const range = store.getSourceRange(path);
+      const { jobID, stepIndex, target } = selection.current;
+      if (jobID === undefined && !target) return;
+      const path = stepIndex === undefined ? ['jobs', jobID!] : ['jobs', jobID!, 'steps', stepIndex];
+      const range = target ?? store.getSourceRange(path);
       const source = store.getSnapshot().source;
+      if (target && target.revision !== store.getSnapshot().revision) return;
       if (!range || view.state.doc.toString() !== source.replace(/\r\n?/g, '\n')) return;
       // CodeMirror counts each line break once, including imported CRLF files.
       const from = source.slice(0, range.from).replace(/\r\n?/g, '\n').length;
       const to = source.slice(0, range.to).replace(/\r\n?/g, '\n').length;
-      // Reveal without taking focus away from the graph or property controls.
+      // Graph selection only reveals; explicit diagnostic navigation also focuses.
       view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'start', yMargin: 12 }) });
+      if (target) view.focus();
     };
     const syncSource = () => {
       if (disposed) return;
@@ -89,6 +91,11 @@ export function SourceEditor({ store, jobID, stepIndex, navigationKey }: { store
     const unsubscribe = store.subscribe(syncSource);
     return () => { disposed = true; revealSelection.current = () => {}; unsubscribe(); view.destroy(); };
   }, [store]);
-  useEffect(() => { revealSelection.current(); }, [store, jobID, stepIndex, navigationKey]);
+  useEffect(() => {
+    if (!target) { revealSelection.current(); return; }
+    // The surface first clears inert when closing the narrow inspector drawer.
+    const frame = requestAnimationFrame(() => revealSelection.current());
+    return () => cancelAnimationFrame(frame);
+  }, [store, jobID, stepIndex, navigationKey, target]);
   return <div className="aw-source" ref={element} />;
 }

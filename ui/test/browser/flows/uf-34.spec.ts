@@ -142,7 +142,9 @@ for (const width of [1450, 600]) {
       (window as any).saves = [];
       (window as any).first.update({ onSave: (snapshot: any) => (window as any).saves.push(snapshot) });
     });
-    await editor.getByRole('button', { name: 'greet', exact: false }).first().click();
+    if (width === 600) await editor.getByRole('navigation', { name: 'Panels' }).getByRole('button', { name: 'palette', exact: true }).click();
+    await editor.locator('.aw-palette').getByRole('button', { name: 'build', exact: true }).click();
+    await editor.getByRole('button', { name: '1. greet', exact: true }).click();
     await editor.getByText('Structured output', { exact: true }).click();
     const output = editor.getByLabel('Structured output contract (YAML)', { exact: true });
     await output.fill('[bad'); await output.press('Tab');
