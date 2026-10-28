@@ -263,7 +263,11 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		// Recover a child's durable terminal record after a lost item checkpoint.
 		if exists {
 			child, childSnap, loadErr := journal.Load(ctx, last.ChildID)
-			if loadErr == nil && (last.Status == "pending" || last.Status == "waiting") && child.Status != RunStatusSucceeded {
+			// A canceled child can have committed its gate before publishing a
+			// waiting result. Reuse that physical attempt only for a pure
+			// interruption; genuine failures still take the retry guard below.
+			interruptedWait := last.Status == "interrupted" && last.FailureClass == "canceled" && child != nil && child.Status == RunStatusCanceled && child.FailureClass == "canceled"
+			if loadErr == nil && (last.Status == "pending" || last.Status == "waiting" || interruptedWait) && child.Status != RunStatusSucceeded {
 				waiting, waitErr := e.childInputWait(ctx, child, req)
 				if waitErr != nil {
 					return fail(waitErr)
@@ -409,6 +413,28 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		}
 		out.Items[i] = r
 		if stop {
+			// A committed wait with only completed checkpoints has no failed
+			// effect to escalate. Keep the item observation, and let the root
+			// arbitrate its acknowledged input control during finalization.
+			suspended, waiting := cancellationOnly(childErr) && child != nil && child.Status == RunStatusCanceled, false
+			if suspended {
+				for _, job := range child.Jobs {
+					waiting = waiting || job.Status == RunStatusWaiting
+					if job.Status != RunStatusSucceeded && job.Status != RunStatusSkipped && job.Status != RunStatusWaiting {
+						suspended = false
+					}
+				}
+			}
+			if suspended && waiting {
+				retained, waitErr := e.childInputWait(context.WithoutCancel(ctx), child, req)
+				if waitErr != nil {
+					return fail(errors.Join(childErr, waitErr))
+				}
+				if retained {
+					out.Status = RunStatusInterrupted
+					return finish()
+				}
+			}
 			return fail(childErr)
 		}
 	}

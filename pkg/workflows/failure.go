@@ -30,7 +30,7 @@ func classifyFailure(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
 	}
-	if errors.Is(err, context.Canceled) {
+	if cancellationOnly(err) {
 		return "canceled"
 	}
 	if errors.Is(err, ErrProviderFailure) {
@@ -57,6 +57,32 @@ func classifyFailure(err error) string {
 		return "command"
 	}
 	return "execution"
+}
+
+// cancellationOnly distinguishes an interrupted operation from independent
+// failures joined with its cancellation. Wrappers retain their normal identity;
+// every branch of an aggregate must be cancellation before diagnostics may clear.
+func cancellationOnly(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		found := false
+		for _, cause := range joined.Unwrap() {
+			if cause == nil {
+				continue
+			}
+			found = true
+			if !cancellationOnly(cause) {
+				return false
+			}
+		}
+		return found
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return cancellationOnly(wrapped.Unwrap())
+	}
+	return errors.Is(err, context.Canceled)
 }
 
 func hardExecutionFailure(err error) bool {

@@ -107,8 +107,26 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 	if run.Status == RunStatusSucceeded && !iterationRetry(&run) {
 		return &run, nil
 	}
+	// Only authoritative per-origin retry guards may park automatic admission.
+	// Storage, global cleanup and capacity errors remain errors, without changing
+	// this origin. The transaction also fences a concurrent pause or generation.
+	retryRequired := func(diagnostic string) (*Run, error) {
+		if !automatic {
+			return nil, errors.New(diagnostic)
+		}
+		run.Status = RunStatusNeedsAttention
+		run.Error = diagnostic
+		if run.FailureClass != "restore_uncertainty" {
+			run.FailureClass = "needs_attention"
+		}
+		run.FinishedAt = time.Now().UTC()
+		if err = saveRunTx(ctx, tx, &run); err != nil {
+			return nil, err
+		}
+		return &run, tx.Commit()
+	}
 	if run.FailureClass == "restore_uncertainty" && !retry {
-		return nil, fmt.Errorf("restored effects require explicit retry_uncertain acknowledgement")
+		return retryRequired("restored effects require explicit retry_uncertain acknowledgement")
 	}
 	if !retry {
 		var uncertain int
@@ -116,19 +134,19 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain attempts")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain attempts")
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id WHERE w.run_id=? AND m.status IN ('running','failed','interrupted')`, id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain worker turns")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain worker turns")
 		}
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE run_id=? AND status IN ('dispatched','uncertain')", id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {
-			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain tool effects")
+			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain tool effects")
 		}
 	}
 	var pending int

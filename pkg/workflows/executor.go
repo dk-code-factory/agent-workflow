@@ -353,6 +353,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if ctx.Err() != nil {
 		run.Status = RunStatusCanceled
 		runErr = errors.Join(runErr, ctx.Err())
+		if ctx.Err() == context.Canceled && !cancellationOnly(runErr) {
+			run.Status = RunStatusFailed
+		}
 	} else if runErr != nil {
 		run.Status = RunStatusFailed
 	}
@@ -407,6 +410,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if ctx.Err() != nil && run.Status != RunStatusNeedsAttention {
 		run.Status = RunStatusCanceled
 		runErr = errors.Join(runErr, ctx.Err())
+		if ctx.Err() == context.Canceled && !cancellationOnly(runErr) {
+			run.Status = RunStatusFailed
+		}
 		run.Error = runErr.Error()
 	}
 	if depth == 0 {
@@ -429,7 +435,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			run.Status = RunStatusNeedsAttention
 			run.Error = runErr.Error()
 		}
-		if controlErr == nil && control.Paused && !control.Canceled && run.Status != RunStatusNeedsAttention && (runErr == nil || errors.Is(runErr, context.Canceled)) {
+		if controlErr == nil && control.Paused && !control.Canceled && run.Status != RunStatusNeedsAttention && (runErr == nil || cancellationOnly(runErr)) {
 			run.Status = RunStatusInterrupted
 			runErr = nil
 			run.Error = ""
@@ -442,7 +448,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if err := e.save(context.WithoutCancel(ctx), run); err != nil {
 		return run, errors.Join(runErr, iterationPersistence(err, req.ordered))
 	}
-	if run.Status == RunStatusInterrupted && errors.Is(runErr, context.Canceled) {
+	if run.Status == RunStatusInterrupted && cancellationOnly(runErr) {
 		runErr = nil
 	}
 	return run, runErr
@@ -967,6 +973,11 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	run, snap, err := journal.Load(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	// Check the retained closure before admission or an unanswered-wait return.
+	// A legacy Journal can load input runs without exposing the input extension.
+	if hasInputWait(snap.Definitions) && externalInputJournal(e.Store) == nil {
+		return nil, fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
 	}
 	e.CommandExecution = snap.Execution
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {

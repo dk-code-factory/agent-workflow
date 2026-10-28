@@ -67,6 +67,11 @@ type ExternalInputJournal interface {
 	AcceptInput(context.Context, string, string, ExternalInputAnswer) (ExternalInputGate, error)
 	ConsumeInput(context.Context, string) (ExternalInputGate, error)
 	InputControl(context.Context, string) (ExternalInputControl, error)
+	// QueueResume controls the root handle: unanswered gates remain suspended
+	// without a new generation; safe admission atomically clears pause and creates
+	// one execution after cancellation and retry-acknowledgement guards. Empty
+	// request identity and zero queue limit support embedded Executor.Resume.
+	QueueResume(context.Context, string, string, bool, int) (*Run, error)
 }
 
 func externalInputJournal(store RunStore) ExternalInputJournal {
@@ -361,6 +366,11 @@ func (s *SQLiteStore) QueueInputContinuations(ctx context.Context, maxQueued int
 	return s.QueueInputContinuationsExcept(ctx, maxQueued)
 }
 
+// The predicate matches the additive v10 partial index. Gate completeness is
+// checked during discovery/admission; partially answered origins can still cost
+// work proportional to their eligible-intent history.
+const inputContinuationIntentProbe = `SELECT EXISTS(SELECT 1 FROM input_controls c CROSS JOIN runs r ON r.id=c.run_id WHERE c.continuation=1 AND c.paused=0 AND c.canceled=0 AND r.status='waiting' AND r.owner=''`
+
 // QueueInputContinuationsExcept excludes active controller owners until cleanup
 // finishes, even after the executor has published waiting and released its lease.
 func (s *SQLiteStore) QueueInputContinuationsExcept(ctx context.Context, maxQueued int, active ...string) error {
@@ -377,15 +387,27 @@ func (s *SQLiteStore) QueueInputContinuationsExcept(ctx context.Context, maxQueu
 			return nil
 		}
 	}
-	query := `SELECT r.id FROM runs r JOIN input_controls c ON c.run_id=r.id WHERE r.status='waiting' AND r.owner='' AND c.continuation=1 AND c.paused=0 AND c.canceled=0 AND NOT EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id AND g.state IN ('pending','canceled','replaced'))`
 	args := make([]any, 0, len(active)+1)
+	exclusions := ""
 	if len(active) > 0 {
-		query += " AND r.id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(active)), ",") + ")"
+		exclusions = " AND r.id NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(active)), ",") + ")"
 		for _, id := range active {
 			args = append(args, id)
 		}
 	}
-	query += " ORDER BY r.admitted,r.id LIMIT ?"
+	// Start from the sparse eligibility index, not accumulated zero-intent waits.
+	// CROSS JOIN keeps eligible controls outermost even with an empty index. Older
+	// v10 stores without this additive index remain functional until owned Migrate.
+	var eligible bool
+	probe := inputContinuationIntentProbe + exclusions + ")"
+	if err := s.db.QueryRowContext(ctx, probe, args...).Scan(&eligible); err != nil {
+		return err
+	}
+	if !eligible {
+		return nil
+	}
+	query := `SELECT r.id FROM runs r JOIN input_controls c ON c.run_id=r.id WHERE r.status='waiting' AND r.owner='' AND c.continuation=1 AND c.paused=0 AND c.canceled=0 AND NOT EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id AND g.state IN ('pending','canceled','replaced'))`
+	query += exclusions + " ORDER BY r.admitted,r.id LIMIT ?"
 	args = append(args, available)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
