@@ -35,3 +35,40 @@ export function readinessLine(child, label, timeoutMs = 10000) {
     else if (stdout.readableEnded || stdout.destroyed) onEnd();
   });
 }
+
+// Unlike exit, close also confirms that the owned stdout/stderr pipes drained.
+export function childCompletion(child, label, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const finish = (error, code = child.exitCode, signal = child.signalCode) => {
+      clearTimeout(timer);
+      child.off('close', onClose);
+      child.off('error', onError);
+      if (error) reject(error); else resolve([code, signal]);
+    };
+    const onClose = (code, signal) => finish(null, code, signal);
+    const onError = error => finish(new Error(`${label}: child completion failed`, { cause: error }));
+    const timer = setTimeout(() => finish(new Error(`${label}: child completion timed out`)), timeoutMs);
+    child.once('close', onClose);
+    child.once('error', onError);
+    if ((child.exitCode !== null || child.signalCode !== null) &&
+        (!child.stdout || child.stdout.closed) && (!child.stderr || child.stderr.closed)) onClose(child.exitCode, child.signalCode);
+  });
+}
+
+// An attempted start remains owned even if readiness or identity lookup fails.
+export class RuntimeAttempt {
+  pending = false;
+  reference;
+  start(start, identify) {
+    this.pending = true;
+    this.reference = undefined;
+    start();
+    this.reference = identify();
+  }
+  stop(stopExact) {
+    if (!this.pending) return;
+    if (!this.reference) throw new Error('attempted runtime start has no confirmed identity');
+    stopExact(this.reference);
+    this.pending = false;
+  }
+}

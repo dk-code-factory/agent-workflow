@@ -35,6 +35,54 @@ func TestTerminalFixture(t *testing.T) {
 		os.Exit(terminalFrontend())
 	case "workload":
 		os.Exit(terminalWorkload())
+	case "utf8-workload":
+		os.Exit(terminalUTF8Workload())
+	case "sink-ctty":
+		device, err := unix.IoctlGetInt(0, unix.TIOCGDEV)
+		if err != nil {
+			os.Exit(120)
+		}
+		sink, owned := terminalSink(device, os.Stdin, os.Stdout, os.Stderr)
+		if sink == nil || !owned || sink.Name() != "/dev/tty" {
+			os.Exit(121)
+		}
+		fmt.Fprint(sink, "CTTY-SINK")
+		sink.Close()
+		countAliases := func() int {
+			entries, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, entry := range entries {
+				fd, _ := strconv.Atoi(entry.Name())
+				if actual, err := unix.IoctlGetInt(fd, unix.TIOCGDEV); err == nil && actual == device {
+					count++
+				}
+			}
+			return count
+		}
+		before := countAliases()
+		_, launchOutput, _ := terminalPair(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		missing := exec.Command(filepath.Join(t.TempDir(), "missing"))
+		finishLaunch, err := bridgeTerminal(ctx, cancel, missing, os.Stdin, launchOutput)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer finishLaunch()
+		if countAliases() != before+1 {
+			t.Fatal("read-only bridge did not own exactly one reopened sink")
+		}
+		if missing.Run() == nil {
+			t.Fatal("missing command succeeded")
+		}
+		cancel()
+		if err := finishLaunch(); err != nil || countAliases() != before {
+			t.Fatalf("failed Start leaked owned sink: %v", err)
+		}
+		os.Exit(0)
 	case "pipes":
 		cmd := exec.Command("sh", "-c", "printf out; printf err >&2")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -65,7 +113,11 @@ func terminalFrontend() int {
 	defer lifeW.Close()
 	self, _ := os.Executable()
 	cmd := exec.CommandContext(ctx, self, "__agent_workflow_guardian_v1", "3", self, "-test.run=^TestTerminalFixture$")
-	cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE=workload")
+	workload := "workload"
+	if os.Getenv("AW_TERMINAL_UTF8") != "" {
+		workload = "utf8-workload"
+	}
+	cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE="+workload)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.ExtraFiles = []*os.File{lifeR}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -505,16 +557,21 @@ func TestTerminalDrainCancellationReturnsError(t *testing.T) {
 }
 
 func TestTerminalDrainReportsDestinationEIO(t *testing.T) {
-	master, output, err := openTerminal()
+	master, input, _ := terminalPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", "printf control >&2")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, input, input
+	finish, err := bridgeTerminal(ctx, cancel, cmd, input, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer output.Close()
-	master.Close() // Writes to this owned slave now fail with EIO.
-	_, finish, _, _ := startTerminalDrain(t, output)
+	defer finish()
+	master.Close() // Only the owned input/control relay destination now fails.
+	_ = cmd.Run()
 	done := make(chan error, 1)
 	go func() { done <- finish() }()
-	if err := awaitTerminalDrain(t, done); !errors.Is(err, unix.EIO) {
+	if err := awaitTerminalDrain(t, done); !errors.Is(err, unix.EIO) || !strings.Contains(err.Error(), "drain terminal output") {
 		t.Fatalf("destination EIO was hidden: %v", err)
 	}
 }
@@ -624,11 +681,11 @@ func TestTerminalDestinationFailureCancelsLargeOutputFrontend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputMaster, output, err := openTerminal()
+	outputReader, output, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputMaster.Close()
+	outputReader.Close()
 	defer output.Close()
 	self, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -649,8 +706,8 @@ func TestTerminalDestinationFailureCancelsLargeOutputFrontend(t *testing.T) {
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 122 {
 		t.Fatalf("failed-output frontend exit = %v; diagnostics %q", err, diagnostics.String())
 	}
-	if !strings.Contains(diagnostics.String(), "drain terminal output:") || !strings.Contains(diagnostics.String(), "input/output error") {
-		t.Fatalf("missing original destination EIO: %q", diagnostics.String())
+	if !strings.Contains(diagnostics.String(), "drain terminal output:") || !strings.Contains(diagnostics.String(), "broken pipe") {
+		t.Fatalf("missing original destination failure: %q", diagnostics.String())
 	}
 	current, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
 	if err != nil || !reflect.DeepEqual(current, saved) {
@@ -919,25 +976,63 @@ func terminalFillOutput(t *testing.T, output *os.File) []byte {
 	return nil
 }
 
+func terminalControlFixture(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv("AW_TERMINAL_CONTROL_FIXTURE") == t.Name() {
+		return false
+	}
+	master, slave, _ := terminalPair(t)
+	self, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "-test.run=^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), "AW_TERMINAL_CONTROL_FIXTURE="+t.Name())
+	cmd.Stdin = slave
+	cmd.ExtraFiles = []*os.File{master}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("owned controlling-tty fixture: %v, %s", err, output)
+	}
+	return true
+}
+
+func terminalFixtureInput(t *testing.T) (*os.File, *os.File, *unix.Termios) {
+	t.Helper()
+	fd, err := unix.FcntlInt(3, unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master := os.NewFile(uintptr(fd), "owned-ctty-master")
+	t.Cleanup(func() { master.Close() })
+	modes, err := unix.IoctlGetTermios(0, unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return master, os.Stdin, modes
+}
+
 func TestTerminalOutputDrainRestoresModesAfterFinalNewline(t *testing.T) {
+	if terminalControlFixture(t) {
+		return
+	}
 	for _, same := range []bool{false, true} {
 		t.Run(fmt.Sprintf("same=%t", same), func(t *testing.T) {
 			master, output, savedOutput := terminalPair(t)
 			input, savedInput := output, savedOutput
 			if !same {
-				_, input, savedInput = terminalPair(t)
+				master, input, savedInput = terminalFixtureInput(t)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
 			payload := strings.Repeat("final\n", 2048)
-			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\"; exit 37", "fixture", payload)
-			cmd.Stdin, cmd.Stdout = input, output
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\" >&2; exit 37", "fixture", payload)
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, input
 			finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer finish()
-			filler := terminalFillOutput(t, output)
+			filler := terminalFillOutput(t, input)
 			if err := cmd.Run(); err == nil || err.(*exec.ExitError).ExitCode() != 37 {
 				t.Fatalf("workload exit = %v", err)
 			}
@@ -948,14 +1043,12 @@ func TestTerminalOutputDrainRestoresModesAfterFinalNewline(t *testing.T) {
 				t.Fatalf("backpressured drain returned early: %v", err)
 			case <-time.After(1200 * time.Millisecond):
 			}
-			modes, err := unix.IoctlGetTermios(terminalFD(output), unix.TCGETS)
+			modes, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
 			if err != nil || modes.Oflag&unix.OPOST != 0 {
 				t.Fatalf("outer output processing enabled before drain: %+v, %v", modes, err)
 			}
 			inputModes := *savedInput
-			if same {
-				inputModes.Oflag &^= unix.OPOST
-			}
+			inputModes.Oflag &^= unix.OPOST
 			terminalAssertModes(t, input, &inputModes)
 			want := append(filler, []byte(strings.ReplaceAll(payload, "\n", "\r\n"))...)
 			if err := master.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
@@ -979,24 +1072,27 @@ func TestTerminalOutputDrainRestoresModesAfterFinalNewline(t *testing.T) {
 }
 
 func TestTerminalBlockedOutputCancellationRestoresBothTerminals(t *testing.T) {
+	if terminalControlFixture(t) {
+		return
+	}
 	for _, same := range []bool{false, true} {
 		t.Run(fmt.Sprintf("same=%t", same), func(t *testing.T) {
 			_, output, savedOutput := terminalPair(t)
 			input, savedInput := output, savedOutput
 			if !same {
-				_, input, _ = terminalPair(t)
+				_, input, _ = terminalFixtureInput(t)
 				savedInput = terminalSetOutput(t, input, unix.ONLCR)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\"", "fixture", strings.Repeat("final\n", 2048))
-			cmd.Stdin, cmd.Stdout = input, output
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\" >&2", "fixture", strings.Repeat("final\n", 2048))
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, input
 			finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer finish()
-			_ = terminalFillOutput(t, output)
+			_ = terminalFillOutput(t, input)
 			if err := cmd.Run(); err != nil {
 				t.Fatal(err)
 			}
@@ -1008,9 +1104,7 @@ func TestTerminalBlockedOutputCancellationRestoresBothTerminals(t *testing.T) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			inputModes := *savedInput
-			if same {
-				inputModes.Oflag &^= unix.OPOST
-			}
+			inputModes.Oflag &^= unix.OPOST
 			terminalAssertModes(t, input, &inputModes) // ISIG/ICANON/ECHO restored during drain.
 			cancel()
 			if err := awaitTerminalDrain(t, done); !errors.Is(err, context.Canceled) {
@@ -1062,7 +1156,10 @@ func TestTerminalSetupAndLaunchFailuresPreserveBothModes(t *testing.T) {
 }
 
 func TestTerminalDistinctInputRetainsDirectStderrOutputModes(t *testing.T) {
-	inputMaster, input, savedInput := terminalPair(t)
+	if terminalControlFixture(t) {
+		return
+	}
+	inputMaster, input, savedInput := terminalFixtureInput(t)
 	outputMaster, output, _ := terminalPair(t)
 	savedOutput := terminalSetOutput(t, output, unix.ONLCR)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1074,8 +1171,8 @@ func TestTerminalDistinctInputRetainsDirectStderrOutputModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer finish()
-	if cmd.Stderr != input {
-		t.Fatal("stderr targeting distinct stdin terminal was replaced")
+	if cmd.Stderr != cmd.Stdin.(*os.File) {
+		t.Fatal("stderr targeting distinct stdin terminal was not routed to private input")
 	}
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
@@ -1091,4 +1188,332 @@ func TestTerminalDistinctInputRetainsDirectStderrOutputModes(t *testing.T) {
 	}
 	terminalAssertModes(t, input, savedInput)
 	terminalAssertModes(t, output, savedOutput)
+}
+
+func terminalUTF8Workload() int {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return 120
+	}
+	defer tty.Close()
+	fmt.Fprint(tty, "CONTROL\n")
+	fmt.Fprint(os.Stderr, "DIAGNOSTIC\n")
+	prefix := os.Getenv("AW_TERMINAL_UTF8")
+	for phase := 0; phase < 2; phase++ {
+		if phase == 1 {
+			attrs, err := unix.IoctlGetTermios(1, unix.TCGETS)
+			if err != nil {
+				return 121
+			}
+			attrs.Iflag ^= unix.IUTF8
+			if unix.IoctlSetTermios(1, unix.TCSETS, attrs) != nil {
+				return 121
+			}
+		}
+		fmt.Fprint(os.Stdout, "é\t\n")
+		name := prefix + strconv.Itoa(phase)
+		if os.WriteFile(name+".ready", nil, 0600) != nil {
+			return 122
+		}
+		buf := make([]byte, 32)
+		n, err := os.Stdin.Read(buf)
+		// Publish completion only after all bytes are written and closed.
+		// Creating .read directly lets the observer see an empty result.
+		pending := name + ".read.pending"
+		if err != nil || os.WriteFile(pending, buf[:n], 0600) != nil || os.Rename(pending, name+".read") != nil {
+			return 122
+		}
+	}
+	return 37
+}
+
+func waitTerminalFile(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil {
+			return data
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("terminal fixture marker missing: %s", path)
+	return nil
+}
+
+func TestTerminalDistinctUTF8NativeAndGuardian(t *testing.T) {
+	for _, inputUTF8 := range []bool{false, true} {
+		for _, echo := range []bool{false, true} {
+			for _, diagnostic := range []string{"input", "output", "third"} {
+				t.Run(fmt.Sprintf("input-utf8=%t/echo=%t/stderr=%s", inputUTF8, echo, diagnostic), func(t *testing.T) {
+					capture := func(guarded bool) [3][]byte {
+						inputMaster, input, savedInput := terminalPair(t)
+						outputMaster, output, savedOutput := terminalPair(t)
+						thirdMaster, third, _ := terminalPair(t)
+						savedInput.Iflag &^= unix.IUTF8
+						savedOutput.Iflag |= unix.IUTF8
+						if inputUTF8 {
+							savedInput.Iflag |= unix.IUTF8
+							savedOutput.Iflag &^= unix.IUTF8
+						}
+						savedInput.Lflag &^= unix.ECHO
+						if echo {
+							savedInput.Lflag |= unix.ECHO
+						}
+						savedInput.Cc[unix.VERASE] = 127
+						savedOutput.Oflag = unix.OPOST | unix.ONLCR | unix.TAB3
+						for file, modes := range map[*os.File]*unix.Termios{input: savedInput, output: savedOutput} {
+							if err := unix.IoctlSetTermios(terminalFD(file), unix.TCSETS, modes); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if _, err := output.Write([]byte("xxx")); err != nil {
+							t.Fatal(err)
+						}
+						prefix := filepath.Join(t.TempDir(), "utf8")
+						self, _ := os.Executable()
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						cmd := exec.CommandContext(ctx, self, "-test.run=^TestTerminalFixture$")
+						fixture := "utf8-workload"
+						if guarded {
+							fixture = "frontend"
+						}
+						cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE="+fixture, "AW_TERMINAL_UTF8="+prefix)
+						cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, third
+						if diagnostic == "input" {
+							cmd.Stderr = input
+						} else if diagnostic == "output" {
+							cmd.Stderr = output
+						}
+						cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+						if err := cmd.Start(); err != nil {
+							t.Fatal(err)
+						}
+						done := make(chan error, 1)
+						go func() { done <- cmd.Wait(); close(done) }()
+						t.Cleanup(func() {
+							cancel()
+							_ = cmd.Process.Kill()
+							select {
+							case <-done:
+							case <-time.After(5 * time.Second):
+								t.Error("UTF8 fixture did not join")
+							}
+						})
+						for phase := 0; phase < 2; phase++ {
+							name := prefix + strconv.Itoa(phase)
+							waitTerminalFile(t, name+".ready")
+							if _, err := inputMaster.Write([]byte("é\x7f\n")); err != nil {
+								t.Fatal(err)
+							}
+							read := waitTerminalFile(t, name+".read")
+							want := []byte("\xc3\n")
+							if inputUTF8 {
+								want = []byte("\n")
+							}
+							if !bytes.Equal(read, want) {
+								t.Fatalf("canonical input after FD1 phase%d (guarded=%t) = %x, want %x", phase, guarded, read, want)
+							}
+						}
+						if err := awaitTerminalDrain(t, done); err == nil || err.(*exec.ExitError).ExitCode() != 37 {
+							t.Fatalf("UTF8 fixture exit = %v", err)
+						}
+						if guarded {
+							terminalAssertModes(t, input, savedInput)
+							terminalAssertModes(t, output, savedOutput)
+						}
+						return [3][]byte{terminalReadBuffered(t, inputMaster), terminalReadBuffered(t, outputMaster), terminalReadBuffered(t, thirdMaster)}
+					}
+					native, guarded := capture(false), capture(true)
+					if !reflect.DeepEqual(native, guarded) {
+						t.Fatalf("guardian stream bytes %x, native %x", guarded, native)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestTerminalInputSinkAuthority(t *testing.T) {
+	_, input, _ := terminalPair(t)
+	device, err := unix.IoctlGetInt(terminalFD(input), unix.TIOCGDEV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.OpenFile(input.Name(), os.O_RDONLY|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	flags, _ := unix.FcntlInt(uintptr(terminalFD(reader)), unix.F_GETFL, 0)
+	alias, owned := terminalSink(device, reader, input)
+	if alias != input || owned {
+		t.Fatal("existing writable same-device alias was not reused")
+	}
+	reopened, owned := terminalSink(device, reader)
+	if reopened == nil || !owned {
+		t.Fatal("permitted read-only input reopen was not acquired")
+	}
+	reopened.Close()
+	if after, _ := unix.FcntlInt(uintptr(terminalFD(reader)), unix.F_GETFL, 0); after != flags {
+		t.Fatal("caller read-only descriptor flags changed")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied fixture requires unprivileged caller")
+	}
+	if err := os.Chmod(input.Name(), 0400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(input.Name(), 0620)
+	if sink, owned := terminalSink(device, reader); sink != nil || owned {
+		if owned {
+			sink.Close()
+		}
+		t.Fatal("unavailable sink gained write authority")
+	}
+	_, output, _ := terminalPair(t)
+	cmd := exec.Command("true")
+	cmd.Stdin, cmd.Stdout = reader, output
+	finish, err := bridgeTerminal(context.Background(), func() {}, cmd, reader, output)
+	if err != nil {
+		t.Fatalf("existing admitted read-only input newly rejected: %v", err)
+	}
+	defer finish()
+	if cmd.Run() != nil || finish() != nil {
+		t.Fatal("no-sink fallback no longer launches/cleans up")
+	}
+	// No assertion blesses fallback UTF8/echo bytes: that class remains a
+	// recorded unresolved preservation defect, not a compatibility exclusion.
+}
+
+func TestTerminalReadOnlyControllingInputSink(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied fixture requires unprivileged caller")
+	}
+	master, input, _ := terminalPair(t)
+	reader, err := os.OpenFile(input.Name(), os.O_RDONLY|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := os.Chmod(input.Name(), 0400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(input.Name(), 0620)
+	if writer, err := os.OpenFile(input.Name(), os.O_WRONLY|unix.O_NOCTTY, 0); err == nil {
+		writer.Close()
+		t.Fatal("disposable node unexpectedly permits reopen")
+	}
+	self, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "-test.run=^TestTerminalFixture$")
+	cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE=sink-ctty")
+	cmd.Stdin = reader
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("read-only controlling input sink: %v, %q", err, out)
+	}
+	if got := terminalReadBuffered(t, master); string(got) != "CTTY-SINK" {
+		t.Fatalf("matching controlling input destination = %q", got)
+	}
+}
+
+func TestTerminalDirectStdoutBackpressure(t *testing.T) {
+	if terminalControlFixture(t) {
+		return
+	}
+	for _, code := range []int{0, 37, 125, -1} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			_, input, savedInput := terminalFixtureInput(t)
+			master, outputTTY, savedOutput := terminalPair(t)
+			// Like inherited CLI stdio, this description is blocking and was
+			// not made nonblocking by os.OpenFile's internal Go poller setup.
+			fd, err := unix.Open(outputTTY.Name(), unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := os.NewFile(uintptr(fd), outputTTY.Name())
+			defer output.Close()
+			inputFlags, _ := unix.FcntlInt(uintptr(terminalFD(input)), unix.F_GETFL, 0)
+			outputFlags, _ := unix.FcntlInt(uintptr(terminalFD(output)), unix.F_GETFL, 0)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			payload := strings.Repeat("final\n", 2048)
+			exitCode := code
+			if code == -1 {
+				exitCode = 37
+			}
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' \"$1\"; exit "+strconv.Itoa(exitCode), "fixture", payload)
+			cmd.Stdin, cmd.Stdout = input, output
+			finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			if cmd.Stdout != output {
+				t.Fatal("distinct stdout is not the original descriptor")
+			}
+			filler := terminalFillOutput(t, output)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				err := cmd.Wait()
+				if cleanup := finish(); cleanup != nil {
+					err = errors.Join(err, cleanup)
+				}
+				done <- err
+				close(done)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				_ = cmd.Process.Kill()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("direct stdout fixture did not join")
+				}
+			})
+			select {
+			case err := <-done:
+				t.Fatalf("direct write did not apply native workload backpressure: %v", err)
+			case <-time.After(1200 * time.Millisecond):
+			}
+			terminalAssertModes(t, output, savedOutput)
+			if code == -1 {
+				cancel()
+				if err := awaitTerminalDrain(t, done); err == nil {
+					t.Fatal("cancelled blocked workload succeeded")
+				}
+			} else {
+				want := append(filler, []byte(strings.ReplaceAll(payload, "\n", "\r\n"))...)
+				if err := master.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				got := make([]byte, len(want))
+				if _, err := io.ReadFull(master, got); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("direct stdout lost bytes: %v", err)
+				}
+				err := awaitTerminalDrain(t, done)
+				if code == 0 && err != nil {
+					t.Fatal(err)
+				} else if code != 0 {
+					if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != code {
+						t.Fatalf("direct exit = %v, want %d", err, code)
+					}
+				}
+			}
+			terminalAssertModes(t, input, savedInput)
+			terminalAssertModes(t, output, savedOutput)
+			for file, want := range map[*os.File]int{input: inputFlags, output: outputFlags} {
+				if flags, _ := unix.FcntlInt(uintptr(terminalFD(file)), unix.F_GETFL, 0); flags != want {
+					t.Fatal("caller descriptor flags changed")
+				}
+			}
+		})
+	}
 }

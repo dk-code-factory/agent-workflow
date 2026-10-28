@@ -62,9 +62,38 @@ def wait_file(path, proc):
         time.sleep(.02)
 
 
+IUTF8 = getattr(termios, 'IUTF8', 0x4000)  # Linux N_TTY's dual input/column flag.
+
+
+def utf8_output_fixture(barrier):
+    tty = os.open('/dev/tty', os.O_WRONLY | os.O_NOCTTY)
+    try:
+        os.write(tty, b'CONTROL\n')
+    finally:
+        os.close(tty)
+    os.write(2, b'DIAGNOSTIC\n')
+    for phase in range(2):
+        if phase:
+            attrs = termios.tcgetattr(1)
+            attrs[0] ^= IUTF8
+            termios.tcsetattr(1, termios.TCSANOW, attrs)
+        os.write(1, 'é\t\n'.encode())
+        with open(os.path.join(barrier, f'{phase}.ready'), 'wb'):
+            pass
+        read = os.read(0, 32)
+        result = os.path.join(barrier, f'{phase}.read')
+        pending = result + '.pending'
+        with open(pending, 'wb') as marker:
+            marker.write(read)
+        os.replace(pending, result)  # Publish only the closed, complete body.
+
+
 def output_fixture(mode, barrier=None):
     saved = termios.tcgetattr(1)
     try:
+        if mode.startswith('utf8'):
+            utf8_output_fixture(barrier)
+            sys.exit(37)
         if barrier:
             with open(os.path.join(barrier, 'ready'), 'wb') as marker:
                 marker.write(b'ready')
@@ -175,22 +204,39 @@ class Caller:
 
 class OutputCaller:
     """A native or complete runtime exec with independently owned terminal FDs."""
-    def __init__(self, binary, runtime, profile, mode, barrier=None):
+    def __init__(self, binary, runtime, profile, mode, barrier=None, stderr_target=None):
         self.fds = []
+        self.input_path_mode = None
+        self.third_master = None
         self.proc = None
         self.diagnostics = tempfile.TemporaryFile()
         try:
-            _, same, input_flags, output_flags = profile
+            _, same, input_flags, output_flags = profile[:4]
             self.master, self.output = pty.openpty()
             self.fds += [self.master, self.output]
-            self.input = self.output
+            self.input, self.input_master = self.output, self.master
             if not same:
-                input_master, self.input = pty.openpty()
-                self.fds += [input_master, self.input]
+                self.input_master, self.input = pty.openpty()
+                self.fds += [self.input_master, self.input]
             for fd, flags in [(self.input, input_flags), (self.output, output_flags)]:
                 attrs = termios.tcgetattr(fd)
                 attrs[1] = flags
                 termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            if mode.startswith('utf8'):
+                for fd, utf8 in [(self.input, profile[4]), (self.output, not profile[4])]:
+                    attrs = termios.tcgetattr(fd)
+                    attrs[0] = (attrs[0] | IUTF8) if utf8 else (attrs[0] & ~IUTF8)
+                    if fd == self.input:
+                        attrs[3] = (attrs[3] | termios.ECHO) if profile[5] else (attrs[3] & ~termios.ECHO)
+                        attrs[6][termios.VERASE] = b'\x7f'
+                    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+                os.write(self.output, b'xxx')  # Preserve an existing stdout column.
+                if mode == 'utf8-readonly':
+                    path = os.ttyname(self.input)
+                    self.input_path_mode = (path, os.stat(path).st_mode & 0o777)
+                    self.input = os.open(path, os.O_RDONLY | os.O_NOCTTY)
+                    self.fds.append(self.input)
+                    os.chmod(path, 0o400)
             self.saved_input = termios.tcgetattr(self.input)
             self.saved_output = termios.tcgetattr(self.output)
             command = [sys.executable, os.path.abspath(__file__), '--output-fixture', mode]
@@ -203,8 +249,16 @@ class OutputCaller:
                 os.setsid()
                 fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
+            diagnostic = self.diagnostics
+            if stderr_target == 'input':
+                diagnostic = self.input
+            elif stderr_target == 'output':
+                diagnostic = self.output
+            elif stderr_target == 'third':
+                self.third_master, diagnostic = pty.openpty()
+                self.fds += [self.third_master, diagnostic]
             self.proc = subprocess.Popen(command, stdin=self.input, stdout=self.output,
-                                         stderr=self.diagnostics, preexec_fn=own_disposable_tty)
+                                         stderr=diagnostic, preexec_fn=own_disposable_tty)
         except BaseException:
             self.close()
             raise
@@ -233,6 +287,9 @@ class OutputCaller:
         try:
             stop_child(self.proc)
         finally:
+            if self.input_path_mode:
+                os.chmod(*self.input_path_mode)
+                self.input_path_mode = None
             for fd in self.fds:
                 os.close(fd)
             self.fds = []
@@ -302,6 +359,57 @@ def backpressured_output(binary, runtime, profile, native):
             caller.close()
 
 
+def read_buffered(fd):
+    data = b''
+    while select.select([fd], [], [], .02)[0]:
+        chunk = os.read(fd, 65536)
+        assert chunk and len(data) + len(chunk) < 65536, 'unexpected fixture stream volume'
+        data += chunk
+    return data
+
+
+def utf8_acceptance(binary=None, runtime=None):
+    rows = []
+    cases = [(False, True, 'input', False), (False, False, 'output', False),
+             (True, True, 'third', False), (True, False, 'input', False),
+             (False, True, 'third', True)]
+    for utf8, echo, stderr, readonly in cases:
+        profile = ('distinct-utf8', False, termios.OPOST | termios.ONLCR,
+                   termios.OPOST | termios.ONLCR | termios.TAB3, utf8, echo)
+
+        def capture(selected_binary):
+            with tempfile.TemporaryDirectory(prefix='aw-terminal-utf8-') as barrier:
+                mode = 'utf8-readonly' if readonly else 'utf8'
+                caller = OutputCaller(selected_binary, runtime, profile, mode, barrier, stderr)
+                try:
+                    reads = []
+                    for phase in range(2):
+                        wait_file(os.path.join(barrier, f'{phase}.ready'), caller.proc)
+                        os.write(caller.input_master, 'é\x7f\n'.encode())
+                        path = os.path.join(barrier, f'{phase}.read')
+                        wait_file(path, caller.proc)
+                        with open(path, 'rb') as marker:
+                            read = marker.read()
+                        assert read == (b'\n' if utf8 else b'\xc3\n'), (phase, read.hex())
+                        reads.append(read.hex())
+                    stdout = caller.capture()
+                    return dict(inputHex=read_buffered(caller.input_master).hex(),
+                                stdoutHex=stdout.hex(),
+                                thirdHex=read_buffered(caller.third_master).hex() if caller.third_master is not None else '',
+                                canonicalReads=reads)
+                finally:
+                    caller.close()
+
+        native = capture(None)
+        actual = capture(binary) if binary else native
+        assert actual == native, (utf8, echo, stderr, readonly, actual, native)
+        rows.append(dict(inputIutf8=utf8, outputIutf8=not utf8, echo=echo,
+                         stderrDestination=stderr, readOnlyControllingInput=readonly,
+                         native=native, actual=actual, exactBytes=True, exitStatus=37,
+                         callerTermiosRestored=True))
+    return rows
+
+
 def output_acceptance(binary=None, runtime=None):
     processed = termios.OPOST | termios.ONLCR
     profiles = [('shared-processed', True, processed, processed),
@@ -320,6 +428,8 @@ def output_acceptance(binary=None, runtime=None):
                              callerTermiosRestored=True))
     native = capture_output(None, None, profiles[0], 'pending')
     return dict(outputOracleUsesRuntime=bool(binary), outputByteOracle=rows,
+                distinctUtf8Oracle=utf8_acceptance(binary, runtime),
+                unresolvedPreservationDefect='Distinct terminals without proved caller controlling-terminal identity matching stdin, or without a caller-authorized input writer, retain the existing combined bridge; native byte/echo/destination parity remains unresolved.',
                 backpressuredFinalNewline=backpressured_output(binary, runtime, profiles[0], native))
 
 

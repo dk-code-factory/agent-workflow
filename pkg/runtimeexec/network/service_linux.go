@@ -741,8 +741,17 @@ func cleanupRoute(method, path string) bool {
 }
 
 func (s *service) proxyCleanup(c *net.UnixConn) {
-	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
-	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	s.proxyCleanupUntil(c, time.Now().Add(15*time.Second))
+}
+
+func (s *service) proxyCleanupUntil(c *net.UnixConn, deadline time.Time) {
+	// Bound upstream dial, headers and body to the same total lifetime as the
+	// frontend. A silent backend after client disconnect is released by this bound.
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	_ = c.SetDeadline(deadline)
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+		// Transport may detach dial cancellation; retain this connection's bound.
 		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(s.run, "api.sock"))
 	}}
 	defer transport.CloseIdleConnections()
@@ -759,7 +768,7 @@ func (s *service) proxyCleanup(c *net.UnixConn) {
 		}
 		req.RequestURI = ""
 		req.URL.Scheme, req.URL.Host = "http", "podman"
-		response, err := transport.RoundTrip(req)
+		response, err := transport.RoundTrip(req.WithContext(ctx))
 		req.Body.Close()
 		if err != nil {
 			return

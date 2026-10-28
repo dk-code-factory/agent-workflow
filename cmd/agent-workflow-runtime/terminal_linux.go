@@ -49,6 +49,52 @@ func openTerminal() (*os.File, *os.File, error) {
 	return master, slave, nil
 }
 
+// terminalSink uses only authority already held by the caller. A readable tty
+// alone need not permit writes, even though its native kernel can emit echo.
+func terminalSink(device int, aliases ...*os.File) (sink *os.File, owned bool) {
+	matches := func(file *os.File) bool {
+		if file == nil {
+			return false
+		}
+		fd := terminalFD(file)
+		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+		if err != nil || flags&unix.O_ACCMODE == unix.O_RDONLY {
+			return false
+		}
+		actual, err := unix.IoctlGetInt(fd, unix.TIOCGDEV)
+		return err == nil && actual == device
+	}
+	for _, file := range aliases {
+		if matches(file) {
+			return file, false
+		}
+	}
+	paths := []string{"/dev/tty", fmt.Sprintf("/proc/self/fd/%d", terminalFD(aliases[0]))}
+	for _, path := range paths {
+		file, err := os.OpenFile(path, os.O_WRONLY|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		if err != nil {
+			continue
+		}
+		if matches(file) {
+			return file, true
+		}
+		file.Close()
+	}
+	return nil, false
+}
+
+// The caller's controlling terminal must also be stdin: otherwise /dev/tty
+// output cannot safely move from the existing combined relay to the input sink.
+func terminalControlsInput(device int) bool {
+	file, err := os.OpenFile("/dev/tty", os.O_RDONLY|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	actual, err := unix.IoctlGetInt(terminalFD(file), unix.TIOCGDEV)
+	return err == nil && actual == device
+}
+
 // bridgeTerminal owns only its new PTY. The caller's saved termios is restored
 // before returning to the shell, including launch errors and handled signals.
 func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, input, output *os.File) (func() error, error) {
@@ -60,14 +106,28 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	outputDevice, outputDeviceErr := unix.IoctlGetInt(terminalFD(output), unix.TIOCGDEV)
 	inputDevice, inputDeviceErr := unix.IoctlGetInt(terminalFD(input), unix.TIOCGDEV)
 	distinctOutput := outputDeviceErr == nil && inputDeviceErr == nil && outputDevice != inputDevice
+	var sink *os.File
+	var ownedSink bool
+	if distinctOutput && terminalControlsInput(inputDevice) {
+		diagnostics, _ := cmd.Stderr.(*os.File)
+		sink, ownedSink = terminalSink(inputDevice, input, diagnostics)
+	}
+	directOutput := sink != nil
+	closeSink := func() {
+		if ownedSink {
+			sink.Close()
+		}
+	}
 	master, slave, err := openTerminal()
 	if err != nil {
+		closeSink()
 		return nil, err
 	}
 	wakeR, wakeW, err := os.Pipe()
 	if err != nil {
 		master.Close()
 		slave.Close()
+		closeSink()
 		return nil, err
 	}
 	fail := func(err error) (func() error, error) {
@@ -75,12 +135,13 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 		slave.Close()
 		wakeR.Close()
 		wakeW.Close()
+		closeSink()
 		return nil, err
 	}
 	// Input discipline comes from stdin, output processing from stdout. The
 	// workload may change its private terminal's modes while it runs.
 	inner := *saved
-	if outputErr == nil {
+	if outputErr == nil && !directOutput {
 		inner.Oflag = savedOutput.Oflag
 	}
 	if err = unix.IoctlSetTermios(terminalFD(slave), unix.TCSETS, &inner); err != nil {
@@ -97,6 +158,9 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
 	raw.Cflag &^= unix.CSIZE | unix.PARENB
 	raw.Cflag |= unix.CS8
+	if directOutput {
+		raw.Oflag &^= unix.OPOST
+	}
 	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
 	restoreModes := func() error {
 		var restoreErr error
@@ -116,7 +180,7 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	if err = unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, &raw); err != nil {
 		return rollback(err)
 	}
-	if outputErr == nil {
+	if outputErr == nil && !directOutput {
 		// Read after setting input raw: stdin and stdout may be aliases of
 		// one terminal. Disable only outer output processing in either case.
 		relayOutput, err := unix.IoctlGetTermios(terminalFD(output), unix.TCGETS)
@@ -128,12 +192,19 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 			return rollback(err)
 		}
 	}
-	// Only diagnostics targeting the original stdout terminal share the new
-	// PTY. A different terminal is an explicit stream redirection.
+	// Distinct stdout keeps its native flags and existing kernel column state.
+	// Echo and /dev/tty stay on the input tty, using a proved caller writer.
 	cmd.Stdin, cmd.Stdout = slave, slave
+	stderrDevice := outputDevice
+	if directOutput {
+		cmd.Stdout = output
+		stderrDevice = inputDevice
+	} else {
+		sink = output
+	}
 	if diagnostics, ok := cmd.Stderr.(*os.File); ok && outputDeviceErr == nil {
 		diagnosticDevice, err := unix.IoctlGetInt(terminalFD(diagnostics), unix.TIOCGDEV)
-		if err == nil && diagnosticDevice == outputDevice {
+		if err == nil && diagnosticDevice == stderrDevice {
 			cmd.Stderr = slave
 		}
 	}
@@ -166,7 +237,7 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 		}
 	}()
 	go func() {
-		_, err := io.Copy(output, terminalOutput{master})
+		_, err := io.Copy(sink, terminalOutput{master})
 		outputDone <- err
 		if err != nil {
 			cancel()
@@ -197,7 +268,7 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 			// drain. Shared output must still bypass outer processing; only
 			// proved distinct input keeps its original output modes now.
 			inputModes := *saved
-			if outputErr == nil && !distinctOutput {
+			if directOutput || (outputErr == nil && !distinctOutput) {
 				inputModes.Oflag &^= unix.OPOST
 			}
 			if err := unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, &inputModes); err != nil {
@@ -231,6 +302,7 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 				restoreErr = errors.Join(restoreErr, fmt.Errorf("drain terminal output: %w", drainErr))
 			}
 			master.Close()
+			closeSink()
 			restoreErr = errors.Join(restoreErr, restoreModes())
 		})
 		return restoreErr

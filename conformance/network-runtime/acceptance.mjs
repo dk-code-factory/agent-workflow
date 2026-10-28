@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { once } from 'node:events';
-import { readinessLine } from './readiness.mjs';
+import { readinessLine, childCompletion, RuntimeAttempt } from './readiness.mjs';
 const require = createRequire(resolve('ui/package.json'));
 if (!process.argv.includes('--run-privileged')) throw new Error('requires --run-privileged; uses sudo/rootful Podman and normal Chrome, no models');
 const { chromium } = require('@playwright/test');
@@ -21,7 +21,7 @@ const fixture = join(dir, 'fixture');
 const workflow = join(dir, 'workflow');
 const children = [];
 let browser;
-let started = false;
+const runtimeAttempt = new RuntimeAttempt();
 let image;
 let ref;
 let monitorOutput = '';
@@ -38,6 +38,25 @@ const podman = (...args) => inside('podman', ...args);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const port = async () => { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const p = server.address().port; await new Promise(r => server.close(r)); return p; };
 const status = () => JSON.parse(runtimeRun('status', name));
+const startRuntime = () => runtimeAttempt.start(() => operator('start', name), () => status().reference);
+// Bind the pidfd before challenging the same authenticated connection with the
+// retained reference. A stop reply precedes owned teardown; wait for daemon exit.
+const stopExact = reference => run('python3', ['-c', `import json,os,select,socket,struct,sys
+reference=json.loads(sys.argv[1])
+with socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET) as s:
+    s.settimeout(10)
+    s.connect('/run/agent-workflow-runtimes/'+reference['name']+'/control.sock')
+    pid,uid,gid=struct.unpack('3i',s.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+    assert uid==0,'runtime peer is not root'
+    fd=os.pidfd_open(pid)
+    try:
+        s.send(json.dumps({'operation':'stop','reference':reference}).encode())
+        response=json.loads(s.recv(1048576))
+        assert not response.get('error'),response.get('error')
+        poll=select.poll();poll.register(fd,select.POLLIN)
+        assert poll.poll(10000),'owned daemon shutdown unconfirmed'
+    finally:os.close(fd)`, JSON.stringify(reference)], { timeout: 25000 });
+const stopRuntime = () => runtimeAttempt.stop(stopExact);
 const spawnInside = (...args) => { const c = spawn(runtime, ['exec', name, '--', ...args], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(c); return c; };
 const settled = async () => { for (let n = 0; n < 100; n++) { if (Object.values(status().members).every(m => m.state === 'cleaned')) return; await sleep(100); } throw new Error('members did not clean'); };
 const snapshot = () => ['link', 'address', 'route'].map(kind => JSON.parse(run('ip', ['-j', kind, 'show'])));
@@ -82,8 +101,8 @@ try {
   const authorityArgs = [runtime, name, String(process.getuid()), String(process.getgid()), JSON.stringify(process.getgroups())];
   evidence.coldOperator = JSON.parse(run('sudo', ['-n', 'unshare', '--mount', '--propagation', 'private', '/usr/bin/python3', authority, 'cold-prepare', ...authorityArgs, run('readlink', ['/proc/self/ns/mnt'])]));
   operator('prepare', name, '--uid', String(process.getuid()));
-  operator('start', name); started = true;
-  ref = status().reference;
+  startRuntime();
+  ref = runtimeAttempt.reference;
   assert.equal(inside('podman', 'info', '--format', '{{.Store.GraphRoot}}'), hostStore);
   assert.equal(podman('image', 'inspect', image, '--format', '{{.Id}}').replace(/^sha256:/, ''), image.replace(/^sha256:/, ''));
   const identity = JSON.parse(inside(fixture, 'identity'));
@@ -135,7 +154,7 @@ print(json.dumps({'native':native,'contained':contained,'byte_exact':True}))`, r
   assert.equal(rewritten.hookSpecificOutput.updatedInput.fixture_option, 'kept');
   const executed = spawn(runtime, ['exec', name, '--', '/bin/sh', '-c', rewritten.hookSpecificOutput.updatedInput.command], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(executed);
   let hookOutput = ''; executed.stdout.on('data', data => { hookOutput += data; });
-  const [hookCode] = await once(executed, 'close'); assert.equal(hookCode, 7);
+  const [hookCode] = await childCompletion(executed, 'hook fixture'); assert.equal(hookCode, 7);
   assert.deepEqual(hookOutput.trim().split('\n'), [ref.endpoint, ref.endpoint, name]);
   const staleRef = { ...ref, generation: ref.generation + 1 };
   const denied = JSON.parse(inside('/bin/sh', '-c', 'AGENT_WORKFLOW_NETWORK_REFERENCE="$1"; export AGENT_WORKFLOW_NETWORK_REFERENCE; /bin/sh "$2" < "$3"', 'hook-stale', JSON.stringify(staleRef), hook, hookInput));
@@ -161,11 +180,11 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
 
   const a = spawnInside('sleep', '60'), b = spawnInside('sleep', '60'), c = spawnInside('sleep', '60');
   for (let n = 0; n < 100 && Object.values(status().members).filter(m => m.state !== 'cleaned').length < 3; n++) await sleep(50);
-  assert.throws(() => runtimeRun('stop', name), /busy/);
-  a.kill('SIGKILL'); await once(a, 'exit');
+  assert.throws(() => stopExact(runtimeAttempt.reference), /busy/);
+  a.kill('SIGKILL'); await childCompletion(a, 'first independent caller');
   assert.equal(b.exitCode, null); assert.equal(c.exitCode, null);
-  assert.throws(() => runtimeRun('stop', name), /busy/);
-  b.kill('SIGKILL'); c.kill('SIGKILL'); await Promise.all([once(b, 'exit'), once(c, 'exit')]); await settled();
+  assert.throws(() => stopExact(runtimeAttempt.reference), /busy/);
+  b.kill('SIGKILL'); c.kill('SIGKILL'); await Promise.all([childCompletion(b, 'second independent caller'), childCompletion(c, 'third independent caller')]); await settled();
   evidence.checks.push('three independent callers, disconnect and atomic busy stop');
 
   const network = name + '-dns'; ownedNetworks.push(network); podman('network', 'create', network);
@@ -180,7 +199,7 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   const server = spawnInside(fixture, 'serve', `127.0.0.1:${loopback}`);
   runtimeRun('forward', name, String(hostLoopback), String(loopback)); await sleep(200);
   assert.equal(run('curl', ['--fail', '--silent', '--max-time', '10', `http://127.0.0.1:${hostLoopback}/`]), 'runtime-service');
-  server.kill('SIGKILL'); await once(server, 'exit'); await settled();
+  server.kill('SIGKILL'); await childCompletion(server, 'loopback server'); await settled();
   assert.equal(inside('curl', '--silent', '--fail', '--unix-socket', ref.endpoint.replace('unix://', ''), 'http://podman/_ping'), 'OK');
   evidence.checks.push('named-network DNS, HTTPS, API, published ports and runtime-loopback forwarding');
 
@@ -224,12 +243,12 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   evidence.checks.push('normal Chrome overlapping HTTP/2 and unchanged host links/addresses/routes');
   await browser.close(); browser = undefined;
   podman('rm', '-f', peer); ownedContainers.splice(0); podman('network', 'rm', network); ownedNetworks.splice(0);
-  await settled(); runtimeRun('stop', name); started = false;
-  operator('start', name); started = true;
+  await settled(); stopRuntime();
+  startRuntime();
   assert.notEqual(status().reference.identity, ref.identity);
   const restored = spawnInside(fixture, 'serve', `127.0.0.1:${loopback}`); await sleep(200);
   assert.equal(run('curl', ['--fail', '--silent', '--max-time', '10', `http://127.0.0.1:${hostLoopback}/`]), 'runtime-service');
-  restored.kill('SIGKILL'); await once(restored, 'exit'); await settled();
+  restored.kill('SIGKILL'); await childCompletion(restored, 'restored server'); await settled();
   assert.throws(() => run('curl', ['--fail', '--silent', '--max-time', '2', '--unix-socket', ref.endpoint.replace('unix://', ''), 'http://podman/_ping']));
 
   // Lose admission health while an exact engine-owned container remains alive.
@@ -254,13 +273,13 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   inside('sudo', '-n', '/usr/sbin/ip', 'link', 'set', 'tap0', 'down');
   assert.equal(status().healthy, false);
   assert.throws(() => inside('/bin/echo', 'new-work-must-fail'), /unhealthy/);
-  const recoveringExit = once(recovering, 'exit'); recovering.kill('SIGTERM'); await recoveringExit;
+  recovering.kill('SIGTERM'); await childCompletion(recovering, 'recovering workflow');
   await settled();
   assert.equal(status().members[reservation.id].state, 'cleaned');
   const retainedNames = run('podman', ['--remote', '--url', recoveryRef.endpoint, 'ps', '--all', '--format', '{{.Names}}']);
   assert(!retainedNames.split(/\s+/).includes(recoveryContainer));
-  runtimeRun('stop', name); started = false;
-  operator('start', name); started = true;
+  stopRuntime();
+  startRuntime();
   assert.notEqual(status().reference.identity, recoveryRef.identity);
   evidence.checks.push('unhealthy admission refuses new work while exact owned container cleanup releases reservation');
 
@@ -270,17 +289,20 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   assert.equal(crashPIDs.length, 2); assert(crashPIDs.every(pid => Number.isInteger(pid) && pid > 1));
   const activeMembers = Object.values(status().members).filter(m => m.state !== 'cleaned').map(m => m.id);
   assert(activeMembers.length > 0);
-  const crashExit = once(crashCaller, 'exit');
-  run('sudo', ['-n', 'python3', '-c', `import socket,struct,os,signal,json
+  run('sudo', ['-n', 'python3', '-c', `import socket,struct,os,signal,json,select
 s=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET)
 s.connect(${JSON.stringify('/run/agent-workflow-runtimes/' + name + '/control.sock')})
-s.send(json.dumps({"operation":"check","reference":json.loads(${JSON.stringify(JSON.stringify(old))})}).encode())
-assert not json.loads(s.recv(1048576)).get("error")
 pid,uid,gid=struct.unpack("3i",s.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
 assert uid==0
 fd=os.pidfd_open(pid)
-signal.pidfd_send_signal(fd,signal.SIGKILL)`]);
-  await crashExit;
+s.settimeout(10)
+s.send(json.dumps({"operation":"check","reference":json.loads(${JSON.stringify(JSON.stringify(old))})}).encode())
+assert not json.loads(s.recv(1048576)).get("error")
+signal.pidfd_send_signal(fd,signal.SIGKILL)
+poll=select.poll();poll.register(fd,select.POLLIN)
+assert poll.poll(10000),'owned crashed daemon exit unconfirmed'
+os.close(fd)`]);
+  await childCompletion(crashCaller, 'daemon-loss caller');
   run('sudo', ['-n', 'python3', '-c', `import json,os,time
 root=${JSON.stringify('/var/lib/agent-workflow/runtimes/' + name)}
 members=${JSON.stringify(activeMembers)}
@@ -300,30 +322,60 @@ for attempt in range(100):
     if all(receipts) and not any(alive):break
     time.sleep(.1)
 else:raise AssertionError('active daemon-loss cleanup/receipt unconfirmed')`]);
-  run('sudo', ['-n', runtime, 'start', name]);
+  runtimeAttempt.pending = false; // Exact daemon exit and member cleanup proved.
+  startRuntime();
   assert.notEqual(status().reference.identity, old.identity);
   evidence.checks.push('clean restart, active-member daemon-loss cleanup and receipts, forwarding recovery and stale endpoint refusal');
   await sleep(100);
   assert.equal(stable(snapshot()), before, 'host links/addresses/routes changed during restart');
   assert.equal(monitor.exitCode, null, 'host network monitor stopped early');
   assert.equal(monitor.signalCode, null, 'host network monitor was signalled early');
-  const monitorExit = once(monitor, 'exit'); monitor.kill('SIGTERM'); await monitorExit;
+  monitor.kill('SIGTERM'); await childCompletion(monitor, 'host monitor');
   assert.equal(monitorErrors.trim(), '', 'host network monitor failed');
   assert.equal(monitorOutput.trim(), '', 'transient host link/address/route change');
   evidence.hostMonitor = { command: 'ip monitor link address route', subscriptionMask, events: monitorOutput, stderr: monitorErrors, snapshotsUnchanged: true };
   evidence.checks.push('continuous host network monitor reports no transient link/address/route changes');
   console.log('PASS', JSON.stringify(evidence));
 } finally {
-  if (browser) await browser.close();
-  for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
-  if (started) {
-    for (const container of ownedContainers) { try { podman('rm', '-f', container); } catch {} }
-    for (const network of ownedNetworks) { try { podman('network', 'rm', network); } catch {} }
-    try { await settled(); runtimeRun('stop', name); } catch (e) { cleanupUncertain = true; console.error('owned runtime needs inspection:', name, e.message); }
+  if (browser) { try { await browser.close(); } catch (e) { cleanupUncertain = true; console.error('browser cleanup unconfirmed:', e.message); } }
+  const reaped = await Promise.allSettled(children.map(async (child, index) => {
+    const completion = childCompletion(child, `owned child ${index}`, 2000);
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await completion;
+    }
+    finally { child.stdout?.destroy(); child.stderr?.destroy(); }
+  }));
+  for (const result of reaped) if (result.status === 'rejected') {
+    cleanupUncertain = true;
+    (evidence.cleanupErrors ??= []).push(result.reason.message);
+    console.error('owned child cleanup unconfirmed:', result.reason.message);
   }
-  if (image) { try { run('sudo', ['-n', 'podman', 'rmi', image]); } catch {} }
+  if (runtimeAttempt.pending) {
+    try {
+      assert(runtimeAttempt.reference, 'attempted start has no confirmed runtime identity');
+      assert.deepEqual(status().reference, runtimeAttempt.reference, 'owned runtime identity changed');
+      const endpoint = runtimeAttempt.reference.endpoint;
+      for (const container of ownedContainers) run('podman', ['--remote', '--url', endpoint, 'rm', '-f', container]);
+      for (const network of ownedNetworks) run('podman', ['--remote', '--url', endpoint, 'network', 'rm', network]);
+      await settled(); stopRuntime();
+    } catch (e) {
+      cleanupUncertain = true;
+      (evidence.cleanupErrors ??= []).push(e.message);
+      console.error('owned runtime needs inspection:', name, e.message);
+    }
+  }
+  if (runtimeAttempt.pending) {
+    cleanupUncertain = true;
+    evidence.pendingRuntime = { name, reference: runtimeAttempt.reference ?? null };
+  }
+  if (image && !cleanupUncertain) { try { run('sudo', ['-n', 'podman', 'rmi', image]); } catch {} }
   console.log(JSON.stringify(evidence));
   // Root-owned registry and receipts are retained for operator audit.
-  if (cleanupUncertain) console.error('retained owned fixture evidence:', dir);
+  if (cleanupUncertain) {
+    writeFileSync(join(dir, 'cleanup-uncertain.json'), JSON.stringify(evidence, null, 2) + '\n');
+    console.error('retained owned fixture evidence:', dir);
+    process.exitCode = 1;
+  }
   else rmSync(dir, { recursive: true, force: true });
 }

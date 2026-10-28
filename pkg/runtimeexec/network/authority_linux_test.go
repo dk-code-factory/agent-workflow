@@ -3,7 +3,9 @@
 package network
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -52,6 +54,41 @@ func TestAuthorityPeerFixture(t *testing.T) {
 	os.Exit(0)
 }
 
+// Each child has one Wait owner, used both normally and by failure teardown.
+func startAuthorityPeer(t *testing.T, cmd *exec.Cmd) func() error {
+	t.Helper()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	var waitErr error
+	wait := func() error {
+		if !waited {
+			waited = true
+			waitErr = cmd.Wait()
+		}
+		return waitErr
+	}
+	t.Cleanup(func() {
+		if !waited {
+			_ = cmd.Process.Kill()
+			_ = wait()
+		}
+	})
+	return wait
+}
+
+func acceptAuthorityPeer(t *testing.T, listener *net.UnixListener) *net.UnixConn {
+	t.Helper()
+	_ = listener.SetDeadline(time.Now().Add(5 * time.Second))
+	c, err := listener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
 func TestAuthenticatedCallersRetainDistinctUmasks(t *testing.T) {
 	self := &unix.Ucred{Pid: int32(os.Getpid()), Uid: uint32(os.Getuid()), Gid: uint32(os.Getgid())}
 	_, before, err := peerAuthority(self)
@@ -67,22 +104,15 @@ func TestAuthenticatedCallersRetainDistinctUmasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var peers []*exec.Cmd
+	var peers []func() error
 	for _, mask := range []string{"0077", "0002"} {
 		cmd := exec.Command(binary, "-test.run=^TestAuthorityPeerFixture$")
 		cmd.Env = append(os.Environ(), "AW_AUTHORITY_PEER=1", "AW_AUTHORITY_MASK="+mask, "AW_AUTHORITY_SOCKET="+listener.Addr().String())
-		if err = cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		peers = append(peers, cmd)
+		peers = append(peers, startAuthorityPeer(t, cmd))
 	}
 	seen := map[int]bool{}
 	for range peers {
-		listener.SetDeadline(time.Now().Add(5 * time.Second))
-		c, err := listener.AcceptUnix()
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := acceptAuthorityPeer(t, listener)
 		cred, err := peer(c)
 		if err != nil {
 			t.Fatal(err)
@@ -94,8 +124,8 @@ func TestAuthenticatedCallersRetainDistinctUmasks(t *testing.T) {
 		seen[mask] = true
 		c.Close()
 	}
-	for _, cmd := range peers {
-		if err = cmd.Wait(); err != nil {
+	for _, wait := range peers {
+		if err = wait(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,6 +135,75 @@ func TestAuthenticatedCallersRetainDistinctUmasks(t *testing.T) {
 	_, after, err := peerAuthority(self)
 	if err != nil || before != after {
 		t.Fatalf("shared caller mask changed %o -> %o: %v", before, after, err)
+	}
+}
+
+func TestAuthorityFailureTeardown(t *testing.T) {
+	if stage := os.Getenv("AW_AUTHORITY_FAILURE_STAGE"); stage != "" {
+		var cmd *exec.Cmd
+		var accepted *net.UnixConn
+		// Registered first, this checks the actual resources after all teardown.
+		t.Cleanup(func() {
+			result := "reaped-and-closed"
+			if cmd == nil || cmd.ProcessState == nil {
+				result = "unreaped"
+			}
+			if accepted != nil {
+				_ = accepted.SetReadDeadline(time.Now().Add(time.Second))
+				var b [1]byte
+				if _, err := accepted.Read(b[:]); !errors.Is(err, net.ErrClosed) {
+					result = "connection-not-closed"
+				}
+			}
+			if err := os.WriteFile(os.Getenv("AW_AUTHORITY_FAILURE_REPORT"), []byte(result), 0600); err != nil {
+				t.Error(err)
+			}
+		})
+		listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "peer"), Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = listener.Close() })
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command(binary, "-test.run=^TestAuthorityPeerFixture$")
+		cmd.Env = append(os.Environ(), "AW_AUTHORITY_PEER=1", "AW_AUTHORITY_MASK=0077", "AW_AUTHORITY_SOCKET="+listener.Addr().String())
+		_ = startAuthorityPeer(t, cmd)
+		if stage == "accept" {
+			t.Fatal("injected failure before accept")
+		}
+		accepted = acceptAuthorityPeer(t, listener)
+		cred, err := peer(accepted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cred.Pid = -1 // Force the real authority lookup to fail with a live peer.
+		if _, _, err := peerAuthority(cred); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("authority lookup unexpectedly succeeded")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"accept", "authority"} {
+		t.Run(stage, func(t *testing.T) {
+			report := filepath.Join(t.TempDir(), "teardown")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, "-test.run=^TestAuthorityFailureTeardown$")
+			cmd.Env = append(os.Environ(), "AW_AUTHORITY_FAILURE_STAGE="+stage, "AW_AUTHORITY_FAILURE_REPORT="+report)
+			if out, err := cmd.CombinedOutput(); err == nil || ctx.Err() != nil {
+				t.Fatalf("failure fixture did not finish its expected failure: %v %s", err, out)
+			}
+			data, err := os.ReadFile(report)
+			if err != nil || string(data) != "reaped-and-closed" {
+				t.Fatalf("failure teardown: %q %v", data, err)
+			}
+		})
 	}
 }
 

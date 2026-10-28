@@ -106,13 +106,34 @@ transport adds no UTF-8 conversion or separate environment-entry count limit.
 When stdin and stdout are terminals, standalone `exec` allocates a
 private PTY and gives the workload its own controlling terminal and foreground
 process group. This supports `/dev/tty`, individual keystrokes, Ctrl-C and window
-resize. The frontend temporarily relays the caller's terminal in raw mode and
-restores its saved settings on completion, launch errors and handled signals.
-Terminal diagnostics share that PTY; redirected stderr retains its original
-descriptor and stays separate. Noninteractive streams and pipes retain their
-original descriptors and separation. SIGTERM cancels only that
+resize. The frontend temporarily relays the caller's terminal in raw mode.
+When stdin and stdout identify different terminals, the frontend proves that
+stdin matches the caller's controlling terminal and has an authorized writer
+for it before keeping stdout direct. Stdout then retains its original descriptor
+and native output processing. Private PTY echo and `/dev/tty` output return to
+the input terminal through that authorized writer.
+
+After workload exit, ordinary completion waits for accepted relay output to
+drain, so a blocked consumer can keep `exec` pending. Keyboard input controls
+restore before this wait. Output processing on the relay destination remains
+disabled until the wait ends, preserving bytes already processed by the private
+PTY. The exact saved terminal settings then restore; restoration and drain
+failures are reported. Cancellation permits a one-second drain grace and
+then reports an unsuccessful drain if the consumer remains blocked. The relay
+cannot forcibly interrupt an arbitrary caller-owned writer, and unsuccessful
+cancellation does not guarantee complete output.
+Diagnostics targeting the input terminal share its private PTY; other stderr
+destinations retain their original descriptors. Noninteractive streams and pipes
+retain their original descriptors and separation. SIGTERM cancels only that
 invocation; terminal children and detached descendants remain owned by its
 existing guardian.
+
+Preservation defects remain when distinct, redirected read-only input has no
+authorized writer, or the caller's controlling terminal is different or cannot
+be proved. The existing combined relay still admits these inputs, but can change
+output that depends on terminal columns, such as UTF-8 text followed by a tab
+with `TAB3` enabled. These defects remain unresolved; they are not accepted
+compatibility exclusions.
 
 For an embedding application such as Code Factory:
 
