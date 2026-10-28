@@ -54,5 +54,8 @@ uses installed Codex, production assets and the real Go helper with disposable
 configuration/trust, local fake Responses/API services and no external route.
 Its root-authenticated control/status fixture is fake; the Podman harness above
 separately verifies the production helper against an actual prepared runtime.
-Hook skip/failure/bypass and saved outside-API fallback remain documented
-[#38](https://github.com/dk-code-factory/agent-workflow/issues/38) follow-up limits.
+Hook skip/failure/bypass remains a routing limitation of the plugin. The
+independent BPF LSM socket boundary prevents host Unix API fallback, and admission
+rejects saved non-Unix container API routes. Deterministic policy fixtures do not
+certify LSM attachment or syscall interception; the kernel test and Podman/Chrome
+harness remain separate opt-ins.

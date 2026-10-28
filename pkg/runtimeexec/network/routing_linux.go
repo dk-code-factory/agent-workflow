@@ -43,11 +43,15 @@ func (s *service) validateRoutingAsPeer(req Request, cred *unix.Ucred, groups []
 func checkRoutingHelper() error {
 	f := os.NewFile(3, "admission")
 	defer f.Close()
+	return checkRoutingPayload(f, validateSavedRouting)
+}
+
+func checkRoutingPayload(f *os.File, validate func([]string) error) error {
 	var launch memberLaunch
-	if err := json.NewDecoder(io.LimitReader(f, 1<<20)).Decode(&launch); err != nil {
+	if err := decodeSealedPayload(f, &launch); err != nil {
 		return err
 	}
-	return validateSavedRouting(launch.Request.Env)
+	return validate(launch.Request.Env)
 }
 
 // Saved network transports cannot be fenced by the Unix LSM while retaining
@@ -70,58 +74,93 @@ func validateSavedRoutingWithDefaults(environment []string, userHome string, sys
 			env[k] = v
 		}
 	}
-	if env["HOME"] == "" {
-		env["HOME"] = userHome
+	// A provider may filter any of these overrides. Check the defaults it can
+	// reveal as well as the explicitly selected locations, including account home.
+	type routingFile struct {
+		path string
+		json bool
 	}
-	config := env["XDG_CONFIG_HOME"]
-	if config == "" && env["HOME"] != "" {
-		config = filepath.Join(env["HOME"], ".config")
-	}
-	var files, patterns []string
-	for _, dir := range system {
-		files = append(files, filepath.Join(dir, "containers.conf"))
-		patterns = append(patterns, filepath.Join(dir, "containers.conf.d/*.conf"))
-	}
-	if config != "" {
-		files = append(files, filepath.Join(config, "containers/containers.conf"), filepath.Join(config, "containers/podman-connections.json"))
-		patterns = append(patterns, filepath.Join(config, "containers/containers.conf.d/*.conf"))
-	}
-	if override := env["CONTAINERS_CONF"]; override != "" {
-		files = []string{override}
-		patterns = nil
-		if config != "" {
-			files = append(files, filepath.Join(config, "containers/podman-connections.json"))
+	var files []routingFile
+	seen := map[routingFile]bool{}
+	add := func(path string, json bool) {
+		file := routingFile{filepath.Clean(path), json}
+		if !seen[file] {
+			seen[file] = true
+			files = append(files, file)
 		}
 	}
-	for _, key := range []string{"CONTAINERS_CONF", "CONTAINERS_CONF_OVERRIDE", "PODMAN_CONNECTIONS_CONF"} {
-		if env[key] != "" {
-			files = append(files, env[key])
+	configs := map[string]bool{}
+	dockers := map[string]bool{}
+	for _, home := range []string{userHome, env["HOME"]} {
+		if home != "" {
+			configs[filepath.Join(home, ".config")] = true
+			dockers[filepath.Join(home, ".docker")] = true
 		}
 	}
-	docker := env["DOCKER_CONFIG"]
-	if docker == "" && env["HOME"] != "" {
-		docker = filepath.Join(env["HOME"], ".docker")
+	if config := env["XDG_CONFIG_HOME"]; config != "" {
+		configs[filepath.Clean(config)] = true
 	}
-	if docker != "" {
-		files = append(files, filepath.Join(docker, "config.json"))
-		patterns = append(patterns, filepath.Join(docker, "contexts/meta/*/meta.json"))
+	if docker := env["DOCKER_CONFIG"]; docker != "" {
+		dockers[filepath.Clean(docker)] = true
 	}
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
+	containerDirs := append([]string(nil), system...)
+	for config := range configs {
+		containerDirs = append(containerDirs, filepath.Join(config, "containers"))
+	}
+	for _, dir := range containerDirs {
+		add(filepath.Join(dir, "containers.conf"), false)
+		dropins := filepath.Join(dir, "containers.conf.d")
+		entries, err := routingDirectory(dropins)
 		if err != nil {
 			return err
 		}
-		files = append(files, matches...)
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".conf") {
+				add(filepath.Join(dropins, entry.Name()), false)
+			}
+		}
 	}
-	for _, path := range files {
-		if err := validateRoutingFile(path); err != nil {
-			return fmt.Errorf("saved container routing %s: %w", path, err)
+	for config := range configs {
+		add(filepath.Join(config, "containers/podman-connections.json"), true)
+	}
+	for _, key := range []string{"CONTAINERS_CONF", "CONTAINERS_CONF_OVERRIDE", "PODMAN_CONNECTIONS_CONF"} {
+		if env[key] != "" {
+			add(env[key], key == "PODMAN_CONNECTIONS_CONF")
+		}
+	}
+	for docker := range dockers {
+		add(filepath.Join(docker, "config.json"), true)
+		meta := filepath.Join(docker, "contexts/meta")
+		entries, err := routingDirectory(meta)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				add(filepath.Join(meta, entry.Name(), "meta.json"), true)
+			}
+		}
+	}
+	for _, file := range files {
+		if err := validateRoutingFile(file.path, file.json); err != nil {
+			return fmt.Errorf("saved container routing %s: %w", file.path, err)
 		}
 	}
 	return nil
 }
 
-func validateRoutingFile(path string) error {
+func routingDirectory(path string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("saved container routing directory %s: %w", path, err)
+	}
+	return entries, nil
+}
+
+func validateRoutingFile(path string, jsonFormat bool) error {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -147,13 +186,29 @@ func validateRoutingFile(path string) error {
 		return errors.New("routing configuration grew beyond limit")
 	}
 	var document map[string]any
-	if strings.HasSuffix(path, ".json") {
+	if jsonFormat {
 		err = json.Unmarshal(data, &document)
 	} else {
 		err = toml.Unmarshal(data, &document)
 	}
 	if err != nil {
 		return errors.New("cannot parse routing configuration")
+	}
+	if !jsonFormat {
+		if engine, ok := document["engine"].(map[string]any); ok {
+			if assignments, ok := engine["env"].([]any); ok {
+				for _, assignment := range assignments {
+					if text, ok := assignment.(string); ok {
+						key, endpoint, _ := strings.Cut(text, "=")
+						if key == "CONTAINER_HOST" {
+							if err := validateDestinations(map[string]any{"uri": endpoint}); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	return validateDestinations(document)
 }

@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/internal/socketfence"
 	"golang.org/x/sys/unix"
 )
 
@@ -117,6 +119,46 @@ func readResponse(t *testing.T, c *net.UnixConn) Response {
 	}
 	return out
 }
+func TestAuthenticationReplacementCannotOpenAdmission(t *testing.T) {
+	s, control := fixtureService(t)
+	s.checkBoundary = nil // Exercise the real missing-boundary admission check.
+	s.config.Generation = s.status.Reference.Generation
+	path := filepath.Join(t.TempDir(), "auth")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	listener.SetUnlinkOnClose(false)
+	enrolled, checked, err := socketfence.OpenSocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked.Close()
+	s.config.AuthenticationSockets = []socketfence.Socket{enrolled}
+	// Replace the pathname after registration/validation and before installation.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	if err := s.installBoundary([]string{control}); err == nil || !strings.Contains(err.Error(), "enrolled socket identity changed") {
+		t.Fatalf("replacement reached policy installation: %v", err)
+	}
+	if s.boundary != nil {
+		t.Fatal("failed startup installed a boundary")
+	}
+	started := false
+	s.memberCommand = func(string) *exec.Cmd { started = true; return exec.Command("/bin/true") }
+	_, response := requestAt(t, control, Request{Operation: "exec", Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, true)
+	if response.Error == "" || started || len(s.status.Members) != 0 {
+		t.Fatalf("failed enrollment admitted a workload: response=%+v started=%v members=%v", response, started, s.status.Members)
+	}
+}
+
 func TestConcurrentMembershipDisconnectAndBusyStop(t *testing.T) {
 	t.Setenv("AW_MEMBER_FIXTURE", "1")
 	s, socket := fixtureService(t)

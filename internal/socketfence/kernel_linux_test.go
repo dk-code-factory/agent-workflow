@@ -57,7 +57,12 @@ func TestKernelSocketBoundary(t *testing.T) {
 	if _, err := rand.Read(id[:]); err != nil {
 		t.Fatal(err)
 	}
-	boundary, err := Install(hex.EncodeToString(id[:]), 7, []string{api, authSocket})
+	enrolled, held, err := OpenSocket(authSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	boundary, err := Install(hex.EncodeToString(id[:]), 7, []string{api}, []Socket{enrolled})
 	if err != nil {
 		t.Fatal(err)
 	}

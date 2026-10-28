@@ -105,32 +105,66 @@ func OpenSocket(path string) (Socket, *os.File, error) {
 	return Socket{Path: path, Inode: st.Ino, Device: dev}, f, nil
 }
 
-// Install runs only at explicit operator start, before launch admission opens.
-func Install(identity string, generation uint64, paths []string) (*Boundary, error) {
-	if err := Supported(); err != nil {
-		return nil, err
+// openEnrolledSocket compares the opened inode before it can enter the policy.
+// The returned handle must remain open for the boundary's lifetime.
+func openEnrolledSocket(expected Socket) (*os.File, error) {
+	actual, f, err := OpenSocket(expected.Path)
+	if err != nil || actual != expected {
+		if f != nil {
+			f.Close()
+		}
+		return nil, errors.New("enrolled socket identity changed; operator must enroll its new identity")
 	}
+	return f, nil
+}
+
+// Install runs only at explicit operator start, before launch admission opens.
+// paths are runtime-owned sockets; authentication must retain registered identities.
+func Install(identity string, generation uint64, paths []string, authentication []Socket) (*Boundary, error) {
 	if len(identity) != 32 || strings.Trim(identity, "0123456789abcdef") != "" || generation == 0 {
 		return nil, errors.New("invalid enforcement generation")
 	}
 	state := State{Identity: identity, Generation: generation, Cgroup: filepath.Join(CgroupRoot, identity), Pins: filepath.Join(PinRoot, identity), Programs: map[string]uint32{}, Maps: map[string]uint32{}}
+	b := &Boundary{State: state}
+	failed := true
+	defer func() {
+		if failed {
+			b.Close()
+		}
+	}()
+	for _, path := range paths {
+		socket, f, err := OpenSocket(path)
+		if err != nil {
+			return nil, err
+		}
+		b.sockets = append(b.sockets, f)
+		b.State.Sockets = append(b.State.Sockets, socket)
+	}
+	for _, expected := range authentication {
+		f, err := openEnrolledSocket(expected)
+		if err != nil {
+			return nil, err
+		}
+		b.sockets = append(b.sockets, f)
+		b.State.Sockets = append(b.State.Sockets, expected)
+	}
+	if err := Supported(); err != nil {
+		return nil, err
+	}
 	if err := privateDir(state.Cgroup); err != nil {
 		return nil, err
 	}
 	if err := privateDir(state.Pins); err != nil {
 		return nil, err
 	}
-	b := &Boundary{State: state}
 	var err error
 	b.Group, err = os.Open(state.Cgroup)
 	if err != nil {
 		return nil, err
 	}
-	failed := true
 	defer func() {
 		if failed {
 			_ = b.Retire()
-			b.Close()
 		}
 	}()
 	var st unix.Stat_t
@@ -143,13 +177,7 @@ func Install(identity string, generation uint64, paths []string) (*Boundary, err
 		return nil, fmt.Errorf("load socket BPF LSM: %w", err)
 	}
 	defer objects.Close()
-	for _, path := range paths {
-		socket, f, e := OpenSocket(path)
-		if e != nil {
-			return nil, e
-		}
-		b.sockets = append(b.sockets, f)
-		b.State.Sockets = append(b.State.Sockets, socket)
+	for _, socket := range b.State.Sockets {
 		key := fenceSocketId{Inode: socket.Inode, Device: socket.Device}
 		if err = objects.Allowed.Update(key, uint32(1), ebpf.UpdateAny); err != nil {
 			return nil, err
@@ -213,13 +241,10 @@ func Restore(state State) (*Boundary, error) {
 		return nil, err
 	}
 	for _, expected := range state.Sockets {
-		actual, f, e := OpenSocket(expected.Path)
-		if e != nil || actual != expected {
-			if f != nil {
-				f.Close()
-			}
+		f, e := openEnrolledSocket(expected)
+		if e != nil {
 			b.Close()
-			return nil, errors.New("enrolled socket identity changed")
+			return nil, e
 		}
 		b.sockets = append(b.sockets, f)
 	}

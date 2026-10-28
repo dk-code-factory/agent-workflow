@@ -146,6 +146,104 @@ func TestSocketIdentityAliasesAndReplacement(t *testing.T) {
 	}
 }
 
+func TestEnrolledSocketRetainsMatchingAliasIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	alias := path + "-alias"
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	expected, registered, err := OpenSocket(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered.Close()
+	held, err := openEnrolledSocket(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Boundary{sockets: []*os.File{held}}
+	defer b.Close()
+	listener.Close()
+	if _, err := held.Stat(); err != nil {
+		t.Fatal("enrolled inode handle was not retained:", err)
+	}
+	b.Close()
+	if _, err := held.Stat(); err == nil {
+		t.Fatal("boundary close retained the inode handle")
+	}
+}
+
+func TestInstallRejectsChangedEnrollmentBeforeKernelSetup(t *testing.T) {
+	for _, change := range []string{"replacement", "symlink", "missing"} {
+		t.Run(change, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "auth")
+			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			listener.SetUnlinkOnClose(false)
+			expected, registered, err := OpenSocket(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registered.Close()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if change != "missing" {
+				replacementPath := path
+				if change == "symlink" {
+					replacementPath += "-other"
+				}
+				replacement, err := net.Listen("unix", replacementPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer replacement.Close()
+				if change == "symlink" {
+					if err := os.Symlink(replacementPath, path); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			// The first open succeeds, then the registered identity must fail.
+			// Install must reject before Supported or any kernel policy work.
+			runtimePath := filepath.Join(dir, "runtime")
+			runtimeListener, err := net.Listen("unix", runtimePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtimeListener.Close()
+			matching, checked, err := OpenSocket(runtimePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked.Close()
+			boundary, err := Install(strings.Repeat("a", 32), 1, []string{runtimePath}, []Socket{matching, expected})
+			if boundary != nil || err == nil || !strings.Contains(err.Error(), "enrolled socket identity changed") {
+				t.Fatalf("changed identity reached kernel setup: boundary=%v err=%v", boundary, err)
+			}
+			fds, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fd := range fds {
+				target, _ := os.Readlink(filepath.Join("/proc/self/fd", fd.Name()))
+				if target == runtimePath || target == path || target == path+"-other" {
+					t.Fatalf("failed enrollment retained inode handle %s", target)
+				}
+			}
+		})
+	}
+}
+
 func TestEmbeddedPolicyContract(t *testing.T) {
 	source, err := os.ReadFile("bpf/fence.c")
 	if err != nil {

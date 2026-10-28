@@ -597,19 +597,7 @@ func serve(name string) error {
 		return err
 	}
 	defer api.Close()
-	paths := []string{filepath.Join(runParent, "control.sock"), filepath.Join(run, "podman.sock")}
-	for _, enrolled := range cfg.AuthenticationSockets {
-		current, f, e := socketfence.OpenSocket(enrolled.Path)
-		if f != nil {
-			f.Close()
-		}
-		if e != nil || current != enrolled {
-			return errors.New("authentication socket changed; operator must enroll its new identity")
-		}
-		paths = append(paths, enrolled.Path)
-	}
-	s.boundary, err = socketfence.Install(identity, cfg.Generation, paths)
-	if err != nil {
+	if err = s.installBoundary([]string{filepath.Join(runParent, "control.sock"), filepath.Join(run, "podman.sock")}); err != nil {
 		return err
 	}
 	defer s.boundary.Close()
@@ -709,6 +697,16 @@ func (s *service) health() error {
 	}
 	_, err = s.slirp(map[string]any{"execute": "list_hostfwd"})
 	return err
+}
+
+// installBoundary completes identity enrollment before serve opens admission.
+func (s *service) installBoundary(paths []string) error {
+	boundary, err := socketfence.Install(s.status.Reference.Identity, s.config.Generation, paths, s.config.AuthenticationSockets)
+	if err != nil {
+		return err
+	}
+	s.boundary = boundary
+	return nil
 }
 
 func (s *service) enforcement() error {
