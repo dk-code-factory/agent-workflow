@@ -31,6 +31,9 @@ func (s *SQLiteStore) ResumeRequest(ctx context.Context, id, requestID string, r
 // QueueResume atomically admits a new execution without modifying the snapshot
 // or any attempt. Duplicate request identities refer to the original generation.
 func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, retry bool, maxQueued int) (*Run, error) {
+	return s.queueResume(ctx, id, requestID, retry, maxQueued, false)
+}
+func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, retry bool, maxQueued int, automatic bool) (*Run, error) {
 	if len(requestID) > 128 {
 		return nil, fmt.Errorf("request_id exceeds 128 bytes")
 	}
@@ -82,8 +85,51 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 	if origin != id {
 		return nil, fmt.Errorf("control the originating run %s", origin)
 	}
+	control, err := inputControlTx(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if automatic && (run.Status != RunStatusWaiting || control.Paused || control.Canceled || !control.Continuation) {
+		return &run, nil
+	}
+	if control.Canceled {
+		var gates int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=?", id).Scan(&gates); err != nil {
+			return nil, err
+		}
+		if gates > 0 {
+			return nil, fmt.Errorf("canceled input gates require a new run")
+		}
+	}
 	if run.Status == RunStatusQueued || run.Status == RunStatusRunning {
 		return nil, fmt.Errorf("run is already active")
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=? AND state='pending'", id).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0 WHERE run_id=?", id); err != nil {
+			return nil, err
+		}
+		run.Status = RunStatusWaiting
+		run.FinishedAt = time.Time{}
+		run.Error = ""
+		run.FailureClass = ""
+		b, err = json.Marshal(run)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE runs SET status=?,record=? WHERE id=?", run.Status, b, id); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE executions SET status=?,record=? WHERE run_id=? AND generation=?", run.Status, b, id, run.Generation); err != nil {
+			return nil, err
+		}
+		if err = addEvent(ctx, tx, id, "run.waiting", run); err != nil {
+			return nil, err
+		}
+		return &run, tx.Commit()
 	}
 	if run.Status == RunStatusSucceeded && !iterationRetry(&run) {
 		return &run, nil
@@ -120,6 +166,9 @@ func (s *SQLiteStore) QueueResume(ctx context.Context, id, requestID string, ret
 		if queued >= maxQueued {
 			return nil, fmt.Errorf("queued run limit reached")
 		}
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0,continuation=0 WHERE run_id=?", id); err != nil {
+		return nil, err
 	}
 	previous := run.Status
 	run.Generation++

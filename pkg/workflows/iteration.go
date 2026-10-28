@@ -259,9 +259,20 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			out.Items[i] = last
 			continue
 		}
+		var waitingChild *Run
 		// Recover a child's durable terminal record after a lost item checkpoint.
 		if exists {
 			child, childSnap, loadErr := journal.Load(ctx, last.ChildID)
+			if loadErr == nil && (last.Status == "pending" || last.Status == "waiting") && child.Status != RunStatusSucceeded {
+				waiting, waitErr := e.childInputWait(ctx, child, req)
+				if waitErr != nil {
+					return fail(waitErr)
+				}
+				if waiting {
+					waitingChild = child
+					resetIterationDependents(waitingChild, all)
+				}
+			}
 			if loadErr == nil && child.Status != RunStatusSucceeded && len(child.Jobs) == len(all[child.WorkflowRef].Jobs) {
 				allSucceeded := true
 				for _, job := range child.Jobs {
@@ -293,7 +304,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 				return fail(loadErr)
 			}
 			// Preserve the old uncertain observation before allocating a new child.
-			if latest[item.Key].Status == "pending" {
+			if latest[item.Key].Status == "pending" && waitingChild == nil {
 				last.Status = "interrupted"
 				last.FailureClass = "owner_loss"
 				last.Error = "child completion was not committed"
@@ -302,7 +313,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 				}
 			}
 		}
-		if exists {
+		if exists && waitingChild == nil {
 			if err = e.guardIterationRetry(ctx, last, req); err != nil {
 				out.Items[i] = last
 				return fail(err)
@@ -310,8 +321,12 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		}
 		r := IterationItemResult{PlanFingerprint: p.Fingerprint, Key: item.Key, Number: item.Number, Attempt: last.Attempt + 1, Status: "pending"}
 		r.ChildID = iterationChildID(p.RunID, id, item.Key, r.Attempt)
-		if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
-			return fail(err)
+		if waitingChild != nil {
+			r = last
+		} else {
+			if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
+				return fail(err)
+			}
 		}
 		out.Items[i] = r
 		ec.Item = item.Item
@@ -333,7 +348,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		}
 		metadata["iteration_logical_run_id"] = actionHash([]any{logical, id, item.Key})
 		childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
-		child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, nil)
+		child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, waitingChild)
 		r.Status = "completed"
 
 		if child != nil {
@@ -341,6 +356,17 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			r.Jobs = child.Jobs
 			r.FailureClass = child.FailureClass
 			r.Error = child.Error
+		}
+		if childErr == nil && child != nil && child.Status == RunStatusWaiting {
+			r.Status = "waiting"
+			r.Error = ""
+			r.FailureClass = ""
+			if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
+				return fail(err)
+			}
+			out.Items[i] = r
+			out.Status = RunStatusWaiting
+			return finish()
 		}
 		if child != nil && iterationRetry(child) && childErr == nil {
 			r.Status = "exhausted"
@@ -648,7 +674,7 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 }
 
 func nestedIterationOutcome(jobs map[string]JobExecution) string {
-	severity := map[string]int{"": 0, "completed": 0, "exhausted": 1, "provider_failure": 2, "pending": 3, "interrupted": 4}
+	severity := map[string]int{"": 0, "completed": 0, "exhausted": 1, "provider_failure": 2, "pending": 3, "interrupted": 4, "waiting": 5}
 	outcome := ""
 	retain := func(value string) {
 		if severity[value] > severity[outcome] {

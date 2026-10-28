@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -69,6 +69,12 @@ const schemaV8 = `CREATE TABLE action_attempts(attempt_id TEXT PRIMARY KEY REFER
 const schemaV9 = `
 CREATE TABLE iteration_plans(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,job_id TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,job_id));
 CREATE TABLE iteration_attempts(run_id TEXT NOT NULL,job_id TEXT NOT NULL,item_key TEXT NOT NULL,number INTEGER NOT NULL,phase TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,job_id,item_key,number,phase),FOREIGN KEY(run_id,job_id) REFERENCES iteration_plans(run_id,job_id) ON DELETE CASCADE);
+`
+
+const schemaV10 = `
+CREATE TABLE input_controls(run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,paused INTEGER NOT NULL DEFAULT 0,canceled INTEGER NOT NULL DEFAULT 0,continuation INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE input_gates(id TEXT PRIMARY KEY,origin_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,state TEXT NOT NULL,answer_id TEXT UNIQUE,record BLOB NOT NULL);
+CREATE INDEX input_gates_origin ON input_gates(origin_id,state);
 `
 
 // Migrate must be called while holding exclusive workspace ownership. Existing
@@ -139,7 +145,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		return err
 	}
 	defer tx.Rollback()
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)

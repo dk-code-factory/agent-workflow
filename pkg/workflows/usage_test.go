@@ -158,7 +158,7 @@ func TestMigrationBackfillsHistoricalProviderUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.db.Exec("DROP TABLE iteration_attempts; DROP TABLE iteration_plans; DROP TABLE action_attempts; DROP TABLE usage_observations; DROP TABLE usage_session_counters; DROP TABLE usage_invocations; DROP TABLE retention_groups; ALTER TABLE executions DROP COLUMN finalizing; PRAGMA user_version=4;"); err != nil {
+	if _, err = store.db.Exec("DROP TABLE input_gates; DROP TABLE input_controls; DROP TABLE iteration_attempts; DROP TABLE iteration_plans; DROP TABLE action_attempts; DROP TABLE usage_observations; DROP TABLE usage_session_counters; DROP TABLE usage_invocations; DROP TABLE retention_groups; ALTER TABLE executions DROP COLUMN finalizing; PRAGMA user_version=4;"); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := ownership.Own(store.Dir)

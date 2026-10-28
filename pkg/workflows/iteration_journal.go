@@ -164,6 +164,8 @@ func (s *SQLiteStore) AppendIteration(ctx context.Context, run, job string, r It
 	phase := "result"
 	if r.Status == "pending" {
 		phase = "admitted"
+	} else if r.Status == "waiting" {
+		phase = "waiting:" + r.Fingerprint
 	} else if r.Status != "completed" && r.Status != "exhausted" && r.Status != "provider_failure" && r.Status != "interrupted" {
 		return fmt.Errorf("invalid item outcome %q", r.Status)
 	}
@@ -220,7 +222,7 @@ func (s *SQLiteStore) AppendIteration(ctx context.Context, run, job string, r It
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO iteration_attempts VALUES(?,?,?,?,?,?)", run, job, r.Key, r.Attempt, phase, b); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO iteration_attempts VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING", run, job, r.Key, r.Attempt, phase, b); err != nil {
 		return err
 	}
 	if err = addEvent(ctx, tx, run, "iteration."+r.Status, r); err != nil {

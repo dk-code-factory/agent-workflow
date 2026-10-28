@@ -27,7 +27,7 @@ func (s *SQLiteStore) OriginRuns(ctx context.Context, id string) ([]Run, error) 
 	}
 	out := []Run{}
 	for _, candidate := range runs {
-		if candidate.Status == RunStatusRunning || candidate.Status == RunStatusQueued || candidate.Status == RunStatusNeedsAttention {
+		if candidate.Status == RunStatusRunning || candidate.Status == RunStatusQueued || candidate.Status == RunStatusNeedsAttention || candidate.Status == RunStatusWaiting || candidate.Status == RunStatusInterrupted {
 			return nil, fmt.Errorf("run %s still requires execution or recovery", candidate.ID)
 		}
 		out = append(out, candidate)
@@ -45,7 +45,7 @@ func (s *SQLiteStore) DeleteOrigin(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 	for _, run := range runs {
-		res, err := tx.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention')", run.ID)
+		res, err := tx.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted')", run.ID)
 		if err != nil {
 			return err
 		}

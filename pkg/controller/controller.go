@@ -222,6 +222,9 @@ func (s *Server) loop() {
 		if s.requireReady(s.ctx) != nil {
 			continue
 		}
+		if err := s.Store.QueueInputContinuations(s.ctx, s.MaxQueued); err != nil {
+			s.Logger.Error("input continuation admission deferred", "error", err)
+		}
 		runs, err := s.Store.Queued(s.ctx)
 		if err != nil {
 			s.storageErrors.Add(1)
@@ -430,6 +433,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if s.inputAPI(w, r, run, parts) {
+		return
+	}
 	if len(parts) == 2 && r.Method == "GET" {
 		owner := run.OriginID
 		if owner == "" {
@@ -556,7 +562,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 					fail(500, err)
 					return
 				}
-				if !active && (run.Status == workflows.RunStatusQueued || run.Status == workflows.RunStatusNeedsAttention) {
+				if !active && (run.Status == workflows.RunStatusQueued || run.Status == workflows.RunStatusNeedsAttention || run.Status == workflows.RunStatusWaiting || run.Status == workflows.RunStatusInterrupted) {
 					run.Status = workflows.RunStatusCanceled
 					run.Error = "canceled before execution"
 					run.FinishedAt = time.Now().UTC()

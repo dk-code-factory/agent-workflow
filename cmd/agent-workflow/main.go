@@ -29,6 +29,8 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+var errInputWaiting = errors.New("run suspended awaiting external input")
+
 type values []string
 
 func (v *values) String() string     { return strings.Join(*v, ",") }
@@ -38,6 +40,9 @@ func main() {
 	defer cancel()
 	if err := command(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, errInputWaiting) {
+			os.Exit(2)
+		}
 		if errors.Is(err, context.Canceled) {
 			os.Exit(130)
 		}
@@ -53,12 +58,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow <run|validate|status|list|logs|attempts|cancel|resume|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow <run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
 		return nil
 	}
 	verb := args[0]
 	switch verb {
-	case "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker", "tool-calls", "invocations", "usage", "backup", "restore", "bundle", "cleanup-status":
+	case "inputs", "answer", "interrupt", "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker", "tool-calls", "invocations", "usage", "backup", "restore", "bundle", "cleanup-status":
 	default:
 		return fmt.Errorf("unknown command %q", verb)
 	}
@@ -80,6 +85,10 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	workerTurns := fs.Int("turns", 0, "worker turn budget (default 32)")
 	workerRequest := fs.String("request-id", "", "durable start, resume, or mailbox request ID")
 	workerPrompt := fs.String("message", "", "mailbox message")
+	gateID := fs.String("gate", "", "durable external-input gate ID")
+	evidenceID := fs.String("evidence-id", "", "pinned evidence identity")
+	answerID := fs.String("answer-id", "", "unique answer delivery identity")
+	answerFile := fs.String("answer-file", "", "JSON value file; - reads stdin")
 	artifact := fs.String("artifact", "", "export the named stdout/stderr artifact as bytes")
 	limit := fs.Int("limit", 100, "inspection page size (1–1000)")
 	cursor := fs.String("cursor", "", "opaque inspection continuation cursor")
@@ -169,7 +178,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if verb == "init" {
 		return initialize(root, stdout)
 	}
-	if verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" || verb == "tool-calls" || verb == "invocations" || verb == "usage" || verb == "cleanup-status" {
+	if verb == "inputs" || verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" || verb == "tool-calls" || verb == "invocations" || verb == "usage" || verb == "cleanup-status" {
 		var store *workflows.SQLiteStore
 		var err error
 		if verb == "cleanup" {
@@ -188,6 +197,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		defer store.Close()
 		switch verb {
+		case "inputs":
+			v, err := store.Inputs(ctx, id)
+			if err != nil {
+				return err
+			}
+			return encode(v)
 		case "list":
 			v, err := store.ListPage(ctx, *limit, *cursor)
 			if err != nil {
@@ -213,7 +228,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 				if err != nil {
 					return err
 				}
-				if run.Status != workflows.RunStatusRunning && run.Status != workflows.RunStatusQueued && len(events) < 1000 {
+				if run.Status != workflows.RunStatusRunning && run.Status != workflows.RunStatusQueued && run.Status != workflows.RunStatusWaiting && run.Status != workflows.RunStatusInterrupted && len(events) < 1000 {
 					return nil
 				}
 				if err = pause(ctx, 200*time.Millisecond); err != nil {
@@ -440,6 +455,9 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 				return errors.Join(runErr, err)
 			}
 		}
+		if runErr == nil && run != nil && (run.Status == workflows.RunStatusWaiting || run.Status == workflows.RunStatusInterrupted) {
+			return fmt.Errorf("%w: %s", errInputWaiting, run.ID)
+		}
 		return runErr
 	}
 	client := controller.NewClient(dir)
@@ -447,6 +465,27 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err = ensureController(ctx, client, root, path, *parallel, stderr); err != nil {
 			return err
 		}
+	}
+	if verb == "answer" {
+		if *gateID == "" || *evidenceID == "" || *answerID == "" || *answerFile == "" {
+			return fmt.Errorf("answer requires --gate, --evidence-id, --answer-id, and --answer-file")
+		}
+		value, err := readAnswer(*answerFile, os.Stdin)
+		if err != nil {
+			return err
+		}
+		var gate workflows.ExternalInputGate
+		if err = client.Call(ctx, "POST", "/runs/"+id+"/inputs/"+url.PathEscape(*gateID)+"/answer", workflows.ExternalInputAnswer{AnswerID: *answerID, EvidenceID: *evidenceID, Value: value}, &gate); err != nil {
+			return err
+		}
+		return encode(gate)
+	}
+	if verb == "interrupt" {
+		var v any
+		if err = client.Call(ctx, "POST", "/runs/"+id+"/interrupt", nil, &v); err != nil {
+			return err
+		}
+		return encode(v)
 	}
 	if verb == "cancel" {
 		var v any
@@ -512,6 +551,9 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if run.Status != workflows.RunStatusQueued && run.Status != workflows.RunStatusRunning {
 			if err = encode(run); err != nil {
 				return err
+			}
+			if run.Status == workflows.RunStatusWaiting || run.Status == workflows.RunStatusInterrupted {
+				return fmt.Errorf("%w: %s", errInputWaiting, id)
 			}
 			if run.Status != workflows.RunStatusSucceeded {
 				return fmt.Errorf("run %s: %s", id, run.Error)

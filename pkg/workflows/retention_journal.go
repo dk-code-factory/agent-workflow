@@ -98,7 +98,7 @@ func (s *SQLiteStore) FinishRetention(ctx context.Context, record Retention, own
 	}
 	defer tx.Rollback()
 	for _, run := range runs {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention')", run.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted')", run.ID); err != nil {
 			return err
 		}
 	}

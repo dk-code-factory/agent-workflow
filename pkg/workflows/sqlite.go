@@ -451,13 +451,13 @@ func (s *SQLiteStore) Recover(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return s.recoverInputWaits(ctx)
 }
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	if err := s.CheckInvocationCleanup(ctx, id); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention')", id)
+	res, err := s.db.ExecContext(ctx, "DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted') AND NOT EXISTS(SELECT 1 FROM runs origin WHERE origin.id=runs.origin_id AND origin.status IN ('waiting','interrupted'))", id)
 	if err != nil {
 		return err
 	}
@@ -561,6 +561,37 @@ func (s *SQLiteStore) RequestCancelGeneration(ctx context.Context, id string, ge
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE executions SET cancellation_requested=1 WHERE run_id=? AND generation=(SELECT generation FROM runs WHERE id=?)", id, id); err != nil {
 		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO input_controls(run_id,canceled) VALUES(?,1) ON CONFLICT(run_id) DO UPDATE SET canceled=1,continuation=0", id); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM input_gates WHERE origin_id=? AND state IN ('pending','accepted')", id)
+	if err != nil {
+		return err
+	}
+	var gates []string
+	for rows.Next() {
+		var gate string
+		if err = rows.Scan(&gate); err != nil {
+			rows.Close()
+			return err
+		}
+		gates = append(gates, gate)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, gate := range gates {
+		g, loadErr := loadInput(ctx, tx, gate)
+		if loadErr != nil {
+			return loadErr
+		}
+		inputObservation(&g, "canceled", current)
+		if err = writeInput(ctx, tx, g); err != nil {
+			return err
+		}
 	}
 	if err = addEvent(ctx, tx, id, "run.cancellation_requested", map[string]string{"id": id}); err != nil {
 		return err

@@ -9,6 +9,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if hasInputWait(all) && externalInputJournal(e.Store) == nil {
+		return fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
+	}
 	for _, w := range all {
 		for _, j := range w.Jobs {
 			if j.ForEach != nil && iterationJournal(e.Store) == nil {
