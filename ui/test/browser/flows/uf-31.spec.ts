@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, job } from './harness';
+import { open, snapshot, field, job, step } from './harness';
 
 test('fix browser errors and report host validation failure', async ({ page }) => {
   const ui = await open(page, 'jobs: {build: {steps: [{id: bad, argv: []}]}}');

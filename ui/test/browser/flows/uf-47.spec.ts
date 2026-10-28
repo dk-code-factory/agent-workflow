@@ -517,3 +517,39 @@ test('guided result wiring preserves a pending raw sibling buffer', async ({ pag
   expect(after.workflow.jobs.build.steps[0].with.model).toBe('${{ needs.test.outputs.captured }}');
   expect(after.hasLocalChanges).toBe(true);
 });
+
+for (const narrow of [false, true]) {
+  test(`diagnostic navigation protects reported raw buffers at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page }) => {
+    const ui = await rawInspector(page, false, false);
+    if (narrow) await ui.evaluate(element => { element.style.width = '620px'; });
+    await page.evaluate(() => (window as any).first.update({ validate: async () => [
+      { code: 'command-policy', severity: 'error', source: 'host', path: ['jobs', 'test', 'steps', 0, 'argv', 0], message: 'Review command executable' },
+    ] }));
+    const diagnostic = ui.locator('.aw-diagnostics').getByRole('button', { name: /Review command executable/ });
+    await expect(diagnostic).toBeVisible();
+    const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.fill('Buffered during diagnostic navigation');
+    const before = await snapshot(page);
+    const cleanups = await page.evaluate(() => (window as any).raw.cleanups);
+    await diagnostic.click();
+    await expect(raw).toHaveValue('Buffered during diagnostic navigation');
+    await expect(ui.locator('.aw-diagnostics [role=status]')).toContainText('Complete the pending inspector edit');
+    expect(await snapshot(page)).toEqual(before);
+    await diagnostic.focus(); await diagnostic.press('Enter');
+    await expect(raw).toBeVisible();
+    expect(await page.evaluate(() => (window as any).raw.cleanups)).toBe(cleanups);
+    expect(await snapshot(page)).toEqual(before);
+    await page.evaluate(source => (window as any).first.update({ source: source.replace('Hello', 'Incoming after navigation') }), before.source);
+    await ui.getByRole('button', { name: 'Keep local', exact: true }).click();
+    await expect(raw).toHaveValue('Buffered during diagnostic navigation');
+    await page.evaluate(source => (window as any).first.update({ source: source.replace('Hello', 'Newest after navigation') }), before.source);
+    await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
+    await expect(raw).toHaveValue('Newest after navigation');
+    await diagnostic.focus(); await diagnostic.press('Enter');
+    await expect(ui.getByLabel('Executable', { exact: true })).toBeFocused();
+    expect((await snapshot(page)).source).not.toContain('Buffered during diagnostic navigation');
+    expect((await snapshot(page)).revision).toBe(before.revision + 1);
+    await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+    expect((await snapshot(page)).source).toBe(before.source);
+  });
+}
