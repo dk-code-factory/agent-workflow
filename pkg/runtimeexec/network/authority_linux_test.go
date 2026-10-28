@@ -215,7 +215,11 @@ func TestIsolatedWorkloadUmaskAndPrivateEnvironment(t *testing.T) {
 	for _, mask := range []int{0077, 0002} {
 		t.Run(fmt.Sprintf("%04o", mask), func(t *testing.T) {
 			dir := t.TempDir()
-			req := Request{Path: "/bin/sh", Args: []string{"-c", `set -e; test -z "${AGENT_WORKFLOW_NETWORK_REQUEST+x}"; test "$FAKE_PROVIDER_CREDENTIAL" = credential-only-in-private-environment; umask; touch created; mkdir directory`}, Dir: dir, Umask: mask, Env: []string{"PATH=/usr/bin:/bin", "AW_AUTHORITY_FIXTURE=1", "FAKE_PROVIDER_CREDENTIAL=credential-only-in-private-environment"}}
+			config := filepath.Join(dir, "containers.conf")
+			if err := os.WriteFile(config, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			req := Request{Path: "/bin/sh", Args: []string{"-c", `set -e; test -z "${AGENT_WORKFLOW_NETWORK_REQUEST+x}"; test "$FAKE_PROVIDER_CREDENTIAL" = credential-only-in-private-environment; umask; touch created; mkdir directory`}, Dir: dir, Umask: mask, Env: []string{"HOME=" + dir, "CONTAINERS_CONF=" + config, "PATH=/usr/bin:/bin", "AW_AUTHORITY_FIXTURE=1", "FAKE_PROVIDER_CREDENTIAL=credential-only-in-private-environment"}}
 			data, err := json.Marshal(req)
 			if err != nil {
 				t.Fatal(err)

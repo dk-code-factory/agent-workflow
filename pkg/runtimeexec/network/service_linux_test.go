@@ -47,7 +47,7 @@ func fixtureService(t *testing.T) (*service, string) {
 	}
 	ref := Reference{Name: "test", Identity: randomID(), Generation: 1}
 	ref.Endpoint = Endpoint(ref.Name, ref.Identity)
-	s := &service{probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Healthy: true, Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
+	s := &service{checkRouting: func(Request, *unix.Ucred, []uint32) error { return nil }, checkBoundary: func() error { return nil }, probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Healthy: true, SocketEnforcement: "bpf-lsm-unix-v1", Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -381,5 +381,53 @@ func TestStatusExposesHeldNetworkNamespace(t *testing.T) {
 		if response.Error != "" || response.Status.NetworkNamespace != "net:[12345]" || response.Status.Reference != ref || !response.Status.Healthy {
 			t.Fatalf("namespace status missing: %+v", response)
 		}
+	}
+}
+
+func TestSocketEnforcementFailuresPreventLaunchAndReservations(t *testing.T) {
+	for _, failure := range []string{"missing", "disabled", "unsupported-kernel", "initialization-failure", "stale-map", "replaced-link", "service-crash", "timeout"} {
+		t.Run(failure, func(t *testing.T) {
+			s, socket := fixtureService(t)
+			s.mu.Lock()
+			s.checkBoundary = func() error { return errors.New(failure) }
+			launches := 0
+			s.memberCommand = func(string) *exec.Cmd { launches++; return exec.Command("/bin/false") }
+			s.mu.Unlock()
+			for _, operation := range []string{"exec", "reserve"} {
+				_, out := requestAt(t, socket, Request{Operation: operation, Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, operation == "exec")
+				if out.Error == "" {
+					t.Fatalf("%s admitted without enforcement", operation)
+				}
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if launches != 0 || len(s.status.Members) != 0 {
+				t.Fatal("workload effects preceded enforcement")
+			}
+		})
+	}
+}
+
+func TestStaleGenerationRejectedWithHealthyEnforcement(t *testing.T) {
+	s, socket := fixtureService(t)
+	ref := s.status.Reference
+	ref.Generation++
+	_, out := requestAt(t, socket, Request{Operation: "exec", Reference: ref, ID: randomID(), Path: "/bin/true"}, true)
+	if out.Error == "" {
+		t.Fatal("stale generation admitted")
+	}
+}
+
+func TestRoutingAdmissionFailureLeavesNoUncertainMembership(t *testing.T) {
+	s, socket := fixtureService(t)
+	s.checkRouting = func(Request, *unix.Ucred, []uint32) error { return errors.New("saved SSH API route") }
+	_, out := requestAt(t, socket, Request{Operation: "exec", Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, true)
+	if out.Error == "" {
+		t.Fatal("unsupported route admitted")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.status.Members) != 0 {
+		t.Fatal("rejected admission blocked unrelated callers")
 	}
 }

@@ -1,6 +1,9 @@
 **
 !go.mod
 !go.sum
+!internal/
+!internal/socketfence/
+!internal/socketfence/**
 !pkg/
 !pkg/process/
 !pkg/process/**

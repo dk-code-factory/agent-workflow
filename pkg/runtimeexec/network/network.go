@@ -24,6 +24,7 @@ const RunRoot = "/run/agent-workflow-runtimes"
 const ReferenceEnvironment = "AGENT_WORKFLOW_NETWORK_REFERENCE"
 
 const launchEnvironment = "AGENT_WORKFLOW_NETWORK_REQUEST"
+const SocketEnforcement = "bpf-lsm-unix-v1"
 
 // Linux native argv/environment aggregate limits fit within this JSON bound,
 // including worst-case escaping. Payloads never travel in a socket packet.
@@ -69,6 +70,7 @@ type Forward struct {
 type Status struct {
 	Reference         Reference             `json:"reference"`
 	Healthy           bool                  `json:"healthy"`
+	SocketEnforcement string                `json:"socket_enforcement"`
 	NetworkNamespace  string                `json:"network_namespace"`
 	Members           map[string]Membership `json:"members"`
 	Forwards          []Forward             `json:"forwards"`
@@ -147,7 +149,7 @@ func Resolve(ctx context.Context, name string) (Reference, error) {
 	if err != nil {
 		return Reference{}, err
 	}
-	if !out.Status.Healthy {
+	if !out.Status.Healthy || out.Status.SocketEnforcement != SocketEnforcement {
 		return Reference{}, errors.New("network runtime is unhealthy")
 	}
 	return out.Status.Reference, out.Status.Reference.Validate()
@@ -160,7 +162,7 @@ func Check(ctx context.Context, ref Reference) error {
 	if err != nil {
 		return err
 	}
-	if !out.Status.Healthy {
+	if !out.Status.Healthy || out.Status.SocketEnforcement != SocketEnforcement {
 		return errors.New("network runtime is unhealthy")
 	}
 	return nil

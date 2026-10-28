@@ -8,6 +8,7 @@ RUN go mod download
 COPY pkg/process ./pkg/process
 COPY pkg/containerapi ./pkg/containerapi
 COPY pkg/runtimeexec/network ./pkg/runtimeexec/network
+COPY internal/socketfence ./internal/socketfence
 COPY cmd/agent-workflow-guardian ./cmd/agent-workflow-guardian
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath -o /guardian ./cmd/agent-workflow-guardian
 

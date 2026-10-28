@@ -136,8 +136,8 @@ backends; legacy CLI configuration continues to be provider-owned.
 
 ### Shared network runtime
 
-On Linux, an explicitly prepared rootful Podman runtime can contain network
-effects for both local and container execution:
+On Linux with an operator-enabled BPF LSM and cgroup v2, an explicitly prepared
+rootful Podman runtime can contain network effects for local and container execution:
 
 ```yaml
 execution:

@@ -100,7 +100,7 @@ try {
   const authority = join(root, 'conformance/network-runtime/authority.py');
   const authorityArgs = [runtime, name, String(process.getuid()), String(process.getgid()), JSON.stringify(process.getgroups())];
   evidence.coldOperator = JSON.parse(run('sudo', ['-n', 'unshare', '--mount', '--propagation', 'private', '/usr/bin/python3', authority, 'cold-prepare', ...authorityArgs, run('readlink', ['/proc/self/ns/mnt'])]));
-  operator('prepare', name, '--uid', String(process.getuid()));
+  operator('prepare', name, '--uid', String(process.getuid()), '--socket-boundary');
   startRuntime();
   ref = runtimeAttempt.reference;
   assert.equal(inside('podman', 'info', '--format', '{{.Store.GraphRoot}}'), hostStore);

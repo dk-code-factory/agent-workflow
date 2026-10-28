@@ -26,13 +26,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/internal/socketfence"
 	"golang.org/x/sys/unix"
 )
 
 type registration struct {
-	Name       string
-	Users      map[uint32]bool
-	Generation uint64
+	Name                  string
+	Users                 map[uint32]bool
+	Generation            uint64
+	SocketBoundary        bool
+	AuthenticationSockets []socketfence.Socket
 }
 type memberLaunch struct {
 	Request         Request
@@ -40,6 +43,7 @@ type memberLaunch struct {
 	Groups          []uint32
 	Keeper          int
 	Binary, Receipt string
+	Enforcement     socketfence.State
 }
 type service struct {
 	netNS, mountNS   *os.File
@@ -54,6 +58,9 @@ type service struct {
 	stopping         bool
 	statusPending    bool
 	stop             chan struct{}
+	boundary         *socketfence.Boundary
+	checkBoundary    func() error
+	checkRouting     func(Request, *unix.Ucred, []uint32) error
 }
 
 func randomID() string {
@@ -152,8 +159,17 @@ func writeResolver(path string) error {
 // API is equivalent to unrestricted service-user execution; narrow Podman read
 // permissions are insufficient. No login or privilege refresh is performed.
 func Prepare(name string, uid uint32) error {
+	return PrepareProtected(name, uid, false, nil)
+}
+
+// PrepareProtected requires explicit operator consent to the host kernel policy
+// and to each authentication exception. Re-preparation replaces the exception list.
+func PrepareProtected(name string, uid uint32, enable bool, authentication []string) error {
 	if err := rootOnly(name); err != nil {
 		return err
+	}
+	if !enable {
+		return errors.New("network runtime requires explicit --socket-boundary enrollment")
 	}
 	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
 	if err != nil {
@@ -190,6 +206,16 @@ func Prepare(name string, uid uint32) error {
 		cfg.Users = map[uint32]bool{}
 	}
 	cfg.Users[uid] = true
+	cfg.SocketBoundary = true
+	cfg.AuthenticationSockets = nil
+	for _, path := range authentication {
+		socket, f, e := socketfence.OpenSocket(path)
+		if e != nil {
+			return e
+		}
+		f.Close()
+		cfg.AuthenticationSockets = append(cfg.AuthenticationSockets, socket)
+	}
 	// Install a trusted executable explicitly. Runtime launch never executes a
 	// caller-owned binary as root. No setuid permission or sudo rule is installed.
 	source, err := os.Executable()
@@ -250,6 +276,9 @@ func Start(name string) error {
 	current, e := Call(ctx, name, Request{Operation: "status"})
 	cancel()
 	if e == nil && current.Status.Healthy {
+		if current.Status.SocketEnforcement != SocketEnforcement {
+			return errors.New("active runtime lacks socket enforcement; stop and re-prepare with --socket-boundary")
+		}
 		return nil
 	}
 	var owner *os.File
@@ -311,6 +340,8 @@ func init() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "__network_runtime_check_routing_v1":
+		err = checkRoutingHelper()
 	case "__network_runtime_configure_v1":
 		err = configureNamespace(os.Args[2])
 	case "__network_runtime_probe_v1":
@@ -421,6 +452,12 @@ func serve(name string) error {
 	defer lock.Close()
 	var cfg registration
 	if err = load(filepath.Join(dir, "registration.json"), &cfg); err != nil {
+		return err
+	}
+	if !cfg.SocketBoundary {
+		return errors.New("runtime lacks socket-boundary enrollment; prepare with --socket-boundary")
+	}
+	if err = socketfence.Supported(); err != nil {
 		return err
 	}
 	var prior Status
@@ -560,6 +597,31 @@ func serve(name string) error {
 		return err
 	}
 	defer api.Close()
+	paths := []string{filepath.Join(runParent, "control.sock"), filepath.Join(run, "podman.sock")}
+	for _, enrolled := range cfg.AuthenticationSockets {
+		current, f, e := socketfence.OpenSocket(enrolled.Path)
+		if f != nil {
+			f.Close()
+		}
+		if e != nil || current != enrolled {
+			return errors.New("authentication socket changed; operator must enroll its new identity")
+		}
+		paths = append(paths, enrolled.Path)
+	}
+	s.boundary, err = socketfence.Install(identity, cfg.Generation, paths)
+	if err != nil {
+		return err
+	}
+	defer s.boundary.Close()
+	defer func() {
+		if e := s.boundary.Retire(); e != nil {
+			fmt.Fprintf(os.Stderr, "retaining socket enforcement for %s: %v\n", identity, e)
+		}
+	}()
+	s.status.SocketEnforcement = socketfence.Capability
+	if err = save(filepath.Join(run, "enforcement.json"), s.boundary.State); err != nil {
+		return err
+	}
 	for _, socket := range []string{filepath.Join(runParent, "control.sock"), filepath.Join(run, "podman.sock")} {
 		if err = os.Chmod(socket, 0666); err != nil {
 			return err
@@ -647,6 +709,13 @@ func (s *service) health() error {
 	}
 	_, err = s.slirp(map[string]any{"execute": "list_hostfwd"})
 	return err
+}
+
+func (s *service) enforcement() error {
+	if s.checkBoundary != nil {
+		return s.checkBoundary()
+	}
+	return s.boundary.Check()
 }
 func trustedConnection(c *net.UnixConn) error {
 	cred, err := peer(c)
@@ -904,7 +973,7 @@ func (s *service) handle(c *net.UnixConn) {
 		return
 	}
 	if req.Operation == "status" {
-		if s.status.Healthy && s.health() != nil {
+		if s.status.Healthy && (s.health() != nil || s.enforcement() != nil) {
 			s.status.Healthy = false
 			s.statusPending = true
 		}
@@ -949,7 +1018,7 @@ func (s *service) handle(c *net.UnixConn) {
 		respond(Response{Status: out}, errors.New("network runtime unhealthy or stopping"))
 		return
 	}
-	if err = s.health(); err != nil {
+	if err = errors.Join(s.health(), s.enforcement()); err != nil {
 		s.status.Healthy = false
 		s.statusPending = true
 		s.mu.Unlock()
@@ -1023,6 +1092,19 @@ func (s *service) handle(c *net.UnixConn) {
 			respond(Response{}, errors.New("invocation already admitted; reconcile instead of replaying"))
 			return
 		}
+		groups, _, admissionErr := peerAuthority(cred)
+		if admissionErr == nil {
+			checker := s.checkRouting
+			if checker == nil {
+				checker = s.validateRoutingAsPeer
+			}
+			admissionErr = checker(req, cred, groups)
+		}
+		if admissionErr != nil {
+			s.mu.Unlock()
+			respond(Response{}, admissionErr)
+			return
+		}
 		m := Membership{ID: req.ID, UID: cred.Uid, State: "launching", ExitCode: 125}
 		s.status.Members[req.ID] = m
 		if err = s.saveStatus(); err != nil {
@@ -1050,6 +1132,9 @@ func (s *service) handle(c *net.UnixConn) {
 		if err != nil {
 			beforeStartFailure(err)
 			return
+		}
+		if s.boundary != nil {
+			launch.Enforcement = s.boundary.State
 		}
 
 		launchPath := req.ID
@@ -1114,6 +1199,14 @@ func runMember(path string) error {
 	// nsenter joins only mount/network namespaces. setpriv drops to the peer's
 	// account before the trusted guardian interprets any caller command or env.
 	config.Close()
+	if launch.Enforcement.Identity != launch.Request.Reference.Identity || launch.Enforcement.Generation != launch.Request.Reference.Generation {
+		return errors.New("launch enforcement generation changed")
+	}
+	boundary, err := socketfence.Restore(launch.Enforcement)
+	if err != nil {
+		return fmt.Errorf("restore socket boundary: %w", err)
+	}
+	defer boundary.Close()
 	// The launch file is root-only. Pass its data over fd4 after dropping UID.
 	data, _ := json.Marshal(launch.Request)
 	r, w, err := os.Pipe()
@@ -1131,6 +1224,8 @@ func runMember(path string) error {
 	defer ackR.Close()
 	defer ackW.Close()
 	cmd := memberWorkloadCommand(launch, path)
+	cmd.SysProcAttr.UseCgroupFD = true
+	cmd.SysProcAttr.CgroupFD = int(boundary.Group.Fd())
 	cmd.ExtraFiles = []*os.File{life, r, os.NewFile(5, "network-namespace"), os.NewFile(6, "mount-namespace"), ackW}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -1274,6 +1369,9 @@ func workload() error {
 		if err := os.Chdir(req.Dir); err != nil {
 			return err
 		}
+	}
+	if err := validateSavedRouting(req.Env); err != nil {
+		return err
 	}
 	binary, err := os.Executable()
 	if err != nil {

@@ -39,13 +39,16 @@ func run() (runErr error) {
 	case "prepare":
 		fs := flag.NewFlagSet("prepare", flag.ContinueOnError)
 		uid := fs.Uint("uid", uint(os.Getuid()), "existing rootful Podman operator UID to enroll")
+		boundary := fs.Bool("socket-boundary", false, "explicitly enable required BPF LSM Unix socket boundary")
+		var authentication socketFlags
+		fs.Var(&authentication, "auth-socket", "enroll an existing host authentication socket (repeatable)")
 		if err := fs.Parse(os.Args[3:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
 			return fmt.Errorf("unexpected prepare arguments")
 		}
-		return network.Prepare(name, uint32(*uid))
+		return network.PrepareProtected(name, uint32(*uid), *boundary, authentication)
 	case "start":
 		return network.Start(name)
 	case "status":
@@ -118,3 +121,8 @@ func run() (runErr error) {
 		return fmt.Errorf("unknown operation %s", op)
 	}
 }
+
+type socketFlags []string
+
+func (s *socketFlags) String() string         { return fmt.Sprint([]string(*s)) }
+func (s *socketFlags) Set(value string) error { *s = append(*s, value); return nil }
