@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,8 +25,7 @@ func readAnswer(path string, stdin io.Reader) (json.RawMessage, error) {
 	if len(raw) > 1<<20 {
 		return nil, fmt.Errorf("answer exceeds 1 MiB")
 	}
-	var value any
-	if !json.Valid(raw) || json.Unmarshal(raw, &value) != nil || value == nil {
+	if !json.Valid(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, fmt.Errorf("answer must be one non-null JSON value")
 	}
 	return json.RawMessage(raw), nil

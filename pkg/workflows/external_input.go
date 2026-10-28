@@ -343,9 +343,19 @@ func (s *SQLiteStore) InterruptInput(ctx context.Context, origin string, generat
 	return tx.Commit()
 }
 
-// QueueInputContinuations is called by the sole controller scheduler. Intent
-// survives shutdown; waiting status is published only after owner cleanup.
+// QueueInputContinuations admits durable continuation intents when no controller
+// owns an execution. Controllers use QueueInputContinuationsExcept during cleanup.
 func (s *SQLiteStore) QueueInputContinuations(ctx context.Context, maxQueued int) error {
+	return s.QueueInputContinuationsExcept(ctx, maxQueued)
+}
+
+// QueueInputContinuationsExcept excludes active controller owners until cleanup
+// finishes, even after the executor has published waiting and released its lease.
+func (s *SQLiteStore) QueueInputContinuationsExcept(ctx context.Context, maxQueued int, active ...string) error {
+	excluded := make(map[string]bool, len(active))
+	for _, id := range active {
+		excluded[id] = true
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id FROM runs r JOIN input_controls c ON c.run_id=r.id WHERE r.status='waiting' AND r.owner='' AND c.continuation=1 AND c.paused=0 AND c.canceled=0 AND NOT EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=r.id AND g.state IN ('pending','canceled','replaced')) ORDER BY r.admitted,r.id`)
 	if err != nil {
 		return err
@@ -365,6 +375,9 @@ func (s *SQLiteStore) QueueInputContinuations(ctx context.Context, maxQueued int
 		return err
 	}
 	for _, id := range ids {
+		if excluded[id] {
+			continue
+		}
 		if _, err = s.queueResume(ctx, id, "", false, maxQueued, true); err != nil {
 			return err
 		}
@@ -495,30 +508,41 @@ func (s *SQLiteStore) recoverInputWaits(ctx context.Context) error {
 		if uncertain > 0 {
 			continue
 		}
-		c, err := s.InputControl(ctx, r.ID)
-		if err != nil {
-			return err
-		}
-		if c.Canceled {
-			continue
-		}
-		r.Status = RunStatusWaiting
-		if c.Paused {
-			r.Status = RunStatusInterrupted
-		}
-		r.Error = ""
-		r.FailureClass = ""
-		r.FinishedAt = time.Time{}
-		if err = s.Save(ctx, &r); err != nil {
-			return err
-		}
-		// Reconstruct intent after a crash following consumption but preceding the
-		// final run checkpoint. Queue admission still checks every pending gate.
-		if _, err = s.db.ExecContext(ctx, "UPDATE input_controls SET continuation=1 WHERE run_id=? AND EXISTS(SELECT 1 FROM input_gates WHERE origin_id=? AND state IN ('accepted','consumed'))", r.ID, r.ID); err != nil {
+		if err = s.recoverInputWait(ctx, r); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *SQLiteStore) recoverInputWait(ctx context.Context, r Run) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	c, err := inputControlTx(ctx, tx, r.ID)
+	if err != nil {
+		return err
+	}
+	if c.Canceled {
+		return nil
+	}
+	r.Status = RunStatusWaiting
+	if c.Paused {
+		r.Status = RunStatusInterrupted
+	}
+	r.Error, r.FailureClass = "", ""
+	r.FinishedAt = time.Time{}
+	if err = saveRunTx(ctx, tx, &r); err != nil {
+		return err
+	}
+	// A crash following consumption can leave intent cleared by queue admission.
+	// Reconstruct it atomically with the recoverable suspension checkpoint.
+	if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET continuation=1 WHERE run_id=? AND EXISTS(SELECT 1 FROM input_gates WHERE origin_id=? AND state IN ('accepted','consumed'))", r.ID, r.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (e *Executor) childInputWait(ctx context.Context, child *Run, req RunRequest) (bool, error) {

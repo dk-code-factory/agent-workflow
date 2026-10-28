@@ -355,62 +355,89 @@ func TestExternalInputRequiresExtensionAndValidFields(t *testing.T) {
 	}
 }
 func TestExternalInputV10MigrationAndRestore(t *testing.T) {
-	ctx := context.Background()
-	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-	if _, err := s.db.Exec("DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
-		t.Fatal(err)
-	}
-	lock, err := ownership.Own(s.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Migrate(ctx, lock); err != nil {
-		t.Fatal(err)
-	}
-	lock.Close()
-	if _, err = os.Stat(filepath.Join(s.Dir, "state.pre-v10.db")); err != nil {
-		t.Fatal(err)
-	}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	answerGate(t, s, inputGate(t, s, run.ID))
+	for _, state := range []string{"pending", "accepted"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+			if _, err := s.db.Exec("DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := ownership.Own(s.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Migrate(ctx, lock); err != nil {
+				t.Fatal(err)
+			}
+			lock.Close()
+			if _, err = os.Stat(filepath.Join(s.Dir, "state.pre-v10.db")); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "accepted" {
+				answerGate(t, s, inputGate(t, s, run.ID))
+			}
 
-	lock, err = ownership.Own(s.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	backup := filepath.Join(t.TempDir(), "backup.db")
-	if err = s.Backup(ctx, backup, lock); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = RestoreDatabase(ctx, s.Dir, backup, lock); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := OpenSQLite(s.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restored.Close()
-	g := inputGate(t, restored, run.ID)
-	if g.State != "accepted" || g.Answer == nil {
-		t.Fatal("answer lost", g)
-	}
-	recovered, _, err := restored.Load(ctx, run.ID)
-	if err != nil || recovered.Status != RunStatusNeedsAttention || recovered.FailureClass != "restore_uncertainty" {
-		t.Fatal(recovered, err)
-	}
-	if err = restored.QueueInputContinuations(ctx, 128); err != nil {
-		t.Fatal(err)
-	}
-	recovered, _, _ = restored.Load(ctx, run.ID)
-	if recovered.Status == RunStatusQueued {
-		t.Fatal("restored run continued without acknowledgement")
+			lock, err = ownership.Own(s.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			backup := filepath.Join(t.TempDir(), "backup.db")
+			if err = s.Backup(ctx, backup, lock); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = RestoreDatabase(ctx, s.Dir, backup, lock); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := OpenSQLite(s.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			g := inputGate(t, restored, run.ID)
+			if g.State != state || (state == "accepted" && g.Answer == nil) {
+				t.Fatal("answer lost", g)
+			}
+			recovered, _, err := restored.Load(ctx, run.ID)
+			if err != nil || recovered.Status != RunStatusNeedsAttention || recovered.FailureClass != "restore_uncertainty" {
+				t.Fatal(recovered, err)
+			}
+			if err = restored.QueueInputContinuations(ctx, 128); err != nil {
+				t.Fatal(err)
+			}
+			recovered, _, _ = restored.Load(ctx, run.ID)
+			if recovered.Status == RunStatusQueued {
+				t.Fatal("restored run continued without acknowledgement")
+			}
+			if _, err = restored.QueueResume(ctx, run.ID, "", false, 128); err == nil {
+				t.Fatal("restore quarantine cleared without acknowledgement")
+			}
+			if state == "pending" {
+				answerGate(t, restored, g)
+			}
+			if err = restored.QueueInputContinuations(ctx, 128); err != nil {
+				t.Fatal(err)
+			}
+			recovered, _, _ = restored.Load(ctx, run.ID)
+			if recovered.Status != RunStatusNeedsAttention || recovered.FailureClass != "restore_uncertainty" || recovered.Generation != run.Generation {
+				t.Fatal("restore quarantine lost", recovered)
+			}
+			if _, err = restored.QueueResume(ctx, run.ID, "", true, 128); err != nil {
+				t.Fatal("explicit acknowledgement failed", err)
+			}
+			e.Store = restored
+			done, err := e.Resume(ctx, run.ID, nil, true)
+			if err != nil || done.Status != RunStatusSucceeded {
+				t.Fatalf("acknowledged restore %+v %v", done, err)
+			}
+		})
 	}
 }
 
@@ -588,5 +615,286 @@ func TestExternalInputDrainsIndependentWorkAndActiveInterrupt(t *testing.T) {
 				t.Fatal("interrupt invalidated question")
 			}
 		})
+	}
+}
+
+// lateInputControlJournal delivers a control after the executor's final control
+// observation, immediately before its outcome reaches the journal transaction.
+type lateInputControlJournal struct {
+	*SQLiteStore
+	beforeSave func(context.Context, *Run) error
+}
+
+func (s *lateInputControlJournal) Save(ctx context.Context, r *Run) error {
+	if s.beforeSave != nil && r.Status != RunStatusRunning && r.Status != RunStatusQueued {
+		before := s.beforeSave
+		s.beforeSave = nil
+		if err := before(ctx, r); err != nil {
+			return err
+		}
+	}
+	return s.SQLiteStore.Save(ctx, r)
+}
+
+func TestExternalInputLateControlPublication(t *testing.T) {
+	for _, outcome := range []string{"waiting", "completed", "uncertain"} {
+		for _, control := range []string{"interrupt", "cancel"} {
+			t.Run(outcome+"/"+control, func(t *testing.T) {
+				ctx := context.Background()
+				e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+				wrapper := &lateInputControlJournal{SQLiteStore: s}
+				e.Store = wrapper
+				var id string
+				var generation int64 = 1
+				if outcome == "completed" {
+					r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					id = r.ID
+					answerGate(t, s, inputGate(t, s, id))
+					generation++
+				}
+				if outcome == "uncertain" {
+					e.BeforeFinalize = func(context.Context, string) error { return ErrActionIntegrity }
+				}
+				wrapper.beforeSave = func(ctx context.Context, r *Run) error {
+					id = r.ID
+					// Retain an accepted answer when interruption arrives during suspension.
+					if outcome == "waiting" {
+						answerGate(t, s, inputGate(t, s, id))
+					}
+					if control == "interrupt" {
+						return s.InterruptInput(ctx, id, r.Generation)
+					}
+					return s.RequestCancelGeneration(ctx, id, r.Generation)
+				}
+				var run *Run
+				var err error
+				if outcome == "completed" {
+					run, err = e.Resume(ctx, id, nil, false)
+				} else {
+					run, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				}
+				want := RunStatusInterrupted
+				if control == "cancel" {
+					want = RunStatusCanceled
+				}
+				if outcome == "uncertain" {
+					want = RunStatusNeedsAttention
+				}
+				if run == nil || run.Status != want || (outcome != "uncertain" && err != nil) || (outcome == "uncertain" && !errors.Is(err, ErrActionIntegrity)) {
+					t.Fatalf("outcome %+v %v", run, err)
+				}
+				persisted, _, loadErr := s.Load(ctx, id)
+				if loadErr != nil || persisted.Status != want || persisted.Generation != generation {
+					t.Fatalf("published %+v %v", persisted, loadErr)
+				}
+				if control == "interrupt" && outcome != "uncertain" && !persisted.FinishedAt.IsZero() {
+					t.Fatal("interrupted outcome is terminal", persisted)
+				}
+				gate := inputGate(t, s, id)
+				if outcome == "waiting" && control == "interrupt" && (gate.State != "accepted" || len(gate.History) != 2 || gate.Answer == nil) {
+					t.Fatal("interruption lost answer", gate)
+				}
+				if control == "cancel" && outcome != "completed" && gate.State != "canceled" {
+					t.Fatal("cancel retained outstanding gate", gate)
+				}
+				if err = s.QueueInputContinuations(ctx, 128); err != nil {
+					t.Fatal(err)
+				}
+				persisted, _, _ = s.Load(ctx, id)
+				if persisted.Status != want || persisted.Generation != generation {
+					t.Fatal("late control admitted continuation", persisted)
+				}
+			})
+		}
+	}
+	// Once completion commits, an interruption must be rejected.
+	ctx := context.Background()
+	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answerGate(t, s, inputGate(t, s, run.ID))
+	run, err = e.Resume(ctx, run.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.InterruptInput(ctx, run.ID, run.Generation); !errors.Is(err, ErrExternalInput) {
+		t.Fatal("terminal interruption accepted", err)
+	}
+}
+
+func TestExternalInputRecoveryPublicationRollback(t *testing.T) {
+	for _, state := range []string{"accepted", "consumed"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			var calls atomic.Int32
+			e, s := durableExecutor(t, waitSource, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+				calls.Add(1)
+				return map[string]any{}, nil
+			}))
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate := inputGate(t, s, run.ID)
+			answerGate(t, s, gate)
+			if err = s.QueueInputContinuations(ctx, 128); err != nil {
+				t.Fatal(err)
+			}
+			run, _, err = s.Load(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := run.Status
+			run.Status = RunStatusRunning
+			if err = s.Claim(ctx, run, previous); err != nil {
+				t.Fatal(err)
+			}
+			if state == "consumed" {
+				if _, err = s.ConsumeInput(fenceContext(ctx, run), gate.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Fail reconstruction after the waiting checkpoint has been written inside
+			// recovery. Both writes must roll back, retaining an owner-loss candidate.
+			if _, err = s.db.Exec(`CREATE TRIGGER fail_input_recovery BEFORE UPDATE OF continuation ON input_controls WHEN NEW.continuation=1 BEGIN SELECT RAISE(ABORT,'recovery fault'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Recover(ctx); err == nil {
+				t.Fatal("recovery fault not observed")
+			}
+			r, _, err := s.Load(ctx, run.ID)
+			if err != nil || r.Status != RunStatusNeedsAttention || r.FailureClass != "owner_loss" {
+				t.Fatalf("stranded recovery %+v %v", r, err)
+			}
+			control, err := s.InputControl(ctx, run.ID)
+			if err != nil || control.Continuation {
+				t.Fatalf("intent failed to roll back %+v %v", control, err)
+			}
+			g := inputGate(t, s, run.ID)
+			if g.State != state || g.Answer == nil {
+				t.Fatal("answer/history changed", g)
+			}
+			events, err := s.Events(ctx, run.ID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting := 0
+			for _, event := range events {
+				if event.Type == "run.waiting" {
+					waiting++
+				}
+			}
+			if waiting != 1 {
+				t.Fatal("failed recovery published waiting event", waiting)
+			}
+			dir := s.Dir
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenSQLite(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			e.Store = reopened
+			if _, err = reopened.db.Exec("DROP TRIGGER fail_input_recovery"); err != nil {
+				t.Fatal(err)
+			}
+			if err = reopened.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err = reopened.QueueInputContinuations(ctx, 128); err != nil {
+				t.Fatal(err)
+			}
+			if err = reopened.QueueInputContinuations(ctx, 128); err != nil {
+				t.Fatal(err)
+			}
+			done, err := e.Resume(ctx, run.ID, nil, false)
+			if err != nil || done.Status != RunStatusSucceeded || done.Generation != run.Generation+1 || calls.Load() != 3 {
+				t.Fatalf("recovered %+v %v calls=%d", done, err, calls.Load())
+			}
+		})
+	}
+}
+
+func TestExternalInputCanceledNestedRetention(t *testing.T) {
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprint(uncertain), func(t *testing.T) {
+			ctx := context.Background()
+			e, s := durableExecutor(t, `jobs: {review: {uses: workflows/child.yml}}`, nil)
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
+jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`)
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate := inputGate(t, s, run.ID)
+			if gate.RunID == run.ID {
+				t.Fatal("missing nested fixture")
+			}
+			if uncertain {
+				child, _, err := s.Load(ctx, gate.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				child.Status, child.FailureClass = RunStatusNeedsAttention, "owner_loss"
+				if err = s.Save(ctx, child); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = s.RequestCancelGeneration(ctx, run.ID, run.Generation); err != nil {
+				t.Fatal(err)
+			}
+			child, _, err := s.Load(ctx, gate.RunID)
+			want := RunStatusCanceled
+			if uncertain {
+				want = RunStatusNeedsAttention
+			}
+			if err != nil || child.Status != want {
+				t.Fatal("child outcome", child, err)
+			}
+			if inputGate(t, s, run.ID).State != "canceled" {
+				t.Fatal("gate not invalidated")
+			}
+			if err = s.DeleteOrigin(ctx, run.ID); (err != nil) != uncertain {
+				t.Fatal("retention", err)
+			}
+		})
+	}
+}
+
+func TestExternalInputPendingResumePreservesUncertainty(t *testing.T) {
+	ctx := context.Background()
+	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.Begin(ctx, run.ID, "independent", "effect", 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.InterruptInput(ctx, run.ID, run.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.QueueResume(ctx, run.ID, "", false, 128); err == nil {
+		t.Fatal("pending gate bypassed uncertain attempt")
+	}
+	r, _, err := s.Load(ctx, run.ID)
+	control, controlErr := s.InputControl(ctx, run.ID)
+	if err != nil || controlErr != nil || r.Status != RunStatusInterrupted || !control.Paused || r.Generation != run.Generation {
+		t.Fatalf("failed resume mutated state %+v %+v %v %v", r, control, err, controlErr)
+	}
+	answerGate(t, s, inputGate(t, s, run.ID))
+	if err = s.QueueInputContinuations(ctx, 128); err != nil {
+		t.Fatal(err)
+	}
+	r, _, _ = s.Load(ctx, run.ID)
+	if r.Status != RunStatusInterrupted || r.Generation != run.Generation {
+		t.Fatal("uncertain run automatically admitted", r)
 	}
 }

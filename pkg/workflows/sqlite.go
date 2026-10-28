@@ -200,16 +200,49 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	return tx.Commit()
 }
 func (s *SQLiteStore) Save(ctx context.Context, r *Run) error {
-	b, err := json.Marshal(r)
-	if err != nil {
-		return err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	// Publish final outcomes under the same transaction as input controls. A
+	// control acknowledged after the executor's last observation must still win.
+	final := *r
+	if final.Status != RunStatusRunning && final.Status != RunStatusQueued && final.Status != RunStatusNeedsAttention {
+		var origin string
+		if err = tx.QueryRowContext(ctx, "SELECT origin_id FROM runs WHERE id=?", r.ID).Scan(&origin); err != nil {
+			return err
+		}
+		control, controlErr := inputControlTx(ctx, tx, origin)
+		if controlErr != nil {
+			return controlErr
+		}
+		if control.Canceled {
+			final.Status = RunStatusCanceled
+			final.FinishedAt = time.Now().UTC()
+		} else if origin == r.ID && control.Paused && (final.FailureClass == "" || final.FailureClass == "canceled") {
+			final.Status = RunStatusInterrupted
+			final.Error, final.FailureClass = "", ""
+			final.FinishedAt = time.Time{}
+		}
+	}
+	if err = saveRunTx(ctx, tx, &final); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*r = final
+	return nil
+}
+
+// saveRunTx lets recovery publish its outcome and continuation intent together.
+func saveRunTx(ctx context.Context, tx *sql.Tx, r *Run) error {
+	b, err := json.Marshal(r)
+	if err != nil {
 		return err
 	}
 	owner := r.Owner
@@ -228,9 +261,6 @@ func (s *SQLiteStore) Save(ctx context.Context, r *Run) error {
 		return err
 	}
 	if err = addEvent(ctx, tx, r.ID, "run."+r.Status, r); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
 		return err
 	}
 	r.Owner = owner
@@ -590,6 +620,37 @@ func (s *SQLiteStore) RequestCancelGeneration(ctx context.Context, id string, ge
 		}
 		inputObservation(&g, "canceled", current)
 		if err = writeInput(ctx, tx, g); err != nil {
+			return err
+		}
+	}
+	// Suspended children have no active effects to stop. Retire them with their
+	// gates so retention cannot remain blocked by an unreachable waiting child.
+	rows, err = tx.QueryContext(ctx, "SELECT record,generation,owner FROM runs WHERE origin_id=? AND status IN ('waiting','interrupted')", id)
+	if err != nil {
+		return err
+	}
+	var suspended []Run
+	for rows.Next() {
+		var r Run
+		var b []byte
+		if err = rows.Scan(&b, &r.Generation, &r.Owner); err == nil {
+			err = decodeJSONWithNumbers(b, &r)
+		}
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		suspended = append(suspended, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, r := range suspended {
+		r.Status = RunStatusCanceled
+		r.FinishedAt = time.Now().UTC()
+		if err = saveRunTx(ctx, tx, &r); err != nil {
 			return err
 		}
 	}

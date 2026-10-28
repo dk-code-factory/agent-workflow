@@ -442,6 +442,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if err := e.save(context.WithoutCancel(ctx), run); err != nil {
 		return run, errors.Join(runErr, iterationPersistence(err, req.ordered))
 	}
+	if run.Status == RunStatusInterrupted && errors.Is(runErr, context.Canceled) {
+		runErr = nil
+	}
 	return run, runErr
 }
 

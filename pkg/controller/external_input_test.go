@@ -149,3 +149,119 @@ func TestInputControllerUnansweredResumeAndInvalidAnswers(t *testing.T) {
 		t.Fatal("unanswered resume allocated owner", current)
 	}
 }
+
+// Block after the executor publishes its wait, while executeOwner still owns
+// its controller entry. This models cleanup after the journal releases owner.
+type inputOwnerCleanupJournal struct {
+	*workflows.SQLiteStore
+	published chan string
+	release   <-chan struct{}
+	blocked   atomic.Bool
+}
+
+func (j *inputOwnerCleanupJournal) Save(ctx context.Context, r *workflows.Run) error {
+	if err := j.SQLiteStore.Save(ctx, r); err != nil {
+		return err
+	}
+	if r.Status == workflows.RunStatusWaiting && j.blocked.CompareAndSwap(false, true) {
+		j.published <- r.ID
+		<-j.release
+	}
+	return nil
+}
+
+func TestInputControllerContinuationWaitsForOwnerCleanup(t *testing.T) {
+	for _, cancelOwner := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelOwner), func(t *testing.T) {
+			s, c := inputFixture(t, `jobs: {x: {steps: [{id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+			published := make(chan string, 1)
+			release := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			// Ensure the blocked owner can always finish before fixture shutdown.
+			t.Cleanup(unblock)
+			s.mu.Lock()
+			s.Executor.Store = &inputOwnerCleanupJournal{SQLiteStore: s.Store, published: published, release: release}
+			s.mu.Unlock()
+			run := startInput(t, c)
+			select {
+			case id := <-published:
+				if id != run.ID {
+					t.Fatal(id)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("owner did not publish wait")
+			}
+			gate := controllerGates(t, c, run.ID)[0]
+			if err := c.Call(context.Background(), "POST", "/runs/"+run.ID+"/inputs/"+gate.ID+"/answer", workflows.ExternalInputAnswer{AnswerID: "owner-answer", EvidenceID: "e", Value: json.RawMessage(`true`)}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.queueInputContinuations(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			current, _, err := s.Store.Load(context.Background(), run.ID)
+			if err != nil || current.Generation != run.Generation || current.Status != workflows.RunStatusWaiting {
+				t.Fatal("old owner replaced before cleanup", current, err)
+			}
+			s.mu.Lock()
+			_, active := s.active[run.ID]
+			s.mu.Unlock()
+			if !active {
+				t.Fatal("test lost old owner")
+			}
+			if cancelOwner {
+				if err = c.Call(context.Background(), "POST", "/runs/"+run.ID+"/cancel", nil, nil); err != nil {
+					t.Fatal(err)
+				}
+				if controllerGates(t, c, run.ID)[0].State != "canceled" {
+					t.Fatal("active-owner cancellation lost gate")
+				}
+			}
+			unblock()
+			want := workflows.RunStatusSucceeded
+			if cancelOwner {
+				want = workflows.RunStatusCanceled
+			}
+			completed := awaitStatus(t, c, run.ID, want)
+			wantGeneration := run.Generation + 1
+			if cancelOwner {
+				wantGeneration = run.Generation
+			}
+			if completed.Generation != wantGeneration {
+				t.Fatal("wrong continuation generation", completed)
+			}
+		})
+	}
+}
+
+func TestInputControllerLargeNumberAnswerOutput(t *testing.T) {
+	s, c := inputFixture(t, `jobs: {x: {steps: [{id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
+	run := startInput(t, c)
+	awaitStatus(t, c, run.ID, workflows.RunStatusWaiting)
+	gate := controllerGates(t, c, run.ID)[0]
+	value := json.RawMessage(`{"large":1e400,"integer":9007199254740993}`)
+	answer := workflows.ExternalInputAnswer{AnswerID: "large-answer", EvidenceID: "e", Value: value}
+	var accepted workflows.ExternalInputGate
+	if err := c.Call(context.Background(), "POST", "/runs/"+run.ID+"/inputs/"+gate.ID+"/answer", answer, &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if string(accepted.Answer.Value) != string(value) {
+		t.Fatal("transport changed answer", accepted)
+	}
+	done := awaitStatus(t, c, run.ID, workflows.RunStatusSucceeded)
+	if done.Generation != run.Generation+1 {
+		t.Fatal("typed generation changed", done.Generation)
+	}
+	output, ok := done.Jobs["x"].Steps["q"].Outputs["answer"].(map[string]any)
+	if !ok || output["large"] != json.Number("1e400") || output["integer"] != json.Number("9007199254740993") {
+		t.Fatal("numeric output changed", output)
+	}
+	persisted, _, err := s.Store.Load(context.Background(), run.ID)
+	if err != nil || persisted.Status != workflows.RunStatusSucceeded {
+		t.Fatal(persisted, err)
+	}
+	consumed := controllerGates(t, c, run.ID)[0]
+	if consumed.State != "consumed" || string(consumed.Answer.Value) != string(value) {
+		t.Fatal("journal changed numeric answer", consumed)
+	}
+}

@@ -104,33 +104,6 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 	if run.Status == RunStatusQueued || run.Status == RunStatusRunning {
 		return nil, fmt.Errorf("run is already active")
 	}
-	var pending int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=? AND state='pending'", id).Scan(&pending); err != nil {
-		return nil, err
-	}
-	if pending > 0 {
-		if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0 WHERE run_id=?", id); err != nil {
-			return nil, err
-		}
-		run.Status = RunStatusWaiting
-		run.FinishedAt = time.Time{}
-		run.Error = ""
-		run.FailureClass = ""
-		b, err = json.Marshal(run)
-		if err != nil {
-			return nil, err
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE runs SET status=?,record=? WHERE id=?", run.Status, b, id); err != nil {
-			return nil, err
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE executions SET status=?,record=? WHERE run_id=? AND generation=?", run.Status, b, id, run.Generation); err != nil {
-			return nil, err
-		}
-		if err = addEvent(ctx, tx, id, "run.waiting", run); err != nil {
-			return nil, err
-		}
-		return &run, tx.Commit()
-	}
 	if run.Status == RunStatusSucceeded && !iterationRetry(&run) {
 		return &run, nil
 	}
@@ -157,6 +130,33 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 		if uncertain != 0 {
 			return nil, fmt.Errorf("explicit retry_uncertain acknowledgement required for uncertain tool effects")
 		}
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM input_gates WHERE origin_id=? AND state='pending'", id).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE input_controls SET paused=0 WHERE run_id=?", id); err != nil {
+			return nil, err
+		}
+		run.Status = RunStatusWaiting
+		run.FinishedAt = time.Time{}
+		run.Error = ""
+		run.FailureClass = ""
+		b, err = json.Marshal(run)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE runs SET status=?,record=? WHERE id=?", run.Status, b, id); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE executions SET status=?,record=? WHERE run_id=? AND generation=?", run.Status, b, id, run.Generation); err != nil {
+			return nil, err
+		}
+		if err = addEvent(ctx, tx, id, "run.waiting", run); err != nil {
+			return nil, err
+		}
+		return &run, tx.Commit()
 	}
 	if maxQueued > 0 {
 		var queued int

@@ -222,7 +222,7 @@ func (s *Server) loop() {
 		if s.requireReady(s.ctx) != nil {
 			continue
 		}
-		if err := s.Store.QueueInputContinuations(s.ctx, s.MaxQueued); err != nil {
+		if err := s.queueInputContinuations(s.ctx); err != nil {
 			s.Logger.Error("input continuation admission deferred", "error", err)
 		}
 		runs, err := s.Store.Queued(s.ctx)
@@ -259,6 +259,19 @@ func (s *Server) loop() {
 		}
 	}
 }
+
+// Hold controller ownership through admission so a published wait cannot
+// advance its generation until executeOwner has completed all cleanup.
+func (s *Server) queueInputContinuations(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active := make([]string, 0, len(s.active))
+	for id := range s.active {
+		active = append(active, id)
+	}
+	return s.Store.QueueInputContinuationsExcept(ctx, s.MaxQueued, active...)
+}
+
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.diagnosticAPI(w, r) {

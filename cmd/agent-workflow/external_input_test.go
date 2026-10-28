@@ -13,12 +13,12 @@ import (
 )
 
 func TestReadExternalInputAnswer(t *testing.T) {
-	for _, raw := range []string{`null`, ``, `true false`, `{"a":`, strings.Repeat(" ", (1<<20)+1)} {
+	for _, raw := range []string{`null`, " \n null\t ", ``, `true false`, `{"a":`, strings.Repeat(" ", (1<<20)+1)} {
 		if _, err := readAnswer("-", strings.NewReader(raw)); err == nil {
 			t.Fatal("invalid answer accepted")
 		}
 	}
-	for _, raw := range []string{`false`, `0`, `""`, `[]`, `{"policy":"approve"}`} {
+	for _, raw := range []string{`false`, `0`, `""`, `[]`, `{"policy":"approve"}`, `1e400`, `{"large":[1e400,9007199254740993]}`} {
 		if out, err := readAnswer("-", strings.NewReader(raw)); err != nil || string(out) != raw {
 			t.Fatal(string(out), err)
 		}
