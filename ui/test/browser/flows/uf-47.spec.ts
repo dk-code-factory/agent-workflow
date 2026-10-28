@@ -449,6 +449,133 @@ for (const narrow of [false, true]) {
   });
 }
 
+for (const narrow of [false, true]) {
+  test(`late incoming notice stays outside delete modal interaction at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page, browserName }) => {
+    const ui = await open(page); await field(page, 'Name', 'Local before delete'); await step(page);
+    if (narrow) {
+      await ui.evaluate(element => { element.style.width = '620px'; });
+      await expect(ui.locator('.aw-inspector h2')).toBeFocused();
+    }
+    await ui.getByRole('button', { name: 'Delete step', exact: true }).click();
+    const dialog = ui.getByRole('alertdialog'); const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
+    await expect(cancel).toBeFocused();
+    const before = await snapshot(page);
+    await page.evaluate(source => (window as any).first.update({ source }), incoming);
+    const staged = await snapshot(page);
+    expect(staged).toMatchObject({ source: before.source, revision: before.revision, canUndo: before.canUndo, pendingSourceReplacement: incoming });
+    const notice = ui.locator('.aw-source-replacement');
+    const useIncoming = notice.getByRole('button', { name: 'Use incoming', exact: true, includeHidden: true });
+    // Native focus and the accessibility tree must both exclude the late background region.
+    await useIncoming.evaluate(element => element.focus());
+    await expect(cancel).toBeFocused();
+    if (browserName === 'chromium') {
+      const accessibility = await page.context().newCDPSession(page);
+      try {
+        const tree = await accessibility.send('Accessibility.getFullAXTree');
+        const names = tree.nodes.filter(node => !node.ignored).map(node => node.name?.value);
+        expect(names).not.toContain('Incoming source replacement');
+        expect(names).not.toContain('Keep local'); expect(names).not.toContain('Use incoming');
+      } finally { await accessibility.detach(); }
+    }
+    await page.keyboard.press('Tab'); await expect(dialog.getByRole('button', { name: 'Confirm delete', exact: true })).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(cancel).toBeFocused();
+    expect(await snapshot(page)).toEqual(staged);
+    await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
+    await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
+    await useIncoming.focus(); await expect(useIncoming).toBeFocused();
+    await page.keyboard.press('Enter');
+    expect(await snapshot(page)).toMatchObject({ source: incoming, revision: before.revision + 1, pendingSourceReplacement: undefined });
+    await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+    expect(await snapshot(page)).toMatchObject({ source: before.source, canUndo: before.canUndo });
+  });
+
+  for (const nestedKeepLocal of [false, true]) test(`pointer acceptance preserves a fresh blur-committing buffer ${nestedKeepLocal ? 'with nested Keep local' : 'until retry'} at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page }) => {
+    const ui = await rawInspector(page);
+    if (narrow) {
+      await ui.evaluate(element => { element.style.width = '620px'; });
+      await expect(ui.locator('.aw-inspector h2')).toBeFocused();
+    }
+    const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.fill('Original blur-committing draft');
+    const before = await snapshot(page);
+    await page.evaluate(({ source, nestedKeepLocal }) => {
+      const host = (window as any);
+      host.first.update({ source: source.replace('Hello', 'Incoming after pointer choice') });
+      host.freshPointerInput = document.querySelector('#a input[aria-label="Raw prompt"]');
+      host.beforePointerCleanups = host.raw.cleanups;
+      let armed = true;
+      host.first.update({ onChange: (snapshot: import('../../../src').Snapshot) => {
+        if (armed && !snapshot.hasLocalChanges) {
+          armed = false;
+          host.freshPointerInput.value = 'Fresh blur-committing draft';
+          host.freshPointerInput.dispatchEvent(new Event('input', { bubbles: true }));
+          if (nestedKeepLocal) host.first.resolveSourceReplacement('keep-local');
+        }
+      } });
+    }, { source: before.source, nestedKeepLocal });
+    const staged = await snapshot(page);
+    const notice = ui.getByRole('region', { name: 'Incoming source replacement' });
+    // Notice mounting and Keep local must not steal focus and commit the pending input.
+    await expect(raw).toBeFocused();
+    await notice.getByRole('button', { name: 'Use incoming', exact: true }).click();
+    expect(await snapshot(page)).toEqual({ ...staged, pendingSourceReplacement: nestedKeepLocal ? undefined : staged.pendingSourceReplacement });
+    await expect(raw).toBeFocused(); await expect(raw).toHaveValue('Fresh blur-committing draft');
+    expect(await raw.evaluate(element => element === (window as any).freshPointerInput)).toBe(true);
+    expect(await page.evaluate(() => (window as any).raw.cleanups)).toBe(await page.evaluate(() => (window as any).beforePointerCleanups));
+    expect(await page.evaluate(() => (window as any).raw.discards)).toBe(1);
+    const acceptedSource = staged.pendingSourceReplacement + (nestedKeepLocal ? '\n# renewed explicit choice' : '');
+    if (nestedKeepLocal) {
+      await expect(notice).toHaveCount(0);
+      await page.evaluate(source => (window as any).first.update({ source }), acceptedSource);
+      await expect(raw).toBeFocused();
+    } else await expect(notice).toBeVisible();
+    await notice.getByRole('button', { name: 'Use incoming', exact: true }).click();
+    await expect(raw).toHaveValue('Incoming after pointer choice');
+    expect(await page.evaluate(() => (window as any).raw.discards)).toBe(2);
+    expect(await snapshot(page)).toMatchObject({ source: acceptedSource, revision: before.revision + 1, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    await expect(ui.locator('.aw-toolbar button').first()).toBeFocused();
+    await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+    expect(await snapshot(page)).toMatchObject({ source: before.source, canUndo: before.canUndo });
+  });
+}
+
+test('keyboard Keep local honors fresh raw focus selected by its host callback', async ({ page }) => {
+  const ui = await rawInspector(page);
+  const raw = ui.getByLabel('Raw prompt', { exact: true });
+  const renders = await page.evaluate(() => (window as any).raw.renders);
+  await page.evaluate(() => (window as any).raw.contexts.at(-1).setField(['with', 'model'], 'Local model'));
+  await expect.poll(() => page.evaluate(() => (window as any).raw.renders)).toBeGreaterThan(renders);
+  const before = await snapshot(page);
+  await page.evaluate(source => (window as any).first.update({ source: source.replace('Hello', 'Incoming keyboard choice') }), before.source);
+  const notice = ui.getByRole('region', { name: 'Incoming source replacement' });
+  await notice.getByRole('button', { name: 'Keep local', exact: true }).focus(); await page.keyboard.press('Enter');
+  await expect(notice).toHaveCount(0);
+  await expect(ui.locator('.aw-toolbar button').first()).toBeFocused();
+  await page.evaluate(source => {
+    const host = (window as any);
+    host.first.update({ source: source.replace('Hello', 'New incoming keyboard choice') });
+    host.keepLocalInput = document.querySelector('#a input[aria-label="Raw prompt"]');
+    host.beforeKeepLocalCleanups = host.raw.cleanups;
+    let armed = true;
+    host.first.update({ onChange: (snapshot: import('../../../src').Snapshot) => {
+      if (armed && snapshot.pendingSourceReplacement === undefined) {
+        armed = false;
+        host.keepLocalInput.value = 'Fresh host-focused draft';
+        host.keepLocalInput.focus();
+        host.keepLocalInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } });
+  }, before.source);
+  const staged = await snapshot(page);
+  await notice.getByRole('button', { name: 'Keep local', exact: true }).focus(); await page.keyboard.press('Enter');
+  expect(await snapshot(page)).toEqual({ ...staged, pendingSourceReplacement: undefined });
+  await expect(notice).toHaveCount(0);
+  await expect(raw).toBeFocused(); await expect(raw).toHaveValue('Fresh host-focused draft');
+  expect(await raw.evaluate(element => element === (window as any).keepLocalInput)).toBe(true);
+  expect(await page.evaluate(() => (window as any).raw.cleanups)).toBe(await page.evaluate(() => (window as any).beforeKeepLocalCleanups));
+  expect(await page.evaluate(() => (window as any).raw.discards)).toBe(0);
+});
+
 test('a newer source from custom discard survives the captured replacement without extra history', async ({ page }) => {
   const ui = await rawInspector(page);
   const raw = ui.getByLabel('Raw prompt', { exact: true });
