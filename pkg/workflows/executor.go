@@ -221,6 +221,12 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if depth > 8 {
 		return nil, fmt.Errorf("reusable workflow depth exceeds 8")
 	}
+	if depth > 0 {
+		origin := nativeString(req.Metadata, "origin_run_id")
+		if err := e.checkEffectAdmission(ctx, origin); err != nil {
+			return nil, err
+		}
+	}
 	w := all[ref]
 	req.ordered = req.ordered || hasOrderedIteration(all)
 	inputs, err := resolveInputs(w.On.WorkflowCall, req.Inputs, req.Secrets)
@@ -289,7 +295,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			needs := map[string]JobExecution{}
 			for _, dep := range job.Needs {
 				result, ok := run.Jobs[dep]
-				if !ok {
+				if !ok || result.Status == RunStatusWaiting || result.Status == RunStatusInterrupted {
 					ready = false
 					break
 				}
@@ -306,7 +312,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			}(id, job, needs)
 		}
 		if active == 0 {
-			return run, fmt.Errorf("scheduler has no runnable jobs")
+			break
 		}
 		finished := <-done
 		active--
@@ -321,8 +327,12 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	run.Status = RunStatusSucceeded
 	var runErr error
 	needsAttention := false
+	waiting := false
 	for _, id := range order {
 		job := run.Jobs[id]
+		if job.Status == RunStatusWaiting || job.Status == RunStatusInterrupted {
+			waiting = true
+		}
 		if job.Status == RunStatusNeedsAttention {
 			needsAttention = true
 		}
@@ -343,9 +353,15 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			runErr = errors.Join(runErr, jobErr)
 		}
 	}
+	if waiting {
+		run.Status = RunStatusWaiting
+	}
 	if ctx.Err() != nil {
 		run.Status = RunStatusCanceled
 		runErr = errors.Join(runErr, ctx.Err())
+		if ctx.Err() == context.Canceled && !cancellationOnly(runErr) {
+			run.Status = RunStatusFailed
+		}
 	} else if runErr != nil {
 		run.Status = RunStatusFailed
 	}
@@ -356,7 +372,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		run.Status = RunStatusFailed
 		runErr = errors.Join(runErr, iterationPersistence(storeErr, req.ordered))
 	}
-	if w.On.WorkflowCall != nil && runErr == nil {
+	if w.On.WorkflowCall != nil && runErr == nil && run.Status == RunStatusSucceeded {
 		run.Outputs = map[string]any{}
 		for key, output := range w.On.WorkflowCall.Outputs {
 			value, err := renderString(output.Value, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Jobs: run.Jobs})
@@ -400,6 +416,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if ctx.Err() != nil && run.Status != RunStatusNeedsAttention {
 		run.Status = RunStatusCanceled
 		runErr = errors.Join(runErr, ctx.Err())
+		if ctx.Err() == context.Canceled && !cancellationOnly(runErr) {
+			run.Status = RunStatusFailed
+		}
 		run.Error = runErr.Error()
 	}
 	if depth == 0 {
@@ -415,8 +434,31 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	}
 	run.FailureClass = classifyFailure(runErr)
 	run.FinishedAt = time.Now().UTC()
+	if j := externalInputJournal(e.Store); j != nil && depth == 0 {
+		control, controlErr := j.InputControl(context.WithoutCancel(ctx), run.ID)
+		if controlErr != nil {
+			runErr = errors.Join(runErr, controlErr)
+			run.Status = RunStatusNeedsAttention
+			run.Error = runErr.Error()
+		}
+		if controlErr == nil && control.Canceled && run.Status != RunStatusNeedsAttention {
+			run.Status = RunStatusCanceled
+		}
+		if controlErr == nil && control.Paused && !control.Canceled && run.Status != RunStatusNeedsAttention && (runErr == nil || cancellationOnly(runErr)) {
+			run.Status = RunStatusInterrupted
+			runErr = nil
+			run.Error = ""
+			run.FailureClass = ""
+		}
+	}
+	if run.Status == RunStatusWaiting || run.Status == RunStatusInterrupted {
+		run.FinishedAt = time.Time{}
+	}
 	if err := e.save(context.WithoutCancel(ctx), run); err != nil {
 		return run, errors.Join(runErr, iterationPersistence(err, req.ordered))
+	}
+	if run.Status == RunStatusInterrupted && cancellationOnly(runErr) {
+		runErr = nil
 	}
 	return run, runErr
 }
@@ -441,10 +483,7 @@ func (e *Executor) executeJob(ctx context.Context, id string, job Job, inputs ma
 		}
 		allowed, err := evalIf(job.Repeat.Until, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: result.Steps, Iteration: map[string]any{"number": iteration, "previous": previous, "outputs": result.Outputs, "status": result.Status}})
 		if err != nil {
-			result.Status = RunStatusFailed
-			if ctx.Err() != nil {
-				result.Status = RunStatusCanceled
-			}
+			result.Status = executionFailureStatus(ctx, err)
 			result.FailureClass = classifyFailure(err)
 			result.Error = err.Error()
 			return result
@@ -474,19 +513,20 @@ func stepsAsMap(steps map[string]StepExecution) map[string]any {
 func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, previous map[string]any) (out JobExecution) {
 	out = JobExecution{ID: id, Status: RunStatusSucceeded, Steps: map[string]StepExecution{}, Outputs: map[string]any{}}
 	fail := func(err error) JobExecution {
-		out.Status = RunStatusFailed
-		if ctx.Err() != nil {
-			out.Status = RunStatusCanceled
+		if onlyError(err, ErrExternalInputCanceled) {
+			out.Status = RunStatusWaiting
+			return out
 		}
-		if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-			out.Status = RunStatusNeedsAttention
-		}
+		out.Status = executionFailureStatus(ctx, err)
 		out.Error = err.Error()
 		out.FailureClass = classifyFailure(err)
 		return out
 	}
 	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
 	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
 		return fail(err)
 	}
 	for _, result := range needs {
@@ -545,8 +585,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		childReq.actionContracts = req.actionContracts
 		childReq.SecretRefs = req.SecretRefs
 		childReq.RetryUncertain = req.RetryUncertain
-		hash := sha256.Sum256([]byte(req.runID + "/" + id + fmt.Sprint(req.iteration)))
-		childReq.runID = hex.EncodeToString(hash[:16])
+		childReq.runID = reusableChildID(req.runID, id, req.iteration)
 		if logical := nativeString(req.Metadata, "iteration_logical_run_id"); req.ordered {
 			if logical == "" {
 				logical = req.runID
@@ -573,12 +612,28 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		child, err := e.execute(ctx, ref, childReq, all, slots, depth+1, existing)
 		if err != nil {
 			result := fail(err)
-			if child != nil && child.Status == RunStatusNeedsAttention {
-				result.Status = RunStatusNeedsAttention
-				result.FailureClass = "needs_attention"
+			if child != nil {
+				result.ChildRunID, result.ChildJobs = child.ID, child.Jobs
+				result.Outputs = child.Outputs
+				if child.Status == RunStatusNeedsAttention {
+					result.Status = RunStatusNeedsAttention
+				}
+			}
+			suspended, proofErr := e.inputSuspension(context.WithoutCancel(ctx), child, err, req)
+			if proofErr != nil {
+				combined := errors.Join(err, proofErr)
+				result.Error, result.FailureClass = combined.Error(), classifyFailure(combined)
+				if result.Status != RunStatusNeedsAttention {
+					result.Status = executionFailureStatus(ctx, combined)
+				}
+				return result
+			}
+			if suspended {
+				result.Status, result.Error, result.FailureClass = RunStatusInterrupted, "", ""
 			}
 			return result
 		}
+		out.Status = child.Status
 		out.ChildRunID = child.ID
 		out.ChildJobs = child.Jobs
 		out.Outputs = child.Outputs
@@ -592,13 +647,18 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
+		if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
+			return fail(err)
+		}
 		allowed, err := evalIf(step.If, ec)
 		if err == nil && !allowed {
 			result.Status = RunStatusSkipped
 			out.Steps[sid] = result
 			continue
 		}
-		if err == nil && isApplicationAction(step.Uses) {
+		if err == nil && step.Uses == "input/wait" {
+			result, err = e.executeInputWait(ctx, step, ec)
+		} else if err == nil && isApplicationAction(step.Uses) {
 			result, err = e.executeApplicationAction(ctx, step, ec)
 		} else if err == nil {
 			var attempt Attempt
@@ -621,34 +681,36 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				}
 				result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
 				result.FinishedAt = time.Now().UTC()
+				if onlyError(err, ErrExternalInputCanceled) {
+					result.Status = RunStatusWaiting
+					err = nil
+				}
 				if err != nil {
-					result.Status = RunStatusFailed
+					result.Status = executionFailureStatus(ctx, err)
 					result.Error = err.Error()
 					result.FailureClass = classifyFailure(err)
-					if ctx.Err() != nil {
-						result.Status = RunStatusCanceled
-					}
-					if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-						result.Status = RunStatusNeedsAttention
-					}
 				}
 				if durable {
 					err = errors.Join(err, iterationPersistence(journal.Complete(context.WithoutCancel(ctx), attempt, result), req.ordered))
 				}
 			}
 		}
+		if onlyError(err, ErrExternalInputCanceled) {
+			result.Status = RunStatusWaiting
+			result.Error = ""
+			result.FailureClass = ""
+			err = nil
+		}
 		if err != nil {
-			result.Status = RunStatusFailed
-			if ctx.Err() != nil {
-				result.Status = RunStatusCanceled
-			}
+			result.Status = executionFailureStatus(ctx, err)
 			result.FailureClass = classifyFailure(err)
-			if errors.Is(err, process.ErrCleanup) || errors.Is(err, operational.ErrUnavailable) || errors.Is(err, ErrActionIntegrity) {
-				result.Status = RunStatusNeedsAttention
-			}
 			result.Error = err.Error()
 		}
 		out.Steps[sid] = result
+		if result.Status == RunStatusWaiting && err == nil {
+			out.Status = RunStatusWaiting
+			return out
+		}
 		if err != nil && (req.ordered || !step.ContinueOnError || hardExecutionFailure(err)) {
 			return fail(err)
 		}
@@ -673,6 +735,9 @@ func allMustJob(all map[string]*Workflow, ref, id string) Job {
 
 func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := e.checkEffectAdmission(ctx, ec.RunID); err != nil {
 		return nil, err
 	}
 	if e.Ready != nil {
@@ -934,6 +999,11 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if err != nil {
 		return nil, err
 	}
+	// Check the retained closure before admission or an unanswered-wait return.
+	// A legacy Journal can load input runs without exposing the input extension.
+	if hasInputWait(snap.Definitions) && externalInputJournal(e.Store) == nil {
+		return nil, fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
+	}
 	e.CommandExecution = snap.Execution
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {
 		return nil, fmt.Errorf("resume originating run %s", origin)
@@ -950,6 +1020,9 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 				return nil, err
 			}
 		}
+	}
+	if run.Status == RunStatusWaiting || run.Status == RunStatusInterrupted {
+		return run, nil
 	}
 	if e.ActionFactory != nil {
 		actions, err := e.ActionFactory(snap.Roles)
@@ -1000,7 +1073,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if err = journal.Claim(ctx, run, previousStatus); err != nil {
 		return nil, err
 	}
-	if err = e.validateActionRecovery(fenceContext(ctx, run), run.ID, snap); err != nil {
+	if err = errors.Join(e.validateActionRecovery(fenceContext(ctx, run), run.ID, snap), e.validateInputRecovery(fenceContext(ctx, run), run.ID)); err != nil {
 		run.Status = RunStatusNeedsAttention
 		run.Error = err.Error()
 		run.FinishedAt = time.Now().UTC()

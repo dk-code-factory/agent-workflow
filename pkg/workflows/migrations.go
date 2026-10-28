@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -71,6 +71,17 @@ CREATE TABLE iteration_plans(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE 
 CREATE TABLE iteration_attempts(run_id TEXT NOT NULL,job_id TEXT NOT NULL,item_key TEXT NOT NULL,number INTEGER NOT NULL,phase TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,job_id,item_key,number,phase),FOREIGN KEY(run_id,job_id) REFERENCES iteration_plans(run_id,job_id) ON DELETE CASCADE);
 `
 
+const schemaV10 = `
+CREATE TABLE input_controls(run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,paused INTEGER NOT NULL DEFAULT 0,canceled INTEGER NOT NULL DEFAULT 0,continuation INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE input_gates(id TEXT PRIMARY KEY,origin_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,state TEXT NOT NULL,answer_id TEXT UNIQUE,record BLOB NOT NULL);
+CREATE INDEX input_gates_origin ON input_gates(origin_id,state);
+` + schemaV10InputIndexes
+
+const schemaV10InputIndexes = `
+CREATE INDEX IF NOT EXISTS input_controls_continuations ON input_controls(run_id) WHERE continuation=1 AND paused=0 AND canceled=0;
+CREATE INDEX IF NOT EXISTS input_gates_run ON input_gates(run_id);
+`
+
 // Migrate must be called while holding exclusive workspace ownership. Existing
 // snapshots and attempt history are never rewritten. The consistent pre-upgrade
 // backup is deliberately retained for operator verification and rollback.
@@ -85,11 +96,26 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 	if version > schemaVersion {
 		return fmt.Errorf("unsupported state schema version %d", version)
 	}
+	backupName := fmt.Sprintf("state.pre-v%d.db", schemaVersion)
 	if version == schemaVersion {
-		return nil
+		var indexed int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('input_controls_continuations','input_gates_run')").Scan(&indexed); err != nil {
+			return err
+		}
+		if indexed == 2 {
+			return nil
+		}
+		// Same-version repair remains explicit and owned. Preserve each pre-repair
+		// state, including after restoring an earlier v10 backup without these indexes.
+		backupName = "state.pre-v10-input-continuations.db"
+		if _, err := os.Stat(filepath.Join(s.Dir, backupName)); err == nil {
+			backupName = "state.pre-v10-input-continuations-" + newID() + ".db"
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	if version > 0 {
-		backup := filepath.Join(s.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion))
+		backup := filepath.Join(s.Dir, backupName)
 		if _, err := os.Stat(backup); os.IsNotExist(err) {
 			// VACUUM INTO includes committed WAL content, unlike copying state.db.
 			tmp := backup + ".partial"
@@ -139,7 +165,13 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		return err
 	}
 	defer tx.Rollback()
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9}
+	if version == schemaVersion {
+		if _, err = tx.ExecContext(ctx, schemaV10InputIndexes); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)

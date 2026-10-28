@@ -56,5 +56,7 @@ func (c *Client) Call(ctx context.Context, method, path string, input, output an
 		_, err = io.Copy(io.Discard, resp.Body)
 		return err
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(output)
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 64<<20))
+	decoder.UseNumber()
+	return decoder.Decode(output)
 }

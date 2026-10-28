@@ -100,7 +100,7 @@ func (s *Server) diagnosticAPI(w http.ResponseWriter, r *http.Request) bool {
 		sort.Strings(keys)
 		for _, state := range keys {
 			switch state {
-			case "queued", "running", "succeeded", "failed", "canceled", "needs_attention", "skipped", "idle", "closed":
+			case "queued", "running", "succeeded", "failed", "canceled", "needs_attention", "waiting", "interrupted", "skipped", "idle", "closed":
 				fmt.Fprintf(w, "agent_workflow_%s{state=%q} %d\n", kind, state, states[state])
 			}
 		}

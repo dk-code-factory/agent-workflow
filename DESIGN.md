@@ -248,6 +248,28 @@ input. Git receive-pack's ordinary ref comparison catches later races without
 force. Configured workflow check/review reports remain a trusted input.
 
 
+## Durable external input
+
+`durable-external-input-v1` adds an optional ExternalInputJournal extension.
+SQLite schema v10 persists immutable input requests, originating and physical
+execution identities, evidence correlation, unique answer identities and lifecycle
+history. `input/wait` commits its gate before exposing waiting. It holds no slot;
+independent invocations drain and supervised cleanup finishes before the origin
+publishes nonterminal waiting and releases controller capacity. Dependent jobs
+remain undispatched. Reusable calls, repeat attempts and ordered items retain
+the same waiting child and reuse completed checkpoints.
+
+Answer acceptance and continuation intent commit together. The sole controller
+scheduler queues a new generation only after all questions are answered and the
+previous owner's cleanup has finished. Restart reconstructs safe suspension while
+uncertain effects require attention. Snapshot, action contract, binding and
+retained evidence verification precede consumption and dependent execution.
+Applications use preparation, wait, then re-preparation with the accepted answer.
+Interruption durably pauses continuation while preserving questions and answers;
+Resume clears the pause, and Cancel invalidates outstanding gates. Waiting and
+interrupted origins remain protected from retention. Restore retains answers and
+quarantines continuation behind the existing uncertainty acknowledgement.
+
 ## Retention and database recovery
 
 An exclusive retention journal freezes each origin's removal plan before effects.

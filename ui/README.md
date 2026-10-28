@@ -74,6 +74,13 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
+Durable `input/wait` steps use **Action target** and **Advanced parameters** to
+edit required string `prompt` and `evidence-id` fields and an optional JSON
+`payload`. YAML and visual edits preserve payloads and answer expressions. The
+browser validates request shape; the host supplies an engine advertising
+`durable-external-input-v1` and owns inspection, answer delivery and continuation.
+See [durable external input](../docs/EXTERNAL_INPUT.md).
+
 Registered Go `action/<name>` steps preserve custom parameters and use the existing
 host action forms. The browser validates identifier syntax and reports registration
 availability and typed schema validation as host checks. See the

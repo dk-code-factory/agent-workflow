@@ -99,7 +99,13 @@ type redactedStore struct {
 }
 
 func (s redactedStore) Save(ctx context.Context, r *Run) error {
-	return s.Journal.Save(ctx, redactRun(r, s.secrets))
+	safe := redactRun(r, s.secrets)
+	if err := s.Journal.Save(ctx, safe); err != nil {
+		return err
+	}
+	// The journal may reconcile a late input control while publishing an outcome.
+	r.Status, r.Error, r.FailureClass, r.FinishedAt, r.Owner = safe.Status, safe.Error, safe.FailureClass, safe.FinishedAt, safe.Owner
+	return nil
 }
 func (s redactedStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	b, err := json.Marshal(snap)

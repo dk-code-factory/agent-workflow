@@ -81,6 +81,9 @@ func (s *SQLiteStore) AdmitAction(ctx context.Context, a ActionAttempt) error {
 	if err = checkFence(ctx, tx); err != nil {
 		return err
 	}
+	if err = checkEffectAdmission(ctx, tx, a.Attempt.RunID); err != nil {
+		return err
+	}
 	b, err := json.Marshal(a.Attempt)
 	if err != nil {
 		return err

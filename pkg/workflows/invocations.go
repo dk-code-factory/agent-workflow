@@ -17,6 +17,9 @@ func (s *SQLiteStore) AdmitInvocation(ctx context.Context, record runtimeexec.Re
 		return err
 	}
 	defer tx.Rollback()
+	if err = checkEffectAdmission(ctx, tx, record.RunID); err != nil {
+		return err
+	}
 	var pending int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM invocations i JOIN runs r ON r.id=i.run_id WHERE i.state IN ('intent','launching','created','running','uncertain') AND (i.state='uncertain' OR r.status!='running')`).Scan(&pending); err != nil {
 		return err

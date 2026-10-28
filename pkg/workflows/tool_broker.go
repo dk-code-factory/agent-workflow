@@ -344,10 +344,16 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 		if previous.Server != "engine" {
 			return nil, ErrUncertainTool
 		}
+		if err = checkEffectAdmission(ctx, tx, in.RunID); err != nil {
+			return nil, err
+		}
 		// Engine operations reconcile their deterministic child/message IDs; they
 		// never reserve a child's grant a second time after a lost response.
 		record = previous
 	} else if errors.Is(err, sql.ErrNoRows) {
+		if err = checkEffectAdmission(ctx, tx, in.RunID); err != nil {
+			return nil, err
+		}
 		var uncertain int
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE run_id=? AND generation=? AND status='uncertain'", in.RunID, in.Generation).Scan(&uncertain); err != nil {
 			return nil, err

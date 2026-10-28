@@ -222,6 +222,9 @@ func (s *Server) loop() {
 		if s.requireReady(s.ctx) != nil {
 			continue
 		}
+		if err := s.queueInputContinuations(s.ctx); err != nil {
+			s.Logger.Error("input continuation admission deferred", "error", err)
+		}
 		runs, err := s.Store.Queued(s.ctx)
 		if err != nil {
 			s.storageErrors.Add(1)
@@ -256,6 +259,19 @@ func (s *Server) loop() {
 		}
 	}
 }
+
+// Hold controller ownership through admission so a published wait cannot
+// advance its generation until executeOwner has completed all cleanup.
+func (s *Server) queueInputContinuations(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active := make([]string, 0, len(s.active))
+	for id := range s.active {
+		active = append(active, id)
+	}
+	return s.Store.QueueInputContinuationsExcept(ctx, s.MaxQueued, active...)
+}
+
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.diagnosticAPI(w, r) {
@@ -287,7 +303,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/shutdown" && r.Method == "POST" {
-		encode(map[string]bool{"stopping": true})
+		const response = "{\"stopping\":true}\n"
+		// Close may run before the handler returns and finishes chunked framing.
+		w.Header().Set("Content-Length", strconv.Itoa(len(response)))
+		_, _ = w.Write([]byte(response))
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -430,6 +449,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if s.inputAPI(w, r, run, parts) {
+		return
+	}
 	if len(parts) == 2 && r.Method == "GET" {
 		owner := run.OriginID
 		if owner == "" {
@@ -556,7 +578,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 					fail(500, err)
 					return
 				}
-				if !active && (run.Status == workflows.RunStatusQueued || run.Status == workflows.RunStatusNeedsAttention) {
+				if !active && (run.Status == workflows.RunStatusQueued || run.Status == workflows.RunStatusNeedsAttention || run.Status == workflows.RunStatusWaiting || run.Status == workflows.RunStatusInterrupted) {
 					run.Status = workflows.RunStatusCanceled
 					run.Error = "canceled before execution"
 					run.FinishedAt = time.Now().UTC()
