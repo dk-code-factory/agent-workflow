@@ -28,12 +28,15 @@ test('preview and cancel result wiring, then apply and Undo the complete transac
   await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('Add dependency: summarize needs review');
   expect((await snapshot(page)).source).toBe(before);
   await picker.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(ui.getByLabel('Prompt', { exact: true })).toBeFocused();
   expect((await snapshot(page)).source).toBe(before);
+  await ui.getByLabel('Prompt', { exact: true }).press('ControlOrMeta+End');
   await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).focus();
   await page.keyboard.press('Enter');
   await picker.getByLabel('Job output name', { exact: true }).fill('report');
   await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
   await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  await expect(ui.getByLabel('Prompt', { exact: true })).toBeFocused();
   const jobs = (await snapshot(page)).workflow.jobs;
   expect(jobs.review.outputs).toEqual({ report: '${{ steps.analyze.outputs.text }}' });
   expect(jobs.summarize.needs).toEqual(['review']);
@@ -53,10 +56,25 @@ test('existing outputs are reusable and changed documents require a new preview'
   await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('Reuse review.outputs.report');
   await page.evaluate(() => { const editor = (window as any).first; editor.update({ source: '# host update\n' + editor.getSnapshot().source }); });
   const changed = (await snapshot(page)).source;
-  await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  await picker.getByRole('button', { name: 'Apply job result', exact: true }).focus();
+  await page.keyboard.press('Enter');
   await expect(picker.getByRole('alert')).toContainText('document changed');
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Apply job result', exact: true })).toBeFocused();
   expect((await snapshot(page)).source).toBe(changed);
   await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
   await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
   expect((await snapshot(page)).workflow.jobs.review.outputs).toEqual({ report: '${{ steps.analyze.outputs.text }}' });
+});
+
+
+test('Escape closes the native result dialog and restores field focus without editing', async ({ page }) => {
+  const ui = await open(page, 'jobs: {review: {steps: [{argv: [echo]}]}, summarize: {steps: [{uses: agent/claude, with: {prompt: Summary}}]}}');
+  await job(page, 'summarize'); await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
+  const before = (await snapshot(page)).source;
+  await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).focus(); await page.keyboard.press('Enter');
+  const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
+  await expect(picker).toBeVisible(); await picker.press('Escape');
+  await expect(picker).toHaveCount(0); await expect(ui.getByLabel('Prompt', { exact: true })).toBeFocused();
+  expect((await snapshot(page)).source).toBe(before);
 });

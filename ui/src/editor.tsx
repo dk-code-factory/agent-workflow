@@ -88,7 +88,29 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const matchingJobs = new Set(results.map(result => result.job));
   const disabled = store.readOnly || snapshot.stale;
   const drafts = useMemo(() => new InspectorDrafts(pending => store.setInspectorDirty(pending)), [store]);
-  const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (e) { setError(String(e)); } };
+  useEffect(() => store.onDiscardInspector(() => drafts.discard()), [store, drafts]);
+  const discardFailure = useRef<{ revision: number; candidate?: string; message: string } | undefined>(undefined);
+  // Observe completed choices before a host callback can restage the same
+  // incoming bytes and React batches away the intermediate cleared candidate.
+  useEffect(() => store.subscribe(() => {
+    const failure = discardFailure.current; const current = store.getSnapshot();
+    if (failure && (current.revision !== failure.revision || current.pendingSourceReplacement !== failure.candidate)) {
+      discardFailure.current = undefined;
+      setError(value => value === failure.message ? '' : value);
+    }
+  }), [store]);
+  const latestAttempt = useRef(0);
+  const attempt = (fn: () => void, replacement = false) => {
+    const currentAttempt = ++latestAttempt.current;
+    discardFailure.current = undefined;
+    // A synchronous host callback may start a newer UI attempt and show its error.
+    try { fn(); if (currentAttempt === latestAttempt.current) setError(''); }
+    catch (e) {
+      const message = String(e); const current = store.getSnapshot();
+      if (replacement) discardFailure.current = { revision: current.revision, candidate: current.pendingSourceReplacement, message };
+      setError(message);
+    }
+  };
   // Pointer Save keeps the active field focused until this preflight. A blur
   // rename can otherwise scroll the page between pointer down and click.
   const save = () => {
@@ -178,6 +200,9 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     let lastSize: { width: number; height: number } | undefined;
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
+      // Playground sessions detach their mount while inactive. A zero-size
+      // observation is not a user resize and must not refit their viewport.
+      if (width <= 0 || height <= 0) return;
       if (width > 0 && height > 0 && ((lastSize && (lastSize.width !== width || lastSize.height !== height)) || (!lastSize && graphWasObserved.current))) {
         pendingResizeFit.current = true;
         requestFit(value => value + 1);
@@ -226,7 +251,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   }, [!!deletion]);
   useEffect(() => {
     if (!root.current) return;
-    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width <= 760));
+    const observer = new ResizeObserver(([entry]) => { if (entry.contentRect.width > 0) setNarrow(entry.contentRect.width <= 760); });
     observer.observe(root.current);
     return () => observer.disconnect();
   }, []);
@@ -243,6 +268,10 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
     }
     if (narrow && panel === 'inspector' && !deletion) element.querySelector<HTMLElement>('.aw-inspector h2')?.focus();
   }, [narrow, panel, !!deletion]);
+  useEffect(() => {
+    const notice = root.current?.querySelector<HTMLElement>('.aw-source-replacement');
+    if (notice) notice.inert = !!deletion;
+  }, [!!deletion, snapshot.pendingSourceReplacement !== undefined]);
   const revealSource = (diagnostic: Diagnostic) => {
     const source = store.getSnapshot().source;
     const range = diagnostic.location
@@ -259,7 +288,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
   const activateDiagnostic = (diagnostic: Diagnostic) => {
     const pending = drafts.pending();
     if (pending) {
-      setNavigationNotice('Complete the pending inspector edit or press Escape to discard it, then activate the diagnostic again.');
+      setNavigationNotice('Complete the pending inspector edit or discard it using its controls, then activate the diagnostic again.');
       setPanel('inspector'); pending.reveal(); return;
     }
     setNavigationNotice('');
@@ -321,6 +350,10 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       <div className="aw-mode" role="group" aria-label="Editor mode">{(['visual', 'yaml', 'split'] as const).map(value => <button type="button" key={value} aria-pressed={mode === value} onClick={() => { modeChosen.current = true; setMode(value); }}>{value === 'yaml' ? 'YAML' : value[0].toUpperCase() + value.slice(1)}</button>)}</div>
       <div className="aw-button-row">{!store.readOnly && <><button type="button" disabled={!snapshot.canUndo} onClick={() => store.undo()}>Undo</button><button type="button" disabled={!snapshot.canRedo} onClick={() => store.redo()}>Redo</button></>}<button type="button" onClick={download}>Export YAML</button>{!store.readOnly && options.onSave && <><span className="aw-save-status" role="status" aria-label="Save status" data-failed={!!snapshot.saveError}>{snapshot.saving ? 'Saving…' : snapshot.saveError ? 'Save failed' : snapshot.dirty ? 'Unsaved changes' : 'Saved'}</span><button type="button" disabled={snapshot.saving} onMouseDown={event => event.preventDefault()} onClick={save}>{snapshot.saving ? 'Saving…' : 'Save'}</button></>}</div>
     </header>
+    {snapshot.pendingSourceReplacement !== undefined && <div className="aw-source-replacement" role="region" aria-label="Incoming source replacement">
+      <p role="status">The host sent new source. Choose whether to keep the current source or use the incoming source and discard unapplied fields.</p>
+      <div className="aw-button-row"><button type="button" onPointerDown={event => event.preventDefault()} onClick={event => { const focused = document.activeElement; const restoreFocus = event.currentTarget.parentElement?.contains(focused); attempt(() => { store.resolveSourceReplacement('keep-local'); if (restoreFocus && (document.activeElement === focused || document.activeElement === document.body)) root.current?.querySelector<HTMLElement>('.aw-toolbar button')?.focus(); }); }}>Keep local</button><button type="button" onPointerDown={event => event.preventDefault()} onClick={() => attempt(() => { store.resolveSourceReplacement('use-incoming'); const resolved = store.getSnapshot(); if (resolved.pendingSourceReplacement === undefined && !resolved.hasLocalChanges) root.current?.querySelector<HTMLElement>('.aw-toolbar button')?.focus(); }, true)}>Use incoming</button></div>
+    </div>}
     <nav className="aw-mobile-nav" aria-label="Panels">{(['palette', 'canvas', 'inspector'] as const).map(p => <button type="button" key={p} aria-pressed={panel === p} onClick={() => setPanel(p)}>{p}</button>)}</nav>
     {snapshot.stale && <div className="aw-stale" role="status">Stale preview — fix the YAML structure to resume visual editing.</div>}
     {(error || snapshot.saveError) && <div className="aw-error" role="alert">{error || snapshot.saveError}<button type="button" onClick={() => { setError(''); store.dismissSaveError(); }}>Dismiss</button></div>}

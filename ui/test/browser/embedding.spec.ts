@@ -91,6 +91,8 @@ test('uncontrolled React host rerenders preserve local drafts and accept source 
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
   await expect.poll(() => page.evaluate(() => (window as any).latest.workflow.name)).toBe('Local draft');
   await page.evaluate(() => (window as any).replaceHostSource('name: Host replacement\njobs: {replacement: {steps: [{argv: [echo]}]}}'));
+  await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
+  await first.getByRole('button', { name: 'Use incoming', exact: true }).click();
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Host replacement');
   await first.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(first.getByLabel('Name', { exact: true })).toHaveValue('Local draft');
@@ -108,4 +110,27 @@ test('custom renderer callbacks stop mutating after replacement or teardown', as
   await expect(first.getByLabel('Prompt', { exact: true })).toHaveValue('Custom value');
   await page.evaluate(() => { (window as any).first.destroy(); (window as any).customSetField(['with', 'prompt'], 'After teardown'); });
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.prompt)).toBe('Custom value');
+});
+
+test('imperative destruction silences source echoes before cleanup and aborts validation', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/test/browser.html'); const ui = page.locator('#a');
+  await ui.getByRole('button', { name: 'greet', exact: false }).first().click();
+  await page.evaluate(() => {
+    const host = (window as any); host.destroyNotifications = 0; host.destroying = false; host.oldDestroyField = host.customSetField;
+    host.first.update({ onChange: (snapshot: any) => {
+      if (host.destroying) host.destroyNotifications++;
+      host.first.update({ source: snapshot.source });
+    }, validate: (_snapshot: any, signal: AbortSignal) => new Promise(() => { host.destroySignal = signal; }) });
+  });
+  await ui.getByLabel('Prompt', { exact: true }).fill('Unapplied teardown draft');
+  expect(await page.evaluate(() => (window as any).destroySignal.aborted)).toBe(false);
+  await page.evaluate(() => {
+    const host = (window as any); host.destroyBefore = host.first.getSnapshot().source; host.destroying = true;
+    host.first.destroy(); host.first.destroy(); host.oldDestroyField(['with', 'prompt'], 'Obsolete cleanup write');
+  });
+  await expect(ui.locator('.aw-editor')).toHaveCount(0);
+  expect(await page.evaluate(() => ({ notifications: (window as any).destroyNotifications, aborted: (window as any).destroySignal.aborted, source: (window as any).first.getSnapshot().source, original: (window as any).destroyBefore }))).toMatchObject({ notifications: 0, aborted: true });
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source === (window as any).destroyBefore)).toBe(true);
+  expect(errors).toEqual([]);
 });

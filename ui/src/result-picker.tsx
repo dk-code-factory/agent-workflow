@@ -19,8 +19,9 @@ export function JobResultPicker({ store, path, selection, close }: {
   const [error, setError] = useState('');
   useEffect(() => { dialog.current?.showModal(); }, []);
   const change = (fn: () => void) => { fn(); setPreview(undefined); setError(''); };
+  const dismiss = () => { const element = dialog.current; if (!element?.open) return; element.close(); close(); };
   const attempt = (fn: () => void) => { try { fn(); setError(''); } catch (error) { setError(String(error)); } };
-  return <dialog className="aw-result-dialog" ref={dialog} aria-labelledby={`${id}-title`} onCancel={event => { event.preventDefault(); close(); }}>
+  return <dialog className="aw-result-dialog" ref={dialog} aria-labelledby={`${id}-title`} onCancel={event => { event.preventDefault(); dismiss(); }}>
     <h2 id={`${id}-title`}>Use job result</h2>
     <label className="aw-field">Producer job<select aria-label="Producer job" value={producer} onChange={event => change(() => { setProducer(event.target.value); setStep('0'); if (source === 'output') setOutput(Object.keys(jobs[event.target.value]?.outputs ?? {})[0] ?? ''); })}>{producers.map(job => <option key={job}>{job}</option>)}</select></label>
     <label className="aw-field">Result source<select aria-label="Result source" value={source} onChange={event => change(() => { setSource(event.target.value); setOutput(event.target.value === 'output' ? Object.keys(jobs[producer]?.outputs ?? {})[0] ?? '' : 'text'); })}><option value="step">Step output</option><option value="output">Existing job output</option></select></label>
@@ -41,6 +42,6 @@ export function JobResultPicker({ store, path, selection, close }: {
       <p>Field after insertion:</p><pre>{preview.value}</pre>
     </div>}
     {error && <p role="alert">{error}</p>}
-    <div className="aw-button-row"><button type="button" disabled={!preview} onClick={() => attempt(() => { store.applyJobResult(preview!); close(); })}>Apply job result</button><button type="button" onClick={close}>Cancel</button></div>
+    <div className="aw-button-row"><button type="button" disabled={!preview} onClick={() => attempt(() => { store.applyJobResult(preview!); dismiss(); })}>Apply job result</button><button type="button" onClick={dismiss}>Cancel</button></div>
   </dialog>;
 }

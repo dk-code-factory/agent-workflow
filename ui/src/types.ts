@@ -19,8 +19,12 @@ export interface Snapshot {
   source: string; workflow?: Workflow; previewWorkflow?: Workflow; diagnostics: Diagnostic[]; stale: boolean;
   revision: number; canUndo: boolean; canRedo: boolean; validating: boolean;
   saving: boolean; saveError?: string;
-  /** Source or built-in inspector edits differ from the last successful save. */
+  /** Source or pending inspector edits differ from the last successful save. */
   dirty: boolean;
+  /** Source differs from the initial/accepted/saved source, or inspector text is pending. */
+  hasLocalChanges: boolean;
+  /** New host source awaiting an explicit choice; excludes unapplied inspector text. */
+  pendingSourceReplacement?: string;
 }
 export interface LayoutState {
   positions: Record<string, { x: number; y: number }>;
@@ -31,6 +35,14 @@ export interface ActionField { key: string; label: string; type?: 'text' | 'text
 export interface CustomInspectorContext {
   step: Step; path: Path; readOnly: boolean;
   setField: (path: Path, value: unknown) => void;
+  /** Report this renderer's buffered edits. Discard must synchronously reset them without committing.
+   * Pending DOM survives constrained sibling field/catalog updates, argument-leaf edits and admitted result wiring.
+   * Arbitrary source edits, undo/redo,
+   * other structural edits, changes to selected job/step, step ID/action kind or read-only state, and unmount end its lifetime.
+   * Hosts own additional retention before those transitions.
+   * This does not apply or serialize buffers when saving. Call with false after applying/resetting.
+   */
+  reportDraft: (pending: boolean, discard: () => void) => void;
 }
 export interface ActionDefinition {
   uses: string; label: string; fields?: ActionField[];
@@ -68,5 +80,6 @@ export interface WorkflowOptions {
 export interface WorkflowHandle {
   update: (options: Partial<WorkflowOptions>) => void;
   getSnapshot: () => Snapshot;
+  resolveSourceReplacement: (choice: 'keep-local' | 'use-incoming') => void;
   destroy: () => void;
 }

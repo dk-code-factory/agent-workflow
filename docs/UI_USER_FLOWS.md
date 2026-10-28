@@ -255,7 +255,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-17.spec.ts)
 
-- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
+- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Narrow setup waits for the inspector heading focus that completes the responsive transition before typing, and verifies the executable in both its control and stored source before argument operations. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
 
 - **Starting point:** I add **Direct command** or choose it under Step type.
 - **My flow:** I enter **Executable**, edit each argument row, and use **Add
@@ -458,7 +458,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-31.spec.ts)
 
-- **Coverage:** Diagnostic buttons support mouse, Enter, and Space activation in Visual, Split, and YAML modes at desktop and narrow widths. They reveal inspector fields, expand cards and collapsed controls, or focus YAML ranges with CRLF normalization, including an exact EOF caret assertion for stale parser errors. Job-output reference diagnostics focus the consuming Output value while identifier diagnostics at the same path focus its Identifier. Host diagnostics also reveal guided command arguments and typed callable defaults. Long diagnostic identifiers use bounded visible labels while retaining full paths and working navigation. Whole-job configuration diagnostics use YAML instead of Job ID in Visual and Split modes; scalar action diagnostics still focus Action target, and identifier problems focus Job ID. Unsupported fields use YAML; narrow inspector-to-YAML fallback waits until the source pane becomes interactive before selecting and focusing the range, including repeated activation; unavailable locations explain the problem without moving selection; failed pointer navigation keeps the diagnostic focused for keyboard reactivation even when restoring a formerly focused inspector. Navigation preserves document state, save failures, inspector selection for unavailable fields, and independent editors, works for viewers, and protects active or rejected inspector drafts until completion or explicit discard; pending-edit cases select the starting step through its inspector link to keep canvas motion outside the recovery assertions. Opening Advanced command YAML and correcting an invalid command array clears browser errors; rejected host validation appears in diagnostics. The registered-action recovery case selects its job through the palette and its step through the inspector link to avoid initial canvas-selection timing; correcting the invalid name still clears browser errors and exposes the host registration/schema check without requiring agent parameters.
+- **Coverage:** Diagnostic buttons support mouse, Enter, and Space activation in Visual, Split, and YAML modes at desktop and narrow widths. They reveal inspector fields, expand cards and collapsed controls, or focus YAML ranges with CRLF normalization, including an exact EOF caret assertion for stale parser errors. Job-output reference diagnostics focus the consuming Output value while identifier diagnostics at the same path focus its Identifier. Host diagnostics also reveal guided command arguments and typed callable defaults. Long diagnostic identifiers use bounded visible labels while retaining full paths and working navigation. Whole-job configuration diagnostics use YAML instead of Job ID in Visual and Split modes; scalar action diagnostics still focus Action target, and identifier problems focus Job ID. Unsupported fields use YAML; narrow inspector-to-YAML fallback waits until the source pane becomes interactive before selecting and focusing the range, including repeated activation; unavailable locations explain the problem without moving selection; failed pointer navigation keeps the diagnostic focused for keyboard reactivation even when restoring a formerly focused inspector. Navigation preserves document state, save failures, inspector selection for unavailable fields, and independent editors, works for viewers, and protects active or rejected inspector drafts until completion or explicit discard; pending-edit cases select the starting step through its inspector link to keep canvas motion outside the recovery assertions. The invalid-command recovery setup selects its job and stable inspector step link before opening Advanced command YAML, avoiding a moving canvas hit target. Correcting the invalid command array clears browser errors; rejected host validation appears in diagnostics. The registered-action recovery case selects its job through the palette and its step through the inspector link to avoid initial canvas-selection timing; correcting the invalid name still clears browser errors and exposes the host registration/schema check without requiring agent parameters.
 
 - **Starting point:** The diagnostics area reports warnings or errors.
 - **My flow:** I expand diagnostics → read the message, document path, source,
@@ -472,7 +472,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-32.spec.ts)
 
-- **Coverage:** Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
+- **Coverage:** Host replacement with malformed YAML first preserves pending fields for confirmation; Use incoming discards them before stale editing resumes. Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
 
 - **Starting point:** My source becomes malformed or structurally unusable.
 - **My flow:** I read **Stale preview — fix the YAML structure to resume visual
@@ -539,16 +539,18 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source; theme controls, example-named downloads, layout storage, and reloading original source are exercised. The download-only notice is visible and no Save button or host save status claims draft persistence.
+- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Invalid-source setup uses the YAML editor’s select-all command and verifies the complete replacement before switching; returning to a cached example verifies its edited export and original example filename. Reset confirmation, cancellation, example isolation, retained layout, and theme activation are exercised. Reload disposal is checked against the unreset Parallel draft in its own example, with empty source history after reload. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
-  or `develop-iteration`) → explore or edit it → choose **Theme** (`system`,
-  `light`, or `dark`) → use **Export YAML** to download my changes.
-- **What I see:** **Export YAML** downloads an example-named YAML file. A notice explains that workflow drafts are not retained. The playground
-  remembers layout separately for each example in browser storage; switching
-  examples reloads the selected example's original source, so I download edits
-  I want to keep before switching.
+  or `develop-iteration`) → explore or edit it → switch examples and return to
+  my draft → choose **Theme** → use **Export YAML** to download my changes.
+  I select **Reset example** and confirm when I want its original source back.
+- **What I see:** Each example keeps its editor, source history, selection, and
+  unapplied inspector fields while the page stays open. Reset discards only the
+  active example's source, history, and inspector drafts, retaining layout and
+  the current theme. Cancellation preserves the draft. Layout is stored separately
+  in browser storage; reloading clears drafts. Export uses the example's filename.
 
 ## Connecting work across jobs and steps
 
@@ -570,7 +572,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-39.spec.ts)
 
-- **Coverage:** A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed.
+- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed.
 
 - **Starting point:** My `review` job contains an agent step with ID `analyze`,
   and a `summarize` job needs its result.
@@ -706,16 +708,21 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-47.spec.ts)
 
-- **Coverage:** Undo after a host replacement restores the prior local draft for export.
+- **Coverage:** Visible collapse/expand transitions retain clean and pending custom DOM with unchanged source and no whole-step serialization for large supported metadata; subsequent metadata and prompt edits invalidate reuse, and clearing a raw buffer reconciles the deferred content. Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Explicit handle requests can reload the last supplied source after saving or stage it while protected; unchanged React initial props are filtered at the component boundary. Successful handle resolution clears obsolete discard errors, including an intermediate Keep local choice whose synchronous host callback resets the sole raw buffer, reports fresh text, and restages the identical incoming source before React renders. The fresh DOM, source, revision, history, candidate, protection, and unrelated save error are retained; a newer UI discard failure with identical error text from that callback remains visible. Clicked UI Keep local also preserves newer nested UI failures with identical or different messages, after verifying the nested discard and retained candidate; successful nested acceptance clears old errors and accepts source once. Guided result preview/apply preserves a pending raw sibling buffer while wiring the output and dependency as one source edit. Keep local preserves drafts; Use incoming and imperative acceptance discard unapplied text without committing it, with source Undo recovery. Controlled React echoes and repeated props do not reopen notices after observed policy/theme updates complete. Participating raw renderers report buffered text without source edits; Keep local retains the focused buffer, while both replacement entrypoints discard before blur and create one undoable source edit. Raw and built-in contributions aggregate; sibling/catalog/theme updates, saves, identity replacement, obsolete callbacks, destruction, independent editors, and viewer guards are exercised. Throwing custom discard callbacks retain source, candidate, raw protection, and rejected built-in drafts. Keep local clears the obsolete discard error while preserving buffers and unrelated save errors. A newer host source sent from custom discard remains pending without accepting the older capture or adding history. At desktop and narrow widths, a fresh raw buffer reported during the final discard notification keeps its original DOM, source, candidate, and history; a second explicit keyboard acceptance discards it once and source Undo restores the prior source. Pointer acceptance also preserves fresh blur-committing raw text, focus, DOM identity, cleanup count, source, candidate, and history when acceptance is deferred; Keep local retains focus, including a synchronous nested host choice that clears the candidate during discard notification; fresh local protection still prevents blur commits. A second explicit pointer acceptance (after restaging for the nested Keep local case) discards once, restores toolbar focus, and allows source Undo. Keyboard Keep local restores toolbar focus normally, but honors a fresh raw control focused/reported by its synchronous host callback without committing text or changing source/history. A notice staged after a delete dialog opens is excluded from native focus and the accessibility tree; Tab stays in the modal, and closing it restores operable source choices without changing the staged source or history. Anonymous-step YAML reordering, whole-step edits, and undo invalidate callbacks before cleanup so drafts cannot apply to a different step. At desktop and narrow widths, diagnostic navigation gives control-specific completion/discard guidance. Pointer and keyboard activation preserve reported raw buffers and source/history until an incoming-source choice; Keep local retains them, Use incoming discards them, and navigation then reaches the other step without adding a source edit.
 
-- **Starting point:** The host replaces the definition in the same open editor
-  instance, for example after loading an updated version.
-- **My flow:** I inspect the new graph and YAML → select **Undo** if I want my
-  previous draft back → review it and save or export the version I want to keep.
-- **What I see:** Source replacement participates in the document history, so
-  the previous draft can be restored while that editor instance remains open.
-  This is document undo; it does not reverse storage changes already made by
-  the host or recover history after the editor is destroyed and reopened.
+- **Starting point:** The host sends a different definition to the same editor.
+- **My flow:** I read the incoming-source notice → select **Keep local** to retain
+  my draft, or **Use incoming** to discard unapplied fields and accept the latest
+  host source → review and save or export. I can **Undo** an accepted replacement.
+- **What I see:** Local source edits and pending inspector text trigger confirmation.
+  Clean replacements and read-only viewer updates appear immediately. Change echoes
+  and repeated incoming values do not reopen resolved notices. Accepted replacement
+  is one source-history edit; unapplied field text is excluded from snapshots and
+  cannot be restored with document undo. `hasLocalChanges` exposes draft protection
+  independently from save status. Raw custom controls participate by reporting pending
+  buffers and a synchronous discard callback; unreported host state remains the
+  host’s responsibility. Destruction remains unconditional; the embedding
+  host must confirm disposal or retain the instance before destroying it.
 
 ## Implementation references
 

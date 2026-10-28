@@ -22,6 +22,7 @@
 .aw-result-dialog{width:min(520px,calc(100% - 32px));max-height:90vh;overflow:auto;padding:24px;color:var(--aw-text);background:var(--aw-panel);border:1px solid var(--aw-border);border-radius:12px}.aw-result-dialog::backdrop{background:#0008}.aw-result-preview{overflow-wrap:anywhere}.aw-result-preview pre{white-space:pre-wrap;overflow-wrap:anywhere}
 
 .aw-save-status{font-size:12px;color:var(--aw-muted)}.aw-save-status[data-failed=true]{color:var(--aw-error)}
+.aw-source-replacement{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 16px;background:var(--aw-panel);border-bottom:1px solid var(--aw-border)}.aw-source-replacement p{flex:1 1 260px;margin:0}.aw-source-replacement button{min-height:40px}
 
 .aw-diagnostics button{width:100%;overflow-wrap:anywhere}.aw-diagnostics [role=status]:empty{display:none}.aw-diagnostic-help{font:12px/1.5 system-ui,sans-serif;color:var(--aw-muted);margin:4px 0 10px}
 

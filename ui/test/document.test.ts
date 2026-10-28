@@ -252,6 +252,47 @@ describe('host option updates', () => {
     document.update({ validationKey: 'updated-policy' });
     expect(validate).toHaveBeenCalledTimes(2);
   });
+  for (const readOnly of [false, true]) {
+    it(`validates an accepted ${readOnly ? 'viewer' : 'clean editor'} source once with merged context`, async () => {
+      const oldValidate = vi.fn(() => []);
+      const document = new WorkflowDocument({ source, validate: oldValidate }, readOnly);
+      await document.validate();
+      const observations: { source: string; key: unknown; agent: unknown; workflow: unknown; signal: AbortSignal }[] = [];
+      const validate = vi.fn((snapshot: { source: string }, signal: AbortSignal) => {
+        const options = document.getOptions();
+        observations.push({ source: snapshot.source, key: options.validationKey, agent: options.agents?.[0].id, workflow: options.workflows?.[0].id, signal });
+        return [];
+      });
+      const incoming = '# incoming\n' + source;
+      document.update({ source: incoming, validate, validationKey: 'new policy', agents: [{ id: 'fresh-agent' }], workflows: [{ id: 'fresh.yml' }] });
+      expect(oldValidate).toHaveBeenCalledTimes(1); expect(validate).toHaveBeenCalledTimes(1);
+      expect(observations[0]).toMatchObject({ source: incoming, key: 'new policy', agent: 'fresh-agent', workflow: 'fresh.yml' });
+      expect(observations[0].signal.aborted).toBe(false);
+      await Promise.resolve(); expect(document.getSnapshot().validating).toBe(false);
+    });
+  }
+  it('refreshes staged replacement context against the retained local source', () => {
+    const observations: { source: string; key: unknown; signal: AbortSignal }[] = [];
+    const document = new WorkflowDocument({ source, validate: (snapshot, signal) => {
+      observations.push({ source: snapshot.source, key: document.getOptions().validationKey, signal }); return [];
+    } });
+    document.setField(['name'], 'Protected local');
+    const local = document.getSnapshot().source; const oldSignal = observations[0].signal; observations.length = 0;
+    const incoming = '# staged\n' + source;
+    document.update({ source: incoming, validationKey: 'staged policy', agents: [{ id: 'new-agent' }] });
+    expect(document.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: incoming });
+    expect(observations).toHaveLength(1); expect(observations[0]).toMatchObject({ source: local, key: 'staged policy' });
+    expect(oldSignal.aborted).toBe(true); expect(observations[0].signal.aborted).toBe(false);
+  });
+  it('continues refreshing key, catalog and validator changes without source edits', async () => {
+    const validate = vi.fn(() => []); const document = new WorkflowDocument({ source, validate });
+    await document.validate();
+    document.update({ validationKey: 'new' }); expect(validate).toHaveBeenCalledTimes(2);
+    document.update({ agents: [{ id: 'new' }] }); expect(validate).toHaveBeenCalledTimes(3);
+    document.update({ workflows: [{ id: 'new.yml' }] }); expect(validate).toHaveBeenCalledTimes(4);
+    const replacement = vi.fn(() => []); document.update({ validate: replacement });
+    expect(replacement).toHaveBeenCalledTimes(1); expect(document.getSnapshot()).toMatchObject({ source, revision: 0 });
+  });
   it('clears catalog warnings when the catalog is removed', async () => {
     const document = new WorkflowDocument({ source, agents: [{ id: 'other' }] });
     await document.validate(); expect(document.getSnapshot().diagnostics.some(d => d.code === 'agent-catalog')).toBe(true);
@@ -298,6 +339,58 @@ describe('source cursor context', () => {
 
 
 describe('asynchronous host lifecycle', () => {
+  it('does not start validation after source notification disposes the document, and can start again', async () => {
+    let armed = false; const signals: AbortSignal[] = [];
+    const next = '# next\n' + source;
+    const document = new WorkflowDocument({ source, validate: (_snapshot, signal) => { signals.push(signal); return []; }, onChange: snapshot => {
+      if (armed && snapshot.source === next) { armed = false; document.destroy(); }
+    } });
+    await document.validate(); const old = signals[0]; signals.length = 0;
+    armed = true; document.setSource(next); await Promise.resolve();
+    expect(old.aborted).toBe(true); expect(signals).toHaveLength(0);
+    document.start(); await Promise.resolve();
+    expect(signals).toHaveLength(1); expect(signals[0].aborted).toBe(false);
+    expect(document.getSnapshot().validating).toBe(false);
+  });
+  it('does not dispatch a controller disposed by its validating notification', async () => {
+    let armed = true; let notifications = 0; const validate = vi.fn(() => []);
+    const document = new WorkflowDocument({ source, validate, onChange: snapshot => {
+      if (armed && snapshot.validating) { armed = false; notifications++; document.destroy(); }
+    } });
+    await document.validate();
+    expect(notifications).toBe(1); expect(validate).not.toHaveBeenCalled();
+  });
+  it('dispatches only the latest request started during a validating notification', async () => {
+    let armed = true;
+    const requests: { key: unknown; signal: AbortSignal; finish: (value: []) => void }[] = [];
+    const document = new WorkflowDocument({ source, validationKey: 'initial', validate: (_snapshot, signal) => new Promise<[]>(finish => {
+      requests.push({ key: document.getOptions().validationKey, signal, finish });
+    }), onChange: snapshot => {
+      if (armed && snapshot.validating) { armed = false; document.update({ validationKey: 'latest' }); }
+    } });
+    const obsolete = document.validate();
+    expect(requests).toHaveLength(1); expect(requests[0].key).toBe('latest'); expect(requests[0].signal.aborted).toBe(false);
+    requests[0].finish([]); await obsolete;
+    expect(document.getSnapshot().validating).toBe(false);
+  });
+  it('retains a newer nested validation started by an aborted request listener', async () => {
+    let armed = false; const notifications: { key: unknown; validating: boolean }[] = [];
+    const requests: { key: unknown; signal: AbortSignal; finish: (value: import('../src/types').Diagnostic[]) => void }[] = [];
+    const document = new WorkflowDocument({ source, validationKey: 'initial', validate: (_snapshot, signal) => new Promise<import('../src/types').Diagnostic[]>(finish => {
+      requests.push({ key: document.getOptions().validationKey, signal, finish });
+      signal.addEventListener('abort', () => { if (armed) { armed = false; document.update({ validationKey: 'latest' }); } }, { once: true });
+    }), onChange: snapshot => { notifications.push({ key: document.getOptions().validationKey, validating: snapshot.validating }); } });
+    const initial = document.validate(); notifications.length = 0; armed = true; const obsolete = document.validate();
+    expect(requests).toHaveLength(2); expect(requests[0].signal.aborted).toBe(true);
+    expect(notifications).toEqual([{ key: 'latest', validating: true }]);
+    expect(requests[1].key).toBe('latest'); expect(requests[1].signal.aborted).toBe(false);
+    requests[1].finish([{ source: 'host', code: 'latest', message: 'Latest result', severity: 'info', path: [] }]); await obsolete;
+    expect(document.getSnapshot().validating).toBe(false);
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'latest')).toBe(true);
+    requests[0].finish([{ source: 'host', code: 'old', message: 'Late result', severity: 'error', path: [] }]); await initial;
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'old')).toBe(false);
+    expect(document.getSnapshot().diagnostics.some(d => d.code === 'latest')).toBe(true);
+  });
   it('aborts superseded validation and ignores late results after destroy', async () => {
     const requests: { signal: AbortSignal; resolve: (value: import('../src/types').Diagnostic[]) => void }[] = [];
     const changed = vi.fn();
@@ -330,9 +423,13 @@ describe('asynchronous host lifecycle', () => {
     expect(document.getSnapshot().dirty).toBe(false);
     document.redo();
     expect(document.getSnapshot().dirty).toBe(true);
-    document.update({ source });
+    document.update({ source: 'name: Incoming\njobs: {}' });
+    document.resolveSourceReplacement('use-incoming');
+    expect(document.getSnapshot().dirty).toBe(true);
+    document.undo(); document.undo();
     expect(document.getSnapshot().dirty).toBe(false);
     document.update({ source: 'jobs: [' });
+    document.resolveSourceReplacement('use-incoming');
     expect(document.getSnapshot().dirty).toBe(true);
     await document.save();
     expect(document.getSnapshot()).toMatchObject({ dirty: false, stale: true });
@@ -346,10 +443,10 @@ describe('asynchronous host lifecycle', () => {
     await document.save();
     expect(onSave).toHaveBeenCalledTimes(1);
     finish(); await pending;
-    expect(document.getSnapshot()).toMatchObject({ dirty: true, saving: false });
+    expect(document.getSnapshot()).toMatchObject({ dirty: true, saving: false, hasLocalChanges: true });
     expect(onSave.mock.calls[0][0].source).toBe(source);
     document.undo();
-    expect(document.getSnapshot().dirty).toBe(false);
+    expect(document.getSnapshot()).toMatchObject({ dirty: false, hasLocalChanges: false });
     document.setInspectorDirty(true);
     const next = document.save(); finish(); await next;
     expect(document.getSnapshot().dirty).toBe(true);
@@ -392,5 +489,203 @@ describe('asynchronous host lifecycle', () => {
     await pending;
     expect(document.getSnapshot()).toBe(snapshot);
     expect(changed).toHaveBeenCalledTimes(calls);
+  });
+});
+
+
+describe('host source replacement protection', () => {
+  it('starts clean independently from saving and protects edits through echoes', () => {
+    const doc = new WorkflowDocument({ source });
+    expect(doc.getSnapshot()).toMatchObject({ hasLocalChanges: false, dirty: true });
+    doc.setField(['name'], 'Local');
+    const local = doc.getSnapshot().source;
+    doc.update({ source: local });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
+    // Explicit document calls request a replacement; React separately filters
+    // unchanged props before forwarding options to the document.
+    doc.update({ source });
+    expect(doc.getSnapshot().pendingSourceReplacement).toBe(source);
+    doc.resolveSourceReplacement('keep-local');
+    const incoming = 'name: Incoming\njobs: {}';
+    doc.update({ source: incoming });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: incoming });
+    doc.resolveSourceReplacement('keep-local');
+    doc.update({ source: local }); doc.update({ source: incoming });
+    expect(doc.getSnapshot()).toMatchObject({ source: local, hasLocalChanges: true, pendingSourceReplacement: undefined });
+  });
+  for (const clean of [false, true]) {
+    it(`honors an explicit initial-source request ${clean ? 'after saving' : 'while protected'}`, async () => {
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.setField(['name'], 'Local'); const local = doc.getSnapshot().source;
+      if (clean) await doc.save();
+      doc.update({ source });
+      expect(doc.getSnapshot()).toMatchObject(clean ? { source, pendingSourceReplacement: undefined } : { source: local, pendingSourceReplacement: source });
+    });
+  }
+  it('honors reused mutable original options without losing the requested source', () => {
+    const options = { source }; const doc = new WorkflowDocument(options);
+    doc.setField(['name'], 'Local'); const local = doc.getSnapshot().source;
+    options.source = 'name: Incoming\njobs: {}'; doc.update(options);
+    expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: options.source });
+  });
+  for (const saveBeforeResend of [false, true]) {
+    it(`reconsiders accepted source after an echo when ${saveBeforeResend ? 'saved clean' : 'locally protected'}`, async () => {
+      const accepted = 'name: Accepted\njobs: {}';
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.update({ source: accepted });
+      doc.setField(['name'], 'Local');
+      const local = doc.getSnapshot().source;
+      doc.update({ source: local });
+      if (saveBeforeResend) await doc.save();
+      doc.update({ source: accepted });
+      expect(doc.getSnapshot()).toMatchObject(saveBeforeResend
+        ? { source: accepted, hasLocalChanges: false, pendingSourceReplacement: undefined }
+        : { source: local, hasLocalChanges: true, pendingSourceReplacement: accepted });
+      if (saveBeforeResend) { doc.undo(); expect(doc.getSnapshot().source).toBe(local); }
+    });
+  }
+  for (const editAfterSave of [false, true]) {
+    it(`retires declined-source memory after saving${editAfterSave ? ' and another edit' : ''}`, async () => {
+      const incoming = 'name: Previously declined\njobs: {}';
+      const doc = new WorkflowDocument({ source, onSave: () => {} });
+      doc.setField(['name'], 'Local');
+      doc.update({ source: incoming }); doc.resolveSourceReplacement('keep-local');
+      doc.update({ source: doc.getSnapshot().source });
+      await doc.save();
+      if (editAfterSave) doc.setField(['name'], 'Another local edit');
+      const local = doc.getSnapshot().source;
+      doc.update({ source: incoming });
+      expect(doc.getSnapshot()).toMatchObject(editAfterSave
+        ? { source: local, hasLocalChanges: true, pendingSourceReplacement: incoming }
+        : { source: incoming, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    });
+  }
+  for (const sourceEdit of [false, true]) {
+    it(`keeps a newer host update sent when ${sourceEdit ? 'source and inspector' : 'only inspector'} drafts are discarded`, () => {
+      const first = 'name: Older incoming\njobs: {}';
+      const newest = 'name: Newest incoming\njobs: {}';
+      let armed = false;
+      const doc = new WorkflowDocument({ source, onChange: snapshot => {
+        if (armed && snapshot.hasLocalChanges === sourceEdit) { armed = false; doc.update({ source: newest }); }
+      } });
+      if (sourceEdit) doc.setField(['name'], 'Local source');
+      const local = doc.getSnapshot().source;
+      const revision = doc.getSnapshot().revision;
+      doc.onDiscardInspector(() => doc.setInspectorDirty(false));
+      doc.setInspectorDirty(true); doc.update({ source: first });
+      armed = true; doc.resolveSourceReplacement('use-incoming');
+      expect(armed).toBe(false);
+      if (sourceEdit) {
+        expect(doc.getSnapshot()).toMatchObject({ source: local, pendingSourceReplacement: newest, revision });
+        doc.resolveSourceReplacement('use-incoming');
+      }
+      expect(doc.getSnapshot()).toMatchObject({ source: newest, pendingSourceReplacement: undefined, hasLocalChanges: false, revision: revision + 1 });
+      doc.undo(); expect(doc.getSnapshot().source).toBe(local);
+      if (!sourceEdit) expect(doc.getSnapshot().canUndo).toBe(false);
+    });
+  }
+  it('keeps inspector drafts reported by the final discard notification until another choice', () => {
+    const incoming = 'name: Incoming\njobs: {}';
+    let armed = false;
+    const doc = new WorkflowDocument({ source, onChange: snapshot => {
+      if (armed && !snapshot.hasLocalChanges) { armed = false; doc.setInspectorDirty(true); }
+    } });
+    const discard = vi.fn(() => doc.setInspectorDirty(false));
+    doc.onDiscardInspector(discard);
+    doc.setInspectorDirty(true); doc.update({ source: incoming });
+    const before = doc.getSnapshot(); const generation = doc.getInspectorGeneration();
+    armed = true; doc.resolveSourceReplacement('use-incoming');
+    expect(armed).toBe(false);
+    expect(doc.getSnapshot()).toEqual(before);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    expect(discard).toHaveBeenCalledTimes(1);
+    doc.resolveSourceReplacement('use-incoming');
+    expect(discard).toHaveBeenCalledTimes(2);
+    expect(doc.getSnapshot()).toMatchObject({ source: incoming, revision: before.revision + 1, hasLocalChanges: false, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, canUndo: false });
+  });
+  it('keeps a newer candidate sent directly by a discard callback without accepting the older one', () => {
+    const first = 'name: Older incoming\njobs: {}';
+    const newest = 'name: Newest incoming\njobs: {}';
+    const doc = new WorkflowDocument({ source });
+    let armed = true;
+    doc.onDiscardInspector(() => {
+      if (armed) { armed = false; doc.update({ source: newest }); }
+      doc.setInspectorDirty(false);
+    });
+    doc.setInspectorDirty(true); doc.update({ source: first });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(doc.getSnapshot()).toMatchObject({ source, revision: 0, pendingSourceReplacement: newest, hasLocalChanges: false });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(doc.getSnapshot()).toMatchObject({ source: newest, revision: 1, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, canUndo: false });
+  });
+  it('accepts clean replacements and viewers immediately', () => {
+    for (const readOnly of [false, true]) {
+      const doc = new WorkflowDocument({ source }, readOnly);
+      doc.update({ source: 'jobs: {}' });
+      expect(doc.getSnapshot()).toMatchObject({ source: 'jobs: {}', hasLocalChanges: false, pendingSourceReplacement: undefined });
+      doc.undo();
+      expect(doc.getSnapshot().source).toBe(readOnly ? 'jobs: {}' : source);
+    }
+  });
+  it('protects inspector text and uses the newest candidate as one undoable edit', () => {
+    const doc = new WorkflowDocument({ source });
+    const discard = vi.fn(); doc.onDiscardInspector(discard);
+    doc.setInspectorDirty(true);
+    doc.update({ source: 'jobs: {}' });
+    doc.update({ source: '' });
+    expect(doc.getSnapshot()).toMatchObject({ hasLocalChanges: true, pendingSourceReplacement: '' });
+    doc.resolveSourceReplacement('use-incoming');
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(doc.getSnapshot()).toMatchObject({ source: '', hasLocalChanges: false, pendingSourceReplacement: undefined });
+    doc.undo(); expect(doc.getSnapshot()).toMatchObject({ source, hasLocalChanges: true });
+    doc.redo(); expect(doc.getSnapshot().hasLocalChanges).toBe(false);
+  });
+  it('does not let old saves override accepted replacements or newer inspector protection', async () => {
+    let finish = () => {};
+    const doc = new WorkflowDocument({ source, onSave: () => new Promise<void>(resolve => { finish = resolve; }) });
+    doc.setField(['name'], 'Submitted');
+    const submitted = doc.getSnapshot().source;
+    const pending = doc.save();
+    doc.update({ source: 'jobs: {}' }); doc.resolveSourceReplacement('use-incoming');
+    doc.undo();
+    expect(doc.getSnapshot().source).toBe(submitted);
+    finish(); await pending;
+    expect(doc.getSnapshot()).toMatchObject({ source: submitted, dirty: false, hasLocalChanges: true });
+    doc.update({ source: 'name: Newer\njobs: {}' });
+    expect(doc.getSnapshot().pendingSourceReplacement).toContain('Newer');
+    doc.resolveSourceReplacement('use-incoming');
+    const next = doc.save(); doc.setInspectorDirty(true); finish(); await next;
+    expect(doc.getSnapshot().hasLocalChanges).toBe(true);
+  });
+  it('saves current source as the protection baseline and ignores obsolete validation', async () => {
+    const responses: ((value: []) => void)[] = [];
+    const doc = new WorkflowDocument({ source, onSave: () => {}, validate: () => new Promise<[]>(resolve => responses.push(resolve)) });
+    doc.start(); doc.setField(['name'], 'Saved'); await doc.save();
+    expect(doc.getSnapshot().hasLocalChanges).toBe(false);
+    doc.update({ source: 'jobs: {}' });
+    responses[0]([]); await Promise.resolve();
+    expect(doc.getSnapshot()).toMatchObject({ source: 'jobs: {}', hasLocalChanges: false, validating: true });
+    responses.at(-1)!([]); await Promise.resolve();
+    expect(doc.getSnapshot().validating).toBe(false);
+  });
+});
+
+describe('guided writes and renderer ownership', () => {
+  it('preserves owners for argument leaves and result wiring, and invalidates whole step lists', () => {
+    const doc = new WorkflowDocument({ source: 'jobs: {build: {steps: [{uses: agent/claude, with: {prompt: Hello}}, {uses: agent/claude, with: {prompt: Other}}]}, producer: {steps: [{argv: [echo, first, second]}]}}' });
+    const generation = doc.getInspectorGeneration();
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'model'], 'Sibling model');
+    doc.moveArgument(['jobs', 'producer', 'steps', 0, 'argv'], 1, 2);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    const preview = doc.previewJobResult({ target: ['jobs', 'build', 'steps', 0, 'with', 'model'], producer: 'producer', source: { kind: 'step', step: 0, output: 'stdout', name: 'captured' } });
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    doc.applyJobResult(preview);
+    expect(doc.getInspectorGeneration()).toBe(generation);
+    expect(doc.getSnapshot().workflow!.jobs.build.needs).toEqual(['producer']);
+    expect(doc.getSnapshot().workflow!.jobs.producer.outputs).toEqual({ captured: '${{ steps.step_1.outputs.stdout }}' });
+    doc.moveArgument(['jobs', 'build', 'steps'], 1);
+    expect(doc.getInspectorGeneration()).toBeGreaterThan(generation);
   });
 });

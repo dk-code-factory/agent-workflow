@@ -15,7 +15,10 @@ test('argument rows preserve boundaries through keyboard editing, reordering and
   const ui = await open(page); await job(page);
   await ui.getByRole('button', { name: 'Direct command', exact: true }).click();
   await page.locator('#a').evaluate(element => { (element as HTMLElement).style.width = '500px'; });
+  await expect(ui.locator('.aw-inspector h2')).toBeFocused();
   await field(page, 'Executable', '/path with spaces/tool');
+  await expect(ui.getByLabel('Executable', { exact: true })).toHaveValue('/path with spaces/tool');
+  expect((await snapshot(page)).workflow.jobs.build.steps[1].argv[0]).toBe('/path with spaces/tool');
   await field(page, 'Argument 1', 'one "quoted" argument');
   await ui.getByRole('button', { name: 'Add argument', exact: true }).focus();
   await page.keyboard.press('Enter');

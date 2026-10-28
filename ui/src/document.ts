@@ -4,6 +4,8 @@ import { dependencies, effectiveStepID, identifier, parseWorkflow } from './vali
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
+// Whole workflow/job/step replacements may change anonymous owners; field leaves do not.
+const preservesInspectorOwner = (path: Path) => path.length > 0 && (path[0] !== 'jobs' || (path.length >= 3 && path[2] !== 'steps') || path.length > 4);
 const emptyLayout = (): LayoutState => ({ positions: {}, collapsed: {} });
 export class WorkflowDocument {
   private options: WorkflowOptions;
@@ -19,37 +21,81 @@ export class WorkflowDocument {
   private lastEditTime = 0;
   private savedSource?: string;
   private inspectorDirty = false;
+  private inspectorDraftEpoch = 0;
+  private inspectorGeneration = 0;
+  private protectionSource: string;
+  private protectionEpoch = 0;
+  private lastProtectedSource?: string;
+  private discardInspectorListeners = new Set<() => void>();
   readonly readOnly: boolean;
   layout: LayoutState;
   constructor(options: WorkflowOptions, readOnly = false) {
     this.options = options; this.readOnly = readOnly;
+    this.protectionSource = options.source;
     this.layout = structuredClone(options.layout ?? emptyLayout());
     this.parsed = parseWorkflow(options.source);
-    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false, dirty: true };
+    this.snapshot = { source: options.source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: 0, canUndo: false, canRedo: false, saving: false, validating: false, dirty: true, hasLocalChanges: false, pendingSourceReplacement: undefined };
   }
   start = () => { this.disposed = false; void this.validate(); };
   getOptions = () => this.options;
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  private emit() { if (!this.disposed) { this.listeners.forEach(fn => fn()); this.options.onChange?.(structuredClone(this.snapshot)); } }
+  private emit() {
+    // A clean baseline ends repeat suppression for a previously declined source.
+    if (!this.snapshot.hasLocalChanges) this.lastProtectedSource = undefined;
+    if (!this.disposed) { this.listeners.forEach(fn => fn()); this.options.onChange?.(structuredClone(this.snapshot)); }
+  }
   update(options: Partial<WorkflowOptions>) {
-    const previous = this.options;
+    const previous = this.options; const validationEpoch = this.epoch;
     this.options = { ...previous, ...options };
     if (options.layout) this.layout = structuredClone(options.layout);
-    if (options.source !== undefined && options.source !== this.snapshot.source) this.commit(options.source, true);
-    else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); if (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows)) void this.validate(); }
+    // Current-source echoes are acknowledgements of neither saving nor draft
+    // disposal. Repeat suppression lasts only for the current protected draft.
+    if (options.source !== undefined && options.source !== this.snapshot.source && (options.source !== this.lastProtectedSource || !this.snapshot.hasLocalChanges)) {
+      if (!this.readOnly && this.snapshot.hasLocalChanges) {
+        this.lastProtectedSource = options.source;
+        this.snapshot = { ...this.snapshot, pendingSourceReplacement: options.source };
+        this.emit();
+      } else this.acceptSource(options.source);
+    } else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
+    // An accepted source may already have validated the merged options. A
+    // staged or context-only update still needs its own refresh.
+    if (this.epoch === validationEpoch && (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows))) void this.validate();
+  }
+  /** @internal Invalidates renderer ownership after arbitrary source/history or structural edits. */
+  getInspectorGeneration = () => this.inspectorGeneration;
+  onDiscardInspector = (listener: () => void) => { this.discardInspectorListeners.add(listener); return () => { this.discardInspectorListeners.delete(listener); }; };
+  resolveSourceReplacement(choice: 'keep-local' | 'use-incoming') {
+    if (this.disposed || this.snapshot.pendingSourceReplacement === undefined) return;
+    const incoming = this.snapshot.pendingSourceReplacement;
+    if (choice === 'use-incoming') this.acceptSource(incoming);
+    else { this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined }; this.emit(); }
+  }
+  private acceptSource(source: string) {
+    const { revision, pendingSourceReplacement } = this.snapshot;
+    const inspectorDraftEpoch = this.inspectorDraftEpoch;
+    this.discardInspectorListeners.forEach(discard => discard());
+    // Discard can synchronously notify the host. A newer source edit, candidate
+    // or reported inspector draft owns the next choice.
+    if (this.disposed || this.snapshot.revision !== revision || this.snapshot.pendingSourceReplacement !== pendingSourceReplacement || this.inspectorDraftEpoch !== inspectorDraftEpoch) return;
+    this.inspectorDirty = false;
+    this.protectionSource = source; this.protectionEpoch++;
+    this.snapshot = { ...this.snapshot, pendingSourceReplacement: undefined, hasLocalChanges: this.snapshot.source !== source, dirty: this.snapshot.source !== this.savedSource };
+    if (source !== this.snapshot.source) this.commit(source, true);
+    else this.emit();
   }
   setLayout(next: LayoutState) { this.layout = structuredClone(next); this.options.onLayoutChange?.(structuredClone(this.layout)); this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
-  private commit(source: string, history: boolean, group?: string) {
+  private commit(source: string, history: boolean, group?: string, preserveInspector = false) {
     if (this.disposed || source === this.snapshot.source) return;
     if (history) {
       const now = Date.now();
       if (!group || group !== this.historyGroup || now - this.lastEditTime > 750) this.past.push(this.snapshot.source);
       this.future = []; this.lastEditTime = now;
     }
+    if (!preserveInspector) this.inspectorGeneration++;
     this.historyGroup = history ? group : undefined;
     this.parsed = parseWorkflow(source);
-    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource };
+    this.snapshot = { ...this.snapshot, source, workflow: this.parsed.workflow, previewWorkflow: this.parsed.workflow ?? this.snapshot.previewWorkflow, diagnostics: this.parsed.diagnostics, stale: !this.parsed.usable, revision: this.snapshot.revision + 1, canUndo: !!this.past.length, canRedo: !!this.future.length, saveError: undefined, dirty: this.inspectorDirty || source !== this.savedSource, hasLocalChanges: this.inspectorDirty || source !== this.protectionSource };
     this.emit(); void this.validate();
   }
   getPathAtOffset(offset: number): Path {
@@ -76,10 +122,10 @@ export class WorkflowDocument {
   setSource(source: string, group?: string) { if (!this.readOnly) this.commit(source, true, group); }
   undo() { if (!this.readOnly && this.past.length) { this.future.push(this.snapshot.source); this.commit(this.past.pop()!, false); } }
   redo() { if (!this.readOnly && this.future.length) { this.past.push(this.snapshot.source); this.commit(this.future.pop()!, false); } }
-  private edit(fn: (doc: Document) => void) {
+  private edit(fn: (doc: Document) => void, preserveInspector = false) {
     if (this.readOnly) throw new Error('Viewer is read-only');
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
-    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true);
+    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
   }
   private writeField(doc: Document, path: Path, value: unknown) {
     if (value === undefined) { doc.deleteIn(path); return; }
@@ -100,14 +146,14 @@ export class WorkflowDocument {
     }
     doc.setIn(path, value);
   }
-  setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value)); }
+  setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value), preservesInspectorOwner(path)); }
   moveArgument(path: Path, from: number, to?: number) {
     this.edit(doc => {
       const seq = doc.getIn(path, true);
       if (!isSeq(seq) || from < 1 || from >= seq.items.length || (to !== undefined && (to < 1 || to >= seq.items.length))) throw new Error('Invalid argument position');
       const [item] = seq.items.splice(from, 1);
       if (to !== undefined) seq.items.splice(to, 0, item);
-    });
+    }, preservesInspectorOwner(path));
   }
   previewJobResult(request: JobResultRequest): JobResultPreview {
     if (this.readOnly) throw new Error('Viewer is read-only');
@@ -164,7 +210,7 @@ export class WorkflowDocument {
         else this.writeField(doc, ['jobs', consumer, 'needs'], [...dependencies(this.snapshot.workflow!.jobs[consumer]), producer]);
       }
       this.writeField(doc, target, current.value);
-    });
+    }, true); // Preview admission restricts these writes to non-owner fields.
   }
   private unique(base: string, ids: string[]) { let id = base; let i = 2; while (ids.includes(id)) id = `${base}_${i++}`; return id; }
   addJob(uses?: string): string {
@@ -346,7 +392,8 @@ export class WorkflowDocument {
   setInspectorDirty(dirty: boolean) {
     if (this.disposed || this.inspectorDirty === dirty) return;
     this.inspectorDirty = dirty;
-    this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource };
+    if (dirty) this.inspectorDraftEpoch++;
+    this.snapshot = { ...this.snapshot, dirty: dirty || this.snapshot.source !== this.savedSource, hasLocalChanges: dirty || this.snapshot.source !== this.protectionSource };
     this.emit();
   }
   dismissSaveError() {
@@ -360,19 +407,25 @@ export class WorkflowDocument {
     const onSave = this.options.onSave;
     const submitted = structuredClone({ ...this.snapshot, saving: true, saveError: undefined });
     const revision = submitted.revision;
+    const protectionEpoch = this.protectionEpoch;
     this.snapshot = submitted; this.emit();
     try {
       await onSave(structuredClone(submitted));
       if (!this.disposed) {
         this.savedSource = submitted.source;
-        this.snapshot = { ...this.snapshot, dirty: this.inspectorDirty || this.snapshot.source !== this.savedSource };
+        // An older save still establishes a saved-source baseline, but must
+        // never supersede a host replacement accepted while it was pending.
+        if (protectionEpoch === this.protectionEpoch) this.protectionSource = submitted.source;
+        this.snapshot = { ...this.snapshot, dirty: this.inspectorDirty || this.snapshot.source !== this.savedSource, hasLocalChanges: this.inspectorDirty || this.snapshot.source !== this.protectionSource };
       }
     }
     catch (error) { if (!this.disposed && revision === this.snapshot.revision) this.snapshot = { ...this.snapshot, saveError: String(error) }; }
     finally { if (!this.disposed) { this.snapshot = { ...this.snapshot, saving: false }; this.emit(); } }
   }
   async validate() {
-    this.validation?.abort(); const controller = new AbortController(); this.validation = controller; const epoch = ++this.epoch;
+    if (this.disposed) return;
+    const previous = this.validation; const controller = new AbortController(); this.validation = controller; const epoch = ++this.epoch; previous?.abort();
+    if (this.disposed || controller.signal.aborted || epoch !== this.epoch) return;
     let diagnostics: Diagnostic[] = [];
     const w = this.parsed.workflow;
     if (w) for (const [id, job] of Object.entries(w.jobs)) {
@@ -382,7 +435,8 @@ export class WorkflowDocument {
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();
-    if (!this.options.validate) return;
+    // Notification and abort callbacks can dispose or supersede this request.
+    if (this.disposed || controller.signal.aborted || epoch !== this.epoch || !this.options.validate) return;
     try { diagnostics = [...diagnostics, ...await this.options.validate(structuredClone(this.snapshot), controller.signal)]; }
     catch (error) { if (!controller.signal.aborted) diagnostics.push({ code: 'host-validation', message: String(error), path: [], severity: 'error', source: 'host' }); }
     if (!this.disposed && epoch === this.epoch) { this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: false }; this.emit(); }

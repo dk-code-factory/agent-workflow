@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { controllerParameters, dependencies, effectiveStepID } from './validation';
 import { parseDocument, stringify } from 'yaml';
 import type { WorkflowDocument } from './document';
@@ -13,19 +13,33 @@ export function applyEdit(fn: () => void): ApplyResult {
   try { fn(); return { ok: true }; }
   catch (error) { return { ok: false, error: String(error) }; }
 }
-type InspectorDraft = { apply: () => boolean; reveal: () => void; identifier: boolean; isPending: () => boolean };
+type InspectorDraft = { apply: () => boolean; discard: () => void; reveal: () => void; identifier: boolean; custom?: boolean; isPending: () => boolean };
 export class InspectorDrafts {
   private fields = new Set<InspectorDraft>();
+  private discarding = 0;
   constructor(private onPendingChange: (pending: boolean) => void) {}
-  changed() { this.onPendingChange([...this.fields].some(field => field.isPending())); }
+  changed() { if (this.discarding) return; this.onPendingChange([...this.fields].some(field => field.isPending())); }
   register(field: InspectorDraft) { this.fields.add(field); this.changed(); return () => { this.fields.delete(field); this.changed(); }; }
   pending() { return [...this.fields].find(field => field.isPending()); }
+  discard() {
+    // Fallible host callbacks run before managed drafts are reset. Successful
+    // host callbacks are not rolled back if a later callback fails.
+    this.discarding++;
+    try {
+      const fields = [...this.fields];
+      for (const field of [...fields.filter(field => field.custom), ...fields.filter(field => !field.custom)]) {
+        if (this.fields.has(field)) field.discard();
+      }
+    } finally {
+      if (--this.discarding === 0) this.changed();
+    }
+  }
   apply() {
     // Apply values before converting their type or renaming containing paths;
     // nested structural fields precede parent identifiers. Blurred values are already applied.
     const fields = [...this.fields];
     for (const field of [...fields.filter(field => !field.identifier), ...fields.filter(field => field.identifier).reverse()]) {
-      if (!field.apply()) return field;
+      if (this.fields.has(field) && !field.apply()) return field;
     }
   }
 }
@@ -70,7 +84,9 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
   };
   const latestApply = useRef(apply);
   latestApply.current = apply;
-  useEffect(() => registry?.register({ identifier, isPending: pending, apply: () => latestApply.current(), reveal: () => {
+  const latestDiscard = useRef(discard);
+  latestDiscard.current = discard;
+  useEffect(() => registry?.register({ identifier, isPending: pending, apply: () => latestApply.current(), discard: () => latestDiscard.current(), reveal: () => {
     for (let parent = control.current?.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }
@@ -231,14 +247,52 @@ function NamedFields({ store, path, kind, title, requestDelete, suggestionsID }:
 }
 function CustomForm({ definition, store, job, index }: { definition: ActionDefinition; store: WorkflowDocument; job: string; index: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const registry = useContext(InspectorDraftContext);
+  const [, refresh] = useState(0);
+  const rendered = useRef<{ step: string; generation: number; render: ActionDefinition['renderInspector']; job: string; index: number; uses: string | undefined; id: string | undefined; readOnly: boolean; pending: () => boolean; dispose: () => void } | undefined>(undefined);
   const step = (store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow)!.jobs[job].steps![index];
+  // Document source edits replace parsed steps; layout and option updates retain them.
+  const text = useMemo(() => JSON.stringify(step), [step]);
   const readOnly = store.readOnly || store.getSnapshot().stale;
+  const generation = store.getInspectorGeneration();
+  useEffect(() => () => { rendered.current?.dispose(); rendered.current = undefined; }, [store, registry]);
+  // Reconcile explicitly: effect cleanup on every step/catalog change would
+  // destroy raw host buffers before a replacement choice could protect them.
   useEffect(() => {
+    const previous = rendered.current;
+    if (previous && previous.generation === generation && previous.job === job && previous.index === index && previous.uses === step.uses && previous.id === step.id && previous.readOnly === readOnly &&
+      (previous.pending() || (previous.step === text && previous.render === definition.renderInspector))) return;
+    rendered.current = undefined; previous?.dispose();
     const element = ref.current!;
-    let active = true;
-    const cleanup = definition.renderInspector?.(element, { step: structuredClone(step), path: ['jobs', job, 'steps', index], readOnly, setField: (path, value) => { if (active && !readOnly) store.setField(['jobs', job, 'steps', index, ...path], value); } });
-    return () => { active = false; cleanup?.(); element.replaceChildren(); };
-  }, [definition, store, job, index, step, readOnly]);
+    let active = true; let pending = false; let discarding = false;
+    let discard: (() => void) | undefined;
+    const canEdit = () => {
+      const snapshot = store.getSnapshot();
+      const current = snapshot.workflow?.jobs[job]?.steps?.[index];
+      return active && generation === store.getInspectorGeneration() && !discarding && !readOnly && !snapshot.stale && !!current && current.id === step.id && current.uses === step.uses;
+    };
+    const unregister = registry?.register({ identifier: false, custom: true, isPending: () => pending, apply: () => true, reveal: () => {}, discard: () => {
+      if (!active || discarding || generation !== store.getInspectorGeneration()) return;
+      discarding = true;
+      try { if (pending) discard?.(); pending = false; }
+      finally { discarding = false; registry?.changed(); }
+    } });
+    const cleanup = definition.renderInspector?.(element, {
+      step: structuredClone(step), path: ['jobs', job, 'steps', index], readOnly,
+      setField: (path, value) => { if (canEdit()) store.setField(['jobs', job, 'steps', index, ...path], value); },
+      reportDraft: (next, onDiscard) => {
+        if (!canEdit()) return;
+        const cleared = pending && !next;
+        pending = next; discard = onDiscard; registry?.changed();
+        // Aggregate pending state may stay true because a built-in field is
+        // still pending. Reconcile deferred host updates when this one clears.
+        if (cleared) refresh(value => value + 1);
+      },
+    });
+    rendered.current = { step: text, generation, render: definition.renderInspector, job, index, uses: step.uses, id: step.id, readOnly, pending: () => pending, dispose: () => {
+      active = false; unregister?.(); cleanup?.(); element.replaceChildren();
+    } };
+  });
   return <div className="aw-custom-form" ref={ref} />;
 }
 export type Selection = { job?: string; step?: number };
