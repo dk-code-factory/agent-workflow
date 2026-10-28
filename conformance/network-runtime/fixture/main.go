@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,6 +89,30 @@ func run() error {
 	case "identity":
 		ns, _ := os.Readlink("/proc/self/ns/net")
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"uid": os.Getuid(), "gid": os.Getgid(), "netns": ns, "endpoint": os.Getenv("DOCKER_HOST"), "cwd": mustCWD()})
+	case "native-bytes":
+		if len(os.Args) != 3 {
+			return fmt.Errorf("native-bytes needs one opaque argument")
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		count, valid := 0, true
+		for _, entry := range os.Environ() {
+			if strings.HasPrefix(entry, "AW21_MANY_") {
+				count++
+			}
+		}
+		for i := 0; i < 10001; i++ {
+			if os.Getenv(fmt.Sprintf("AW21_MANY_%05d", i)) != fmt.Sprintf("value-%05d", i) {
+				valid = false
+			}
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"cwd_hex": hex.EncodeToString([]byte(cwd)), "arg_hex": hex.EncodeToString([]byte(os.Args[2])),
+			"env_hex": hex.EncodeToString([]byte(os.Getenv("AW21_RAW_ENV"))), "executable_hex": hex.EncodeToString([]byte(os.Args[0])),
+			"many_count": count, "many_values_ok": valid,
+		})
 	case "network":
 		return networkCycle(os.Args[2])
 	case "exec": // fake codex-cli: prompts contain a disposable network name.

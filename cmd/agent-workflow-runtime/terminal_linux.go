@@ -94,9 +94,13 @@ func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cm
 	if err = unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, &raw); err != nil {
 		return fail(err)
 	}
+	// Only diagnostics targeting the original stdout terminal share the new
+	// PTY. A different terminal is an explicit stream redirection.
+	outputDevice, outputErr := unix.IoctlGetInt(terminalFD(output), unix.TIOCGDEV)
 	cmd.Stdin, cmd.Stdout = slave, slave
-	if diagnostics, ok := cmd.Stderr.(*os.File); ok {
-		if _, err := unix.IoctlGetTermios(terminalFD(diagnostics), unix.TCGETS); err == nil {
+	if diagnostics, ok := cmd.Stderr.(*os.File); ok && outputErr == nil {
+		diagnosticDevice, err := unix.IoctlGetInt(terminalFD(diagnostics), unix.TIOCGDEV)
+		if err == nil && diagnosticDevice == outputDevice {
 			cmd.Stderr = slave
 		}
 	}

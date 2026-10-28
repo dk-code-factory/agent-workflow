@@ -56,7 +56,8 @@ class Caller:
     def __init__(self, binary, runtime, redirected_stderr=False):
         self.master, self.slave = pty.openpty()
         self.saved = termios.tcgetattr(self.slave)
-        self.diagnostics = tempfile.TemporaryFile() if redirected_stderr else None
+        self.diagnostic_pty = pty.openpty() if redirected_stderr == "pty" else None
+        self.diagnostics = tempfile.TemporaryFile() if redirected_stderr is True else None
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
 
         def own_disposable_tty():
@@ -66,7 +67,8 @@ class Caller:
         self.proc = subprocess.Popen([binary, 'exec', runtime, '--', sys.executable,
                                       os.path.abspath(__file__), '--fixture'],
                                      stdin=self.slave, stdout=self.slave,
-                                     stderr=self.diagnostics if self.diagnostics else self.slave,
+                                     stderr=(self.diagnostic_pty[1] if self.diagnostic_pty else
+                                             self.diagnostics if self.diagnostics else self.slave),
                                      preexec_fn=own_disposable_tty)
         self.buffer = b''
         try:
@@ -97,6 +99,14 @@ class Caller:
             self.diagnostics.seek(0)
             assert self.diagnostics.read() == b'DIAGNOSTIC\n', 'redirected stderr was not preserved'
             assert b'DIAGNOSTIC' not in self.buffer, 'redirected diagnostics leaked to terminal'
+        if self.diagnostic_pty:
+            diagnostic = b''
+            deadline = time.monotonic() + 5
+            while b'DIAGNOSTIC\r\n' not in diagnostic and time.monotonic() < deadline:
+                if select.select([self.diagnostic_pty[0]], [], [], .1)[0]:
+                    diagnostic += os.read(self.diagnostic_pty[0], 65536)
+            assert diagnostic == b'DIAGNOSTIC\r\n', diagnostic
+            assert b'DIAGNOSTIC' not in self.buffer, 'separate stderr PTY merged into stdout'
         try:
             os.kill(self.descendant, 0)
         except OSError as error:
@@ -112,6 +122,9 @@ class Caller:
         os.close(self.slave)
         if self.diagnostics:
             self.diagnostics.close()
+        if self.diagnostic_pty:
+            for fd in self.diagnostic_pty:
+                os.close(fd)
 
 
 def acceptance(binary, runtime):
@@ -152,7 +165,11 @@ def acceptance(binary, runtime):
         os.write(e.master, b'q')
         e.expect(b'BYE')
         e.finish(37)
-        print(json.dumps(dict(controllingTerminal=True, foregroundGroup=True, byteInput=True, resize=True, exitStatus=37, ctrlC=130, sigterm=True, detachedDescendantCleanup=True, independentCallerSurvived=True, callerTermiosRestored=True, redirectedStderrPreserved=True)))
+        f = Caller(binary, runtime, redirected_stderr="pty"); callers.append(f)
+        os.write(f.master, b'q')
+        f.expect(b'BYE')
+        f.finish(37)
+        print(json.dumps(dict(separateStderrPtyPreserved=True, controllingTerminal=True, foregroundGroup=True, byteInput=True, resize=True, exitStatus=37, ctrlC=130, sigterm=True, detachedDescendantCleanup=True, independentCallerSurvived=True, callerTermiosRestored=True, redirectedStderrPreserved=True)))
     finally:
         for caller in callers:
             caller.close()

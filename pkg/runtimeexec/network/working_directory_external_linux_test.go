@@ -4,6 +4,7 @@ package network_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ type directoryObservation struct {
 	CWD        string
 	PWD        string
 	Credential string
+	Argument   string
+	Executable string
 }
 
 func TestDirectoryObservationFixture(t *testing.T) {
@@ -33,7 +36,7 @@ func TestDirectoryObservationFixture(t *testing.T) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(126)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(directoryObservation{CWD: cwd, PWD: os.Getenv("PWD"), Credential: os.Getenv("FAKE_PROVIDER_CREDENTIAL")}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(directoryObservation{CWD: hex.EncodeToString([]byte(cwd)), PWD: hex.EncodeToString([]byte(os.Getenv("PWD"))), Credential: hex.EncodeToString([]byte(os.Getenv("FAKE_PROVIDER_CREDENTIAL"))), Argument: hex.EncodeToString([]byte(os.Args[len(os.Args)-2])), Executable: hex.EncodeToString([]byte(os.Args[0]))}); err != nil {
 		os.Exit(126)
 	}
 	os.Exit(0)
@@ -46,12 +49,15 @@ func TestWrapPreservesNativeDirectoryAndEffectiveEnvironment(t *testing.T) {
 	}
 	root := t.TempDir()
 	caller, service := filepath.Join(root, "caller"), filepath.Join(root, "service")
-	for _, dir := range []string{caller, service, filepath.Join(caller, "project"), filepath.Join(caller, "child"), filepath.Join(root, "elsewhere", "target"), filepath.Join(root, "elsewhere", "child")} {
+	for _, dir := range []string{caller, service, filepath.Join(root, "cwd-\xfd"), filepath.Join(caller, "project"), filepath.Join(caller, "child"), filepath.Join(root, "elsewhere", "target"), filepath.Join(root, "elsewhere", "child")} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := os.Symlink(filepath.Join(root, "elsewhere", "target"), filepath.Join(caller, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(os.Args[0], filepath.Join(root, "executable-\xfc")); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -73,8 +79,9 @@ func runDirectoryCases(t *testing.T, service string) {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name, dir string
-		env       []string
+		name, dir      string
+		path, argument string
+		env            []string
 	}{
 		{name: "empty/inherited"},
 		{name: "relative/inherited", dir: "project"},
@@ -85,13 +92,18 @@ func runDirectoryCases(t *testing.T, service string) {
 		{name: "relative/duplicates", dir: "project", env: []string{"PWD=/first-pwd", "PWD=/last-pwd", "FAKE_PROVIDER_CREDENTIAL=first", "FAKE_PROVIDER_CREDENTIAL=last", "AGENT_WORKFLOW_NETWORK_TERMINAL=1", "AGENT_WORKFLOW_NETWORK_TERMINAL=0"}},
 		{name: "relative/symlink-parent", dir: "link/../child"},
 		{name: "absolute/symlink-parent", dir: caller + "/link/../child"},
+		{name: "opaque-native-bytes", dir: filepath.Join(filepath.Dir(caller), "cwd-\xfd"), path: filepath.Join(filepath.Dir(caller), "executable-\xfc"), argument: "arg-\xff-\xc3(", env: []string{"FAKE_PROVIDER_CREDENTIAL=env-\xfe-\xed\xa0\x80"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			command := func() *exec.Cmd {
-				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDirectoryObservationFixture$", "--", "directory-observation")
+				path := tc.path
+				if path == "" {
+					path = os.Args[0]
+				}
+				cmd := exec.CommandContext(ctx, path, "-test.run=^TestDirectoryObservationFixture$", "--", tc.argument, "directory-observation")
 				cmd.Dir = tc.dir
 				cmd.Env = tc.env
 				cmd.WaitDelay = 2 * time.Second

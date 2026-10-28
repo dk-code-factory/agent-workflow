@@ -957,7 +957,7 @@ func (s *service) handle(c *net.UnixConn) {
 		s.mu.Unlock()
 		respond(Response{Status: out}, err)
 	case "exec":
-		if (len(files) != 3 && len(files) != 4) || len(req.ID) != 32 || !hexID(req.ID) || req.Path == "" || len(req.Env) > 10000 {
+		if (len(files) != 3 && len(files) != 4) || len(req.ID) != 32 || !hexID(req.ID) || req.Path == "" {
 			s.mu.Unlock()
 			respond(Response{}, errors.New("invalid launch request"))
 			return

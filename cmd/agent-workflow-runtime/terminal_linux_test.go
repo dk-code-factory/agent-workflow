@@ -689,3 +689,69 @@ func TestTerminalFailedLaunchWithRetainedSlaveBoundsCleanup(t *testing.T) {
 		t.Fatalf("retained-slave cleanup = %v", err)
 	}
 }
+
+func TestTerminalStderrTerminalIdentity(t *testing.T) {
+	for _, sameTerminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("same-terminal=%t", sameTerminal), func(t *testing.T) {
+			stdoutMaster, stdout, err := openTerminal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stdoutMaster.Close()
+			defer stdout.Close()
+			var stderrMaster, stderr *os.File
+			if sameTerminal {
+				fd, err := unix.Dup(terminalFD(stdout))
+				if err != nil {
+					t.Fatal(err)
+				}
+				stderr = os.NewFile(uintptr(fd), "owned-duplicate-terminal")
+			} else {
+				stderrMaster, stderr, err = openTerminal()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stderrMaster.Close()
+			}
+			defer stderr.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "sh", "-c", "printf stdout-payload; printf stderr-payload >&2")
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = stdout, stdout, stderr
+			finish, err := bridgeTerminal(ctx, cancel, cmd, stdout, stdout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			if sameTerminal {
+				if cmd.Stderr != cmd.Stdout || cmd.Stderr == stderr {
+					t.Fatal("duplicate descriptor for same terminal was not bridged")
+				}
+			} else if cmd.Stderr != stderr {
+				t.Fatal("separate terminal descriptor was replaced")
+			}
+			if err := cmd.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish(); err != nil {
+				t.Fatal(err)
+			}
+			want := "stdout-payload"
+			if sameTerminal {
+				want += "stderr-payload"
+			}
+			out := &terminalFixture{master: stdoutMaster}
+			out.expect(t, want)
+			if out.output.String() != want {
+				t.Fatalf("stdout terminal = %q, want %q", out.output.String(), want)
+			}
+			if !sameTerminal {
+				diag := &terminalFixture{master: stderrMaster}
+				diag.expect(t, "stderr-payload")
+				if diag.output.String() != "stderr-payload" {
+					t.Fatalf("stderr terminal = %q", diag.output.String())
+				}
+			}
+		})
+	}
+}

@@ -346,6 +346,9 @@ func TestUnauthorizedPeerAndServerAreRejected(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root is the explicit operator")
 	}
+	s.mu.Lock()
+	s.config.Users = map[uint32]bool{}
+	s.mu.Unlock()
 	c, err := net.DialUnix("unixpacket", nil, &net.UnixAddr{Name: socket, Net: "unixpacket"})
 	if err != nil {
 		t.Fatal(err)
@@ -354,9 +357,6 @@ func TestUnauthorizedPeerAndServerAreRejected(t *testing.T) {
 	if trustedConnection(c) == nil {
 		t.Fatal("non-root service impersonation accepted")
 	}
-	s.mu.Lock()
-	s.config.Users = map[uint32]bool{}
-	s.mu.Unlock()
 	data, _ := json.Marshal(Request{Operation: "status"})
 	if _, err = c.Write(data); err != nil {
 		// Authentication can close the connection before the first request.

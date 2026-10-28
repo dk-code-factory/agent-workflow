@@ -86,6 +86,29 @@ try {
   assert.notEqual(identity.netns, run('readlink', ['/proc/self/ns/net']));
   evidence.checks.push('identity, endpoint and cached rootful image store');
 
+  // Bytes are passed by Python directly to Linux exec; the fixture reports hex
+  // before JSON so invalid UTF-8 cannot be replaced on both sides of the oracle.
+  const byteProof = JSON.parse(run('python3', ['-c', `import json,os,subprocess,sys
+runtime,name,fixture,root=map(os.fsencode,sys.argv[1:])
+raw_root=root+b'/native-bytes';os.mkdir(raw_root,0o700)
+cwd=raw_root+b'/cwd-\\xff';os.mkdir(cwd,0o700)
+executable=raw_root+b'/executable-\\xfd';os.symlink(fixture,executable)
+argument=b'arg-\\xff-\\xc3('
+environment={b'PATH':b'/usr/bin:/bin',b'PWD':cwd,b'AW21_RAW_ENV':b'env-\\xfe-\\xed\\xa0\\x80'}
+environment.update({('AW21_MANY_%05d'%i).encode():('value-%05d'%i).encode() for i in range(10001)})
+def observe(command):return json.loads(subprocess.check_output(command,cwd=cwd,env=environment,timeout=30))
+native=observe([executable,b'native-bytes',argument])
+contained=observe([runtime,b'exec',name,b'--',executable,b'native-bytes',argument])
+assert native==contained,(native,contained)
+assert native['arg_hex']==argument.hex() and native['cwd_hex']==cwd.hex()
+assert native['executable_hex']==executable.hex() and native['env_hex']==environment[b'AW21_RAW_ENV'].hex()
+assert native['many_count']==10001 and native['many_values_ok']
+print(json.dumps({'native':native,'contained':contained,'byte_exact':True}))`, runtime, name, fixture, dir]));
+  assert.equal(byteProof.byte_exact, true);
+  evidence.nativeBytes = byteProof;
+  await settled();
+  evidence.checks.push('actual runtime preserves opaque Linux argv/env/cwd/executable bytes and every entry of a10001-variable environment');
+
   assert.throws(() => inside('/bin/sh', '-c', 'exit 125'), { status: 125 });
   await settled();
   const largeEnvironment = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`AW21_LARGE_${i}`, 'v'.repeat(1024)]));

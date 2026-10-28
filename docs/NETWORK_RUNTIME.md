@@ -100,6 +100,8 @@ flattening the caller's arguments and environment into one executable argument
 or environment entry. Credentials stay out of helper/guardian arguments and
 persistent membership records; transport descriptors never reach the workload.
 Extra inherited file descriptors beyond standard streams are rejected.
+Native argument, environment and pathname bytes retain their Linux meaning;
+transport adds no UTF-8 conversion or separate environment-entry count limit.
 
 When stdin and stdout are terminals, standalone `exec` allocates a
 private PTY and gives the workload its own controlling terminal and foreground
