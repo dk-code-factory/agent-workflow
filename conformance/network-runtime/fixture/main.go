@@ -27,6 +27,15 @@ func run() error {
 		return fmt.Errorf("fixture needs a mode")
 	}
 	switch os.Args[1] {
+	case "--version": // cached doctor probe; never invokes a provider.
+		ns, _ := os.Readlink("/proc/self/ns/net")
+		fmt.Printf("fixture %s %s\n", ns, os.Getenv("DOCKER_HOST"))
+		return nil
+	case "login":
+		if len(os.Args) != 3 || os.Args[2] != "status" || os.Getenv("AGENT_WORKFLOW_NETWORK_RUNTIME") == "" {
+			return fmt.Errorf("expected contained cached-status probe")
+		}
+		return nil
 	case "serve":
 		return http.ListenAndServe(os.Args[2], http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "runtime-service") }))
 	case "h2":

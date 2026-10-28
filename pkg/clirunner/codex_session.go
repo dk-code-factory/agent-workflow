@@ -38,8 +38,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		command = "codex"
 	}
 	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`}
-	args = append(args, networkShellArgs(agent.Execution)...)
-	args = append(args, agent.Args...)
+	args = append(args, providerArgs(agent)...)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
 	cmd.Env = providerEnvironment("")

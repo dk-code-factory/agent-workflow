@@ -34,9 +34,13 @@ func init() {
 	syscall.CloseOnExec(fd)
 	var cleanupArgs []string
 	var completionPath, completionToken string
+	terminal := false
 	target := 3
 	for target < len(os.Args) {
-		if os.Args[target] == "--cleanup" {
+		if os.Args[target] == "--terminal" {
+			terminal = true
+			target++
+		} else if os.Args[target] == "--cleanup" {
 			if target+1 >= len(os.Args) || json.Unmarshal([]byte(os.Args[target+1]), &cleanupArgs) != nil {
 				os.Exit(125)
 			}
@@ -95,6 +99,11 @@ func init() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if terminal {
+		// The frontend supplied an invocation-owned PTY. Acquire only that
+		// terminal in a fresh session; never steal the caller's terminal.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	}
 	if err = cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		clean()
@@ -146,6 +155,11 @@ func init() {
 			code = exit.ExitCode()
 			if code < 0 {
 				code = 128
+				if terminal {
+					if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+						code += int(status.Signal())
+					}
+				}
 			}
 		}
 	}

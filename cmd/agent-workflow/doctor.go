@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
+	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
-	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
-func doctorCommand(ctx context.Context, root, command string, args ...string) (string, error) {
+func doctorCommand(ctx context.Context, root string, policy runtimeexec.Policy, command string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -29,7 +29,7 @@ func doctorCommand(ctx context.Context, root, command string, args ...string) (s
 	var output doctorOutput
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	cleanup, err := process.Supervise(cmd)
+	cleanup, err := runtimeexec.SupervisePolicy(ctx, cmd, policy)
 	if err != nil {
 		return "", err
 	}
@@ -52,10 +52,35 @@ func (b *doctorOutput) Write(p []byte) (int, error) {
 	_, _ = b.text.Write(p)
 	return n, nil
 }
+func doctorContainerCommand(ctx context.Context, root string, policy runtimeexec.Policy, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := runtimeexec.CheckPolicy(ctx, policy); err != nil {
+		return "", err
+	}
+	runtime, err := runtimeexec.RuntimePath(policy)
+	if err != nil {
+		return "", err
+	}
+	if policy.Network == nil {
+		return doctorCommand(ctx, root, policy, runtime, args...)
+	}
+	output, err := containerapi.OutputAt(ctx, runtime, policy.Network, args...)
+	return strings.TrimSpace(string(output)), err
+}
+
 func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Writer) error {
-	runner := &clirunner.Runner{Config: cfg, Workspace: root}
-	secrets := runner.SecretValues()
+	secrets := (&clirunner.Runner{Config: cfg, Workspace: root}).SecretValues()
 	report := map[string]any{"workspace": root, "backends": map[string]any{}, "native_authentication": "cached status only; actual model acceptance requires a separate budgeted live probe"}
+	// Admit the whole configuration before any configured executable can run,
+	// including preflight probes and command-container image diagnostics.
+	pinned, err := cfg.PinRuntimes(ctx)
+	if err != nil {
+		report["execution_error"] = workflows.Redact(err.Error(), secrets)
+		return errors.Join(err, json.NewEncoder(out).Encode(report))
+	}
+	cfg = pinned
+	runner := &clirunner.Runner{Config: cfg, Workspace: root}
 	backends := report["backends"].(map[string]any)
 	var failures error
 	guarantee := func(container bool) string {
@@ -79,6 +104,7 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 		}
 	}
 	for id, a := range cfg.Agents {
+		policy := (clirunner.Config{Execution: a.Execution}).CommandExecutionPolicy()
 		item := map[string]any{"provider": a.Provider, "authentication_route": a.Authentication.Mode}
 		item["cleanup_guarantee"] = guarantee(a.Execution.Mode == "container")
 		if a.Execution.Mode == "container" {
@@ -110,26 +136,22 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 			}
 		}
 		if a.Execution.Mode == "container" {
-			runtime := a.Execution.Runtime
-			if runtime == "" {
-				runtime = "podman"
-			}
-			version, err := doctorCommand(ctx, root, runtime, "version", "--format", "{{.Server.Version}}")
+			version, err := doctorContainerCommand(ctx, root, policy, "version", "--format", "{{.Server.Version}}")
 			if err != nil {
 				item["error"] = "container runtime unavailable"
 				failures = errors.Join(failures, fmt.Errorf("agent %s container runtime: %w", id, err))
 				continue
 			}
-			item["container_runtime_version"] = version
-			image, err := doctorCommand(ctx, root, runtime, "image", "inspect", "--format", "{{.Id}}", a.Execution.Image)
+			item["container_runtime_version"] = workflows.Redact(version, secrets)
+			image, err := doctorContainerCommand(ctx, root, policy, "image", "inspect", "--format", "{{.Id}}", a.Execution.Image)
 			if err != nil {
 				item["error"] = "pinned image unavailable"
 				failures = errors.Join(failures, fmt.Errorf("agent %s image: %w", id, err))
 				continue
 			}
-			item["image_id"] = image
+			item["image_id"] = workflows.Redact(image, secrets)
 		} else {
-			version, err := doctorCommand(ctx, root, command, "--version")
+			version, err := doctorCommand(ctx, root, policy, command, "--version")
 			if err != nil {
 				failures = errors.Join(failures, fmt.Errorf("agent %s version: %w", id, err))
 				item["error"] = "version probe failed"
@@ -168,7 +190,7 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 				failures = errors.Join(failures, fmt.Errorf("agent %s gateway models endpoint returned HTTP %d", id, resp.StatusCode))
 			}
 		} else if a.Execution.Mode != "container" && (a.Provider == "claude" || a.Provider == "claude-cli") {
-			status, err := doctorCommand(ctx, root, command, "auth", "status", "--json")
+			status, err := doctorCommand(ctx, root, policy, command, "auth", "status", "--json")
 			var auth struct {
 				LoggedIn bool `json:"loggedIn"`
 			}
@@ -180,14 +202,14 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 		} else if a.Provider == "codex-app-server" && a.Authentication.Mode == "native" {
 			item["native_file_authentication"] = "available; model acceptance unverified"
 		} else if a.Execution.Mode != "container" && (a.Authentication.Mode == "native" || a.Provider == "codex" || a.Provider == "codex-cli") {
-			_, err := doctorCommand(ctx, root, command, "login", "status")
+			_, err := doctorCommand(ctx, root, policy, command, "login", "status")
 			item["native_cached_login"] = err == nil
 			if err != nil {
 				failures = errors.Join(failures, fmt.Errorf("agent %s native authentication status unavailable", id))
 			}
 		}
 	}
-	head, err := doctorCommand(ctx, root, "git", "rev-parse", "--verify", "HEAD")
+	head, err := doctorCommand(ctx, root, runtimeexec.Policy{}, "git", "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		failures = errors.Join(failures, fmt.Errorf("Git baseline: %w", err))
 	}

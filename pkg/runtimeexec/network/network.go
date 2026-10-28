@@ -19,6 +19,8 @@ import (
 const Registry = "/var/lib/agent-workflow/runtimes"
 const RunRoot = "/run/agent-workflow-runtimes"
 
+const launchEnvironment = "AGENT_WORKFLOW_NETWORK_REQUEST"
+
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$`)
 
 type Reference struct {
@@ -71,6 +73,8 @@ type Request struct {
 	Env       []string  `json:"env,omitempty"`
 	Dir       string    `json:"dir,omitempty"`
 	Forward   Forward   `json:"forward,omitempty"`
+	Umask     int       `json:"umask,omitempty"`
+	Terminal  bool      `json:"terminal,omitempty"`
 }
 type Response struct {
 	Status Status     `json:"status"`
@@ -148,6 +152,16 @@ func Check(ctx context.Context, ref Reference) error {
 	}
 	return nil
 }
+
+// CheckRetained fences owned recovery against replacement without admitting new work.
+func CheckRetained(ctx context.Context, ref Reference) error {
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	_, err := Call(ctx, ref.Name, Request{Operation: "cleanup-check", Reference: ref})
+	return err
+}
+
 func Completed(ctx context.Context, ref Reference, id string) error {
 	out, err := Call(ctx, ref.Name, Request{Operation: "member", Reference: ref, ID: id})
 	if err != nil {
@@ -168,7 +182,7 @@ func Environment(env []string, ref Reference) []string {
 	for _, v := range env {
 		k, _, _ := strings.Cut(v, "=")
 		switch k {
-		case "DOCKER_HOST", "CONTAINER_HOST", "DOCKER_CONTEXT", "CONTAINER_CONNECTION", "AGENT_WORKFLOW_NETWORK_RUNTIME":
+		case "DOCKER_HOST", "CONTAINER_HOST", "DOCKER_CONTEXT", "CONTAINER_CONNECTION", "AGENT_WORKFLOW_NETWORK_RUNTIME", launchEnvironment, "AGENT_WORKFLOW_NETWORK_TERMINAL":
 			continue
 		}
 		out = append(out, v)
@@ -200,13 +214,19 @@ func Wrap(cmd *exec.Cmd, ref Reference, id string) error {
 		}
 	}
 	req := Request{Operation: "exec", Reference: ref, ID: id, Path: cmd.Path, Args: append([]string(nil), cmd.Args[1:]...), Env: Environment(cmd.Env, ref), Dir: cmd.Dir}
+	for _, value := range cmd.Environ() {
+		if value == "AGENT_WORKFLOW_NETWORK_TERMINAL=1" {
+			req.Terminal = true
+		}
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
+	cmd.Env = append(Environment(cmd.Env, ref), launchEnvironment+"="+string(data))
 	cmd.Path = executable
 	cmd.Err = nil
-	cmd.Args = []string{executable, "__network_runtime_client_v1", string(data)}
+	cmd.Args = []string{executable, "__network_runtime_client_v1"}
 	return nil
 }
 

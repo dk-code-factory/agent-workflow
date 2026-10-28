@@ -36,8 +36,16 @@ func Output(ctx context.Context, runtime string, args ...string) ([]byte, error)
 	return OutputAt(ctx, runtime, nil, args...)
 }
 func OutputAt(ctx context.Context, runtime string, ref *network.Reference, args ...string) ([]byte, error) {
+	return outputAt(ctx, runtime, ref, false, args...)
+}
+
+func outputAt(ctx context.Context, runtime string, ref *network.Reference, recovery bool, args ...string) ([]byte, error) {
 	if ref != nil {
-		if err := network.Check(ctx, *ref); err != nil {
+		check := network.Check
+		if recovery {
+			check = network.CheckRetained
+		}
+		if err := check(ctx, *ref); err != nil {
 			return nil, err
 		}
 		args = append([]string{"--remote", "--url", ref.Endpoint}, args...)
@@ -61,7 +69,11 @@ func Identity(ctx context.Context, runtime string) (string, error) {
 	return IdentityAt(ctx, runtime, nil)
 }
 func IdentityAt(ctx context.Context, runtime string, ref *network.Reference) (string, error) {
-	data, err := OutputAt(ctx, runtime, ref, "info", "--format", "{{json .}}")
+	return identityAt(ctx, runtime, ref, false)
+}
+
+func identityAt(ctx context.Context, runtime string, ref *network.Reference, recovery bool) (string, error) {
+	data, err := outputAt(ctx, runtime, ref, recovery, "info", "--format", "{{json .}}")
 	if err != nil {
 		return "", err
 	}
@@ -126,16 +138,16 @@ type inspected struct {
 }
 
 func Inspect(ctx context.Context, owner Owner) (id string, exists bool, err error) {
-	identity, err := IdentityAt(ctx, owner.Runtime, owner.Network)
+	identity, err := identityAt(ctx, owner.Runtime, owner.Network, true)
 	if err != nil {
 		return "", false, err
 	}
 	if identity != owner.Identity {
 		return "", false, fmt.Errorf("container runtime identity changed")
 	}
-	data, inspectErr := OutputAt(ctx, owner.Runtime, owner.Network, "container", "inspect", owner.Name)
+	data, inspectErr := outputAt(ctx, owner.Runtime, owner.Network, true, "container", "inspect", owner.Name)
 	if inspectErr != nil {
-		listing, listErr := OutputAt(ctx, owner.Runtime, owner.Network, "ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}")
+		listing, listErr := outputAt(ctx, owner.Runtime, owner.Network, true, "ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}")
 		if listErr != nil {
 			return "", false, fmt.Errorf("container absence cannot be confirmed: %w", listErr)
 		}
@@ -181,7 +193,7 @@ func Remove(ctx context.Context, owner Owner) error {
 	if !exists {
 		return nil
 	}
-	_, removeErr := OutputAt(ctx, owner.Runtime, owner.Network, "rm", "--force", id)
+	_, removeErr := outputAt(ctx, owner.Runtime, owner.Network, true, "rm", "--force", id)
 	owner.ID = id
 	_, exists, err = Inspect(ctx, owner)
 	if err != nil {

@@ -75,12 +75,28 @@ agent-workflow-runtime exec development -- make test
 
 Launch a fresh provider process. Do not connect it to an existing host-side
 provider/app-server daemon. The launcher preserves the original working
-directory, UID, primary and supplementary groups, environment, authentication
+directory, UID, primary and supplementary groups, caller umask, environment, authentication
 paths, arguments and standard streams. Existing approval and sandbox arguments
 remain applicable. Every invocation has its own guardian and lifetime channel;
 normal completion, cancellation or caller loss stops its descendants without
 stopping the runtime or another invocation. Cleanup uncertainty remains visible.
+The authenticated launch peer supplies its own umask; only its isolated workload
+helper applies it, so concurrent callers cannot change the shared service mask.
+Launch metadata travels through a consumed helper environment entry and a sealed
+root-member memory file. Credentials stay out of helper/guardian arguments and
+persistent membership records; transport entries never reach the workload.
 Extra inherited file descriptors beyond standard streams are rejected.
+
+When stdin and stdout are terminals, standalone `exec` allocates a
+private PTY and gives the workload its own controlling terminal and foreground
+process group. This supports `/dev/tty`, individual keystrokes, Ctrl-C and window
+resize. The frontend temporarily relays the caller's terminal in raw mode and
+restores its saved settings on completion, launch errors and handled signals.
+Terminal diagnostics share that PTY; redirected stderr retains its original
+descriptor and stays separate. Noninteractive streams and pipes retain their
+original descriptors and separation. SIGTERM cancels only that
+invocation; terminal children and detached descendants remain owned by its
+existing guardian.
 
 For an embedding application such as Code Factory:
 
@@ -146,6 +162,15 @@ uncertain members, as well as retained container network namespaces. Container
 creation reserves membership before effects and releases it only after exact
 cleanup. Disconnecting one native caller closes only its lifetime channel.
 Explicit stop owns runtime components only; no broad container cleanup occurs.
+
+Failed admission health still permits inspection and cleanup of an existing
+owned container through its retained identity, generation and endpoint. Recovery
+checks the same daemon/store identity, exact container ID and ownership labels
+before removal, then proves absence before releasing the reservation. The
+unhealthy API proxy permits only recovery reads and deletion by full container
+ID, checking every HTTP request; admission, launch, forwarding and general API
+operations remain blocked. Unavailable API evidence or failed inspection/listing
+retains uncertainty and never counts as absence.
 
 A clean restart or daemon crash produces a new identity/generation and a new
 API socket. Old snapshots and ownership records cannot silently follow it.

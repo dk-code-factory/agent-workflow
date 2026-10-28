@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -287,7 +288,16 @@ func TestReferenceAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var req Request
-	if err := json.Unmarshal([]byte(cmd.Args[2]), &req); err != nil {
+	if len(cmd.Args) != 2 {
+		t.Fatal("request exposed in helper argv", cmd.Args)
+	}
+	var data string
+	for _, value := range cmd.Env {
+		if strings.HasPrefix(value, launchEnvironment+"=") {
+			data = strings.TrimPrefix(value, launchEnvironment+"=")
+		}
+	}
+	if err := json.Unmarshal([]byte(data), &req); err != nil {
 		t.Fatal(err)
 	}
 	if req.Path != "/bin/echo" || req.Dir != cmd.Dir || req.Args[0] != "hello" {
@@ -347,7 +357,8 @@ func TestUnauthorizedPeerAndServerAreRejected(t *testing.T) {
 	s.mu.Unlock()
 	data, _ := json.Marshal(Request{Operation: "status"})
 	if _, err = c.Write(data); err != nil {
-		t.Fatal(err)
+		// Authentication can close the connection before the first request.
+		return
 	}
 	_ = c.SetReadDeadline(time.Now().Add(time.Second))
 	var b [1]byte

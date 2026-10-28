@@ -1,9 +1,12 @@
 """Deterministic release rejection tests; no live services or maintainer keys."""
 import copy
+import fnmatch
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -112,6 +115,58 @@ class IdentityTests(unittest.TestCase):
                 with self.assertRaises(gate.GateError):
                     gate.trusted_signature(['git', 'verify-tag', '--raw', 'unsigned'], [key], [fingerprint])
             run('gpgconf', '--kill', 'gpg-agent')
+
+class WorkerPackagingTests(unittest.TestCase):
+    def test_guardian_builds_from_dockerfile_copy_context(self):
+        root = Path(__file__).resolve().parents[1]
+        rules = [line.strip() for line in (root / '.dockerignore').read_text().splitlines()
+                 if line.strip() and not line.lstrip().startswith('#')]
+        def ignored(path):
+            relative = path.relative_to(root).as_posix()
+            excluded = False
+            for rule in rules:
+                if fnmatch.fnmatchcase(relative, rule.lstrip('!').rstrip('/')):
+                    excluded = not rule.startswith('!')
+            return excluded
+        with tempfile.TemporaryDirectory(prefix='worker-guardian-context-') as directory:
+            context = Path(directory) / 'src'
+            context.mkdir()
+            stage = None
+            copies = 0
+            # Materialize the Dockerfile's restricted sources, so the checkout
+            # cannot accidentally supply a missing transitive package.
+            for line in (root / 'images/worker.Dockerfile').read_text().splitlines():
+                if not line.startswith(('FROM ', 'COPY ')):
+                    continue
+                words = shlex.split(line, comments=True)
+                if words[0] == 'FROM':
+                    stage = words[-1]
+                if stage != 'guardian' or words[0] != 'COPY':
+                    continue
+                self.assertFalse(words[1].startswith('--'), 'unsupported guardian COPY syntax')
+                destination = context / words[-1]
+                self.assertTrue(destination.resolve().is_relative_to(context))
+                for source in words[1:-1]:
+                    source = root / source
+                    for path in [source, *source.parents]:
+                        if path == root:
+                            break
+                        self.assertFalse(ignored(path), f'{path.relative_to(root)} excluded by .dockerignore')
+                    if source.is_dir():
+                        shutil.copytree(source, destination, dirs_exist_ok=True,
+                                        ignore=lambda directory, names: [name for name in names
+                                            if ignored(Path(directory) / name)])
+                    else:
+                        destination.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, destination / source.name)
+                    copies += 1
+            self.assertGreater(copies, 0, 'guardian stage must copy its build sources')
+            result = subprocess.run(
+                ['go', 'build', '-trimpath', '-o', str(Path(directory) / 'guardian'), './cmd/agent-workflow-guardian'],
+                cwd=context, capture_output=True, text=True, timeout=120,
+                env=dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH='amd64',
+                         GOWORK='off', GOPROXY='off', GOTOOLCHAIN='auto'))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 class PublicationTests(unittest.TestCase):
     def test_draft_retry_and_conflicts(self):

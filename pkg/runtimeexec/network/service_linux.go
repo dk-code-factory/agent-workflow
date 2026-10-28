@@ -3,6 +3,7 @@
 package network
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,6 +263,15 @@ func Start(name string) error {
 	return fmt.Errorf("runtime readiness unconfirmed; inspect %s", log.Name())
 }
 func init() {
+	if len(os.Args) == 2 && os.Args[1] == "__network_runtime_client_v1" {
+		data := os.Getenv(launchEnvironment)
+		_ = os.Unsetenv(launchEnvironment)
+		if err := runClient(data); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(125)
+		}
+		os.Exit(0)
+	}
 	if len(os.Args) < 3 {
 		return
 	}
@@ -272,8 +283,6 @@ func init() {
 		err = probeNamespace(os.Args[2])
 	case "__network_runtime_workload_v1":
 		err = workload()
-	case "__network_runtime_client_v1":
-		err = runClient(os.Args[2])
 	case "__network_runtime_daemon_v1":
 		err = serve(os.Args[2])
 	case "__network_runtime_keeper_v1":
@@ -659,6 +668,7 @@ func (s *service) proxyAPI(listener *net.UnixListener) {
 			healthy := s.status.Healthy && !s.stopping
 			s.mu.Unlock()
 			if !healthy {
+				s.proxyCleanup(c)
 				return
 			}
 			upstream, err := net.DialTimeout("unix", filepath.Join(s.run, "api.sock"), 2*time.Second)
@@ -680,6 +690,60 @@ func (s *service) proxyAPI(listener *net.UnixListener) {
 		}()
 	}
 }
+
+// Unhealthy generations retain only the HTTP operations used by exact owned
+// reconciliation. Parse every request: a keepalive connection is not permission
+// to create, start, exec, or otherwise admit new work after a successful read.
+var cleanupVersion = regexp.MustCompile(`^/v[0-9]+(?:\.[0-9]+)*/(?:libpod/)?`)
+
+func cleanupRoute(method, path string) bool {
+	path = cleanupVersion.ReplaceAllString(path, "/")
+	if method == http.MethodGet && (path == "/_ping" || path == "/info" || path == "/containers/json") {
+		return true
+	}
+	if !strings.HasPrefix(path, "/containers/") {
+		return false
+	}
+	object := strings.TrimPrefix(path, "/containers/")
+	if method == http.MethodGet && strings.HasSuffix(object, "/json") {
+		name := strings.TrimSuffix(object, "/json")
+		return name != "" && !strings.ContainsAny(name, "/%") && name != "." && name != ".."
+	}
+	return method == http.MethodDelete && len(object) == 64 && hexID(object)
+}
+
+func (s *service) proxyCleanup(c *net.UnixConn) {
+	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(s.run, "api.sock"))
+	}}
+	defer transport.CloseIdleConnections()
+	reader := bufio.NewReader(c)
+	for {
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		if req.Header.Get("Upgrade") != "" || strings.Contains(strings.ToLower(req.Header.Get("Connection")), "upgrade") || req.URL.RawPath != "" || !cleanupRoute(req.Method, req.URL.Path) || req.ContentLength != 0 || len(req.TransferEncoding) != 0 {
+			req.Body.Close()
+			_, _ = io.WriteString(c, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+			return
+		}
+		req.RequestURI = ""
+		req.URL.Scheme, req.URL.Host = "http", "podman"
+		response, err := transport.RoundTrip(req)
+		req.Body.Close()
+		if err != nil {
+			return
+		}
+		err = response.Write(c)
+		response.Body.Close()
+		if err != nil || req.Close {
+			return
+		}
+	}
+}
+
 func (s *service) reconcile() {
 	for id, m := range s.status.Members {
 		if m.State != "cleaned" {
@@ -741,6 +805,11 @@ func (s *service) handle(c *net.UnixConn) {
 	if req.Operation != "status" && req.Reference != s.status.Reference {
 		s.mu.Unlock()
 		respond(Response{}, errors.New("network runtime identity/generation changed"))
+		return
+	}
+	if req.Operation == "cleanup-check" {
+		s.mu.Unlock()
+		respond(Response{}, nil)
 		return
 	}
 	if req.Operation == "release" {
@@ -886,7 +955,7 @@ func (s *service) handle(c *net.UnixConn) {
 			return
 		}
 		launch := memberLaunch{Request: req, UID: cred.Uid, GID: cred.Gid, Keeper: s.keeper.Process.Pid, Binary: s.binary, Receipt: filepath.Join(s.dir, "member-"+req.ID+".done")}
-		launch.Groups, err = peerGroups(cred)
+		launch.Groups, launch.Request.Umask, err = peerAuthority(cred)
 		if err != nil {
 			s.mu.Unlock()
 			respond(Response{}, err)
@@ -1092,6 +1161,10 @@ func workload() error {
 		return err
 	}
 	requestFile.Close()
+	if req.Umask < 0 || req.Umask > 0777 {
+		return errors.New("invalid caller umask")
+	}
+	unix.Umask(req.Umask)
 	if req.Dir != "" {
 		if err := os.Chdir(req.Dir); err != nil {
 			return err
@@ -1103,7 +1176,11 @@ func workload() error {
 	}
 	// The existing guardian retains fd3, then marks it close-on-exec before
 	// launching the workload. Descendants therefore cannot prolong membership.
-	return syscall.Exec(binary, append([]string{binary, "__agent_workflow_guardian_v1", "3", req.Path}, req.Args...), req.Env)
+	args := []string{binary, "__agent_workflow_guardian_v1", "3"}
+	if req.Terminal {
+		args = append(args, "--terminal")
+	}
+	return syscall.Exec(binary, append(append(args, req.Path), req.Args...), req.Env)
 }
 
 func cloneStatus(in Status) Status {
@@ -1193,13 +1270,14 @@ func probeNamespace(run string) error {
 	return errors.New("runtime DNS unavailable")
 }
 
-func peerGroups(cred *unix.Ucred) ([]uint32, error) {
+func peerAuthority(cred *unix.Ucred) ([]uint32, int, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", cred.Pid))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var groups []uint32
-	uidOK, gidOK, groupsOK := false, false, false
+	var mask uint64
+	uidOK, gidOK, groupsOK, maskOK := false, false, false, false
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -1211,19 +1289,23 @@ func peerGroups(cred *unix.Ucred) ([]uint32, error) {
 		if fields[0] == "Gid:" && len(fields) >= 3 {
 			gidOK = fields[2] == strconv.FormatUint(uint64(cred.Gid), 10)
 		}
+		if fields[0] == "Umask:" {
+			mask, err = strconv.ParseUint(fields[1], 8, 9)
+			maskOK = err == nil
+		}
 		if fields[0] == "Groups:" {
 			groupsOK = true
 			for _, field := range fields[1:] {
 				gid, e := strconv.ParseUint(field, 10, 32)
 				if e != nil {
-					return nil, e
+					return nil, 0, e
 				}
 				groups = append(groups, uint32(gid))
 			}
 		}
 	}
-	if !uidOK || !gidOK || !groupsOK {
-		return nil, errors.New("caller credential changed during admission")
+	if !uidOK || !gidOK || !groupsOK || !maskOK {
+		return nil, 0, errors.New("caller credential or umask unavailable during admission")
 	}
-	return groups, nil
+	return groups, int(mask), nil
 }

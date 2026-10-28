@@ -43,13 +43,28 @@ func (r *Runner) RunnerForRoles(raw json.RawMessage) (workflows.AgentRunner, err
 	return &Runner{Config: cfg, Workspace: r.Workspace}, nil
 }
 
-// Codex's shell environment filter must retain the selected endpoint even with
-// a provider-owned include/exclude policy. These are execution settings, never
-// credentials or additional approval/sandbox authority.
+// Codex's explicit shell environment overrides retain the selected endpoint.
+// These are execution settings, never credentials or additional
+// approval/sandbox authority.
 func networkShellArgs(e Execution) []string {
 	if e.Network == nil || e.Mode == "container" {
 		return nil
 	}
-	value := "shell_environment_policy.set={DOCKER_HOST=" + strconv.Quote(e.Network.Endpoint) + ",CONTAINER_HOST=" + strconv.Quote(e.Network.Endpoint) + ",AGENT_WORKFLOW_NETWORK_RUNTIME=" + strconv.Quote(e.Network.Name) + "}"
-	return []string{"--config", value}
+	// Codex applies CLI overrides in order. Override individual keys after the
+	// caller's args so a configured set table retains its unrelated values.
+	return []string{
+		"--config", "shell_environment_policy.set.DOCKER_HOST=" + strconv.Quote(e.Network.Endpoint),
+		"--config", "shell_environment_policy.set.CONTAINER_HOST=" + strconv.Quote(e.Network.Endpoint),
+		"--config", "shell_environment_policy.set.AGENT_WORKFLOW_NETWORK_RUNTIME=" + strconv.Quote(e.Network.Name),
+	}
+}
+
+// providerArgs retains explicit provider configuration before enforcing the
+// admitted endpoint keys. Other settings, including authority, remain explicit.
+func providerArgs(agent Agent) []string {
+	args := append([]string(nil), agent.Args...)
+	if agent.Provider == "codex" || agent.Provider == "codex-cli" || agent.Provider == "codex-app-server" {
+		args = append(args, networkShellArgs(agent.Execution)...)
+	}
+	return args
 }

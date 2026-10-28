@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
@@ -16,6 +18,9 @@ import (
 
 func main() {
 	if err := run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -78,6 +83,8 @@ func run() error {
 		if len(args) == 0 {
 			return fmt.Errorf("exec requires a command")
 		}
+		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer cancel()
 		policy, err := runtimeexec.PinPolicy(ctx, runtimeexec.Policy{NetworkRuntime: name})
 		if err != nil {
 			return err
@@ -86,17 +93,17 @@ func run() error {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		restore, err := prepareTerminal(cmd)
+		if err != nil {
+			return err
+		}
+		defer restore()
 		stop, err := runtimeexec.SupervisePolicy(ctx, cmd, policy)
 		if err != nil {
 			return err
 		}
 		defer stop()
-		err = cmd.Run()
-		if exit, ok := err.(*exec.ExitError); ok {
-			stop()
-			os.Exit(exit.ExitCode())
-		}
-		return err
+		return cmd.Run()
 	default:
 		return fmt.Errorf("unknown operation %s", op)
 	}
