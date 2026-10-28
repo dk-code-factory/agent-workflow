@@ -661,8 +661,9 @@ for (const choice of ['keep-local', 'use-incoming'] as const) {
   });
 }
 
-for (const newerFailure of [false, true]) {
-  test(`Keep local observes a completed choice before same-source restaging${newerFailure ? ' and preserves a newer failure' : ''}`, async ({ page }, testInfo) => {
+for (const [entrypoint, nested] of [['handle', 'none'], ['handle', 'same'], ['button', 'none'], ['button', 'same'], ['button', 'different'], ['button', 'success']] as const) {
+  test(`${entrypoint} Keep local observes a completed choice before same-source restaging (${nested})`, async ({ page }, testInfo) => {
+    const newerFailure = nested === 'same' || nested === 'different';
     const ui = await rawInspector(page, false, false);
     await page.evaluate(() => (window as any).first.update({ onSave: () => { throw new Error('Existing save failure'); } }));
     await ui.getByRole('button', { name: 'Save', exact: true }).click();
@@ -675,7 +676,7 @@ for (const newerFailure of [false, true]) {
     }, candidate);
     await ui.getByRole('button', { name: 'Use incoming', exact: true }).click();
     await expect(ui.locator('.aw-error')).toContainText('Custom discard failed');
-    const transition = await page.evaluate(({ candidate, newerFailure }) => {
+    const transition = await page.evaluate(({ candidate, entrypoint, nested }) => {
       const host = (window as any); const states: any[] = []; let handled = false;
       const original = host.first.getSnapshot();
       host.first.update({ onChange: (current: any) => {
@@ -688,23 +689,36 @@ for (const newerFailure of [false, true]) {
         input.value = 'Hello'; input.dispatchEvent(new Event('input', { bubbles: true }));
         input.value = 'Fresh protected buffer'; input.dispatchEvent(new Event('input', { bubbles: true }));
         host.first.update({ source: candidate });
-        if (newerFailure) {
-          // The fresh failure deliberately has the same text as the old one.
+        if (nested !== 'none') {
+          host.raw.failDiscard = false;
+          host.raw.onDiscard = () => {
+            host.nestedDiscardMessage = nested === 'same' ? 'Custom discard failed' : 'New nested discard failure';
+            if (nested !== 'success') throw new Error(host.nestedDiscardMessage);
+          };
           (document.querySelector('#a .aw-source-replacement button:last-child') as HTMLButtonElement).click();
         }
       } });
-      host.first.resolveSourceReplacement('keep-local');
-      return { states, original, current: host.first.getSnapshot(), sameDOM: host.retainedRaw === document.querySelector('#a input[aria-label="Raw prompt"]'), cleanups: host.raw.cleanups, discards: host.raw.discards };
-    }, { candidate, newerFailure });
+      if (entrypoint === 'button') (document.querySelector('#a .aw-source-replacement button:first-child') as HTMLButtonElement).click();
+      else host.first.resolveSourceReplacement('keep-local');
+      return { states, original, current: host.first.getSnapshot(), nestedDiscardMessage: host.nestedDiscardMessage, sameDOM: host.retainedRaw === document.querySelector('#a input[aria-label="Raw prompt"]'), cleanups: host.raw.cleanups, discards: host.raw.discards };
+    }, { candidate, entrypoint, nested });
     await testInfo.attach('same-source-transition', { body: JSON.stringify(transition, null, 2), contentType: 'application/json' });
     expect(transition.states).toContainEqual({ candidate: undefined, protected: false });
+    expect(transition.discards).toBe(nested === 'none' ? 1 : 2);
+    if (nested !== 'none') expect(transition.nestedDiscardMessage).toBe(nested === 'same' ? 'Custom discard failed' : 'New nested discard failure');
+    if (nested === 'success') {
+      await expect(ui.locator('.aw-error')).toHaveCount(0);
+      await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toHaveCount(0);
+      await expect(raw).toHaveValue('Same incoming source');
+      expect(await snapshot(page)).toMatchObject({ source: candidate, revision: before.revision + 1, hasLocalChanges: false });
+      return;
+    }
     expect(transition.sameDOM).toBe(true); expect(transition.cleanups).toBe(0);
-    expect(transition.discards).toBe(newerFailure ? 2 : 1);
     await expect(raw).toHaveValue('Fresh protected buffer');
     await expect(ui.getByRole('region', { name: 'Incoming source replacement' })).toBeVisible();
     expect(await snapshot(page)).toMatchObject({ source: before.source, revision: before.revision, canUndo: before.canUndo, canRedo: before.canRedo, hasLocalChanges: true, pendingSourceReplacement: candidate, saveError: before.saveError });
     if (!newerFailure) await expect(ui.locator('.aw-error')).not.toContainText('Custom discard failed');
-    await expect(ui.locator('.aw-error')).toContainText(newerFailure ? 'Custom discard failed' : 'Existing save failure');
+    await expect(ui.locator('.aw-error')).toContainText(newerFailure ? (nested === 'same' ? 'Custom discard failed' : 'New nested discard failure') : 'Existing save failure');
     expect((await snapshot(page)).saveError).toContain('Existing save failure');
   });
 }

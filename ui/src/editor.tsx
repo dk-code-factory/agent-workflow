@@ -99,9 +99,12 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       setError(value => value === failure.message ? '' : value);
     }
   }), [store]);
+  const latestAttempt = useRef(0);
   const attempt = (fn: () => void, replacement = false) => {
+    const currentAttempt = ++latestAttempt.current;
     discardFailure.current = undefined;
-    try { fn(); setError(''); }
+    // A synchronous host callback may start a newer UI attempt and show its error.
+    try { fn(); if (currentAttempt === latestAttempt.current) setError(''); }
     catch (e) {
       const message = String(e); const current = store.getSnapshot();
       if (replacement) discardFailure.current = { revision: current.revision, candidate: current.pendingSourceReplacement, message };
