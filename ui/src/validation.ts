@@ -299,6 +299,9 @@ function validateWorkflow(w: Workflow, add: Add) {
           for (const key of Object.keys(params)) if (!allowed.includes(key)) add('action', `Unsupported controller parameter "${key}"`, [...sp, 'with', key]);
           const required = step.uses === 'git/commit' ? ['path', 'message'] : step.uses === 'github/pr' ? ['path', 'commit', 'title'] : step.uses === 'workspace/integrate' ? ['path'] : [];
           for (const key of required) if (params[key] == null) add('action', `Action requires ${key}`, [...sp, 'with', key]);
+        } else if (step.uses === 'input/wait') {
+          for (const key of Object.keys(params)) if (!['prompt', 'evidence-id', 'payload'].includes(key)) add('input-wait', `Unsupported input/wait parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of ['prompt', 'evidence-id']) if (typeof params[key] !== 'string' || !params[key].trim()) add('input-wait', `input/wait requires string ${key}`, [...sp, 'with', key]);
         } else if (/^action\/[A-Za-z_][A-Za-z0-9_-]*$/.test(step.uses ?? '')) {
           add('host-action', 'Registered action availability and typed schemas require host runtime validation', [...sp, 'uses'], undefined, 'host', 'info');
         } else {
