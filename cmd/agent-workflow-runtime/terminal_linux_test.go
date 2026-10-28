@@ -3,8 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,6 +26,11 @@ import (
 // and PTYs. The test runner never supplies its terminal to the fixture.
 func TestTerminalFixture(t *testing.T) {
 	switch os.Getenv("AW_TERMINAL_FIXTURE") {
+	case "flood-workload":
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 128*1024))
+		os.Exit(0)
+	case "drain-frontend":
+		os.Exit(terminalDrainFrontend())
 	case "frontend":
 		os.Exit(terminalFrontend())
 	case "workload":
@@ -30,7 +38,7 @@ func TestTerminalFixture(t *testing.T) {
 	case "pipes":
 		cmd := exec.Command("sh", "-c", "printf out; printf err >&2")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		finish, err := prepareTerminal(cmd)
+		finish, err := prepareTerminal(context.Background(), func() {}, cmd)
 		if err != nil {
 			os.Exit(120)
 		}
@@ -45,7 +53,9 @@ func TestTerminalFixture(t *testing.T) {
 }
 
 func terminalFrontend() int {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stopSignals()
+	ctx, cancel := context.WithCancel(signalCtx)
 	defer cancel()
 	lifeR, lifeW, err := os.Pipe()
 	if err != nil {
@@ -61,7 +71,7 @@ func terminalFrontend() int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error { return lifeW.Close() }
 	cmd.WaitDelay = 5 * time.Second
-	finish, err := prepareTerminal(cmd)
+	finish, err := prepareTerminal(ctx, cancel, cmd)
 	if err != nil {
 		return 121
 	}
@@ -73,6 +83,10 @@ func terminalFrontend() int {
 		}
 	}
 	err = cmd.Run()
+	if drainErr := finish(); drainErr != nil {
+		fmt.Fprintln(os.Stderr, drainErr)
+		return 122
+	}
 	if exit, ok := err.(*exec.ExitError); ok {
 		return exit.ExitCode()
 	}
@@ -348,7 +362,7 @@ func TestTerminalLaunchFailureRestoresCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(filepath.Join(t.TempDir(), "missing"))
-	finish, err := bridgeTerminal(cmd, slave, slave)
+	finish, err := bridgeTerminal(context.Background(), func() {}, cmd, slave, slave)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,9 +370,322 @@ func TestTerminalLaunchFailureRestoresCaller(t *testing.T) {
 	if cmd.Run() == nil {
 		t.Fatal("missing command succeeded")
 	}
-	finish()
+	if err := finish(); err != nil {
+		t.Fatalf("launch failure terminal cleanup: %v", err)
+	}
 	current, err := unix.IoctlGetTermios(terminalFD(slave), unix.TCGETS)
 	if err != nil || !reflect.DeepEqual(current, saved) {
 		t.Fatalf("launch error did not restore caller termios: %v", err)
+	}
+}
+
+const terminalFinalOutput = "accepted final terminal output"
+
+// The output pipe is owned by this test. Filling its bounded kernel buffer
+// blocks the relay without changing any caller descriptor flags.
+func fullTerminalOutputPipe(t *testing.T) (*os.File, *os.File, string) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close(); writer.Close() })
+	capacity, err := unix.FcntlInt(uintptr(terminalFD(writer)), unix.F_GETPIPE_SZ, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filler := strings.Repeat(".", capacity)
+	if _, err := io.WriteString(writer, filler); err != nil {
+		t.Fatal(err)
+	}
+	return reader, writer, filler
+}
+
+func startTerminalDrain(t *testing.T, output *os.File) (context.CancelFunc, func() error, *os.File, *unix.Termios) {
+	t.Helper()
+	return startTerminalDrainExit(t, output, 0)
+}
+
+func startTerminalDrainExit(t *testing.T, output *os.File, code int) (context.CancelFunc, func() error, *os.File, *unix.Termios) {
+	t.Helper()
+	master, input, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { master.Close(); input.Close() })
+	saved, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.Command("sh", "-c", "printf '%s' '"+terminalFinalOutput+"'; exit "+strconv.Itoa(code))
+	finish, err := bridgeTerminal(ctx, cancel, cmd, input, output)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); output.Close(); _ = finish() })
+	err = cmd.Run()
+	if code == 0 && err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != code {
+			t.Fatalf("workload exit = %v, want %d", err, code)
+		}
+	}
+	return cancel, finish, input, saved
+}
+
+func awaitTerminalDrain(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal drain did not finish within 5 seconds")
+		return nil
+	}
+}
+
+func TestTerminalDrainWaitsForBackpressure(t *testing.T) {
+	for _, code := range []int{0, 37, 125} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			reader, writer, filler := fullTerminalOutputPipe(t)
+			_, finish, input, saved := startTerminalDrainExit(t, writer, code)
+			done := make(chan error, 1)
+			go func() { done <- finish() }()
+			select {
+			case err := <-done:
+				t.Fatalf("drain returned before output resumed: %v", err)
+			case <-time.After(1200 * time.Millisecond):
+			}
+			current, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+			if err != nil || !reflect.DeepEqual(current, saved) {
+				t.Fatalf("caller termios not restored while drain blocked: %v", err)
+			}
+			if err := reader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			want := filler + terminalFinalOutput
+			got := make([]byte, len(want))
+			if _, err := io.ReadFull(reader, got); err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("drained output differs: got %d bytes, want %d", len(got), len(want))
+			}
+			if err := awaitTerminalDrain(t, done); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish(); err != nil {
+				t.Fatalf("repeated cleanup: %v", err)
+			}
+		})
+	}
+}
+
+func TestTerminalDrainCancellationReturnsError(t *testing.T) {
+	_, writer, _ := fullTerminalOutputPipe(t)
+	cancel, finish, input, saved := startTerminalDrain(t, writer)
+	done := make(chan error, 1)
+	go func() { done <- finish() }()
+	cancel()
+	err := awaitTerminalDrain(t, done)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("blocked drain cancellation = %v", err)
+	}
+	if repeated := finish(); repeated != err {
+		t.Fatalf("cleanup error changed: %v, then %v", err, repeated)
+	}
+	current, termErr := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if termErr != nil || !reflect.DeepEqual(current, saved) {
+		t.Fatalf("caller termios not restored after cancellation: %v", termErr)
+	}
+}
+
+func TestTerminalDrainReportsDestinationEIO(t *testing.T) {
+	master, output, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	master.Close() // Writes to this owned slave now fail with EIO.
+	_, finish, _, _ := startTerminalDrain(t, output)
+	done := make(chan error, 1)
+	go func() { done <- finish() }()
+	if err := awaitTerminalDrain(t, done); !errors.Is(err, unix.EIO) {
+		t.Fatalf("destination EIO was hidden: %v", err)
+	}
+}
+
+// This frontend must exit despite its output goroutine remaining blocked in a
+// caller-owned writer. The parent owns that writer and releases it after exit.
+func terminalDrainFrontend() int {
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
+	output := os.NewFile(3, "owned-blocked-output")
+	defer output.Close()
+	cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+terminalFinalOutput+"'")
+	if os.Getenv("AW_TERMINAL_DRAIN") == "failed-output" {
+		self, _ := os.Executable()
+		cmd = exec.CommandContext(ctx, self, "-test.run=^TestTerminalFixture$")
+		cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE=flood-workload")
+	}
+	finish, err := bridgeTerminal(ctx, cancel, cmd, os.Stdin, output)
+	if err != nil {
+		return 120
+	}
+	defer finish()
+	runErr := cmd.Run()
+	if runErr != nil && cmd.Process == nil {
+		cancel()
+	}
+	fmt.Println("ACCEPTED")
+	if err := finish(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 122
+	}
+	if runErr != nil {
+		return 121
+	}
+	return 0
+}
+
+func TestTerminalCancelledFrontendExitsWithBlockedOutput(t *testing.T) {
+	_, writer, _ := fullTerminalOutputPipe(t)
+	master, input, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	saved, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readyR.Close()
+	defer readyW.Close()
+	self, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "-test.run=^TestTerminalFixture$")
+	cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE=drain-frontend")
+	cmd.Stdin, cmd.Stdout = input, readyW
+	cmd.ExtraFiles = []*os.File{writer}
+	var diagnostics bytes.Buffer
+	cmd.Stderr = &diagnostics
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		cancel()
+		_ = cmd.Process.Kill()
+	})
+	if err := readyR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	accepted := make([]byte, len("ACCEPTED\n"))
+	if _, err := io.ReadFull(readyR, accepted); err != nil || string(accepted) != "ACCEPTED\n" {
+		t.Fatalf("frontend did not accept final output: %q, %v", accepted, err)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err = awaitTerminalDrain(t, done)
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 122 {
+		t.Fatalf("cancelled frontend exit = %v; diagnostics %q", err, diagnostics.String())
+	}
+	if !strings.Contains(diagnostics.String(), "drain terminal output: context canceled") {
+		t.Fatalf("missing explicit drain failure: %q", diagnostics.String())
+	}
+	current, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if err != nil || !reflect.DeepEqual(current, saved) {
+		t.Fatalf("cancelled frontend did not restore termios: %v", err)
+	}
+}
+
+func TestTerminalDestinationFailureCancelsLargeOutputFrontend(t *testing.T) {
+	master, input, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	saved, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputMaster, output, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputMaster.Close()
+	defer output.Close()
+	self, _ := os.Executable()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "-test.run=^TestTerminalFixture$")
+	cmd.Env = append(os.Environ(), "AW_TERMINAL_FIXTURE=drain-frontend", "AW_TERMINAL_DRAIN=failed-output")
+	cmd.Stdin = input
+	cmd.ExtraFiles = []*os.File{output}
+	var diagnostics bytes.Buffer
+	cmd.Stderr = &diagnostics
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() { cancel(); _ = cmd.Process.Kill() })
+	err = awaitTerminalDrain(t, done)
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 122 {
+		t.Fatalf("failed-output frontend exit = %v; diagnostics %q", err, diagnostics.String())
+	}
+	if !strings.Contains(diagnostics.String(), "drain terminal output:") || !strings.Contains(diagnostics.String(), "input/output error") {
+		t.Fatalf("missing original destination EIO: %q", diagnostics.String())
+	}
+	current, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
+	if err != nil || !reflect.DeepEqual(current, saved) {
+		t.Fatalf("failed-output frontend did not restore termios: %v", err)
+	}
+}
+
+func TestTerminalFailedLaunchWithRetainedSlaveBoundsCleanup(t *testing.T) {
+	master, input, err := openTerminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.Command(filepath.Join(t.TempDir(), "missing"))
+	finish, err := bridgeTerminal(ctx, cancel, cmd, input, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	fd, err := unix.Dup(terminalFD(cmd.Stdout.(*os.File)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := os.NewFile(uintptr(fd), "owned-retained-slave")
+	defer retained.Close()
+	if err := cmd.Run(); err == nil {
+		t.Fatal("missing workload succeeded")
+	}
+	cancel() // The CLI cancels failed launch/supervision before cleanup.
+	done := make(chan error, 1)
+	go func() { done <- finish() }()
+	if err := awaitTerminalDrain(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("retained-slave cleanup = %v", err)
 	}
 }

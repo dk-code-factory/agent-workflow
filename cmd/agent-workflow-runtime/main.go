@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -25,7 +26,7 @@ func main() {
 		os.Exit(1)
 	}
 }
-func run() error {
+func run() (runErr error) {
 	if len(os.Args) < 3 {
 		return fmt.Errorf("usage: agent-workflow-runtime prepare|start|exec|status|forward|stop NAME [options]")
 	}
@@ -83,7 +84,9 @@ func run() error {
 		if len(args) == 0 {
 			return fmt.Errorf("exec requires a command")
 		}
-		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stopSignals()
+		ctx, cancel := context.WithCancel(signalCtx)
 		defer cancel()
 		policy, err := runtimeexec.PinPolicy(ctx, runtimeexec.Policy{NetworkRuntime: name})
 		if err != nil {
@@ -93,11 +96,18 @@ func run() error {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		restore, err := prepareTerminal(cmd)
+		restore, err := prepareTerminal(ctx, cancel, cmd)
 		if err != nil {
 			return err
 		}
-		defer restore()
+		defer func() {
+			if runErr != nil && cmd.Process == nil {
+				cancel()
+			}
+			if err := restore(); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
+		}()
 		stop, err := runtimeexec.SupervisePolicy(ctx, cmd, policy)
 		if err != nil {
 			return err

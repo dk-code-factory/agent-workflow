@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -221,14 +222,22 @@ func Wrap(cmd *exec.Cmd, ref Reference, id string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if cmd.Dir == "" {
-		cmd.Dir, err = os.Getwd()
+	// Capture native PWD and duplicate-key precedence before changing Dir/Env.
+	effectiveEnv := cmd.Environ()
+	if !filepath.IsAbs(cmd.Dir) {
+		cwd, err := os.Getwd()
 		if err != nil {
 			return nil, err
 		}
+		if cmd.Dir == "" {
+			cmd.Dir = cwd
+		} else {
+			// Keep symlink/.. components for the kernel to resolve in order.
+			cmd.Dir = strings.TrimSuffix(cwd, string(os.PathSeparator)) + string(os.PathSeparator) + cmd.Dir
+		}
 	}
-	req := Request{Operation: "exec", Reference: ref, ID: id, Path: cmd.Path, Args: append([]string(nil), cmd.Args[1:]...), Env: Environment(cmd.Env, ref), Dir: cmd.Dir}
-	for _, value := range cmd.Environ() {
+	req := Request{Operation: "exec", Reference: ref, ID: id, Path: cmd.Path, Args: append([]string(nil), cmd.Args[1:]...), Env: Environment(effectiveEnv, ref), Dir: cmd.Dir}
+	for _, value := range effectiveEnv {
 		if value == "AGENT_WORKFLOW_NETWORK_TERMINAL=1" {
 			req.Terminal = true
 		}
@@ -237,7 +246,7 @@ func Wrap(cmd *exec.Cmd, ref Reference, id string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.Env = Environment(cmd.Env, ref)
+	cmd.Env = Environment(effectiveEnv, ref)
 	cmd.ExtraFiles = []*os.File{payload}
 	cmd.Path = executable
 	cmd.Err = nil

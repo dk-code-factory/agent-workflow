@@ -2,6 +2,11 @@
 
 package main
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
-func prepareTerminal(cmd *exec.Cmd) (func(), error) { return func() {}, nil }
+func prepareTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd) (func() error, error) {
+	return func() error { return nil }, nil
+}

@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,13 +19,13 @@ import (
 
 // prepareTerminal only adapts an interactive standalone launch. Pipes retain
 // their original descriptors and stream separation.
-func prepareTerminal(cmd *exec.Cmd) (func(), error) {
+func prepareTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd) (func() error, error) {
 	for _, f := range []*os.File{os.Stdin, os.Stdout} {
 		if _, err := unix.IoctlGetTermios(terminalFD(f), unix.TCGETS); err != nil {
-			return func() {}, nil
+			return func() error { return nil }, nil
 		}
 	}
-	return bridgeTerminal(cmd, os.Stdin, os.Stdout)
+	return bridgeTerminal(ctx, cancel, cmd, os.Stdin, os.Stdout)
 }
 
 func openTerminal() (*os.File, *os.File, error) {
@@ -49,7 +51,7 @@ func openTerminal() (*os.File, *os.File, error) {
 
 // bridgeTerminal owns only its new PTY. The caller's saved termios is restored
 // before returning to the shell, including launch errors and handled signals.
-func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
+func bridgeTerminal(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, input, output *os.File) (func() error, error) {
 	saved, err := unix.IoctlGetTermios(terminalFD(input), unix.TCGETS)
 	if err != nil {
 		return nil, err
@@ -64,7 +66,7 @@ func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
 		slave.Close()
 		return nil, err
 	}
-	fail := func(err error) (func(), error) {
+	fail := func(err error) (func() error, error) {
 		master.Close()
 		slave.Close()
 		wakeR.Close()
@@ -98,15 +100,12 @@ func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
 			cmd.Stderr = slave
 		}
 	}
-	if cmd.Env == nil {
-		cmd.Env = os.Environ()
-	}
-	cmd.Env = append(cmd.Env, "AGENT_WORKFLOW_NETWORK_TERMINAL=1")
+	cmd.Env = append(cmd.Environ(), "AGENT_WORKFLOW_NETWORK_TERMINAL=1")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGWINCH)
 	done := make(chan struct{})
 	inputDone := make(chan struct{})
-	outputDone := make(chan struct{})
+	outputDone := make(chan error, 1)
 	resizeDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
@@ -129,7 +128,13 @@ func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
 			}
 		}
 	}()
-	go func() { _, _ = io.Copy(output, master); close(outputDone) }()
+	go func() {
+		_, err := io.Copy(output, terminalOutput{master})
+		outputDone <- err
+		if err != nil {
+			cancel()
+		}
+	}()
 	go func() {
 		defer close(resizeDone)
 		for {
@@ -142,7 +147,8 @@ func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
 		}
 	}()
 	var once sync.Once
-	return func() {
+	var restoreErr error
+	return func() error {
 		once.Do(func() {
 			signal.Stop(signals)
 			close(done)
@@ -150,17 +156,52 @@ func bridgeTerminal(cmd *exec.Cmd, input, output *os.File) (func(), error) {
 			wakeW.Close()
 			<-inputDone
 			wakeR.Close()
-			_ = unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, saved)
+			if err := unix.IoctlSetTermios(terminalFD(input), unix.TCSETS, saved); err != nil {
+				restoreErr = fmt.Errorf("restore caller terminal: %w", err)
+			}
 			slave.Close()
 			// Closing the final slave drains buffered output before EIO on
 			// the master. Guardian cleanup has already closed remote copies.
+			var drainErr error
 			select {
-			case <-outputDone:
-			case <-time.After(time.Second):
+			case drainErr = <-outputDone:
+			case <-ctx.Done():
+				// Allow a responsive consumer to finish even when cancellation
+				// preceded the final EOF. Only cancellation bounds this wait;
+				// ordinary output backpressure must never truncate success.
+				timer := time.NewTimer(time.Second)
+				defer timer.Stop()
+				select {
+				case drainErr = <-outputDone:
+				case <-timer.C:
+					// Prefer a completed drain at the deadline, too. Closing
+					// master cannot interrupt a caller writer.
+					select {
+					case drainErr = <-outputDone:
+					default:
+						drainErr = ctx.Err()
+					}
+				}
+			}
+			if drainErr != nil {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("drain terminal output: %w", drainErr))
 			}
 			master.Close()
 		})
+		return restoreErr
 	}, nil
+}
+
+// Linux PTYs report EIO when their final slave closes. Normalize only reads:
+// an EIO from the caller output is a failed drain, not a terminal EOF.
+type terminalOutput struct{ file *os.File }
+
+func (r terminalOutput) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
+	if errors.Is(err, unix.EIO) {
+		err = io.EOF
+	}
+	return n, err
 }
 
 func terminalInput(master, wake *os.File, data []byte) error {
