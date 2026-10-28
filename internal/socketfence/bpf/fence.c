@@ -16,6 +16,7 @@ struct kernfs_node { __u64 id; } CORE;
 struct cgroup { struct kernfs_node *kn; } CORE;
 struct sock_cgroup_data { struct cgroup *cgroup; } CORE;
 struct sock { struct sock_cgroup_data sk_cgrp_data; } CORE;
+struct socket { struct sock *sk; } CORE;
 struct super_block { __u32 s_dev; } CORE;
 struct inode { unsigned long i_ino; struct super_block *i_sb; } CORE;
 struct dentry { struct inode *d_inode; } CORE;
@@ -70,7 +71,14 @@ static __attribute__((always_inline)) inline int check(struct sock *other, int r
 SEC("lsm/unix_stream_connect")
 int fence_stream(__u64 *ctx) { return check((struct sock *)ctx[1], (int)ctx[3]); }
 SEC("lsm/unix_may_send")
-int fence_datagram(__u64 *ctx) { return check((struct sock *)ctx[1], (int)ctx[2]); }
+int fence_datagram(__u64 *ctx) {
+    int ret = (int)ctx[2];
+    if (ret) return ret;
+    struct socket *other = (struct socket *)ctx[1];
+    struct sock *peer = 0;
+    READ(peer, other->sk);
+    return check(peer, 0);
+}
 char LICENSE[] SEC("license") = "GPL";
 #ifdef FENCE_SOURCE_SHA
 const char source_digest[] SEC(".note.fence") = FENCE_SOURCE_SHA;

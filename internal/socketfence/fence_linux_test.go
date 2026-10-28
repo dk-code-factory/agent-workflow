@@ -244,26 +244,113 @@ func TestInstallRejectsChangedEnrollmentBeforeKernelSetup(t *testing.T) {
 	}
 }
 
+func TestGenerationDirectoryRollback(t *testing.T) {
+	for _, existing := range []string{"cgroup", "pins"} {
+		t.Run("existing-"+existing, func(t *testing.T) {
+			dir := t.TempDir()
+			cgroup, pins := filepath.Join(dir, "cgroup"), filepath.Join(dir, "pins")
+			retained := filepath.Join(dir, existing)
+			if err := os.Mkdir(retained, 0700); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(retained, "retained")
+			if err := os.WriteFile(marker, []byte("existing generation"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := createGenerationDirectories(cgroup, pins); err == nil {
+				t.Fatal("existing generation adopted")
+			}
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatal("existing generation changed:", err)
+			}
+			if existing == "pins" {
+				if _, err := os.Stat(cgroup); !os.IsNotExist(err) {
+					t.Fatalf("pin creation failure leaked cgroup: %v", err)
+				}
+			}
+		})
+	}
+	for _, occupied := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback-occupied-%v", occupied), func(t *testing.T) {
+			dir := t.TempDir()
+			cgroup, pins := filepath.Join(dir, "cgroup"), filepath.Join(dir, "pins")
+			rollback, err := createGenerationDirectories(cgroup, pins)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if occupied {
+				// A regular directory cannot emulate kernel cgroup membership.
+				// An occupied leaf instead proves failed removal retains its pins.
+				if err := os.WriteFile(filepath.Join(cgroup, "member"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rollback()
+			for _, path := range []string{cgroup, pins} {
+				_, err := os.Stat(path)
+				if occupied && err != nil || !occupied && !os.IsNotExist(err) {
+					t.Fatalf("unexpected rollback of %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRetirePreservesUncertainOrPopulatedGeneration(t *testing.T) {
+	for _, events := range []string{"missing", "populated 1\n"} {
+		t.Run(strings.TrimSpace(events), func(t *testing.T) {
+			dir := t.TempDir()
+			cgroup, pins := filepath.Join(dir, "cgroup"), filepath.Join(dir, "pins")
+			if _, err := createGenerationDirectories(cgroup, pins); err != nil {
+				t.Fatal(err)
+			}
+			if events != "missing" {
+				if err := os.WriteFile(filepath.Join(cgroup, "cgroup.events"), []byte(events), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			boundary := &Boundary{State: State{Cgroup: cgroup, Pins: pins}}
+			if err := boundary.Retire(); err == nil {
+				t.Fatal("uncertain or populated generation retired")
+			}
+			for _, path := range []string{cgroup, pins} {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("retained resource removed: %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestEmbeddedPolicyContract(t *testing.T) {
 	source, err := os.ReadFile("bpf/fence.c")
 	if err != nil {
 		t.Fatal(err)
 	}
-	object, err := elf.NewFile(bytes.NewReader(_FenceBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer object.Close()
-	section := object.Section(".note.fence")
-	if section == nil {
-		t.Fatal("embedded policy missing source identity; run go generate ./internal/socketfence")
-	}
-	digest, err := section.Data()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimRight(string(digest), "\x00") != fmt.Sprintf("%x", sha256.Sum256(source)) {
-		t.Fatal("C source differs from embedded policy; run go generate ./internal/socketfence")
+	for _, name := range []string{"embedded", "fence_bpfel.o", "fence_bpfeb.o"} {
+		data := _FenceBytes
+		if name != "embedded" {
+			data, err = os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		object, err := elf.NewFile(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer object.Close()
+		section := object.Section(".note.fence")
+		if section == nil {
+			t.Fatalf("%s missing source identity; run go generate ./internal/socketfence", name)
+		}
+		digest, err := section.Data()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(string(digest), "\x00") != fmt.Sprintf("%x", sha256.Sum256(source)) {
+			t.Fatalf("%s differs from C source; run go generate ./internal/socketfence", name)
+		}
 	}
 	spec, err := loadFence()
 	if err != nil {

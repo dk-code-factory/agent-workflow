@@ -86,6 +86,30 @@ func privateDir(path string) error {
 	return nil
 }
 
+// createGenerationDirectories exclusively owns the new generation leaves.
+// Parent trust is checked by Install. Nonrecursive removal lets the kernel
+// refuse a populated cgroup and preserves its pins when cleanup is uncertain.
+func createGenerationDirectories(cgroup, pins string) (func(), error) {
+	if err := os.Mkdir(cgroup, 0700); err != nil {
+		return nil, err
+	}
+	pinsCreated := false
+	rollback := func() {
+		if err := os.Remove(cgroup); err != nil {
+			return
+		}
+		if pinsCreated {
+			_ = os.Remove(pins)
+		}
+	}
+	if err := os.Mkdir(pins, 0700); err != nil {
+		rollback()
+		return nil, err
+	}
+	pinsCreated = true
+	return rollback, nil
+}
+
 func OpenSocket(path string) (Socket, *os.File, error) {
 	if !filepath.IsAbs(path) {
 		return Socket{}, nil, errors.New("authentication socket must be absolute")
@@ -151,13 +175,21 @@ func Install(identity string, generation uint64, paths []string, authentication 
 	if err := Supported(); err != nil {
 		return nil, err
 	}
-	if err := privateDir(state.Cgroup); err != nil {
+	if err := privateDir(filepath.Dir(state.Cgroup)); err != nil {
 		return nil, err
 	}
-	if err := privateDir(state.Pins); err != nil {
+	if err := privateDir(filepath.Dir(state.Pins)); err != nil {
 		return nil, err
 	}
-	var err error
+	rollback, err := createGenerationDirectories(state.Cgroup, state.Pins)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if failed && b.Group == nil {
+			rollback()
+		}
+	}()
 	b.Group, err = os.Open(state.Cgroup)
 	if err != nil {
 		return nil, err
