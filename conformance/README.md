@@ -41,3 +41,21 @@ private. Commit only reviewed sanitized evidence summaries; no credentials or ra
 private transcripts belong in this repository. Failed/unverified assertions stay
 false. Protocol observations useful as regressions should be redacted into
 deterministic fixtures before committing them.
+
+## Shared network runtime
+
+The Linux/rootful Podman and normal-Chrome HTTP/2 check is a separate explicit
+opt-in: `node conformance/network-runtime/acceptance.mjs --run-privileged`.
+It uses uniquely owned fixtures, no models and no GitHub publication. See
+[network runtime verification](../docs/NETWORK_RUNTIME.md#verification).
+
+The separate [production Codex plugin experiment](network-runtime/codex-plugin.md)
+uses installed Codex, production assets and the real Go helper with disposable
+configuration/trust, local fake Responses/API services and no external route.
+Its root-authenticated control/status fixture is fake; the Podman harness above
+separately verifies the production helper against an actual prepared runtime.
+Hook skip/failure/bypass remains a routing limitation of the plugin. The
+independent BPF LSM socket boundary prevents host Unix API fallback, and admission
+rejects saved non-Unix container API routes. Deterministic policy fixtures do not
+certify LSM attachment or syscall interception; the kernel test and Podman/Chrome
+harness remain separate opt-ins.

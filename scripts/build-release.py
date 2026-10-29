@@ -61,12 +61,15 @@ for target in targets:
         stage = Path(temporary) / name
         stage.mkdir()
         env = dict(os.environ, CGO_ENABLED="0", GOOS=goos, GOARCH=arch)
-        for command in ["agent-workflow", "agent-workflow-guardian", "workflow-conformance"]:
+        for command in ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance"]:
             run(["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", str(stage / command), "./cmd/" + command], env=env)
         for item in ["README.md", "DESIGN.md", "LICENSE", "NOTICE", "agents.yml", "go.mod", "go.sum"]:
             shutil.copyfile(ROOT / item, stage / item)
-        for directory in ["workflows", "docs", "conformance"]:
+        for directory in ["workflows", "docs", "conformance", "plugins/network-runtime"]:
             shutil.copytree(ROOT / directory, stage / directory)
+        marketplace = stage / ".agents" / "plugins"
+        marketplace.mkdir(parents=True)
+        shutil.copyfile(ROOT / ".agents/plugins/marketplace.json", marketplace / "marketplace.json")
         licenses = stage / "licenses"
         licenses.mkdir()
         shutil.copyfile(goroot / "LICENSE", licenses / "Go-LICENSE.txt")

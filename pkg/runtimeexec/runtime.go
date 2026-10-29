@@ -17,22 +17,47 @@ import (
 
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 )
 
 type Policy struct {
-	Mode     string `yaml:"mode"`
-	Image    string `yaml:"image"`
-	Runtime  string `yaml:"runtime"`
-	Writable bool   `yaml:"writable"`
-	Cleanup  string `yaml:"cleanup"`
-	UID      *int   `yaml:"uid"`
-	GID      *int   `yaml:"gid"`
+	NetworkRuntime string             `yaml:"network-runtime"`
+	Network        *network.Reference `yaml:"-" json:",omitempty"`
+	Mode           string             `yaml:"mode"`
+	Image          string             `yaml:"image"`
+	Runtime        string             `yaml:"runtime"`
+	Writable       bool               `yaml:"writable"`
+	Cleanup        string             `yaml:"cleanup"`
+	UID            *int               `yaml:"uid"`
+	GID            *int               `yaml:"gid"`
 }
 
 func (p Policy) Validate() error {
 	return p.ValidateFor(runtime.GOOS)
 }
 func (p Policy) ValidateFor(goos string) error {
+	if p.NetworkRuntime != "" {
+		if goos != "linux" {
+			return fmt.Errorf("network-runtime requires Linux/rootful Podman")
+		}
+		if err := network.ValidateName(p.NetworkRuntime); err != nil {
+			return err
+		}
+		if p.Runtime != "" && p.Runtime != "podman" {
+			return fmt.Errorf("network-runtime supports rootful Podman only")
+		}
+		if p.Network != nil {
+			if err := p.Network.Validate(); err != nil {
+				return err
+			}
+			if p.Network.Name != p.NetworkRuntime {
+				return fmt.Errorf("network runtime selection changed")
+			}
+		}
+	} else if p.Network != nil {
+		return fmt.Errorf("network runtime reference without selection")
+	}
+
 	if p.Mode != "" && p.Mode != "local" && p.Mode != "container" {
 		return fmt.Errorf("execution mode must be local or container")
 	}
@@ -55,6 +80,7 @@ func (p Policy) ValidateFor(goos string) error {
 }
 
 type Record struct {
+	Network        *network.Reference  `json:"network_runtime,omitempty"`
 	ID             string              `json:"id"`
 	RunID          string              `json:"run_id"`
 	Generation     int64               `json:"execution_generation"`
@@ -174,6 +200,100 @@ func (i *Invocation) StopHeartbeat() {
 	}
 }
 
+// PinPolicy resolves a selection once at admission. A retained reference is
+// checked, never silently refreshed after runtime replacement or resume.
+func PinPolicy(ctx context.Context, p Policy) (Policy, error) {
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
+	if p.NetworkRuntime == "" {
+		return p, nil
+	}
+	if p.Network == nil {
+		ref, err := network.Resolve(ctx, p.NetworkRuntime)
+		if err != nil {
+			return p, err
+		}
+		p.Network = &ref
+	} else if err := network.Check(ctx, *p.Network); err != nil {
+		return p, err
+	}
+	return p, nil
+}
+func CheckPolicy(ctx context.Context, p Policy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if p.NetworkRuntime != "" {
+		if p.Network == nil {
+			return fmt.Errorf("network-runtime must be pinned at admission")
+		}
+		return network.Check(ctx, *p.Network)
+	}
+	return nil
+}
+func SupervisePolicy(ctx context.Context, cmd *exec.Cmd, p Policy) (func(), error) {
+	if err := CheckPolicy(ctx, p); err != nil {
+		return nil, err
+	}
+	if p.Network == nil {
+		return Supervise(ctx, cmd)
+	}
+	return superviseNetwork(ctx, cmd, *p.Network)
+}
+
+// superviseNetwork prepares an already checked reference; only the caller's
+// subsequent Cmd.Start can send a launch request to the runtime.
+func superviseNetwork(ctx context.Context, cmd *exec.Cmd, ref network.Reference) (_ func(), returnErr error) {
+	i, err := Admit(ctx, "network")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if returnErr != nil && i != nil {
+			finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			if err := i.Save(finish, "cleaned"); err != nil {
+				i.Record.State = "uncertain"
+				returnErr = errors.Join(returnErr, process.ErrCleanup, err)
+			}
+		}
+	}()
+	id := NewID()
+	if i != nil {
+		id = i.Record.ID
+		i.Record.Network = &ref
+		if err = i.Save(ctx, "launching"); err != nil {
+			return nil, err
+		}
+	}
+	transportCleanup, err := network.Wrap(cmd, ref, id)
+	if err != nil {
+		return nil, err
+	}
+	// This outer guardian owns only the launch client. The runtime's root-owned
+	// receipt proves the inner guardian has stopped the actual descendants.
+	stop, err := process.SuperviseWithOptions(cmd, process.SupervisionOptions{InheritDescriptors: []int{3}})
+	if err != nil {
+		transportCleanup()
+		return nil, err
+	}
+	return func() {
+		stop()
+		transportCleanup()
+		if i != nil && (cmd.ProcessState != nil || cmd.Process == nil) {
+			finish, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			state := "cleaned"
+			if cmd.Process != nil {
+				if err := network.Completed(finish, ref, id); err != nil {
+					state = "uncertain"
+				}
+			}
+			_ = i.Save(finish, state)
+		}
+	}, nil
+}
 func Supervise(ctx context.Context, cmd *exec.Cmd) (func(), error) {
 	i, err := Admit(ctx, "native")
 	if err != nil {
@@ -215,6 +335,9 @@ func (i *Invocation) Supervise(ctx context.Context, cmd *exec.Cmd, cleanup []str
 		var cleanupErr error
 		if i.Record.Container != nil {
 			cleanupErr = containerapi.Remove(finishCtx, *i.Record.Container)
+			if cleanupErr == nil && i.Record.Network != nil {
+				cleanupErr = network.Release(finishCtx, *i.Record.Network, i.Record.ID)
+			}
 		} else if cmd.Process != nil {
 			cleanupErr = process.ReadCompletion(i.Record.CompletionPath, i.Record.Token)
 		}
@@ -234,7 +357,7 @@ func Reconcile(ctx context.Context, record Record) (Record, error) {
 		return record, nil
 	}
 	record.UpdatedAt = time.Now().UTC()
-	if record.State == "intent" && record.Container == nil {
+	if record.State == "intent" && record.Container == nil && record.Network == nil {
 		record.State = "cleaned"
 		record.Error = ""
 		return record, nil
@@ -242,6 +365,11 @@ func Reconcile(ctx context.Context, record Record) (Record, error) {
 	var err error
 	if record.Container != nil {
 		err = containerapi.Remove(ctx, *record.Container)
+		if err == nil && record.Network != nil {
+			err = network.Release(ctx, *record.Network, record.ID)
+		}
+	} else if record.Network != nil {
+		err = network.Completed(ctx, *record.Network, record.ID)
 	} else {
 		err = process.ReadCompletion(record.CompletionPath, record.Token)
 	}

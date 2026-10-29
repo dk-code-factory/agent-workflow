@@ -134,6 +134,29 @@ Agent-level relative workspaces resolve against the configuration directory;
 `instructions`, `tools`, and `authentication` management apply to session
 backends; legacy CLI configuration continues to be provider-owned.
 
+### Shared network runtime
+
+On Linux with an operator-enabled BPF LSM and cgroup v2, an explicitly prepared
+rootful Podman runtime can contain network effects for local and container execution:
+
+```yaml
+execution:
+  network-runtime: development
+```
+
+A global selection also applies to stdio MCP servers and cannot be weakened by
+role execution overrides. Admission pins the runtime identity across resume;
+missing or unhealthy runtimes reject engine admission. The standalone
+`agent-workflow-runtime` launcher uses the same Go boundary for ordinary Codex
+sessions. An explicitly installed, enabled and trusted Codex plugin restores
+routing values inside covered local POSIX shell tools while preserving native
+profiles, authentication, approval and sandbox settings. The operator-enabled
+BPF LSM socket boundary prevents host Unix API fallback when hooks are skipped
+or routing values disappear. Admission rejects saved TCP/SSH container API
+routes. Hosts require the documented kernel support and explicit socket-boundary
+enrollment; authentication sockets require explicit identity enrollment.
+See [operator setup, plugin coverage, forwarding and recovery](docs/NETWORK_RUNTIME.md).
+
 ### Containers
 
 Session backends can select:

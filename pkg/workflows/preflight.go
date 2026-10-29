@@ -32,7 +32,7 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 			return err
 		}
 	}
-	if err := e.CommandExecution.Validate(); err != nil {
+	if err := runtimeexec.CheckPolicy(ctx, e.CommandExecution); err != nil {
 		return err
 	}
 	if e.CommandExecution.Mode == "container" {

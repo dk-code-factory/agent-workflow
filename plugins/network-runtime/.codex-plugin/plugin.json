@@ -1,0 +1,10 @@
+{
+  "name": "network-runtime",
+  "version": "0.2.0",
+  "description": "Restore admitted Agent Workflow routing for covered local POSIX shell tools.",
+  "author": {
+    "name": "Agent Workflow contributors"
+  },
+  "homepage": "https://github.com/dk-code-factory/agent-workflow",
+  "license": "MIT"
+}

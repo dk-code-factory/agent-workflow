@@ -108,7 +108,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		}
 		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
 	} else {
-		cleanup, superviseErr = runtimeexec.Supervise(ctx, cmd)
+		cleanup, superviseErr = runtimeexec.SupervisePolicy(ctx, cmd, e.CommandExecution)
 	}
 	if superviseErr != nil {
 		return nil, superviseErr

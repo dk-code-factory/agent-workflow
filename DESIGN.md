@@ -139,6 +139,73 @@ invocation ownership. The command policy is pinned in the admitted snapshot.
 Strict cleanup on macOS requires containers; native macOS provides process-group
 cleanup. Runtime/image/UID/VM conformance is a separate release evidence gate.
 
+## Shared network containment
+
+A named network runtime is independent of local/container execution mode. Global
+selection applies to agents, commands and controller-launched stdio MCP servers.
+Admission pins a typed identity/generation/endpoint reference in command policy
+and role snapshots. Resume checks that reference without resolving a replacement.
+Container ownership retains it for every image/create/start/inspect/remove call.
+Each generation has a distinct API socket, closing check/restart endpoint races.
+
+An explicitly prepared root-owned registry owns the installed launcher, enrolled
+existing rootful Podman operators, durable membership receipts and forwarding.
+The host controller authenticates through Unix peer credentials. A root-owned
+supervisor enters pinned kernel namespace handles, drops to the original account
+before interpreting workload commands/environment, and runs the existing lifetime
+guardian. Caller streams are passed as descriptors; launch environments use
+sealed anonymous memory rather than persistent credential files. Caller loss
+closes only that invocation's lifetime channel. Root-owned completion receipts
+survive controller death; missing receipts preserve uncertainty.
+
+The runtime uses persistent Linux network/mount namespaces, private Netavark,
+Aardvark and network-definition mounts, a private resolver, and slirp outbound
+networking. Original rootful image storage and container metadata remain shared.
+Container mount/credential restrictions remain applicable. Explicit IPv4 TCP
+forwarding binds host 127.0.0.1 and can reach runtime loopback; only the runtime
+TAP enables route_localnet. Namespace, DNS, API, slirp and forwarding prerequisite
+failure closes admission. Docker and non-Linux containment are unsupported.
+
+Stock Codex keeps native configuration, profiles, authentication, approvals and
+sandbox handling. An explicitly installed, enabled and trusted PreToolUse/Bash
+plugin restores the three admitted routing values inside covered local POSIX
+tool commands. A shared Go handler validates an independent admitted-reference
+marker and the healthy runtime namespace; the trampoline invokes the protected
+prepared launcher. Original provider arguments stay unchanged. Native permission
+requests remain native, although the added prefix changes approval-rule matching.
+Normal handler failures deny covered work where a valid response can be emitted.
+
+This plugin is a routing guardrail. Forced/skipped hook failure, later rewrites,
+direct command RPC and native Codex-managed MCP startup can bypass routing repair.
+An independent operator-enabled BPF LSM boundary fences Unix APIs at
+`unix_stream_connect` and `unix_may_send`, using resolved peer socket identities.
+A root-owned leaf cgroup identifies workloads before execution through clone3;
+process descendants inherit it. Only the generation's API/control sockets,
+operator-enrolled authentication socket identities, and sockets created by
+members of the same cgroup are permitted. Socket inode handles survive in root
+member supervisors until guardian completion. Caller credentials, configuration,
+streams and provider approval/sandbox authority remain applicable. Restricted
+container mounts still exclude host/runtime/authentication sockets.
+
+Frozen BPF maps and pinned links bind enforcement to runtime identity and
+generation and survive service death. Launch verifies the exact retained objects;
+missing capability, unsupported kernels, missing pins and stale generations fail
+closed. Retirement removes an empty cgroup before detaching; uncertain membership
+retains durable records and populated cgroups retain enforcement. Saved Podman
+and Docker non-Unix container routes fail the caller's pre-exec admission check,
+including unselected connections and contexts. Arbitrary remote APIs,
+configuration introduced after launch and unrestricted host root remain outside
+this network-effect boundary. Private managed provider state does not inherit
+user plugin/trust/configuration.
+
+Stop and membership admission serialize under one owner. Container creation
+reserves membership durably before effects and cleanup releases it only after
+verified removal. Busy/uncertain stop is refused. Restart reconciles native
+completion receipts; unknown launches and unresolved reservations require operator
+inspection. It never substitutes another generation, prunes shared workloads or
+uses a retained PID as cleanup authority. Code Factory direct launches require
+explicit adoption of the exported Go launcher boundary in its own repository.
+
 ## Providers and workers
 
 AgentRunner remains the workflow compatibility interface. SessionRunner adds

@@ -33,10 +33,35 @@ func init() {
 	}
 	syscall.CloseOnExec(fd)
 	var cleanupArgs []string
+	var inherited []*os.File
+	var cleanAck *os.File
 	var completionPath, completionToken string
+	terminal := false
 	target := 3
 	for target < len(os.Args) {
-		if os.Args[target] == "--cleanup" {
+		if os.Args[target] == "--inherit-fd" || os.Args[target] == "--clean-ack" {
+			if target+1 >= len(os.Args) {
+				os.Exit(125)
+			}
+			n, e := strconv.Atoi(os.Args[target+1])
+			if e != nil || n < 3 || n == fd {
+				os.Exit(125)
+			}
+			syscall.CloseOnExec(n)
+			f := os.NewFile(uintptr(n), "guardian-descriptor")
+			if os.Args[target] == "--clean-ack" {
+				cleanAck = f
+			} else {
+				if n != 3+len(inherited) {
+					os.Exit(125)
+				}
+				inherited = append(inherited, f)
+			}
+			target += 2
+		} else if os.Args[target] == "--terminal" {
+			terminal = true
+			target++
+		} else if os.Args[target] == "--cleanup" {
 			if target+1 >= len(os.Args) || json.Unmarshal([]byte(os.Args[target+1]), &cleanupArgs) != nil {
 				os.Exit(125)
 			}
@@ -58,6 +83,12 @@ func init() {
 		if err := writeCompletion(completionPath, completionToken, cleanupErr); err != nil {
 			fmt.Fprintln(os.Stderr, "guardian completion persistence failed")
 			code = 125
+			cleanupErr = err
+		}
+		if cleanAck != nil && cleanupErr == nil {
+			if _, err := cleanAck.Write([]byte{1}); err != nil {
+				code = 125
+			}
 		}
 		os.Exit(code)
 	}
@@ -91,10 +122,16 @@ func init() {
 		}
 	}
 	cmd := exec.Command(os.Args[target], os.Args[target+1:]...)
+	cmd.ExtraFiles = inherited
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if terminal {
+		// The frontend supplied an invocation-owned PTY. Acquire only that
+		// terminal in a fresh session; never steal the caller's terminal.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	}
 	if err = cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		clean()
@@ -146,6 +183,11 @@ func init() {
 			code = exit.ExitCode()
 			if code < 0 {
 				code = 128
+				if terminal {
+					if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+						code += int(status.Signal())
+					}
+				}
 			}
 		}
 	}
@@ -161,6 +203,11 @@ func SuperviseWithCleanup(cmd *exec.Cmd, cleanupArgs []string) (func(), error) {
 }
 func SuperviseWithOptions(cmd *exec.Cmd, options SupervisionOptions) (func(), error) {
 	cleanupArgs := options.Cleanup
+	for index, fd := range options.InheritDescriptors {
+		if fd != 3+index || index >= len(cmd.ExtraFiles) {
+			return nil, fmt.Errorf("invalid guardian inherited descriptor")
+		}
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -174,6 +221,9 @@ func SuperviseWithOptions(cmd *exec.Cmd, options SupervisionOptions) (func(), er
 	fd := 3 + len(cmd.ExtraFiles)
 	cmd.Path = executable
 	prefix := []string{executable, "__agent_workflow_guardian_v1", strconv.Itoa(fd)}
+	for _, inherited := range options.InheritDescriptors {
+		prefix = append(prefix, "--inherit-fd", strconv.Itoa(inherited))
+	}
 	if len(cleanupArgs) > 0 {
 		data, err := json.Marshal(cleanupArgs)
 		if err != nil {

@@ -167,20 +167,15 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	}
 	copy := *e
 	e = &copy
+	if err := e.pinExecution(ctx); err != nil {
+		return nil, err
+	}
 	req.Execution = e.CommandExecution
 	e.redactionValues = e.redactions(req.Secrets)
 	if j, ok := e.Store.(Journal); ok {
 		e.Store = redactedStore{Journal: j, secrets: e.redactions(req.Secrets)}
 	}
-	if source, ok := e.Agents.(interface {
-		AdmittedRoles(context.Context) (json.RawMessage, error)
-	}); ok {
-		roles, err := source.AdmittedRoles(ctx)
-		if err != nil {
-			return nil, err
-		}
-		e.Roles = roles
-	}
+
 	all, err := e.Load(req.Ref)
 	if err != nil {
 		return nil, err
@@ -1031,8 +1026,16 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		}
 		e.Actions = actions
 	}
-	if e.RoleRunner != nil {
-		runner, err := e.RoleRunner(snap.Roles)
+	roleRunner := e.RoleRunner
+	if roleRunner == nil {
+		if source, ok := e.Agents.(interface {
+			RunnerForRoles(json.RawMessage) (AgentRunner, error)
+		}); ok {
+			roleRunner = source.RunnerForRoles
+		}
+	}
+	if roleRunner != nil {
+		runner, err := roleRunner(snap.Roles)
 		if err != nil {
 			return nil, err
 		}

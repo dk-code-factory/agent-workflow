@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,7 @@ func verifySDKBridge(a Agent) error {
 	return nil
 }
 
-func verifyCodexCLI(ctx context.Context, command string) error {
+func verifyCodexCLI(ctx context.Context, command string, policies ...runtimeexec.Policy) error {
 	if command == "" {
 		command = "codex"
 	}
@@ -46,7 +47,12 @@ func verifyCodexCLI(ctx context.Context, command string) error {
 	var output boundedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	cleanup, err := process.Supervise(cmd)
+	var cleanup func()
+	if len(policies) > 0 && policies[0].NetworkRuntime != "" {
+		cleanup, err = runtimeexec.SupervisePolicy(ctx, cmd, policies[0])
+	} else {
+		cleanup, err = process.Supervise(cmd)
+	}
 	if err != nil {
 		return err
 	}
