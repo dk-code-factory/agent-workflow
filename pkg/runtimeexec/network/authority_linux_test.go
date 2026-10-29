@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The network test binary substitutes only the already-tested process guardian;
-// workload() still consumes the production fd4 request and applies its mask.
+// The authority fixture substitutes the already-tested process guardian; its
+// workload adapter still consumes the private fd4 request and applies its mask.
 func init() {
 	if len(os.Args) > 4 && os.Args[1] == "__agent_workflow_guardian_v1" && os.Getenv("AW_AUTHORITY_FIXTURE") == "1" {
 		target := 3
@@ -215,7 +215,11 @@ func TestIsolatedWorkloadUmaskAndPrivateEnvironment(t *testing.T) {
 	for _, mask := range []int{0077, 0002} {
 		t.Run(fmt.Sprintf("%04o", mask), func(t *testing.T) {
 			dir := t.TempDir()
-			req := Request{Path: "/bin/sh", Args: []string{"-c", `set -e; test -z "${AGENT_WORKFLOW_NETWORK_REQUEST+x}"; test "$FAKE_PROVIDER_CREDENTIAL" = credential-only-in-private-environment; umask; touch created; mkdir directory`}, Dir: dir, Umask: mask, Env: []string{"PATH=/usr/bin:/bin", "AW_AUTHORITY_FIXTURE=1", "FAKE_PROVIDER_CREDENTIAL=credential-only-in-private-environment"}}
+			config := filepath.Join(dir, "containers.conf")
+			if err := os.WriteFile(config, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			req := Request{Path: "/bin/sh", Args: []string{"-c", `set -e; test -z "${AGENT_WORKFLOW_NETWORK_REQUEST+x}"; test "$FAKE_PROVIDER_CREDENTIAL" = credential-only-in-private-environment; umask; touch created; mkdir directory`}, Dir: dir, Umask: mask, Env: []string{"HOME=" + dir, "CONTAINERS_CONF=" + config, "PATH=/usr/bin:/bin", "AW_AUTHORITY_FIXTURE=1", "FAKE_PROVIDER_CREDENTIAL=credential-only-in-private-environment"}}
 			data, err := json.Marshal(req)
 			if err != nil {
 				t.Fatal(err)
@@ -231,9 +235,10 @@ func TestIsolatedWorkloadUmaskAndPrivateEnvironment(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer life.Close()
-			cmd := exec.Command(binary, "__network_runtime_workload_v1", "fixture")
+			cmd := exec.Command(binary, "__network_runtime_workload_fixture_v1", t.TempDir())
 			cmd.ExtraFiles = []*os.File{life, r}
-			cmd.Env = []string{"PATH=/usr/bin:/bin", launchEnvironment + "=must-not-reach-workload"}
+			ambient := hostileRoutingDefaults(t)
+			cmd.Env = []string{"PATH=/usr/bin:/bin", launchEnvironment + "=must-not-reach-workload", "HOME=" + filepath.Join(ambient, "account"), "CONTAINERS_CONF=" + filepath.Join(ambient, "system/containers.conf")}
 			if _, err = w.Write(data); err != nil {
 				t.Fatal(err)
 			}
@@ -254,6 +259,68 @@ func TestIsolatedWorkloadUmaskAndPrivateEnvironment(t *testing.T) {
 				if info.Mode().Perm() != expected {
 					t.Fatalf("%s: %o want %o", name, info.Mode().Perm(), expected)
 				}
+			}
+		})
+	}
+}
+
+func hostileRoutingDefaults(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, name := range []string{"account/.config/containers/containers.conf", "system/containers.conf"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("[engine.service_destinations.saved]\nuri='ssh://outside'\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestWorkloadFixtureRetainsSavedRoutingValidation(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"account", "system", "request"} {
+		t.Run(source, func(t *testing.T) {
+			root := hostileRoutingDefaults(t)
+			config := filepath.Join(root, "system/containers.conf")
+			// Keep only the tested source, so every native discovery path must
+			// independently reject its saved route before the guardian starts.
+			if source != "account" {
+				if err := os.Remove(filepath.Join(root, "account/.config/containers/containers.conf")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if source != "system" {
+				if err := os.Rename(config, filepath.Join(root, "selected.conf")); err != nil {
+					t.Fatal(err)
+				}
+				config = filepath.Join(root, "selected.conf")
+			}
+			req := Request{Path: "/bin/true", Env: []string{"HOME=" + t.TempDir()}}
+			if source == "request" {
+				req.Env = append(req.Env, "CONTAINERS_CONF="+config)
+			}
+			payload, err := sealedPayload(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer payload.Close()
+			life, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer life.Close()
+			cmd := exec.Command(binary, "__network_runtime_workload_fixture_v1", root)
+			cmd.ExtraFiles = []*os.File{life, payload}
+			cmd.Env = []string{"PATH=/usr/bin:/bin"}
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "saved non-Unix container API transport") {
+				t.Fatalf("%s routing reached guardian: %s: %v", source, out, err)
 			}
 		})
 	}

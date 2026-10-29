@@ -3,15 +3,66 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
+
+func TestNetworkFenceCoversDirectAndMCPLaunches(t *testing.T) {
+	if os.Getenv("AW_NETWORK_TEST_CLIENT") == "1" {
+		response, err := http.Post(os.Getenv("AW_NETWORK_TEST_URL"), "application/json", strings.NewReader("{}"))
+		if err != nil {
+			os.Exit(17)
+		}
+		response.Body.Close()
+		os.Exit(18)
+	}
+	var mutations atomic.Int32
+	recorder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			mutations.Add(1)
+		}
+		w.WriteHeader(200)
+	}))
+	defer recorder.Close()
+	t.Setenv("AW_NETWORK_TEST_CLIENT", "1")
+	t.Setenv("AW_NETWORK_TEST_URL", recorder.URL+"/networks/create")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := &network.Reference{Name: "unit-api-fence", Identity: strings.Repeat("f", 32), Generation: 1}
+	ref.Endpoint = network.Endpoint(ref.Name, ref.Identity)
+	policy := runtimeexec.Policy{NetworkRuntime: ref.Name, Network: ref}
+	cmd := exec.Command(self, "-test.run=^TestNetworkFenceCoversDirectAndMCPLaunches$")
+	cmd.Env = os.Environ()
+	cleanup, err := runtimeexec.SupervisePolicy(context.Background(), cmd, policy)
+	if err == nil {
+		defer cleanup()
+		_ = cmd.Run()
+		t.Error("direct command admitted without retained enforcement")
+	}
+	runner := &Runner{Workspace: t.TempDir(), Config: Config{Execution: Execution{NetworkRuntime: ref.Name, Network: ref}, MCPServers: map[string]MCPServer{"stdio": {Transport: "stdio", Command: self, Args: []string{"-test.run=^TestNetworkFenceCoversDirectAndMCPLaunches$"}, Environment: map[string]string{"AW_NETWORK_TEST_CLIENT": "AW_NETWORK_TEST_CLIENT", "AW_NETWORK_TEST_URL": "AW_NETWORK_TEST_URL"}}}}}
+	session, closeSession, err := runner.mcpSession(context.Background(), "stdio")
+	if err == nil {
+		session.Close()
+		closeSession()
+		t.Error("MCP command admitted without retained enforcement")
+	}
+	if mutations.Load() != 0 {
+		t.Fatal("outside recorder received mutating request")
+	}
+}
 
 func TestGlobalNetworkSelectionCannotBeOverriddenByLocalRole(t *testing.T) {
 	for _, role := range []string{"", "    execution: {mode: local}\n", "    execution: {network-runtime: shared}\n"} {

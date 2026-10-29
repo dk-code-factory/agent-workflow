@@ -136,8 +136,8 @@ backends; legacy CLI configuration continues to be provider-owned.
 
 ### Shared network runtime
 
-On Linux, an explicitly prepared rootful Podman runtime can contain network
-effects for both local and container execution:
+On Linux with an operator-enabled BPF LSM and cgroup v2, an explicitly prepared
+rootful Podman runtime can contain network effects for local and container execution:
 
 ```yaml
 execution:
@@ -150,10 +150,11 @@ missing or unhealthy runtimes reject engine admission. The standalone
 `agent-workflow-runtime` launcher uses the same Go boundary for ordinary Codex
 sessions. An explicitly installed, enabled and trusted Codex plugin restores
 routing values inside covered local POSIX shell tools while preserving native
-profiles, authentication, approval and sandbox settings. Hooks can be skipped or
-bypassed; saved client connections can still select an API outside the runtime
-when routing is lost. Stronger API fencing is tracked in
-[#38](https://github.com/dk-code-factory/agent-workflow/issues/38).
+profiles, authentication, approval and sandbox settings. The operator-enabled
+BPF LSM socket boundary prevents host Unix API fallback when hooks are skipped
+or routing values disappear. Admission rejects saved TCP/SSH container API
+routes. Hosts require the documented kernel support and explicit socket-boundary
+enrollment; authentication sockets require explicit identity enrollment.
 See [operator setup, plugin coverage, forwarding and recovery](docs/NETWORK_RUNTIME.md).
 
 ### Containers

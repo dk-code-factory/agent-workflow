@@ -67,11 +67,11 @@ termination: baseline and plugin both let a long command continue after a turn
 interrupt. Agent Workflow's invocation guardian remains a separate lifetime
 boundary. Engine-controlled stdio MCP is separately supervised.
 
-When selectors disappear, a saved client connection can reach an API outside the
-runtime even while the client remains namespaced. The hook is a routing
-guardrail, not mandatory enforcement of every execution path. Stronger API
-fencing and fallback closure are tracked for the whole PR in
-https://github.com/dk-code-factory/agent-workflow/issues/38. Restricted provider
+The hook remains a routing guardrail. The independent operator-enabled BPF LSM
+socket boundary in the runtime launcher prevents host Unix API fallback when
+selectors disappear or a hook is bypassed. Saved TCP/SSH API destinations are
+rejected before workload execution. See [setup and authentication exceptions](../../docs/NETWORK_RUNTIME.md#socket-boundary-and-authentication-exceptions).
+Restricted provider
 containers retain their socket/mount exclusions and receive no rootful API
 authority from this plugin. POSIX/local tool coverage does not imply remote
 executor or non-POSIX coverage.

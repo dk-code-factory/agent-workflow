@@ -16,7 +16,7 @@ def cold_prepare(runtime, name, uid, gid, groups, original_namespace):
     for target in ['/var/lib', '/run']:
         subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', target], check=True)
     os.umask(0o077)
-    subprocess.run([runtime, 'prepare', name, '--uid', str(uid)], check=True, timeout=20)
+    subprocess.run([runtime, 'prepare', name, '--uid', str(uid), '--socket-boundary'], check=True, timeout=20)
     base = pathlib.Path('/var/lib/agent-workflow')
     registry = base / 'runtimes'
     installed = registry / name

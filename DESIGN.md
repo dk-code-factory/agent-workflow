@@ -176,13 +176,27 @@ requests remain native, although the added prefix changes approval-rule matching
 Normal handler failures deny covered work where a valid response can be emitted.
 
 This plugin is a routing guardrail. Forced/skipped hook failure, later rewrites,
-direct command RPC and native Codex-managed MCP startup can bypass it. Pathname
-Unix sockets remain accessible according to existing host authority, so lost
-selectors can reach a saved API outside the namespace. Mandatory API fencing and
-fallback closure are PR-wide follow-up
-[#38](https://github.com/dk-code-factory/agent-workflow/issues/38). Private managed
-provider state does not inherit user plugin/trust/configuration; managed policy
-and restricted container socket exclusions remain unchanged.
+direct command RPC and native Codex-managed MCP startup can bypass routing repair.
+An independent operator-enabled BPF LSM boundary fences Unix APIs at
+`unix_stream_connect` and `unix_may_send`, using resolved peer socket identities.
+A root-owned leaf cgroup identifies workloads before execution through clone3;
+process descendants inherit it. Only the generation's API/control sockets,
+operator-enrolled authentication socket identities, and sockets created by
+members of the same cgroup are permitted. Socket inode handles survive in root
+member supervisors until guardian completion. Caller credentials, configuration,
+streams and provider approval/sandbox authority remain applicable. Restricted
+container mounts still exclude host/runtime/authentication sockets.
+
+Frozen BPF maps and pinned links bind enforcement to runtime identity and
+generation and survive service death. Launch verifies the exact retained objects;
+missing capability, unsupported kernels, missing pins and stale generations fail
+closed. Retirement removes an empty cgroup before detaching; uncertain membership
+retains durable records and populated cgroups retain enforcement. Saved Podman
+and Docker non-Unix container routes fail the caller's pre-exec admission check,
+including unselected connections and contexts. Arbitrary remote APIs,
+configuration introduced after launch and unrestricted host root remain outside
+this network-effect boundary. Private managed provider state does not inherit
+user plugin/trust/configuration.
 
 Stop and membership admission serialize under one owner. Container creation
 reserves membership durably before effects and cleanup releases it only after

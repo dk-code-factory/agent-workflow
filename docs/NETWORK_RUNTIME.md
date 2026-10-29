@@ -19,9 +19,10 @@ The runtime supports **Linux, rootful Podman, Netavark/Aardvark and slirp4netns*
 Docker Engine and other platforms are rejected when containment is selected.
 Configurations without a selection retain their existing execution behavior.
 Networking operations made through that service remain in its namespaces.
-Pathname Unix sockets are not redirected by network namespaces: lost routing
-values can select a saved API outside the runtime. Stronger API fencing is
-tracked in [#38](https://github.com/dk-code-factory/agent-workflow/issues/38).
+An operator-enabled BPF LSM boundary denies connections to other host Unix
+sockets even when routing values disappear. Saved TCP/SSH container API routes
+are rejected before workload execution. This closes the fallback described in
+[#38](https://github.com/dk-code-factory/agent-workflow/issues/38).
 This is not a security sandbox against host-root access, other API destinations
 or unrestricted privileged containers.
 
@@ -32,7 +33,7 @@ extracted distribution in place of the source-build `./bin/` paths below. Then
 explicitly enroll the existing operator and start:
 
 ```sh
-sudo ./bin/agent-workflow-runtime prepare development --uid "$(id -u)"
+sudo ./bin/agent-workflow-runtime prepare development --uid "$(id -u)" --socket-boundary
 sudo ./bin/agent-workflow-runtime start development
 ./bin/agent-workflow-runtime status development
 ```
@@ -45,13 +46,24 @@ Preparation copies the launcher to a root-owned registry and enrolls that UID.
 It installs no setuid bits or sudo rules, refreshes no login, and does not
 bootstrap Podman access. Stop before preparing a new launcher or enrollment.
 
-The host needs `/usr/bin/podman`, `/usr/bin/slirp4netns`, `/usr/bin/nsenter`,
+The host needs an active BPF LSM (`CONFIG_BPF_LSM`, kernel BTF, and `bpf` in
+`/sys/kernel/security/lsm`), mounted bpffs at `/sys/fs/bpf`, a writable unified
+cgroup v2 hierarchy at `/sys/fs/cgroup`, and clone3 with `CLONE_INTO_CGROUP`.
+Enable these through the host
+[kernel LSM configuration](https://docs.kernel.org/bpf/prog_lsm.html) and boot
+configuration before starting the runtime. Startup never edits boot settings or
+loads a replacement kernel. Absent BPF LSM support fails startup, including for
+previously prepared runtimes: stop and re-prepare with `--socket-boundary`.
+`status.socket_enforcement` must report `bpf-lsm-unix-v1`; older launch services
+without this capability cannot admit new work.
+
+The host also needs `/usr/bin/podman`, `/usr/bin/slirp4netns`, `/usr/bin/nsenter`,
 `/usr/bin/setpriv`, `/usr/sbin/ip`, and namespace/mount privileges. Rootless
 Podman, Docker, and macOS are outside this runtime's compatibility boundary.
 Workflows never prepare or start the service automatically. Missing, changed,
 or unhealthy runtime identity rejects engine admission and launch without a
-replacement runtime. This does not fence every API selection made by arbitrary
-workload clients; see [Codex plugin coverage](#codex-routing-plugin).
+replacement runtime. Saved network API routes are unsupported; deliberate
+arbitrary remote APIs and unrestricted host root remain outside this boundary.
 
 Root-owned registration, generation, membership receipts, forwarding ownership
 and the installed launcher live in `/var/lib/agent-workflow/runtimes/NAME`.
@@ -74,6 +86,77 @@ sets `route_localnet=1`, allowing explicit slirp forwarding to runtime loopback;
 no host interface, route, firewall or resolver setting is changed. Health checks
 verify pinned namespace handles, private mounts, loopback/TAP, resolver responses,
 slirp and the Podman API. A failed check latches the generation unhealthy.
+
+## Socket boundary and authentication exceptions
+
+Every local workload is born in a root-owned, nondelegated leaf cgroup through
+`CLONE_INTO_CGROUP`, before namespace entry, credential dropping, or user code.
+Forked children, threads, exec replacements and detached descendants inherit
+membership. Cgroup movement/delegation is not granted. Local Podman still runs
+in the selected network/mount namespaces; clients needing host service sockets
+now fail unless those sockets are explicitly enrolled.
+
+The `unix_stream_connect` and `unix_may_send` BPF LSM hooks inspect the resolved
+peer. They permit the generation's API/control sockets and sockets created by
+workloads in the same protected cgroup. Other host pathname and abstract Unix
+sockets are denied before requests reach their listeners. Symlinks, bind aliases
+and saved custom paths do not change the filesystem device/inode identity. The
+service and per-invocation supervisors hold socket inode handles, preventing
+identity reuse while protected work remains alive. The host controller and the
+runtime's Podman service remain outside the workload cgroup.
+
+Authentication can require a host socket, for example an SSH agent. Explicitly
+enroll each required socket while preparing the stopped runtime:
+
+```sh
+sudo ./bin/agent-workflow-runtime prepare development --uid "$(id -u)" \
+  --socket-boundary --auth-socket "$SSH_AUTH_SOCK"
+```
+
+`--auth-socket` is repeatable and each preparation replaces the exception list.
+It enrolls the current resolved identity; restarting the authentication agent
+requires re-enrollment. Enrolling an API, generic proxy or service-launch socket
+would grant its authority to every enrolled runtime user. Enroll only the
+required authentication service. Existing file credentials and provider
+configuration remain in place; restricted containers still receive no host
+socket or home mounts, including these authentication exceptions.
+
+Before executing the workload, a helper running as the caller inspects Podman's
+system/user `containers.conf`, caller-specific rootless files and drop-ins,
+`podman-connections.json`, and Docker's saved context metadata. It checks known
+account/home defaults alongside configuration overrides so filtering a selector
+cannot reveal an unchecked saved route. Native source roles determine JSON or
+TOML parsing even for custom filenames. Saved `engine.env` endpoint defaults and
+connection-file selectors are inspected as well. Configuration overrides
+`CONTAINERS_CONF`, `CONTAINERS_CONF_OVERRIDE`, `PODMAN_CONNECTIONS_CONF`,
+`XDG_CONFIG_HOME` and `DOCKER_CONFIG` are respected. All saved container
+destinations must use absolute Unix endpoints, including unselected
+connections/contexts. Non-Unix saved
+transports and unreadable/malformed configurations fail admission to execution.
+Move unsupported saved connections out of the selected configuration explicitly;
+the launcher never rewrites them. This check covers saved selection at launch,
+not arbitrary remote API configuration introduced by a running workload.
+
+Frozen maps bind the cgroup and allowed identities to the exact runtime identity
+and generation. Pinned LSM links in `/sys/fs/bpf/agent-workflow/IDENTITY` survive
+service crashes. Root-owned `enforcement.json` under the generation's runtime
+directory retains kernel object identities. Launch rechecks those identities
+and refuses missing, replaced, stale or uninitialized enforcement. Clean
+shutdown detaches only after the kernel confirms an empty cgroup and removes it
+atomically against new launches. Uncertain or populated groups retain their
+pins and receipts; preserve them for operator inspection. After an unacknowledged
+guardian exit, the existing root member supervisor also retains the original
+socket inode handles independently of the service, including service SIGKILL.
+It records the uncertain outcome and closes its invocation streams and lifetime
+channel before notifying the caller. The caller can finish or cancel without
+waiting for this reference retention. Only kernel proof of an empty retained
+cgroup releases those handles; missing or malformed observations keep them.
+Because the cgroup is shared, another active member can conservatively keep an
+uncertain supervisor and its descriptors alive indefinitely. Successful cleanup
+acknowledgements still complete promptly without waiting for unrelated members.
+A host reboot ends
+protected processes and clears kernel pins; no retained invocation is silently
+transferred into a new generation.
 
 ## Standalone Codex and Go applications
 
@@ -222,13 +305,14 @@ state into managed provider directories or relax managed-worker/tool-subset
 certification gates. Use the native `codex-cli`/standalone setup above for the
 documented operator installation path.
 
-The hook is a POSIX/local routing guardrail, not mandatory enforcement of every
-execution path. The recorded turn-interrupt experiment let long commands
+The hook remains a POSIX/local routing guardrail. The launch-layer socket
+boundary applies independently of hooks, including direct command RPC and
+descendant MCP startup. The recorded turn-interrupt experiment let long commands
 continue in both baseline and plugin variants, so it proves no new per-turn
 descendant termination. The Go invocation guardian remains the separate lifetime
-boundary. Saved outside-API fallback, hook bypass and stronger fencing are
-PR-wide [follow-up #38](https://github.com/dk-code-factory/agent-workflow/issues/38),
-not a security claim established by successful covered calls.
+boundary. Hook failure can still cause a client operation to fail instead of
+routing to the intended API; the independent socket boundary prevents host Unix
+API fallback.
 
 ## Shared storage and forwarding
 
@@ -274,8 +358,9 @@ API connections accepted after health loss permit only recovery reads and
 deletion by full container ID, checking every HTTP request. Connections accepted
 while healthy retain byte-stream forwarding for attached execution and protocol
 upgrades; a later health failure does not retroactively filter those streams.
-Engine admission, launch and forwarding remain health-gated. Stronger API
-revocation/fencing belongs to follow-up #38. Unavailable API evidence or failed inspection/listing
+Engine admission, launch and forwarding remain health-gated. Existing API
+streams retain their original generation; socket fencing does not revoke
+already-connected streams on health loss. Unavailable API evidence or failed inspection/listing
 retains uncertainty and never counts as absence.
 
 A clean restart or daemon crash produces a new identity/generation and a new
@@ -290,10 +375,34 @@ before changing retained records. Do not use a stored PID to kill a workload.
 
 ## Verification
 
+Linux deterministic policy fixtures require a C compiler (`cc`). The embedded
+CO-RE programs are included in distributed Go binaries; production hosts need no
+compiler. To regenerate them after C source changes, install clang with the BPF
+target and run `go generate ./internal/socketfence`. Source digests detect stale
+embedded objects.
+
 Ordinary `make test`, `make check` and `make ui-pr-check BASE=origin/main` remain
 deterministic. Unix protocol fixtures cover membership concurrency, disconnect,
 stop admission, identity fencing, duplicate/lost acknowledgements, forwarding
 ownership, uncertain receipts and failure closure without root or providers.
+Native C fixtures exercise the production policy decision function with
+recording fake APIs and substituted kernel reads. These verify decisions and
+zero requests following denial; they do not prove actual LSM attachment or
+syscall interception.
+
+Kernel enforcement has a separate explicit opt-in using disposable recording
+Unix APIs, no Podman daemon, and a BPF-LSM-enabled host:
+
+```sh
+sudo env "PATH=$PATH" AGENT_WORKFLOW_SOCKET_LSM_TEST=1 \
+  go test ./internal/socketfence -run '^TestKernelSocketBoundary$' -count=1 -v
+```
+
+This checks syscall denial through a saved socket alias, permitted runtime and
+authentication sockets, inherited descendant membership, stale generations and
+enforcement retained after the service handle closes. It is skipped by ordinary
+validation. The Podman/Chrome harness below additionally requires the BPF LSM
+prerequisites and remains separately opt-in.
 
 The separate opt-in harness needs rootful Podman, Go, Node, the UI's locked
 Playwright dependencies, normal Google Chrome, outbound HTTPS, and the operator
@@ -321,4 +430,4 @@ uses installed Codex with disposable configuration/trust/auth state, production
 assets, local fake services and no external network route. Its root-authenticated
 runtime control/status is a fixture, not the real Podman runtime. Together these
 checks establish the respective native-hook and actual-runtime interactions;
-neither establishes mandatory API fencing or live model certification.
+neither substitutes for BPF LSM kernel certification or live model certification.

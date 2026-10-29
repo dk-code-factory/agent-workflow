@@ -6,17 +6,37 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/internal/socketfence"
 	"golang.org/x/sys/unix"
 )
+
+func TestMain(m *testing.M) {
+	// Only the test binary recognizes this entrypoint. Production workload()
+	// always inspects the caller account and system routing defaults.
+	if len(os.Args) == 3 && os.Args[1] == "__network_runtime_workload_fixture_v1" {
+		root := os.Args[2]
+		err := workloadWithRouting(func(env []string) error {
+			return validateSavedRoutingWithDefaults(env, filepath.Join(root, "account"), []string{filepath.Join(root, "system")})
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(125)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // This fake runs only under the deterministic test binary. It exercises the
 // production Unix protocol and lifetime fd without privileges or provider calls.
@@ -47,7 +67,7 @@ func fixtureService(t *testing.T) (*service, string) {
 	}
 	ref := Reference{Name: "test", Identity: randomID(), Generation: 1}
 	ref.Endpoint = Endpoint(ref.Name, ref.Identity)
-	s := &service{probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Healthy: true, Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
+	s := &service{checkRouting: func(Request, *unix.Ucred, []uint32) error { return nil }, checkBoundary: func() error { return nil }, probe: func() error { return nil }, config: registration{Users: map[uint32]bool{uint32(os.Getuid()): true}}, dir: dir, run: run, stop: make(chan struct{}), status: Status{Reference: ref, Healthy: true, SocketEnforcement: "bpf-lsm-unix-v1", Members: map[string]Membership{}}, keeper: &exec.Cmd{Process: &os.Process{Pid: 1}}}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +137,46 @@ func readResponse(t *testing.T, c *net.UnixConn) Response {
 	}
 	return out
 }
+func TestAuthenticationReplacementCannotOpenAdmission(t *testing.T) {
+	s, control := fixtureService(t)
+	s.checkBoundary = nil // Exercise the real missing-boundary admission check.
+	s.config.Generation = s.status.Reference.Generation
+	path := filepath.Join(t.TempDir(), "auth")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	listener.SetUnlinkOnClose(false)
+	enrolled, checked, err := socketfence.OpenSocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked.Close()
+	s.config.AuthenticationSockets = []socketfence.Socket{enrolled}
+	// Replace the pathname after registration/validation and before installation.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	if err := s.installBoundary([]string{control}); err == nil || !strings.Contains(err.Error(), "enrolled socket identity changed") {
+		t.Fatalf("replacement reached policy installation: %v", err)
+	}
+	if s.boundary != nil {
+		t.Fatal("failed startup installed a boundary")
+	}
+	started := false
+	s.memberCommand = func(string) *exec.Cmd { started = true; return exec.Command("/bin/true") }
+	_, response := requestAt(t, control, Request{Operation: "exec", Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, true)
+	if response.Error == "" || started || len(s.status.Members) != 0 {
+		t.Fatalf("failed enrollment admitted a workload: response=%+v started=%v members=%v", response, started, s.status.Members)
+	}
+}
+
 func TestConcurrentMembershipDisconnectAndBusyStop(t *testing.T) {
 	t.Setenv("AW_MEMBER_FIXTURE", "1")
 	s, socket := fixtureService(t)
@@ -381,5 +441,55 @@ func TestStatusExposesHeldNetworkNamespace(t *testing.T) {
 		if response.Error != "" || response.Status.NetworkNamespace != "net:[12345]" || response.Status.Reference != ref || !response.Status.Healthy {
 			t.Fatalf("namespace status missing: %+v", response)
 		}
+	}
+}
+
+func TestSocketEnforcementFailuresPreventLaunchAndReservations(t *testing.T) {
+	for _, failure := range []string{"missing", "disabled", "unsupported-kernel", "initialization-failure", "stale-map", "replaced-link", "service-crash", "timeout"} {
+		t.Run(failure, func(t *testing.T) {
+			for _, operation := range []string{"exec", "reserve"} {
+				t.Run(operation, func(t *testing.T) {
+					s, socket := fixtureService(t)
+					s.mu.Lock()
+					checks, launches := 0, 0
+					s.checkBoundary = func() error { checks++; return errors.New(failure) }
+					s.memberCommand = func(string) *exec.Cmd { launches++; return exec.Command("/bin/false") }
+					s.mu.Unlock()
+					_, out := requestAt(t, socket, Request{Operation: operation, Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, operation == "exec")
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					if out.Error != failure || checks != 1 {
+						t.Fatalf("unavailable enforcement did not reject %s: error=%q checks=%d", operation, out.Error, checks)
+					}
+					if launches != 0 || len(s.status.Members) != 0 {
+						t.Fatal("workload effects preceded enforcement")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestStaleGenerationRejectedWithHealthyEnforcement(t *testing.T) {
+	s, socket := fixtureService(t)
+	ref := s.status.Reference
+	ref.Generation++
+	_, out := requestAt(t, socket, Request{Operation: "exec", Reference: ref, ID: randomID(), Path: "/bin/true"}, true)
+	if out.Error == "" {
+		t.Fatal("stale generation admitted")
+	}
+}
+
+func TestRoutingAdmissionFailureLeavesNoUncertainMembership(t *testing.T) {
+	s, socket := fixtureService(t)
+	s.checkRouting = func(Request, *unix.Ucred, []uint32) error { return errors.New("saved SSH API route") }
+	_, out := requestAt(t, socket, Request{Operation: "exec", Reference: s.status.Reference, ID: randomID(), Path: "/bin/true"}, true)
+	if out.Error == "" {
+		t.Fatal("unsupported route admitted")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.status.Members) != 0 {
+		t.Fatal("rejected admission blocked unrelated callers")
 	}
 }
