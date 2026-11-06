@@ -361,6 +361,12 @@ share the host execution capacity, and durable resume retains completed work.
 See [YAML control flow](docs/YAML_CONTROL_FLOW.md) for syntax, result scope,
 cancellation, and recovery semantics.
 
+YAML `conversation` steps let declared roles exchange messages in persistent
+sessions, with one designated finisher and shared turn, message, and time limits.
+The result uses the existing structured-output contracts and named step paths.
+See [YAML conversations](docs/YAML_CONVERSATIONS.md) for syntax, adapter
+requirements, permissions, and durable recovery.
+
 ### Named step results
 
 Successfully completed agent results have concise paths:
@@ -532,7 +538,8 @@ identifier; both `agent` and `prompt` must be YAML strings. Quote date-like
 prompts such as `prompt: "2026-11-06"` so YAML treats them as strings. The other
 supported task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
 An `agent` step may instead use the existing `with.prompt` or `with.message`
-form when top-level `prompt` is absent. Top-level `prompt` requires `agent`.
+form when top-level `prompt` is absent. Top-level `prompt` requires `agent` or
+`conversation`.
 Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
 even when their values match. Nonempty command fields cannot combine with an
 agent call; empty or null command fields remain inactive in either authoring form.

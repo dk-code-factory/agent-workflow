@@ -93,7 +93,7 @@ func validateResultReferences(w *Workflow) error {
 					return err
 				}
 				with := step.With
-				if strings.HasPrefix(step.Uses, "agent/") && step.With["output"] != nil {
+				if (strings.HasPrefix(step.Uses, "agent/") || step.Conversation != nil) && step.With["output"] != nil {
 					output, err := resolveNamedOutput(w, step.With["output"])
 					if err != nil {
 						return fmt.Errorf("%s.steps.%s.with.output: %w", prefix, sid, err)
@@ -104,7 +104,7 @@ func validateResultReferences(w *Workflow) error {
 					}
 					with["output"] = output
 				}
-				for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+				for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory, "prompt": conversationPrompt(step)} {
 					if err := check(value, fmt.Sprintf("%s.steps.%s.%s", prefix, sid, field), id, available, field == "if"); err != nil {
 						return err
 					}

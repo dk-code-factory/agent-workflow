@@ -16,6 +16,7 @@ export const controllerParameters: Record<string, string[]> = {
 };
 export const dependencies = (job: Job): string[] => (Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []).map(s => s.trim()).filter(Boolean);
 export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(step, 'agent') ? `agent/${step.agent}` : step.uses as string | undefined;
+export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'conversation') || !!stepAction(step)?.startsWith('agent/');
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -62,6 +63,7 @@ const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
+  conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'integer', maxMessages: 'integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string',
 };
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
@@ -223,7 +225,7 @@ export function parseWorkflow(source: string): Parsed {
           }
         }
       } else if (Array.isArray(shape)) {
-        valid = Array.isArray(value);
+        valid = Array.isArray(value) && (path.at(-1) !== 'conversation' || value.every(item => item != null));
         if (valid) {
           // yaml.v3 omits null elements from typed slices, including steps,
           // schedules and argv. Keep the YAML tree aligned with semantic step
@@ -334,6 +336,26 @@ function validateWorkflow(w: Workflow, add: Add) {
         for (const key of Object.keys(step)) if (!['id', 'name', 'if', kind].includes(key)) add('block', `Block cannot contain ${key}`, [...sp, key]);
         return;
       }
+      const conversation = Object.hasOwn(step, 'conversation');
+      if (conversation) {
+        const participants = step.conversation ?? [];
+        if (participants.length < 2 || participants.length > 16 || participants.some(role => !identifier.test(role)) || new Set(participants).size !== participants.length) add('conversation', 'conversation requires 2–16 distinct literal role identifiers', [...sp, 'conversation']);
+        if (step.start && !participants.includes(step.start)) add('conversation', 'start must name a declared participant', [...sp, 'start']);
+        if (!participants.includes(step.finishBy ?? '')) add('conversation', 'finishBy must name a declared participant', [...sp, 'finishBy']);
+        for (const [key, limit] of [['maxTurns', 100], ['maxMessages', 256]] as const) if (step[key] !== undefined && (!Number.isInteger(step[key]) || step[key]! < 1 || step[key]! > limit)) add('conversation', `${key} must be an integer from 1 to ${limit}`, [...sp, key]);
+        if (typeof step.prompt !== 'string' || !step.prompt.trim()) add('conversation', 'Conversation requires a nonempty prompt', [...sp, 'prompt']);
+        if (step.timeout && !validDuration(String(step.timeout), 86400000000000n)) add('timeout', 'Expected a positive Go duration of at most 24h', [...sp, 'timeout']);
+        for (const key of ['uses', 'agent', 'argv', 'run', 'shell', 'working-directory', 'context']) if (Object.hasOwn(step, key)) add('conversation', `Conversation cannot contain ${key}`, [...sp, key]);
+        for (const key of Object.keys(step.with ?? {})) if (!['output', 'model', 'workspace'].includes(key)) add('conversation', `Unsupported conversation parameter "${key}"`, [...sp, 'with', key]);
+        const output = step.with?.output;
+        const completionSchema = mapping(output) && typeof output.schema === 'string' ? w.schemas?.[output.schema] : mapping(output) ? output.schema : undefined;
+        if (mapping(completionSchema) && completionSchema.type !== undefined && completionSchema.type !== 'object') add('conversation-output', 'Conversation completion schema must have type object', [...sp, 'with', 'output', 'schema']);
+        if (output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
+        if (mapping(output) && typeof output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, output.schema)) add('schema-reference', `Unknown workflow-local schema "${output.schema}"`, [...sp, 'with', 'output', 'schema']);
+        add('host-conversation', 'Resumable sessions and managed messaging require host adapter admission', [...sp, 'conversation'], undefined, 'host', 'info');
+        return;
+      }
+      for (const key of ['start', 'finishBy', 'maxTurns', 'maxMessages']) if (Object.hasOwn(step, key)) add('conversation', `${key} requires conversation`, [...sp, key]);
       const shorthand = Object.hasOwn(step, 'agent');
       const prompt = Object.hasOwn(step, 'prompt');
       const uses = stepAction(step);
@@ -431,12 +453,12 @@ function validateWorkflow(w: Workflow, add: Add) {
   inspect(w, []);
   for (const [jobID] of Object.entries(jobs)) for (const { step, path: stepPath } of trees.get(jobID) ?? []) {
     const output = step.with?.output;
-    if (!stepAction(step)?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
+    if (!hasAgentResult(step) || !mapping(output) || typeof output.schema !== 'string') continue;
     const declaration = w.schemas?.[output.schema];
     if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, stepPath);
   }
 }
-function validDuration(value: string) {
+function validDuration(value: string, maximum = 9223372036854775807n) {
   if (!/^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/.test(value)) return false;
   const units: Record<string, bigint> = { ns: 1n, us: 1000n, 'µs': 1000n, 'μs': 1000n, ms: 1000000n, s: 1000000000n, m: 60000000000n, h: 3600000000000n };
   let total = 0n;
@@ -448,5 +470,5 @@ function validDuration(value: string) {
     total += BigInt(integer) * units[match[2]] + (digits ? BigInt(digits) * units[match[2]] / (10n ** BigInt(digits.length)) : 0n);
     if (total > 9223372036854775807n) return false;
   }
-  return total > 0n;
+  return total > 0n && total <= maximum;
 }

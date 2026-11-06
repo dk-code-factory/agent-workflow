@@ -4,6 +4,7 @@ export interface Step extends Mapping {
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   parallel?: Step[]; sequence?: Step[];
+  conversation?: string[]; start?: string; finishBy?: string; maxTurns?: number; maxMessages?: number;
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;

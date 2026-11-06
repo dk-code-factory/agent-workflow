@@ -228,7 +228,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-15.spec.ts)
 
-- **Coverage:** Templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call.
+- **Coverage:** Command and conversation templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call. Conversation templates supply declared participants, a finisher, and bounded call/message/time settings.
 
 - **Starting point:** I have selected a job with sequential steps.
 - **My flow:** I choose a step template from **Add to workflow**, using
@@ -241,10 +241,12 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo.
 
-- **Starting point:** I add or select an agent step.
-- **My flow:** I choose the agent under **Step type**, or edit **Action target**
+- **Starting point:** I add or select an agent or conversation step.
+- **My flow:** For a conversation I select **Conversation** under **Step type**,
+  edit **Participants (YAML)**, **Starter**, **Finisher**, and bounded call, message,
+  and timeout settings. For an agent I choose it under **Step type**, or edit **Action target**
   → write the **Prompt** → optionally set **Message**, **Model**, **Workspace**,
   and a **Structured output contract (YAML)**.
 - **Named contracts:** Declare a workflow-level `schemas` map in YAML, then set

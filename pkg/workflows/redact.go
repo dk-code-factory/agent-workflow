@@ -165,6 +165,36 @@ func safeResult(run *Run, err error, secrets map[string]string) (*Run, error) {
 }
 
 func redactAttempt(a Attempt, secrets map[string]string) Attempt {
+	if a.Conversation != nil {
+		copy := *a.Conversation
+		copy.Roles = append([]string(nil), copy.Roles...)
+		copy.Sessions = make(map[string]string, len(a.Conversation.Sessions))
+		for role, id := range a.Conversation.Sessions {
+			copy.Sessions[role] = id
+		}
+		copy.Receipts = make(map[string]ConversationReceipt, len(a.Conversation.Receipts))
+		for id, receipt := range a.Conversation.Receipts {
+			receipt.Reply = append(json.RawMessage(nil), receipt.Reply...)
+			copy.Receipts[id] = receipt
+		}
+		copy.Prompt = Redact(copy.Prompt, secrets)
+		copy.Failure = Redact(copy.Failure, secrets)
+		copy.Result = redactValue(copy.Result, secrets)
+		copy.Queue = append([]ConversationDelivery(nil), copy.Queue...)
+		for i := range copy.Queue {
+			copy.Queue[i].Message = Redact(copy.Queue[i].Message, secrets)
+		}
+		copy.Transcript = append([]ConversationDelivery(nil), copy.Transcript...)
+		for i := range copy.Transcript {
+			copy.Transcript[i].Message = Redact(copy.Transcript[i].Message, secrets)
+		}
+		if copy.Active != nil {
+			active := *copy.Active
+			active.Message = Redact(active.Message, secrets)
+			copy.Active = &active
+		}
+		a.Conversation = &copy
+	}
 	a.TaskOutputs, _ = redactValue(a.TaskOutputs, secrets).(map[string]any)
 	repairs := make([]map[string]any, len(a.RepairOutputs))
 	for i, out := range a.RepairOutputs {

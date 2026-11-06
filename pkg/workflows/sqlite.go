@@ -39,22 +39,23 @@ type Snapshot struct {
 }
 
 type Attempt struct {
-	InputFingerprint string           `json:"input_fingerprint,omitempty"`
-	Phase            string           `json:"phase,omitempty"`
-	TaskAttemptID    string           `json:"task_attempt_id,omitempty"`
-	TaskOutputs      map[string]any   `json:"task_outputs,omitempty"`
-	RepairCount      int              `json:"repair_count,omitempty"`
-	RepairOutputs    []map[string]any `json:"repair_outputs,omitempty"`
-	ID               string           `json:"id"`
-	RunID            string           `json:"run_id"`
-	JobID            string           `json:"job_id"`
-	StepID           string           `json:"step_id"`
-	Iteration        int              `json:"iteration"`
-	Number           int              `json:"number"`
-	Status           string           `json:"status"`
-	StartedAt        time.Time        `json:"started_at"`
-	FinishedAt       time.Time        `json:"finished_at,omitempty"`
-	Result           StepExecution    `json:"result"`
+	Conversation     *ConversationState `json:"conversation,omitempty"`
+	InputFingerprint string             `json:"input_fingerprint,omitempty"`
+	Phase            string             `json:"phase,omitempty"`
+	TaskAttemptID    string             `json:"task_attempt_id,omitempty"`
+	TaskOutputs      map[string]any     `json:"task_outputs,omitempty"`
+	RepairCount      int                `json:"repair_count,omitempty"`
+	RepairOutputs    []map[string]any   `json:"repair_outputs,omitempty"`
+	ID               string             `json:"id"`
+	RunID            string             `json:"run_id"`
+	JobID            string             `json:"job_id"`
+	StepID           string             `json:"step_id"`
+	Iteration        int                `json:"iteration"`
+	Number           int                `json:"number"`
+	Status           string             `json:"status"`
+	StartedAt        time.Time          `json:"started_at"`
+	FinishedAt       time.Time          `json:"finished_at,omitempty"`
+	Result           StepExecution      `json:"result"`
 }
 
 type Event struct {
@@ -341,6 +342,9 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 		return Attempt{}, false, err
 	}
 	a := Attempt{Phase: phase, InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
+	if phase == "orchestration" && last.Conversation != nil {
+		a.Conversation = last.Conversation
+	}
 	if schemaPhase(last.Phase) {
 		a.Phase = last.Phase
 		a.TaskAttemptID = last.TaskAttemptID
@@ -727,4 +731,30 @@ func sqliteDSN(path string, readOnly bool) (string, error) {
 	}
 	u := url.URL{Scheme: "file", Path: absolute, RawQuery: query.Encode()}
 	return u.String(), nil
+}
+
+// ConversationAttempt reads the latest physical turn receipt without admitting
+// work. Recovery can consume completed turns after the conversation deadline.
+func (s *SQLiteStore) ConversationAttempt(ctx context.Context, run, job, step string, iteration int) (Attempt, bool, error) {
+	var data []byte
+	var a Attempt
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return a, false, err
+	}
+	defer tx.Rollback()
+	if err := checkFence(ctx, tx); err != nil {
+		return a, false, err
+	}
+	err = tx.QueryRowContext(ctx, "SELECT record FROM attempts WHERE run_id=? AND job_id=? AND step_id=? AND iteration=? ORDER BY number DESC LIMIT 1", run, job, step, iteration).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, false, nil
+	}
+	if err != nil {
+		return a, false, err
+	}
+	if err := decodeJSONWithNumbers(data, &a); err != nil {
+		return a, false, err
+	}
+	return a, true, tx.Commit()
 }

@@ -89,6 +89,15 @@ func Validate(w *Workflow) error {
 				}
 				continue
 			}
+			if step.Conversation != nil {
+				if err := validateConversationStep(w, step); err != nil {
+					return fmt.Errorf("step %s: %w", sid, err)
+				}
+				continue
+			}
+			if step.Start != "" || step.FinishBy != "" || step.MaxTurns != 0 || step.MaxMessages != 0 {
+				return fmt.Errorf("step %s: conversation fields require conversation", sid)
+			}
 			command := len(step.Argv) > 0 || step.Run != ""
 			if command {
 				if step.Uses != "" || len(step.With) > 0 {
