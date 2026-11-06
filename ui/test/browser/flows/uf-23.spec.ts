@@ -74,3 +74,23 @@ test('concise result suggestions and operand diagnostics follow runner scopes', 
   await condition.fill('${{ "}}" == "}}" }}'); await condition.press('Tab');
   await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toHaveCount(0);
 });
+
+test('shared-schema suggestions stay bounded and YAML prefixes reach later dependency fields', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  const source = await page.evaluate(() => {
+    const schemas = { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`field${index}`, { type: 'string' }])) } };
+    const jobs = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`producer${index}`, { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } }] }]));
+    const needs = Object.keys(jobs);
+    (window as any).first.update({ source: JSON.stringify({ schemas, jobs: { ...jobs, consumer: { needs, steps: [{ id: 'read', agent: 'claude', prompt: 'Read' }] } } }) });
+    return `schemas: ${JSON.stringify(schemas)}\njobs:\n${Object.entries(jobs).map(([id, job]) => `  ${id}: ${JSON.stringify(job)}`).join('\n')}\n  consumer:\n    needs: ${JSON.stringify(needs)}\n    steps:\n      - id: read\n        agent: claude\n        prompt: |\n          ${'${{'} needs.producer24.steps.analyze.field49`;
+  });
+  await expect(editor.locator('.aw-inspector-content > datalist option')).toHaveCount(200);
+  await editor.getByRole('button', { name: 'Inspect job consumer', exact: true }).click();
+  await editor.getByRole('button', { name: '1. read', exact: true }).click();
+  await expect(editor.locator('.aw-inspector-content > datalist option')).toHaveCount(200);
+  await expect(editor.getByLabel('Insert expression into Prompt', { exact: true }).locator('option')).toHaveCount(201);
+  await editor.getByRole('button', { name: 'YAML', exact: true }).click();
+  const yaml = editor.getByRole('textbox', { name: 'Workflow YAML' });
+  await yaml.fill(source); await yaml.press('Control+Space');
+  await expect(editor.getByRole('option', { name: 'needs.producer24.steps.analyze.field49', exact: true })).toBeVisible();
+});

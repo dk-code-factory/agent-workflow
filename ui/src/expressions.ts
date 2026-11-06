@@ -3,6 +3,13 @@ export interface Reference {
   scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets'; id: string;
   step?: string; output?: string; tail?: string; offset: number;
 }
+const expressionSpace = /^\p{White_Space}$/u;
+function expressionEdges(value: string): [number, number] {
+  let start = 0, end = value.length;
+  while (start < end && expressionSpace.test(value[start])) start++;
+  while (end > start && expressionSpace.test(value[end - 1])) end--;
+  return [start, end];
+}
 export function mapReferences(text: string, callback: (ref: Reference) => string | undefined, bareExpression = false): string {
   const mapBody = (body: string): string => {
     const result: string[] = [];
@@ -38,8 +45,8 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
     while (pending.length) {
       const item = pending.pop()!;
       if (typeof item === 'string') { result.push(item); continue; }
-      const expression = item.body.trim();
-      const leading = item.body.length - item.body.trimStart().length;
+      const [leading, trimmedEnd] = expressionEdges(item.body);
+      const expression = item.body.slice(leading, trimmedEnd);
       const offset = item.offset + leading;
       result.push(item.body.slice(0, leading));
       const trailing = item.body.slice(leading + expression.length);
@@ -84,11 +91,11 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
   // Conditions and repeat.until also accept expressions without interpolation
   // delimiters. Other strings are prose unless enclosed in ${{ ... }}.
   if (bareExpression) {
-    const trimmed = text.trim();
+    const [leading, end] = expressionEdges(text);
+    const trimmed = text.slice(leading, end);
     if (trimmed.startsWith('${{') && trimmed.endsWith('}}')) {
-      const start = text.length - text.trimStart().length + 3;
-      const end = text.trimEnd().length - 2;
-      return text.slice(0, start) + mapBody(text.slice(start, end)) + text.slice(end);
+      const start = leading + 3, bodyEnd = end - 2;
+      return text.slice(0, start) + mapBody(text.slice(start, bodyEnd)) + text.slice(bodyEnd);
     }
     return mapBody(text);
   }

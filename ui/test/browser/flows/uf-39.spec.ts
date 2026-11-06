@@ -102,3 +102,29 @@ test('named step result wiring inserts a nested field without declaring a job ou
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
 });
+
+test('named result picker bounds schema fields and typed prefixes reach a later field', async ({ page }) => {
+  const source = JSON.stringify({
+    schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
+    jobs: {
+      review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } }] },
+      summarize: { steps: [{ id: 'summary', agent: 'claude', prompt: 'Read' }] },
+    },
+  });
+  const ui = await open(page, source);
+  await job(page, 'summarize'); await ui.getByRole('button', { name: '1. summary', exact: true }).click();
+  await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).click();
+  const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
+  await picker.getByLabel('Result source', { exact: true }).selectOption('result');
+  await expect(picker.locator('datalist option')).toHaveCount(200);
+  await expect(picker.locator('datalist option').filter({ hasText: /^field999$/ })).toHaveCount(0);
+  await picker.getByLabel('Result field', { exact: true }).fill('field999');
+  await expect(picker.locator('datalist option')).toHaveCount(1);
+  await expect(picker.locator('datalist option').filter({ hasText: /^field999$/ })).toHaveCount(1);
+  await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
+  await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('${{ needs.review.steps.analyze.field999 }}');
+  await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.summarize.steps[0].prompt).toContain('${{ needs.review.steps.analyze.field999 }}');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+});

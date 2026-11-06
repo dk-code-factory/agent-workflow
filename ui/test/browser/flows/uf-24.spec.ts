@@ -68,3 +68,19 @@ test('step renames update concise local and dependency results and deletion revi
   await editor.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.message.includes('Unknown step "inspect"')))).toBe(true);
 });
+
+test('YAML next-line whitespace keeps legacy references in rename and deletion review', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  const source = String.raw`jobs: {review: {steps: [{id: first, agent: claude, prompt: Review}, {id: consume, agent: claude, prompt: "${'${{'} \Nsteps.first.outputs.text\N }}"}]}}`;
+  await page.evaluate(source => (window as any).first.update({ source }), source);
+  await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await editor.getByRole('button', { name: '1. first', exact: true }).click();
+  const id = editor.getByLabel('Step ID', { exact: true });
+  await id.fill('renamed'); await id.press('Enter');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.review.steps[1].prompt)).toBe('${{ \u0085steps.renamed.outputs.text\u0085 }}');
+  await editor.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe(source);
+  await editor.getByRole('button', { name: 'Redo', exact: true }).click();
+  await editor.getByRole('button', { name: 'Delete step', exact: true }).click();
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.prompt');
+});

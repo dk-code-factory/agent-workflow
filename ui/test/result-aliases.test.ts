@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowDocument } from '../src/document';
 import { mapReferences, references, referenceText } from '../src/expressions';
-import { expressionSuggestions } from '../src/source';
+import { expressionSuggestions, stepResultPaths } from '../src/source';
 import { parseWorkflow } from '../src/validation';
 
 const workflow = {
@@ -142,6 +142,30 @@ describe('named step result references', () => {
     expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.steps.inspect.with space }}');
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
   });
+  it.each(['\u0085', '\u00a0', '\u2007', '\u202f'])('tracks runner whitespace %j through rename, deletion review and Undo', space => {
+    const prompt = '${{' + space + 'steps.analyze.outputs.text' + space + '}}';
+    const condition = space + '${{' + space + 'not ' + space + 'steps.analyze.text' + space + '}}' + space;
+    const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
+    doc.setField(['jobs', 'review', 'steps', 1, 'prompt'], prompt);
+    doc.setField(['jobs', 'review', 'steps', 1, 'if'], condition);
+    const source = doc.getSnapshot().source;
+    expect(references(prompt)).toEqual([expect.objectContaining({ id: 'analyze', output: 'text', offset: space.length })]);
+    expect(references(condition, true)).toEqual([expect.objectContaining({ id: 'analyze', tail: '.text', offset: space.length + 4 + space.length })]);
+    expect(doc.deletionImpact('review', 0)).toEqual(expect.arrayContaining([
+      ['jobs', 'review', 'steps', 1, 'prompt'], ['jobs', 'review', 'steps', 1, 'if'],
+    ]));
+    doc.renameStep('review', 0, 'inspect');
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].prompt).toBe(prompt.replace('analyze', 'inspect'));
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].if).toBe(condition.replace('analyze', 'inspect'));
+    doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+    doc.setField(['jobs', 'review', 'steps', 0, 'if'], condition);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['jobs', 'review', 'steps', 0, 'if'] }));
+  });
+  it('keeps BOM characters in operands because the runner does not trim them', () => {
+    expect(references('${{ \ufeffsteps.analyze.text }}')).toEqual([]);
+    expect(references('${{ steps.analyze.text\ufeff }}')).toEqual([expect.objectContaining({ tail: '.text\ufeff' })]);
+    expect(mapReferences('${{ \u0085steps.analyze.text\ufeff\u0085 }}', ref => referenceText({ ...ref, id: 'inspect' }))).toBe('${{ \u0085steps.inspect.text\ufeff\u0085 }}');
+  });
   it('checks job-level arbitrary-field references while preserving legacy fields and literals', () => {
     const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
     doc.setField(['jobs', 'review', 'if'], 'steps.analyze.with space');
@@ -247,6 +271,50 @@ describe('named step result references', () => {
     expect(expressionSuggestions(parsed.workflow, 'review', 1)).toContain('steps.analyze.details.reason');
     expect(expressionSuggestions(parsed.workflow, 'summarize', 0)).toContain('needs.review.steps.analyze.approved');
     expect(expressionSuggestions(parsed.workflow)).toContain('jobs.review.steps.analyze.details.reason');
+  });
+  it('bounds shared-schema suggestions before expansion in root and dependency inspectors while keeping typed paths reachable', () => {
+    const producer = (id: string) => ({ id, agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } });
+    const dependencies = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`producer${index}`, { steps: [producer(`result${index}`)] }]));
+    const parsed = parseWorkflow(JSON.stringify({
+      schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
+      jobs: {
+        producer: { steps: Array.from({ length: 100 }, (_, index) => producer(`result${index}`)) },
+        ...dependencies,
+        consumer: { needs: ['producer'], steps: [{ agent: 'claude', prompt: 'Read' }] },
+        wide: { needs: Object.keys(dependencies), steps: [{ agent: 'claude', prompt: 'Read' }] },
+      },
+    }));
+    expect(parsed.usable).toBe(true);
+    expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    const schema = parsed.workflow!.schemas!.Shared as { properties: Record<string, unknown> };
+    let reads = 0;
+    schema.properties = new Proxy(schema.properties, { get(target, key) {
+      if (++reads > 250) throw new Error('Suggestion schema expansion budget exceeded');
+      return Reflect.get(target, key);
+    } });
+    for (const job of [undefined, 'consumer', 'wide']) {
+      reads = 0;
+      expect(expressionSuggestions(parsed.workflow, job, job ? 0 : undefined)).toHaveLength(200);
+      expect(reads).toBeLessThan(250);
+      reads = 0;
+      const prefix = `${job ? 'needs' : 'jobs'}.${job === 'wide' ? 'producer99' : 'producer'}.steps.result99.field999`;
+      expect(expressionSuggestions(parsed.workflow, job, job ? 0 : undefined, undefined, prefix)).toEqual([prefix]);
+      expect(reads).toBeLessThan(250);
+    }
+  });
+  it('bounds a single named schema before materialization and finds fields beyond the initial result-picker list', () => {
+    let reads = 0;
+    const properties = new Proxy(Object.fromEntries(Array.from({ length: 100_000 }, (_, index) => [`field${index}`, { type: 'string' }])), { get(target, key) {
+      if (++reads > 250) throw new Error('Result picker schema expansion budget exceeded');
+      return Reflect.get(target, key);
+    } });
+    const schemas = { Shared: { type: 'object', properties } };
+    const producer = { agent: 'claude', with: { output: { schema: 'Shared' } } };
+    expect(stepResultPaths(producer, schemas)).toHaveLength(200);
+    expect(reads).toBeLessThan(250);
+    reads = 0;
+    expect(stepResultPaths(producer, schemas, 'field99999')).toEqual(['field99999']);
+    expect(reads).toBeLessThan(250);
   });
   it.each([
     ['preceding', 'steps.first.text', false],

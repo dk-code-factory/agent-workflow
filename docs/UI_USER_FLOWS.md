@@ -351,7 +351,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-23.spec.ts)
 
-- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it.
+- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; typing a YAML path still finds a later producer's field beyond that initial list.
 
 - **Starting point:** I am editing a field that supports expressions.
 - **My flow:** I use field suggestions, choose **Insert expression…** in a
@@ -362,7 +362,8 @@ fields. Escape discards an uncommitted field edit.
   dependency outputs, and named dependency step results. Concise paths such as
   `steps.analyze.approved` and `needs.review.steps.analyze.approved` use known
   structured schema fields; `text` offers the completed text result. Literal
-  metadata fields do not offer expressions.
+  metadata fields do not offer expressions. Lists show up to 200 suggestions;
+  typing a more specific YAML path narrows completion to matching references.
 
 ## Revising and removing content
 
@@ -370,7 +371,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-24.spec.ts)
 
-- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update concise local and cross-job references, including named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo. Deleting a producer lists local and dependent consuming paths and leaves an unknown-step diagnostic after confirmation.
+- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update concise local and cross-job references, including named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo. Deleting a producer lists local and dependent consuming paths and leaves an unknown-step diagnostic after confirmation. YAML next-line whitespace around a legacy output reference preserves rename tracking, deletion impact and exact source restoration through Undo.
 
 - **Starting point:** I select a job, step, callable interface entry, or job output.
 - **My flow:** I edit **Job ID**, **Step ID**, or the entry's **Identifier** →
@@ -580,7 +581,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-39.spec.ts)
 
-- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed. Named step result wiring offers nested fields from a named output schema, previews and inserts that path into an agent shorthand prompt, adds the dependency, leaves producer outputs undeclared, restores focus, and reverses the complete transaction with one Undo.
+- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed. Named step result wiring offers nested fields from a named output schema, previews and inserts that path into an agent shorthand prompt, adds the dependency, leaves producer outputs undeclared, restores focus, and reverses the complete transaction with one Undo. A large named schema shows at most 200 result-field suggestions; typing a later field narrows that list, and the resulting wiring still previews, applies and reverses with one Undo.
 
 - **Starting point:** My `review` job contains an agent step with ID `analyze`,
   and a `summarize` job needs its result.
@@ -591,7 +592,8 @@ fields. Escape discards an uncommitted field edit.
   I can also declare outputs and dependencies separately and use the expression picker.
   Alternatively I choose **Named step result**, select `analyze`, and enter
   `text` or a structured field path such as `details.reason`; this mode needs
-  no job output name.
+  no job output name. Result-field suggestions show up to 200 matching paths;
+  typing a field prefix narrows the list, including fields beyond its initial entries.
 - **What I see:** Confirmation updates the output, dependency, and field together,
   inserting `${{ needs.review.outputs.report }}` at my text selection. Existing
   matching outputs are reused; conflicting names and dependency cycles are rejected.
