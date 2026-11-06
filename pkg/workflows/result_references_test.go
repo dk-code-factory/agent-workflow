@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -161,6 +162,39 @@ jobs:
 	}
 	if err := Validate(w); err != nil {
 		t.Fatalf("literal item data was interpreted as a reference: %v", err)
+	}
+}
+
+func TestConciseResultsPreserveLegacyEmptyPathComponents(t *testing.T) {
+	step := StepExecution{ID: "review", Status: RunStatusSkipped, Outputs: map[string]any{
+		"text": "legacy reply", "structured": map[string]any{
+			"": map[string]any{"outputs": map[string]any{"text": "different"}},
+		},
+	}}
+	ctx := expressionContext{Steps: map[string]StepExecution{"review": step}}
+	metadata := map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}
+	for path, want := range map[string]any{
+		"steps.review..outputs.text": "legacy reply",
+		"steps.review...status":      RunStatusSkipped,
+		"steps.review.":              metadata,
+		"steps.review..":             metadata,
+		"steps.review..text":         nil,
+	} {
+		got, err := lookupPath(path, ctx)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("legacy path %s: got %#v, %v; want %#v", path, got, err, want)
+		}
+		if newResultReference(strings.Split(path, ".")) {
+			t.Errorf("legacy path %s acquired concise admission rules", path)
+		}
+	}
+	for _, condition := range []string{"steps.later..status", "false and steps.later.outputs.text", "false and steps.later..outputs.text"} {
+		w := &Workflow{Jobs: map[string]Job{"main": {
+			If: condition, Steps: []Step{{ID: "later", Argv: []string{"echo", "ready"}}},
+		}}}
+		if err := Validate(w); err != nil {
+			t.Fatalf("legacy metadata reference %q rejected: %v", condition, err)
+		}
 	}
 }
 
@@ -333,6 +367,26 @@ func TestLongConciseResultConditions(t *testing.T) {
 				t.Fatalf("lost runtime short circuit for %q: %v, %v", prefix, allowed, err)
 			}
 		}
+	}
+	steps := make([]Step, 1_000)
+	for index := range steps {
+		steps[index] = Step{Argv: []string{"echo", "skipped"}}
+	}
+	condition := "false and " + strings.Repeat("needs.p.steps.step_1000.status and ", 100_000) + "true"
+	needs := make([]string, 1_000)
+	jobs := make(map[string]Job, len(needs)+1)
+	for index := range needs {
+		needs[index] = fmt.Sprintf("dependency_%d", index)
+		jobs[needs[index]] = Job{Steps: []Step{{Argv: []string{"echo", "skipped"}}}}
+	}
+	needs[len(needs)-1] = "p"
+	jobs["p"] = Job{Steps: steps}
+	jobs["consumer"] = Job{Needs: needs, If: condition, Steps: []Step{{Argv: []string{"echo", "skipped"}}}}
+	if err := Validate(&Workflow{Jobs: jobs}); err != nil {
+		t.Fatalf("reference-heavy condition: %v", err)
+	}
+	if allowed, err := evalIf(condition, expressionContext{}); err != nil || allowed {
+		t.Fatalf("lost reference-heavy runtime short circuit: %v, %v", allowed, err)
 	}
 }
 

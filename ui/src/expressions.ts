@@ -99,7 +99,7 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
 export function referenceText(ref: Pick<Reference, 'scope' | 'id' | 'step' | 'output' | 'tail'>): string {
   return `${ref.scope}.${ref.id}${ref.step === undefined ? '' : `.steps.${ref.step}`}${ref.output === undefined ? '' : `.outputs.${ref.output}`}${ref.tail ?? ''}`;
 }
-export const isConciseStepReference = (ref: Reference) => ref.scope === 'steps' && ref.output === undefined && !!ref.tail && !/^\.(outputs|status|error)(\.|$)/.test(ref.tail);
+export const isConciseStepReference = (ref: Reference) => ref.scope === 'steps' && ref.output === undefined && !!ref.tail && ref.tail !== '.' && !ref.tail.startsWith('..') && !/^\.(outputs|status|error)(\.|$)/.test(ref.tail);
 export function references(text: string, bareExpression = false) {
   const result: Reference[] = [];
   mapReferences(text, ref => { result.push(ref); return undefined; }, bareExpression);

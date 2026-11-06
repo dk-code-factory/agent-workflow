@@ -116,6 +116,16 @@ describe('named step result references', () => {
     ]);
     expect(references('${{ inputs.config.needs.review.steps.analyze.text }}')).toEqual([expect.objectContaining({ scope: 'inputs', id: 'config', step: undefined })]);
   });
+  it.each(['.', '..', '.outputs.text', '..outputs.text', '...status', '..text'])('preserves legacy components in steps.analyze%s during diagnostics and rename', suffix => {
+    const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
+    const condition = `false and steps.analyze${suffix}`;
+    doc.setField(['jobs', 'review', 'if'], condition);
+    const source = doc.getSnapshot().source;
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+    doc.renameStep('review', 0, 'inspect');
+    expect(doc.getSnapshot().workflow!.jobs.review.if).toBe(`false and steps.inspect${suffix}`);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+  });
   it('preserves arbitrary suffixes, operand offsets, whitespace and quoted literals during renames', () => {
     const body = "  'steps.analyze.$value and needs.review.steps.analyze.é' == steps.analyze.$value and not needs.review.steps.analyze.with space  ";
     expect(references('${{' + body + '}}')).toEqual([
@@ -196,6 +206,26 @@ describe('named step result references', () => {
       expect(doc.getSnapshot().workflow!.jobs.build.if).toBe(prefix.repeat(50_000) + "'literal and text'" + operator + 'inputs.ready');
       doc.undo(); expect(doc.getSnapshot().source).toBe(source);
     } finally { scan.mockRestore(); }
+  });
+  it('bounds producer step searches for reference-heavy conditions', () => {
+    const source = JSON.stringify({ jobs: {
+      producer: { steps: Array.from({ length: 1_000 }, () => ({ argv: ['echo', 'lookup-budget'] })) },
+      consumer: { needs: ['producer'], if: 'false and ' + 'needs.producer.steps.step_1000.status and '.repeat(10_000) + 'true', steps: [{ argv: ['echo', 'skipped'] }] },
+    } });
+    const some = Array.prototype.some;
+    let visits = 0;
+    const search = vi.spyOn(Array.prototype, 'some').mockImplementation(function (this: unknown[], callback, thisArg) {
+      return some.call(this, (value, index, array) => {
+        if (value?.argv?.[1] === 'lookup-budget' && ++visits > 20_000) throw new Error('Producer step search budget exceeded');
+        return callback.call(thisArg, value, index, array);
+      });
+    });
+    try {
+      const parsed = parseWorkflow(source);
+      expect(parsed.usable).toBe(true);
+      expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+      expect(visits).toBeLessThan(20_000);
+    } finally { search.mockRestore(); }
   });
   it.each([
     ["'literal == inputs.task and inputs.other", ['task', 'other']],

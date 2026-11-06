@@ -283,6 +283,7 @@ function validateWorkflow(w: Workflow, add: Add) {
     add('host-schema', 'Named schema constraints require runner schema admission', ['schemas', name], undefined, 'host', 'info');
   }
   const dependencySets = new Map<string, Set<string>>();
+  const stepIndexes = new Map(Object.entries(jobs).map(([id, job]) => [id, new Map((job.steps ?? []).map((step, index) => [effectiveStepID(step, index), index]))]));
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
   for (const key of ['schedule', 'channel_message', 'command', 'runtime_event', 'event']) {
@@ -387,7 +388,7 @@ function validateWorkflow(w: Workflow, add: Add) {
           }
           continue;
         }
-        const exists = ref.scope === 'steps' ? jobID && jobs[jobID]?.steps?.some((s, i) => effectiveStepID(s, i) === ref.id) : Object.hasOwn(jobs, ref.id);
+        const exists = ref.scope === 'steps' ? jobID && stepIndexes.get(jobID)?.has(ref.id) : Object.hasOwn(jobs, ref.id);
         if (!exists) add('expression-reference', `Unknown ${ref.scope} reference "${ref.id}"`, path);
         if (exists && ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id) && !warnedProducers.has(ref.id)) {
           warnedProducers.add(ref.id);
@@ -402,11 +403,11 @@ function validateWorkflow(w: Workflow, add: Add) {
           if (exists) {
             const producer = jobs[ref.id];
             if (producer.uses || producer['for-each']) add('expression-reference', `Job "${ref.id}" does not expose individual step results; use its outputs or items`, path);
-            else if (!producer.steps?.some((step, index) => effectiveStepID(step, index) === ref.step)) add('expression-reference', `Unknown step "${ref.step}" of job "${ref.id}"`, path);
+            else if (!stepIndexes.get(ref.id)?.has(ref.step)) add('expression-reference', `Unknown step "${ref.step}" of job "${ref.id}"`, path);
           }
         }
         if (exists && isConciseStepReference(ref) && jobID) {
-          const index = jobs[jobID].steps?.findIndex((step, i) => effectiveStepID(step, i) === ref.id) ?? -1;
+          const index = stepIndexes.get(jobID)?.get(ref.id) ?? -1;
           const consumerIndex = namedStepIndex ?? (path[2] === 'steps' && typeof path[3] === 'number' ? path[3] : undefined);
           const inStep = consumerIndex !== undefined;
           const afterSteps = path[2] === 'outputs' || path[2] === 'repeat' && path[3] === 'until';

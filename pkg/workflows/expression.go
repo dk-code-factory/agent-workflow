@@ -260,7 +260,7 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("step %q not found", parts[1])
 		}
-		if len(parts) > 2 && !legacyStepField(parts[2]) {
+		if len(parts) > 2 && parts[2] != "" && !legacyStepField(parts[2]) {
 			return lookupStepResult(path, step, parts[2:])
 		}
 		cur = map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}

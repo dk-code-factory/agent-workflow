@@ -8,6 +8,20 @@ import (
 )
 
 func validateResultReferences(w *Workflow) error {
+	stepIndexes := make(map[string]map[string]int, len(w.Jobs))
+	dependencies := make(map[string]map[string]bool, len(w.Jobs))
+	for id, job := range w.Jobs {
+		indexes := make(map[string]int, len(job.Steps))
+		for index, step := range job.Steps {
+			indexes[stepID(step, index)] = index
+		}
+		stepIndexes[id] = indexes
+		declared := make(map[string]bool, len(job.Needs))
+		for _, dependency := range job.Needs {
+			declared[dependency] = true
+		}
+		dependencies[id] = declared
+	}
 	check := func(value any, field, jobID string, available int, bare bool) error {
 		return walkResultReferences(value, bare, func(parts []string) error {
 			if !newResultReference(parts) {
@@ -27,11 +41,7 @@ func validateResultReferences(w *Workflow) error {
 					return fail("jobs results are only available in workflow_call outputs; use a declared needs dependency")
 				}
 				if parts[0] == "needs" {
-					declared := false
-					for _, dependency := range w.Jobs[jobID].Needs {
-						declared = declared || dependency == producer
-					}
-					if jobID == "" || !declared {
+					if jobID == "" || !dependencies[jobID][producer] {
 						return fail("job is not a declared needs dependency")
 					}
 				}
@@ -48,13 +58,11 @@ func validateResultReferences(w *Workflow) error {
 			if job.Uses != "" {
 				return fail("reusable workflow steps are private; use its declared outputs")
 			}
-			for index, candidate := range job.Steps {
-				if stepID(candidate, index) == step {
-					if index >= limit {
-						return fail("step result is unavailable before that step completes")
-					}
-					return nil
+			if index, ok := stepIndexes[producer][step]; ok {
+				if index >= limit {
+					return fail("step result is unavailable before that step completes")
 				}
+				return nil
 			}
 			return fail("producer step not found")
 		})
@@ -121,7 +129,7 @@ func validateResultReferences(w *Workflow) error {
 }
 
 func newResultReference(parts []string) bool {
-	return len(parts) >= 3 && (parts[0] == "steps" && !legacyStepField(parts[2]) || (parts[0] == "needs" || parts[0] == "jobs") && parts[2] == "steps")
+	return len(parts) >= 3 && (parts[0] == "steps" && parts[2] != "" && !legacyStepField(parts[2]) || (parts[0] == "needs" || parts[0] == "jobs") && parts[2] == "steps")
 }
 
 func walkResultReferences(value any, bare bool, check func([]string) error) error {
