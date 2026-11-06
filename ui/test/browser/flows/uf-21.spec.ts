@@ -73,3 +73,21 @@ for (const initialMessage of ['Keep', '']) {
     await expect(ui.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Saved');
   });
 }
+
+test('concise agent conversions retain prompts until an incompatible conversion is confirmed', async ({ page }) => {
+  const source = 'jobs: {build: {steps: [{id: review, agent: claude, prompt: Keep this prompt, with: {model: sonnet}}]}}';
+  const ui = await open(page, source);
+  await step(page, 'review agent/claude');
+  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/codex');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({ id: 'review', agent: 'codex', prompt: 'Keep this prompt', with: { model: 'sonnet' } });
+  const before = (await snapshot(page)).source;
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('agent'); expect(dialog.message()).toContain('prompt'); await dialog.dismiss(); });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).source).toBe(before);
+  page.once('dialog', dialog => dialog.accept());
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({ id: 'review', argv: ['echo', 'Hello'] });
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
+  await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Keep this prompt');
+});

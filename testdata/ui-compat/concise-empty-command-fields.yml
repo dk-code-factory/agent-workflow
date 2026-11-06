@@ -1,0 +1,10 @@
+jobs:
+  review:
+    steps:
+      - agent: claude
+        prompt: Review
+        argv: []
+        run: ''
+        shell: ''
+        timeout: ''
+        working-directory: ''

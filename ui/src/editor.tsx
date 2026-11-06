@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type
 import { ReactFlow, ReactFlowProvider, Background, Controls, Handle, Position, useReactFlow, useNodesInitialized, type NodeProps, type Node, type Edge, MarkerType } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import { WorkflowDocument } from './document';
-import { dependencies, diagnosticLabel, effectiveStepID } from './validation';
+import { dependencies, diagnosticLabel, effectiveStepID, stepAction } from './validation';
 import { Inspector, InspectorDraftContext, InspectorDrafts, type Selection } from './forms';
 import { SourceEditor } from './source';
 import type { Diagnostic, Job, LayoutState, Path, Step, WorkflowOptions } from './types';
@@ -23,7 +23,7 @@ function JobCard({ data, selected }: NodeProps<JobNode>) {
     <Handle type="target" position={Position.Top} isConnectable={!data.readOnly} />
     <div className="aw-card-title"><button type="button" className="nodrag" aria-label={`Inspect job ${data.id}`} onClick={() => data.select()}>{data.job.name || data.id}{data.job.name && <small>{data.id}</small>}</button><button type="button" className="nodrag" aria-expanded={!data.collapsed} aria-label={`Expand ${data.id}`} onClick={data.toggle}>{data.collapsed ? '+' : '−'}</button></div>
     <div className="aw-badges">{data.job.if && <span title={data.job.if}>if</span>}{data.job.repeat && <span>repeat ≤ {data.job.repeat['max-attempts']}</span>}{data.job.uses && <span title={data.job.uses}>reusable call</span>}{!!data.job['continue-on-error'] && <span>continue on error</span>}</div>
-    {!data.collapsed && <ol className="aw-steps">{data.job.steps?.map((step, i) => <li key={i}><button type="button" className={`nodrag ${data.selectedStep === i ? 'aw-active-step' : ''}`} onClick={() => data.select(i)}>{step.name || effectiveStepID(step, i)}<small>{step.uses || (step.argv ? 'direct command' : 'shell command')}{step.if ? ' · if' : ''}{step['continue-on-error'] ? ' · continue on error' : ''}</small></button></li>)}{data.job.uses && <li><code>{data.job.uses}</code></li>}</ol>}
+    {!data.collapsed && <ol className="aw-steps">{data.job.steps?.map((step, i) => <li key={i}><button type="button" className={`nodrag ${data.selectedStep === i ? 'aw-active-step' : ''}`} onClick={() => data.select(i)}>{step.name || effectiveStepID(step, i)}<small>{stepAction(step) || (step.argv ? 'direct command' : 'shell command')}{step.if ? ' · if' : ''}{step['continue-on-error'] ? ' · continue on error' : ''}</small></button></li>)}{data.job.uses && <li><code>{data.job.uses}</code></li>}</ol>}
     <Handle type="source" position={Position.Bottom} isConnectable={!data.readOnly} />
   </article>;
 }

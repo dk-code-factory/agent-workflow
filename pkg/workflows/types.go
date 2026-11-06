@@ -127,6 +127,8 @@ type Job struct {
 }
 
 type Step struct {
+	Agent            *string        `json:"agent,omitempty" yaml:"agent,omitempty"`
+	Prompt           *string        `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	Argv             []string       `json:"argv,omitempty" yaml:"argv,omitempty"`
 	Run              string         `json:"run,omitempty" yaml:"run,omitempty"`
 	Shell            string         `json:"shell,omitempty" yaml:"shell,omitempty"`
