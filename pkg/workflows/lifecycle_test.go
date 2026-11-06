@@ -259,7 +259,7 @@ func TestLifecycleOrderedUsagePersistenceBypassesHandlers(t *testing.T) {
 }
 
 func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
-	for _, failure := range []error{ErrActionIntegrity, process.ErrCleanup, operational.ErrUnavailable, errors.New("storage failed"), errors.New("uncertain effect"), iterationPersistence(errors.New("sqlite failed"), true), errors.Join(errors.New("command failed independently"), context.Canceled)} {
+	for _, failure := range []error{ErrActionIntegrity, process.ErrCleanup, operational.ErrUnavailable, errors.New("storage failed"), errors.New("uncertain effect"), iterationPersistence(errors.New("sqlite failed"), true), errors.Join(errors.New("command failed independently"), context.Canceled), errors.Join(context.DeadlineExceeded, context.Canceled), errors.Join(ErrProviderFailure, context.Canceled), errors.Join(ErrUsageExhausted, context.Canceled)} {
 		for _, phase := range []string{"lifecycle_task_completed", "lifecycle_completed"} {
 			t.Run(classifyFailure(failure)+"/"+phase, func(t *testing.T) {
 				ctx := context.Background()
@@ -427,6 +427,11 @@ func TestLifecycleRestartPreservesEnclosingDeadline(t *testing.T) {
 			resumed, err := e.Resume(context.Background(), run.ID, nil, false)
 			if err == nil || resumed == nil || calls != 1 || resumed.Jobs["task"].Steps["work"].UnsafeFailureClass != "canceled" {
 				t.Fatalf("resumed expired execution admitted handlers: calls=%d run=%+v err=%v", calls, resumed, err)
+			}
+			job := resumed.Jobs["task"]
+			step := job.Steps["work"]
+			if job.FailureClass != "timeout" || step.FailureClass != "timeout" || !errors.Is(lifecycleError(step), context.DeadlineExceeded) {
+				t.Fatalf("resumed enclosing deadline lost its diagnostic: job=%s step=%+v", job.FailureClass, step)
 			}
 		})
 	}

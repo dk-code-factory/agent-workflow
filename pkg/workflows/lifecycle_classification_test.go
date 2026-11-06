@@ -111,3 +111,32 @@ func TestLifecycleRetainedClassAggregatePrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestLifecycleRetainedCanceledFailureIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		class string
+		cause error
+	}{
+		{"timeout", context.DeadlineExceeded},
+		{"provider_failure", ErrProviderFailure},
+		{"usage_exhausted", ErrUsageExhausted},
+	} {
+		t.Run(tc.class, func(t *testing.T) {
+			retained := lifecycleError(StepExecution{
+				Status: RunStatusFailed, Error: "[REDACTED]",
+				FailureClass: tc.class, UnsafeFailureClass: "canceled",
+			})
+			for _, err := range []error{retained, errors.Join(retained, nil), errors.Join(errors.New("independent failure"), retained)} {
+				if !errors.Is(err, tc.cause) || !errors.Is(err, context.Canceled) {
+					t.Fatalf("retained failure lost its original or cancellation identity: %v", err)
+				}
+				if got := classifyFailure(err); got != tc.class {
+					t.Fatalf("retained canceled failure changed class: got %s want %s", got, tc.class)
+				}
+				if got := unsafeFailureClass(err); got != "canceled" {
+					t.Fatalf("retained cancellation lost its admission guard: %s", got)
+				}
+			}
+		})
+	}
+}

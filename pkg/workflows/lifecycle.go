@@ -100,7 +100,7 @@ func lifecycleError(result StepExecution) error {
 		}
 	}
 	if result.UnsafeFailureClass == "canceled" && result.FailureClass != "canceled" {
-		cause = errors.Join(errors.New(result.Error), context.Canceled)
+		cause = errors.Join(cause, errors.New(result.Error), context.Canceled)
 	}
 	return &retainedLifecycleFailure{message: result.Error, class: result.FailureClass, unsafeClass: result.UnsafeFailureClass, cause: cause}
 }
