@@ -327,16 +327,25 @@ export class WorkflowDocument {
     if (this.entryDeletionImpact(path).length && !confirmed) throw new Error('Deletion has references; confirmation is required');
     this.edit(doc => { if (!doc.deleteIn(path)) throw new Error('Unknown entry'); });
   }
-  private schemaConsumers(name: string): { job: string; index: number }[] {
-    return Object.entries(this.snapshot.workflow!.jobs).flatMap(([job, value]) => (value.steps ?? []).flatMap((step, index) => {
+  private schemaConsumers(name: string): { job: string; path: Path }[] {
+    const result: { job: string; path: Path }[] = [];
+    const walk = (steps: Step[], job: string, path: Path) => steps.forEach((step, index) => {
+      const location = [...path, index];
       const output = step.with?.output;
-      return stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name ? [{ job, index }] : [];
-    }));
+      if (stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name) result.push({ job, path: location });
+      for (const kind of ['onError', 'onFailure', 'finally'] as const) walk(step[kind] ?? [], job, [...location, kind]);
+    });
+    for (const [job, value] of Object.entries(this.snapshot.workflow!.jobs)) walk(value.steps ?? [], job, ['jobs', job, 'steps']);
+    return result;
+  }
+  private schemaConsumerReferencesStep(consumer: { job: string; path: Path }, job: string, index: number, id: string): boolean {
+    const producer = completedSteps(this.snapshot.workflow!, consumer.path).get(id);
+    return consumer.job === job && producer?.path.length === 4 && producer.path[3] === index;
   }
   deletionImpact(job: string, stepIndex?: number): Path[] {
     const result: Path[] = [];
     const stepID = stepIndex == null ? undefined : effectiveStepID(this.snapshot.workflow!.jobs[job].steps![stepIndex], stepIndex);
-    const schemas = new Set(Object.keys(this.snapshot.workflow!.schemas ?? {}).filter(name => this.schemaConsumers(name).some(consumer => consumer.job === job)));
+    const schemas = new Set(Object.keys(this.snapshot.workflow!.schemas ?? {}).filter(name => this.schemaConsumers(name).some(consumer => stepIndex === undefined ? consumer.job === job : this.schemaConsumerReferencesStep(consumer, job, stepIndex, stepID!))));
     const walk = (value: unknown, path: Path) => {
       if (typeof value === 'string') {
         if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => {
@@ -396,15 +405,16 @@ export class WorkflowDocument {
       const names = Object.keys(this.snapshot.workflow!.schemas ?? {});
       for (const name of namedReferences) {
         const consumers = this.schemaConsumers(name);
+        const affected = consumers.filter(consumer => this.schemaConsumerReferencesStep(consumer, job, index, old));
         let target = name;
-        if (consumers.some(consumer => consumer.job !== job)) {
-          // Step IDs are job-local; retain the original contract for other jobs.
+        if (affected.length !== consumers.length) {
+          // Keep the original contract for consumers with a different producer scope.
           target = this.unique(`${name}_${job}`, names); names.push(target);
           const declaration = doc.getIn(['schemas', name], true) as Node;
           const declarations = doc.getIn(['schemas'], true);
           if (!isMap(declarations)) throw new Error('Expected schema declarations');
           declarations.set(doc.createNode(target), declaration.clone());
-          for (const consumer of consumers.filter(consumer => consumer.job === job)) doc.setIn(['jobs', job, 'steps', consumer.index, 'with', 'output', 'schema'], target);
+          for (const consumer of affected) doc.setIn([...consumer.path, 'with', 'output', 'schema'], target);
         }
         renamedSchemas.add(target);
       }

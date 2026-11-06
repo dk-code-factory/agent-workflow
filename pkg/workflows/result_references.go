@@ -93,6 +93,10 @@ func validateResultReferences(w *Workflow) error {
 			}
 			for index, step := range steps {
 				sid := stepID(step, index)
+				step, err := resolveReferenceStep(w, step)
+				if err != nil {
+					return fmt.Errorf("%s.%s.with.output: %w", path, sid, err)
+				}
 				for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
 					err := walkResultReferences(value, field == "if", func(parts []string) error {
 						if len(parts) > 1 && parts[0] == "steps" {
@@ -134,23 +138,11 @@ func validateResultReferences(w *Workflow) error {
 			available[stepID(step, index)] = true
 		}
 		for index, source := range job.Steps {
-			step, err := normalizeAgentStep(source)
+			step, err := resolveReferenceStep(w, source)
 			if err != nil {
 				return err
 			}
-			with := step.With
-			if strings.HasPrefix(step.Uses, "agent/") && step.With["output"] != nil {
-				output, err := resolveNamedOutput(w, step.With["output"])
-				if err != nil {
-					return fmt.Errorf("%s.steps[%d].with.output: %w", prefix, index, err)
-				}
-				with = make(map[string]any, len(step.With))
-				for key, value := range step.With {
-					with[key] = value
-				}
-				with["output"] = output
-			}
-			for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+			for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
 				if err := check(value, fmt.Sprintf("%s.steps[%d].%s", prefix, index, field), id, index, field == "if"); err != nil {
 					return err
 				}
@@ -175,6 +167,26 @@ func validateResultReferences(w *Workflow) error {
 		}
 	}
 	return nil
+}
+
+func resolveReferenceStep(w *Workflow, source Step) (Step, error) {
+	step, err := normalizeAgentStep(source)
+	if err != nil {
+		return step, err
+	}
+	if strings.HasPrefix(step.Uses, "agent/") && step.With["output"] != nil {
+		output, err := resolveNamedOutput(w, step.With["output"])
+		if err != nil {
+			return step, err
+		}
+		with := make(map[string]any, len(step.With))
+		for key, value := range step.With {
+			with[key] = value
+		}
+		with["output"] = output
+		step.With = with
+	}
+	return step, nil
 }
 
 func newResultReference(parts []string) bool {

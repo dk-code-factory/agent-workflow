@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 const lifecycleWorkflow = `jobs:
@@ -143,6 +146,94 @@ func TestLifecycleBypassesUnsafeFailuresAndCancellation(t *testing.T) {
 				t.Fatalf("missing finalization skip: %+v", run.Jobs["task"])
 			}
 		})
+	}
+}
+
+func TestLifecycleHardHandlerFailuresBypassLaterLists(t *testing.T) {
+	for _, original := range []error{errors.New("authentication failed"), context.DeadlineExceeded} {
+		for _, failing := range []string{"backup", "observer"} {
+			t.Run(original.Error()+"/"+failing, func(t *testing.T) {
+				var calls []string
+				e, _ := durableExecutor(t, lifecycleWorkflow, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
+					calls = append(calls, r.AgentID)
+					if r.AgentID == "primary" {
+						return nil, original
+					}
+					if r.AgentID == failing {
+						return nil, errors.New("storage failed")
+					}
+					return nil, errors.New("ordinary handler failure")
+				}))
+				run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+				want := []string{"primary", "backup"}
+				if failing == "observer" {
+					want = append(want, "observer")
+				}
+				if err == nil || !reflect.DeepEqual(calls, want) || run.Jobs["task"].FailureClass != "storage" {
+					t.Fatalf("hard failure lost: calls=%v job=%+v err=%v", calls, run.Jobs["task"], err)
+				}
+				if run.Jobs["task"].Steps["work"].Lifecycle.Skipped["finally"] != "unsafe failure" {
+					t.Fatal("hard failure did not record skipped finalization")
+				}
+			})
+		}
+	}
+}
+
+func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
+	for _, failure := range []error{ErrActionIntegrity, process.ErrCleanup, operational.ErrUnavailable, errors.New("storage failed"), errors.New("uncertain effect")} {
+		for _, phase := range []string{"lifecycle_task_completed", "lifecycle_completed"} {
+			t.Run(classifyFailure(failure)+"/"+phase, func(t *testing.T) {
+				ctx := context.Background()
+				source := strings.Replace(lifecycleWorkflow, "  task:\n", "  task:\n    continue-on-error: true\n", 1)
+				source += "  dependent:\n    needs: task\n    steps:\n      - agent: downstream\n        prompt: downstream\n"
+				calls := 0
+				e, s := durableExecutor(t, source, agentFunc(func(_ context.Context, _ AgentRequest) (map[string]any, error) {
+					calls++
+					return map[string]any{"text": "unexpected"}, nil
+				}))
+				run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "storage"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.Status = RunStatusRunning
+				if err := s.Save(ctx, run); err != nil {
+					t.Fatal(err)
+				}
+				attempt, _, err := s.Begin(ctx, run.ID, "task", "work", 1, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				status, class := executionFailureStatus(ctx, failure), classifyFailure(failure)
+				attempt.Phase = phase
+				attempt.Result = StepExecution{ID: "work", Status: status, Error: failure.Error(), FailureClass: class, Lifecycle: &StepLifecycle{OriginalError: failure.Error(), OriginalClass: class, Deadline: time.Now().Add(time.Minute)}}
+				journal := redactedStore{Journal: s, secrets: map[string]string{"token": "storage"}}
+				if err := journal.RecordAttempt(ctx, attempt); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Recover(ctx); err != nil {
+					t.Fatal(err)
+				}
+				resumed, resumeErr := e.Resume(ctx, run.ID, map[string]string{"token": "storage"}, false)
+				if resumed == nil {
+					t.Fatalf("resume failed before lifecycle execution: %v", resumeErr)
+				}
+				job := resumed.Jobs["task"]
+				if job.Status != status || job.FailureClass != class || job.Steps["work"].Status != status || job.Steps["work"].FailureClass != class {
+					t.Fatalf("retained failure changed: expected %s/%s, got %+v", status, class, job)
+				}
+				if status == RunStatusNeedsAttention {
+					if calls != 0 || resumed.Status != RunStatusNeedsAttention || resumed.Jobs["dependent"].Status != RunStatusSkipped {
+						t.Fatalf("retained hard failure admitted effects: calls=%d run=%+v", calls, resumed)
+					}
+				} else if calls != 1 || resumed.Jobs["dependent"].Status != RunStatusSucceeded {
+					t.Fatalf("continued failed job changed behavior: calls=%d run=%+v", calls, resumed)
+				}
+				if phase == "lifecycle_task_completed" && job.Steps["work"].Lifecycle.Skipped["finally"] != "unsafe failure" {
+					t.Fatal("retained unsafe failure admitted finalization")
+				}
+			})
+		}
 	}
 }
 
@@ -306,6 +397,43 @@ func TestLifecycleReferenceScopes(t *testing.T) {
 		if err = Validate(w); err == nil {
 			t.Fatalf("in-flight result admitted: %s", bad)
 		}
+	}
+}
+
+func TestLifecycleNamedSchemaReferenceAdmission(t *testing.T) {
+	const source = `schemas:
+  Result: {type: string, enum: ['${{ steps.before.text }}']}
+jobs:
+  task:
+    steps:
+      - {id: before, agent: a, prompt: before}
+      - id: owner
+        agent: a
+        prompt: owner
+        onError:
+          - id: fallback
+            agent: a
+            prompt: fallback
+            with: {output: {schema: Result}}
+          - {id: later, agent: a, prompt: later}
+`
+	for _, reference := range []string{"before", "owner", "fallback", "later", "missing"} {
+		t.Run(reference, func(t *testing.T) {
+			calls := 0
+			e, _ := durableExecutor(t, strings.Replace(source, "steps.before.text", "steps."+reference+".text", 1), agentFunc(func(_ context.Context, _ AgentRequest) (map[string]any, error) {
+				calls++
+				return map[string]any{"text": "before"}, nil
+			}))
+			if reference == "before" {
+				if _, err := e.Load("workflows/main.yml"); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || calls != 0 {
+				t.Fatalf("unavailable named reference admitted effects: calls=%d err=%v", calls, err)
+			}
+		})
 	}
 }
 

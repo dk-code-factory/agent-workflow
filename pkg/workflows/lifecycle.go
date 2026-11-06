@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
 func hasLifecycle(step Step) bool { return len(step.OnError)+len(step.OnFailure)+len(step.Finally) > 0 }
@@ -53,21 +56,38 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 	return nil
 }
 
+type retainedLifecycleFailure struct {
+	message, class string
+	cause          error
+}
+
+func (err *retainedLifecycleFailure) Error() string { return err.message }
+func (err *retainedLifecycleFailure) Unwrap() error { return err.cause }
+
 func lifecycleError(result StepExecution) error {
 	if result.Status == RunStatusSucceeded || result.Status == RunStatusSkipped {
 		return nil
 	}
+	var cause error
 	switch result.FailureClass {
 	case "canceled":
-		return context.Canceled
+		cause = context.Canceled
 	case "timeout":
-		return fmt.Errorf("%w: %s", context.DeadlineExceeded, result.Error)
+		cause = context.DeadlineExceeded
 	case "provider_failure":
-		return fmt.Errorf("%w: %s", ErrProviderFailure, result.Error)
-	case "action_integrity", "needs_attention", "prerequisite":
-		return fmt.Errorf("uncertain retained %s: %s", result.FailureClass, result.Error)
+		cause = ErrProviderFailure
+	case "usage_exhausted":
+		cause = ErrUsageExhausted
+	case "action_integrity":
+		cause = ErrActionIntegrity
+	case "prerequisite":
+		cause = operational.ErrUnavailable
+	case "needs_attention":
+		if result.Status == RunStatusNeedsAttention {
+			cause = process.ErrCleanup
+		}
 	}
-	return errors.New(result.Error)
+	return &retainedLifecycleFailure{message: result.Error, class: result.FailureClass, cause: cause}
 }
 
 func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}, retry bool, child bool) (result StepExecution, returned error) {

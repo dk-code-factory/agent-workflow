@@ -339,7 +339,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
@@ -357,6 +357,9 @@ fields. Escape discards an uncommitted field edit.
   completion offers these fields inside a handler. Lists accept nested handlers;
   the browser diagnoses invalid child steps, timeouts above five minutes, more
   than eight nested levels, and more than 100 handler steps per job.
+  Renaming a preceding outer step updates its references in named handler output
+  schemas while preserving references to a handler sibling with the same ID.
+  Deleting that producer includes those schema uses in the confirmation.
 
 ### UF-23 — Insert a reference into an expression
 

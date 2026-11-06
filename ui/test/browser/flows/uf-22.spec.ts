@@ -41,3 +41,38 @@ test('author bounded fallback, reporting and finalization without losing nested 
   await field(page, 'Handler timeout', '6m');
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'handler-timeout')).toBe(true);
 });
+
+test('renaming an outer step preserves named handler schemas and sibling shadowing', async ({ page }) => {
+  const ui = await open(page, `schemas:
+  Shared: {type: string, enum: ['\${{ steps.earlier.text }}']}
+jobs:
+  build:
+    steps:
+      - {id: earlier, agent: claude, prompt: Prepare}
+      - agent: claude
+        prompt: Work
+        onError:
+          - {agent: codex, prompt: Inherited, with: {output: {schema: Shared}}}
+          - {id: earlier, agent: codex, prompt: Local}
+          - {agent: claude, prompt: Shadowed, with: {output: {schema: Shared}}}
+        finally:
+          - {agent: claude, prompt: Finalize, with: {output: {schema: Shared}}}
+`);
+  await job(page); await step(page, '1. earlier');
+  await field(page, 'Step ID', 'prepared');
+  const edited = await snapshot(page);
+  expect(edited.workflow.schemas.Shared.enum).toEqual(['${{ steps.earlier.text }}']);
+  expect(edited.workflow.schemas.Shared_build.enum).toEqual(['${{ steps.prepared.text }}']);
+  expect(edited.workflow.jobs.build.steps[1].onError[0].with.output.schema).toBe('Shared_build');
+  expect(edited.workflow.jobs.build.steps[1].onError[2].with.output.schema).toBe('Shared');
+  expect(edited.workflow.jobs.build.steps[1].finally[0].with.output.schema).toBe('Shared_build');
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toContain('steps.prepared.text');
+  await ui.getByRole('button', { name: 'Delete step', exact: true }).click();
+  const impact = ui.getByRole('alertdialog', { name: 'Delete step?' });
+  await expect(impact).toContainText('schemas.Shared_build.enum.0');
+  await impact.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.schemas.Shared_build).toBeUndefined();
+});

@@ -15,6 +15,9 @@ func classifyFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	if retained, ok := err.(*retainedLifecycleFailure); ok {
+		return retained.class
+	}
 	if errors.Is(err, errIterationBlocked) {
 		return "iteration_blocked"
 	}
@@ -26,6 +29,18 @@ func classifyFailure(err error) string {
 	}
 	if errors.Is(err, operational.ErrUnavailable) {
 		return "prerequisite"
+	}
+	// An aggregate's ordinary error must not hide an unsafe constituent failure.
+	var causes []error
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes = joined.Unwrap()
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		causes = []error{wrapped.Unwrap()}
+	}
+	for _, cause := range causes {
+		if class := classifyFailure(cause); class != "canceled" && hardFailureClass(class) {
+			return class
+		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
@@ -107,7 +122,11 @@ func executionFailureStatus(ctx context.Context, err error) string {
 }
 
 func hardExecutionFailure(err error) bool {
-	switch classifyFailure(err) {
+	return hardFailureClass(classifyFailure(err))
+}
+
+func hardFailureClass(class string) bool {
+	switch class {
 	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":
 		return true
 	}

@@ -51,6 +51,44 @@ describe('step lifecycle handler authoring', () => {
     expect(doc.getSnapshot().diagnostics).toEqual([]);
   });
 
+  it('tracks named schemas consumed by nested handlers without rewriting shadowed consumers', () => {
+    const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
+      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
+      { agent: 'claude', prompt: 'Work', onError: [
+        { agent: 'codex', prompt: 'Inherited', with: { output: { schema: 'Shared' } } },
+        { id: 'earlier', agent: 'codex', prompt: 'Local' },
+        { agent: 'claude', prompt: 'Shadowed', with: { output: { schema: 'Shared' } } },
+      ], finally: [{ agent: 'claude', prompt: 'Finalize', with: { output: { schema: 'Shared' } } }] },
+    ] } } });
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.deletionImpact('build', 0)).toContainEqual(['schemas', 'Shared', 'enum', 0]);
+    expect(() => doc.deleteStep('build', 0)).toThrow('references');
+    doc.renameStep('build', 0, 'prepared');
+    const edited = doc.getSnapshot();
+    expect(edited.workflow!.schemas!.Shared.enum).toEqual(['${{ steps.earlier.text }}']);
+    expect(edited.workflow!.schemas!.Shared_build.enum).toEqual(['${{ steps.prepared.text }}']);
+    const task = edited.workflow!.jobs.build.steps![1];
+    expect((task.onError![0].with!.output as any).schema).toBe('Shared_build');
+    expect((task.onError![2].with!.output as any).schema).toBe('Shared');
+    expect((task.finally![0].with!.output as any).schema).toBe('Shared_build');
+    expect(edited.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+    doc.deleteStep('build', 0, true);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Shared_build', 'enum', 0] }));
+  });
+
+  it.each(['earlier', 'task', 'fallback', 'later', 'missing'])('validates named handler schemas against the local scope: %s', reference => {
+    const yaml = stringify({ schemas: { Result: { type: 'string', enum: [`\${{ steps.${reference}.text }}`] } }, jobs: { build: { steps: [
+      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
+      { id: 'task', agent: 'claude', prompt: 'Work', onError: [
+        { id: 'fallback', agent: 'claude', prompt: 'Fallback', with: { output: { schema: 'Result' } } },
+        { id: 'later', agent: 'claude', prompt: 'Later' },
+      ] },
+    ] } } });
+    expect(parseWorkflow(yaml).diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(reference !== 'earlier');
+  });
+
   it('discloses unsupported handlers when converting to a controller action', () => {
     const doc = new WorkflowDocument({ source });
     expect(stepConversionImpact(doc.getSnapshot().workflow!.jobs.build.steps![1], 'workspace/create')).toEqual(expect.arrayContaining(['onError', 'onFailure', 'finally', 'handlerTimeout']));

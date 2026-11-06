@@ -385,20 +385,23 @@ function validateWorkflow(w: Workflow, add: Add) {
   };
   Object.keys(jobs).forEach(visit);
   // Expression paths are inspected, never evaluated. Only recognized dot paths are rewritten.
-  const inspect = (value: unknown, path: Path, jobID?: string, namedStepIndex?: number) => {
+  const inspect = (value: unknown, path: Path, jobID?: string, namedStepPath?: Path) => {
+    const contextPath = namedStepPath ?? path;
+    const namedStepIndex = namedStepPath?.[3] as number | undefined;
     if (typeof value === 'string') {
       if (!hasExpressionReferences(path)) return;
       const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
         if (ref.scope === 'failed' || ref.scope === 'error') {
-          const length = stepPathLength(path);
+          if (path[0] === 'schemas' && !namedStepPath) continue;
+          const length = stepPathLength(contextPath);
           const fields = ref.scope === 'failed' ? ['id', 'uses', 'prompt'] : ['message', 'class'];
           if (length === undefined || length <= 4) add('handler-context', `${ref.scope} context is available only inside step handlers`, path);
           else if (!fields.includes(ref.id) || ref.tail) add('handler-context', `Unknown ${ref.scope} context field "${ref.id}${ref.tail ?? ''}"`, path);
           continue;
         }
-        if (ref.scope === 'steps' && (stepPathLength(path) ?? 0) > 4) {
-          if (!completedSteps(w, path).has(ref.id)) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
+        if (ref.scope === 'steps' && (stepPathLength(contextPath) ?? 0) > 4) {
+          if (!completedSteps(w, contextPath).has(ref.id)) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
           continue;
         }
         // Shared declarations have no local job until an agent uses them.
@@ -441,16 +444,20 @@ function validateWorkflow(w: Workflow, add: Add) {
         }
       }
     }
-    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID, namedStepIndex));
-    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID, namedStepIndex));
+    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID, namedStepPath));
+    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID, namedStepPath));
   };
   inspect(w, []);
-  for (const [jobID, job] of Object.entries(jobs)) for (const [index, step] of (job.steps ?? []).entries()) {
+  const inspectNamedOutputs = (steps: Step[], jobID: string, path: Path) => steps.forEach((step, index) => {
+    const location = [...path, index];
     const output = step.with?.output;
-    if (!stepAction(step)?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
-    const declaration = w.schemas?.[output.schema];
-    if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, index);
-  }
+    if (stepAction(step)?.startsWith('agent/') && mapping(output) && typeof output.schema === 'string') {
+      const declaration = w.schemas?.[output.schema];
+      if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, location);
+    }
+    for (const kind of handlerKinds) inspectNamedOutputs(step[kind] ?? [], jobID, [...location, kind]);
+  });
+  for (const [jobID, job] of Object.entries(jobs)) inspectNamedOutputs(job.steps ?? [], jobID, ['jobs', jobID, 'steps']);
 }
 function validDuration(value: string, maximum = 9223372036854775807n) {
   if (!/^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/.test(value)) return false;
