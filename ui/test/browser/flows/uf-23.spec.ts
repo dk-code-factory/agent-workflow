@@ -85,8 +85,9 @@ test('shared-schema suggestions stay bounded and YAML prefixes reach later depen
     return `schemas: ${JSON.stringify(schemas)}\njobs:\n${Object.entries(jobs).map(([id, job]) => `  ${id}: ${JSON.stringify(job)}`).join('\n')}\n  consumer:\n    needs: ${JSON.stringify(needs)}\n    steps:\n      - id: read\n        agent: claude\n        prompt: |\n          ${'${{'} needs.producer24.steps.analyze.field49`;
   });
   await expect(editor.locator('.aw-inspector-content > datalist option')).toHaveCount(200);
-  await editor.getByRole('button', { name: 'Inspect job consumer', exact: true }).click();
-  await editor.getByRole('button', { name: '1. read', exact: true }).click();
+  await editor.getByLabel('Search workflow', { exact: true }).fill('read');
+  await editor.getByRole('list', { name: 'Workflow search results' }).getByRole('button', { name: 'read Step read · Job consumer', exact: true }).click();
+  await expect(editor.getByLabel('Prompt', { exact: true })).toHaveValue('Read');
   await expect(editor.locator('.aw-inspector-content > datalist option')).toHaveCount(200);
   await expect(editor.getByLabel('Insert expression into Prompt', { exact: true }).locator('option')).toHaveCount(201);
   await editor.getByRole('button', { name: 'YAML', exact: true }).click();
