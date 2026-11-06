@@ -126,17 +126,21 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		}
 		// Expand local names before snapshotting. Resume uses admitted definitions.
 		for id, job := range w.Jobs {
-			for i, step := range job.Steps {
+			job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) {
 				if !strings.HasPrefix(step.Uses, "agent/") {
-					continue
+					return step, nil
 				}
 				output, err := resolveNamedOutput(w, step.With["output"])
 				if err != nil {
-					return err
+					return Step{}, err
 				}
 				if output != nil {
-					job.Steps[i].With["output"] = output
+					step.With["output"] = output
 				}
+				return step, nil
+			})
+			if err != nil {
+				return err
 			}
 			w.Jobs[id] = job
 		}
@@ -165,7 +169,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 	if catalog, ok := e.Agents.(interface{ HasAgent(string) bool }); ok {
 		for ref, w := range all {
 			for _, j := range w.Jobs {
-				for _, s := range j.Steps {
+				for _, s := range FlattenSteps(j.Steps) {
 					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(strings.TrimPrefix(s.Uses, "agent/")) {
 						return nil, fmt.Errorf("%s references unconfigured agent %q", ref, s.Uses)
 					}
@@ -650,81 +654,13 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		out.Outputs = child.Outputs
 		return out
 	}
-	for i, step := range job.Steps {
-		sid := stepID(step, i)
-		step.ID = sid
-		ec.Attempt = nil
-		result := StepExecution{ID: sid, Status: RunStatusSucceeded}
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		if err := e.checkEffectAdmission(ctx, req.runID); err != nil {
-			return fail(err)
-		}
-		allowed, err := evalIf(step.If, ec)
-		if err == nil && !allowed {
-			result.Status = RunStatusSkipped
-			out.Steps[sid] = result
-			continue
-		}
-		if err == nil && step.Uses == "input/wait" {
-			result, err = e.executeInputWait(ctx, step, ec)
-		} else if err == nil && isApplicationAction(step.Uses) {
-			result, err = e.executeApplicationAction(ctx, step, ec)
-		} else if err == nil {
-			var attempt Attempt
-			var reused bool
-			journal, durable := e.Store.(Journal)
-			if durable {
-				if req.ordered {
-					attempt, reused, err = e.beginIterationStep(ctx, journal, step, ec, req.RetryUncertain)
-				} else {
-					attempt, reused, err = journal.Begin(ctx, req.runID, id, sid, req.iteration, req.RetryUncertain)
-				}
-			}
-			if err == nil && reused {
-				result = attempt.Result
-			} else if err == nil {
-				result.StartedAt = time.Now().UTC()
-				result.AttemptID = attempt.ID
-				if durable {
-					ec.Attempt = &attempt
-				}
-				result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
-				result.FinishedAt = time.Now().UTC()
-				if onlyError(err, ErrExternalInputCanceled) {
-					result.Status = RunStatusWaiting
-					err = nil
-				}
-				if err != nil {
-					result.Status = executionFailureStatus(ctx, err)
-					result.Error = err.Error()
-					result.FailureClass = classifyFailure(err)
-				}
-				if durable {
-					err = errors.Join(err, iterationPersistence(journal.Complete(context.WithoutCancel(ctx), attempt, result), req.ordered))
-				}
-			}
-		}
-		if onlyError(err, ErrExternalInputCanceled) {
-			result.Status = RunStatusWaiting
-			result.Error = ""
-			result.FailureClass = ""
-			err = nil
-		}
-		if err != nil {
-			result.Status = executionFailureStatus(ctx, err)
-			result.FailureClass = classifyFailure(err)
-			result.Error = err.Error()
-		}
-		out.Steps[sid] = result
-		if result.Status == RunStatusWaiting && err == nil {
-			out.Status = RunStatusWaiting
-			return out
-		}
-		if err != nil && (req.ordered || !step.ContinueOnError || hardExecutionFailure(err)) {
-			return fail(err)
-		}
+	status, err := e.executeStepSequence(ctx, job.Steps, "", ec, req, slots)
+	if err != nil {
+		return fail(err)
+	}
+	if status == RunStatusWaiting {
+		out.Status = RunStatusWaiting
+		return out
 	}
 	for key, expr := range job.Outputs {
 		value, err := renderString(expr, ec)

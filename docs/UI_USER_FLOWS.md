@@ -567,15 +567,26 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-38.spec.ts)
 
-- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes.
+- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes. Local parallel blocks import without admission errors, expose branch YAML editing and the correct block type, and omit unsupported block-level continuation. Nested sequence references survive editing; duplication allocates unique descendant IDs and rewrites internal references. Named contracts consumed inside a copied block receive their own declaration when they reference copied descendants, while original consumers retain the original contract; Undo and Redo restore the complete duplication transaction. Cancelling conversion preserves the block. Joined nested results appear in a following prompt's expression picker, and Undo restores each source transaction. Adding a parallel block from the palette supplies two independently identified command branches.
 
 - **Starting point:** I want two independent reviews and a final summary.
 - **My flow:** I add jobs named `review_a`, `review_b`, and `summarize` → add
   the review steps → select `summarize` and check both review jobs under
   **Dependencies** → use **Auto layout** to inspect the structure.
+  For local composition inside one job, I choose **Parallel block** in the
+  palette, select the block, and edit **Parallel branches (YAML)**. Each branch
+  is a step or a `sequence` block; nested steps are edited through this YAML
+  field or the source. I add a following agent step and insert a joined result
+  such as `${{ steps.second.text }}` using **Insert expression…**.
 - **What I see:** Both review jobs lead into the summary job, with no dependency
   between the reviews. The definition allows the reviews to run independently
   before the summary, subject to the runner's execution capacity.
+  Local parallel branches inherit the same incoming results, while a sequence
+  can use its own preceding steps. Following steps can use all named results
+  after a successful join. IDs are unique within the job. Duplicating a block
+  gives its descendants new IDs and updates references within the copy;
+  changing its type asks before discarding its branches. Block failures
+  propagate, and blocks do not offer **Continue on error**.
 
 ### UF-39 — Pass a result from one job to another
 

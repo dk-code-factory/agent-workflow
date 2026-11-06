@@ -3,6 +3,7 @@ import { ReactFlow, ReactFlowProvider, Background, Controls, Handle, Position, u
 import dagre from '@dagrejs/dagre';
 import { WorkflowDocument } from './document';
 import { dependencies, diagnosticLabel, effectiveStepID, stepAction } from './validation';
+import { blockKind } from './step-tree';
 import { Inspector, InspectorDraftContext, InspectorDrafts, type Selection } from './forms';
 import { SourceEditor } from './source';
 import type { Diagnostic, Job, LayoutState, Path, Step, WorkflowOptions } from './types';
@@ -23,7 +24,7 @@ function JobCard({ data, selected }: NodeProps<JobNode>) {
     <Handle type="target" position={Position.Top} isConnectable={!data.readOnly} />
     <div className="aw-card-title"><button type="button" className="nodrag" aria-label={`Inspect job ${data.id}`} onClick={() => data.select()}>{data.job.name || data.id}{data.job.name && <small>{data.id}</small>}</button><button type="button" className="nodrag" aria-expanded={!data.collapsed} aria-label={`Expand ${data.id}`} onClick={data.toggle}>{data.collapsed ? '+' : '−'}</button></div>
     <div className="aw-badges">{data.job.if && <span title={data.job.if}>if</span>}{data.job.repeat && <span>repeat ≤ {data.job.repeat['max-attempts']}</span>}{data.job.uses && <span title={data.job.uses}>reusable call</span>}{!!data.job['continue-on-error'] && <span>continue on error</span>}</div>
-    {!data.collapsed && <ol className="aw-steps">{data.job.steps?.map((step, i) => <li key={i}><button type="button" className={`nodrag ${data.selectedStep === i ? 'aw-active-step' : ''}`} onClick={() => data.select(i)}>{step.name || effectiveStepID(step, i)}<small>{stepAction(step) || (step.argv ? 'direct command' : 'shell command')}{step.if ? ' · if' : ''}{step['continue-on-error'] ? ' · continue on error' : ''}</small></button></li>)}{data.job.uses && <li><code>{data.job.uses}</code></li>}</ol>}
+    {!data.collapsed && <ol className="aw-steps">{data.job.steps?.map((step, i) => <li key={i}><button type="button" className={`nodrag ${data.selectedStep === i ? 'aw-active-step' : ''}`} onClick={() => data.select(i)}>{step.name || effectiveStepID(step, i)}<small>{blockKind(step) ? `${blockKind(step)} block` : stepAction(step) || (step.argv ? 'direct command' : 'shell command')}{step.if ? ' · if' : ''}{step['continue-on-error'] ? ' · continue on error' : ''}</small></button></li>)}{data.job.uses && <li><code>{data.job.uses}</code></li>}</ol>}
     <Handle type="source" position={Position.Bottom} isConnectable={!data.readOnly} />
   </article>;
 }
@@ -41,6 +42,8 @@ export function automaticLayout(jobs: Record<string, Job>, collapsed: LayoutStat
 const defaultTemplates: { label: string; step: Step }[] = [
     { label: 'Direct command', step: { argv: ['echo', 'Hello'] } },
   { label: 'Shell command', step: { shell: 'sh', run: 'echo Hello' } },
+  { label: 'Parallel block', step: { parallel: [{ argv: ['echo', 'Branch one'] }, { argv: ['echo', 'Branch two'] }] } },
+  { label: 'Sequence block', step: { sequence: [{ argv: ['echo', 'Hello'] }] } },
   ...['workspace/create', 'workspace/snapshot', 'workspace/integrate', 'git/commit', 'github/pr'].map(uses => ({ label: uses, step: { uses, with: {} } })),
 ];
 function EditorSurface({ store }: { store: WorkflowDocument }) {

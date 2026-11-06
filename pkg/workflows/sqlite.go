@@ -294,7 +294,13 @@ func (s *SQLiteStore) Load(ctx context.Context, id string) (*Run, Snapshot, erro
 func (s *SQLiteStore) Begin(ctx context.Context, run, job, step string, iteration int, retry bool) (Attempt, bool, error) {
 	return s.BeginInput(ctx, run, job, step, iteration, retry, "", false, "")
 }
+func (s *SQLiteStore) BeginBlock(ctx context.Context, run, job, step string, iteration int) (Attempt, bool, error) {
+	return s.beginInput(ctx, run, job, step, iteration, true, "", true, "", "orchestration")
+}
 func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, iteration int, retry bool, fingerprint string, replaySafe bool, logical string) (Attempt, bool, error) {
+	return s.beginInput(ctx, run, job, step, iteration, retry, fingerprint, replaySafe, logical, "")
+}
+func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, iteration int, retry bool, fingerprint string, replaySafe bool, logical, phase string) (Attempt, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Attempt{}, false, err
@@ -334,7 +340,7 @@ func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, ite
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
 		return Attempt{}, false, err
 	}
-	a := Attempt{InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
+	a := Attempt{Phase: phase, InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
 	if schemaPhase(last.Phase) {
 		a.Phase = last.Phase
 		a.TaskAttemptID = last.TaskAttemptID
