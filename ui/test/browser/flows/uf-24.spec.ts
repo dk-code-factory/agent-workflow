@@ -29,3 +29,23 @@ test('named callable entries can be renamed and deleted with impact review', asy
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference'))).toBe(true);
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Review.enum.0'))).toBe(true);
 });
+
+test('step rename preserves each job context in a shared named contract', async ({ page }) => {
+  await page.goto('/test/browser.html'); const first = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: 'schemas: {Review: {type: string, enum: ["${{ steps.local.outputs.text }}"]}}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}\n  second:\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {agent: claude, prompt: Review, with: {output: {schema: Review}}}' }));
+  await first.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await first.getByRole('button', { name: 'local direct command', exact: true }).first().click();
+  const id = first.getByLabel('Step ID', { exact: true });
+  await id.fill('renamed'); await id.press('Enter');
+  const result = await page.evaluate(() => (window as any).first.getSnapshot().workflow);
+  expect(result.jobs.review.steps[0].id).toBe('renamed');
+  expect(result.jobs.review.steps[1].with.output.schema).toBe('Review_review');
+  expect(result.schemas.Review_review.enum).toEqual(['${{ steps.renamed.outputs.text }}']);
+  expect(result.jobs.second.steps[1].with.output.schema).toBe('Review');
+  expect(result.schemas.Review.enum).toEqual(['${{ steps.local.outputs.text }}']);
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.filter((d: any) => d.code === 'expression-reference'))).toEqual([]);
+  await first.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.schemas.Review_review)).toBeUndefined();
+  await first.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow)).toEqual(result);
+});

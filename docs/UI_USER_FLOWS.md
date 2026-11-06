@@ -367,7 +367,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-24.spec.ts)
 
-- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference.
+- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update local references in named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo.
 
 - **Starting point:** I select a job, step, callable interface entry, or job output.
 - **My flow:** I edit **Job ID**, **Step ID**, or the entry's **Identifier** →
@@ -406,7 +406,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-27.spec.ts)
 
-- **Coverage:** Deletion exposes structural impacts; Cancel preserves source and a host replacement invalidates a pending confirmation.
+- **Coverage:** Deletion exposes structural impacts and consumed named-schema paths for local step references; Cancel preserves source and a host replacement invalidates a pending confirmation. Confirmed producer deletion reports the remaining named-contract reference, and Undo restores its source.
 
 - **Starting point:** I select the item and its delete control.
 - **My flow:** I read the confirmation and affected document paths → choose
