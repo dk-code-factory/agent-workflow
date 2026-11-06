@@ -74,6 +74,11 @@ func Validate(w *Workflow) error {
 		seen := map[string]bool{}
 		for i, step := range job.Steps {
 			sid := stepID(step, i)
+			var err error
+			step, err = normalizeAgentStep(step)
+			if err != nil {
+				return fmt.Errorf("job %s step %s: %w", id, sid, err)
+			}
 			if !idPattern.MatchString(sid) || seen[sid] {
 				return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
 			}

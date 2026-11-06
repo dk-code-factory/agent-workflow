@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract.
 
 - **Starting point:** I add or select an agent step.
 - **My flow:** I choose the agent under **Step type**, or edit **Action target**
@@ -252,7 +252,7 @@ fields. Escape discards an uncommitted field edit.
   `Review` declaration. Definitions and references remain in exported YAML.
 - **What I see:** The step definition and graph label update. If the host
   supplies an agent catalog, an unavailable agent produces a warning. Output
-  contracts may still require host validation before execution.
+  contracts may still require host validation before execution. Imported concise `agent: ROLE` and top-level `prompt` steps retain that spelling when I edit their agent controls.
 
 ### UF-17 — Configure a direct command
 
@@ -319,7 +319,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters.
+- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
 
 - **Starting point:** A step already has command or action settings.
 - **My flow:** I select a different **Step type** → review any confirmation
@@ -435,7 +435,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor.
+- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -443,7 +443,7 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** Usable source updates the visual representation. Comments
   and unfamiliar fields remain available in the source; visual edits may
   normalize formatting. Pasting source replaces text I select, rather than
-  opening a file-import dialog. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
+  opening a file-import dialog. I can paste concise `agent: ROLE` steps with a top-level multiline `prompt` and optional `with` settings; competing `uses` or `with.prompt` declarations produce field diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
 
 ### UF-30 — Search and replace in YAML
 

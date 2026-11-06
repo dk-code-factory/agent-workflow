@@ -74,6 +74,8 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
+Concise YAML agent steps use `agent: ROLE` and a top-level string `prompt`, with optional `with` settings such as `model`, `message`, `workspace`, and `output`. Imported concise steps use the normal agent inspector and graph labels; prompt and role edits preserve the concise spelling. Changing between agents retains prompts and options. Converting to a command or controller action confirms discarded fields and removes incompatible shorthand. The browser rejects competing `agent`/`uses` or `prompt`/`with.prompt` declarations; top-level `prompt` requires `agent`. Prompt expressions participate in reference diagnostics, renames, and result wiring; the agent role remains a literal identifier.
+
 Durable `input/wait` steps use **Action target** and **Advanced parameters** to
 edit required string `prompt` and `evidence-id` fields and an optional JSON
 `payload`. YAML and visual edits preserve payloads and answer expressions. The

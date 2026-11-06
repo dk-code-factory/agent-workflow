@@ -35,7 +35,78 @@ func Parse(data []byte) (*Workflow, error) {
 	if err := node.Decode(&w); err != nil {
 		return nil, err
 	}
+	for id, job := range w.Jobs {
+		for i, step := range job.Steps {
+			normalized, err := normalizeAgentStep(step)
+			if err != nil {
+				return nil, fmt.Errorf("job %s step %s: %w", id, stepID(step, i), err)
+			}
+			job.Steps[i] = normalized
+		}
+		w.Jobs[id] = job
+	}
 	return &w, nil
+}
+
+// normalizeAgentStep lowers the authoring shorthand to the existing execution
+// contract before role admission, expression evaluation, and durable snapshots.
+func normalizeAgentStep(step Step) (Step, error) {
+	if step.Agent == nil {
+		if step.Prompt != nil {
+			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")
+		}
+		return step, nil
+	}
+	if !idPattern.MatchString(*step.Agent) {
+		return Step{}, fmt.Errorf("agent requires a valid role name")
+	}
+	if step.Uses != "" {
+		return Step{}, fmt.Errorf("agent cannot combine with uses")
+	}
+	if step.Prompt != nil {
+		if _, exists := step.With["prompt"]; exists {
+			return Step{}, fmt.Errorf("prompt cannot combine with with.prompt")
+		}
+		parameters := make(map[string]any, len(step.With)+1)
+		for key, value := range step.With {
+			parameters[key] = value
+		}
+		parameters["prompt"] = *step.Prompt
+		step.With = parameters
+	}
+	step.Uses = "agent/" + *step.Agent
+	step.Agent, step.Prompt = nil, nil
+	return step, nil
+}
+
+// YAML field presence matters for competing authoring forms, even when an
+// explicitly supplied legacy field is empty or null.
+func checkAgentShorthand(n *yaml.Node) error {
+	fields := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		fields[n.Content[i].Value] = n.Content[i+1]
+	}
+	for _, key := range []string{"agent", "prompt"} {
+		if value := fields[key]; value != nil && (value.Kind != yaml.ScalarNode || value.Tag != "!!str") {
+			return fmt.Errorf("%s must be a string", key)
+		}
+	}
+	if fields["agent"] != nil && fields["uses"] != nil {
+		return fmt.Errorf("agent cannot combine with uses")
+	}
+	if fields["prompt"] != nil {
+		if fields["agent"] == nil {
+			return fmt.Errorf("prompt requires agent; use with.prompt with uses")
+		}
+		if with := fields["with"]; with != nil && with.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(with.Content); i += 2 {
+				if with.Content[i].Value == "prompt" {
+					return fmt.Errorf("prompt cannot combine with with.prompt")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
@@ -62,6 +133,11 @@ func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
 		}
 	}
 	if n.Kind == yaml.MappingNode {
+		if t == reflect.TypeOf(Step{}) {
+			if err := checkAgentShorthand(n); err != nil {
+				return fmt.Errorf("step at line %d: %w", n.Line, err)
+			}
+		}
 		seen := map[string]bool{}
 		for i := 0; i < len(n.Content); i += 2 {
 			key := n.Content[i]

@@ -14,8 +14,25 @@ export const controllerParameters: Record<string, string[]> = {
   'github/pr': ['path', 'commit', 'title', 'body'],
 };
 export const dependencies = (job: Job): string[] => (Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []).map(s => s.trim()).filter(Boolean);
+export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(step, 'agent') ? `agent/${step.agent}` : step.uses as string | undefined;
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// Match yaml.v3's allowedTimestampFormats and time.Parse ranges, including
+// short date/time fields and fractional seconds. YAML core leaves these strings.
+export function runnerTimestamp(value: string): boolean {
+  const match = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:([Tt]| +)(\d{1,2}):(\d{1,2}):(\d{1,2})(?:[.,]\d+)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(value);
+  if (!match || match[0] !== value) return false;
+  const [, year, month, day, separator, hour, minute, second, zone] = match;
+  const y = Number(year), m = Number(month), d = Number(day);
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (m < 1 || m > 12 || d < 1 || d > days[m - 1]) return false;
+  if (!separator) return true;
+  if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return false;
+  if (separator.trim() ? !zone : !!zone) return false;
+  return !zone || zone === 'Z' || (Number(zone.slice(1, 3)) <= 24 && Number(zone.slice(4)) <= 60);
+}
 
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
@@ -38,7 +55,7 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
@@ -57,7 +74,7 @@ const schema: Shape = {
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
     'for-each': { items: 'any', key: 'string' },
-    steps: [{ id: 'string', name: 'string', uses: 'string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
+    steps: [{ id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
       argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string' }],
   } },
 };
@@ -131,7 +148,7 @@ export function parseWorkflow(source: string): Parsed {
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
       if (shape === 'any') return;
-      if (value == null) {
+      if (value == null && shape !== 'strict-string') {
         // Null map/struct values decode to Go zero values. Optional pointers
         // remain absent; other mappings become editable empty collections.
         const pointer = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
@@ -153,7 +170,12 @@ export function parseWorkflow(source: string): Parsed {
       }
       let valid = true;
       if (typeof shape === 'string') {
-        if (shape === 'list') {
+        if (shape === 'strict-string') {
+          const node = doc!.getIn(path, true);
+          valid = typeof value === 'string' && isScalar(node)
+            && (!node.tag || node.tag === 'tag:yaml.org,2002:str')
+            && !(node.type === 'PLAIN' && !node.tag && runnerTimestamp(value));
+        } else if (shape === 'list') {
           // Go StringList accepts scalar values decoded as strings, trims them,
           // and discards empty/null entries. Use YAML scalar text for numbers
           // so IDs such as 01 and 0xA retain the runner's spelling.
@@ -226,7 +248,7 @@ export function parseWorkflow(source: string): Parsed {
           else checkShape(item, child, [...path, key]);
         }
       }
-      if (!valid) { shaped = false; add('shape', `Expected ${typeof shape === 'string' ? shape : Array.isArray(shape) ? 'sequence' : 'mapping'}`, path, undefined, 'parser'); }
+      if (!valid) { shaped = false; add('shape', `Expected ${shape === 'strict-string' ? 'string' : typeof shape === 'string' ? shape : Array.isArray(shape) ? 'sequence' : 'mapping'}`, path, undefined, 'parser'); }
     };
     checkShape(value, schema, []);
     if (!mapping(value) || !mapping(value.jobs) || Object.values(value.jobs).some(j => !mapping(j))) {
@@ -300,27 +322,34 @@ function validateWorkflow(w: Workflow, add: Add) {
       const sid = effectiveStepID(step, i);
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
+      const shorthand = Object.hasOwn(step, 'agent');
+      const prompt = Object.hasOwn(step, 'prompt');
+      const uses = stepAction(step);
+      if (shorthand && !identifier.test(step.agent!)) add('agent', 'agent requires a literal role identifier', [...sp, 'agent']);
+      if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
+      if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
+      if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
       const command = !!(step.argv?.length || step.run);
-      const params = step.with ?? {};
+      const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {
-        if (step.uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
+        if (uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
         if (step.run && (!step.shell || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
         if (!step.run && step.shell) add('command', 'shell requires run', sp);
         if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
       } else {
         if (step.shell || step.timeout || step['working-directory']) add('command', 'Command fields require argv or run', sp);
-        const allowed = Object.hasOwn(controllerParameters, step.uses ?? '') ? controllerParameters[step.uses!] : undefined;
+        const allowed = Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : undefined;
         if (allowed) {
           for (const key of Object.keys(params)) if (!allowed.includes(key)) add('action', `Unsupported controller parameter "${key}"`, [...sp, 'with', key]);
-          const required = step.uses === 'git/commit' ? ['path', 'message'] : step.uses === 'github/pr' ? ['path', 'commit', 'title'] : step.uses === 'workspace/integrate' ? ['path'] : [];
+          const required = uses === 'git/commit' ? ['path', 'message'] : uses === 'github/pr' ? ['path', 'commit', 'title'] : uses === 'workspace/integrate' ? ['path'] : [];
           for (const key of required) if (params[key] == null) add('action', `Action requires ${key}`, [...sp, 'with', key]);
-        } else if (step.uses === 'input/wait') {
+        } else if (uses === 'input/wait') {
           for (const key of Object.keys(params)) if (!['prompt', 'evidence-id', 'payload'].includes(key)) add('input-wait', `Unsupported input/wait parameter "${key}"`, [...sp, 'with', key]);
           for (const key of ['prompt', 'evidence-id']) if (typeof params[key] !== 'string' || !params[key].trim()) add('input-wait', `input/wait requires string ${key}`, [...sp, 'with', key]);
-        } else if (/^action\/[A-Za-z_][A-Za-z0-9_-]*$/.test(step.uses ?? '')) {
+        } else if (/^action\/[A-Za-z_][A-Za-z0-9_-]*$/.test(uses ?? '')) {
           add('host-action', 'Registered action availability and typed schemas require host runtime validation', [...sp, 'uses'], undefined, 'host', 'info');
         } else {
-          if (!/^agent\/[A-Za-z_][A-Za-z0-9_-]*$/.test(step.uses ?? '')) add('action', 'Expected agent/<name> or a controller action', [...sp, 'uses']);
+          if (!/^agent\/[A-Za-z_][A-Za-z0-9_-]*$/.test(uses ?? '')) add('action', 'Expected agent/<name> or a controller action', [...sp, 'uses']);
           for (const key of Object.keys(params)) if (!['model', 'prompt', 'message', 'workspace', 'output'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           if (params.prompt == null && params.message == null) add('action', 'Agent requires prompt or message', [...sp, 'with']);
           if (params.output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
@@ -374,7 +403,7 @@ function validateWorkflow(w: Workflow, add: Add) {
   inspect(w, []);
   for (const [jobID, job] of Object.entries(jobs)) for (const step of job.steps ?? []) {
     const output = step.with?.output;
-    if (!step.uses?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
+    if (!stepAction(step)?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
     const declaration = w.schemas?.[output.schema];
     if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, true);
   }
