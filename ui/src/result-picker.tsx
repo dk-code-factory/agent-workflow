@@ -31,7 +31,7 @@ export function JobResultPicker({ store, path, selection, close }: {
       : <>
         <label className="aw-field">Producer step<select aria-label="Producer step" value={step} onChange={event => change(() => setStep(event.target.value))}>{(!jobs[producer]?.uses ? jobs[producer]?.steps : [])?.map((step, index) => <option key={index} value={index}>{effectiveStepID(step, index)}</option>)}</select></label>
         <label className="aw-field">{source === 'result' ? 'Result field' : 'Step output'}<input value={output} list={`${id}-outputs`} onChange={event => change(() => setOutput(event.target.value))} /></label>
-        <datalist id={`${id}-outputs`}>{(source === 'result' ? stepResultPaths(jobs[producer]?.steps?.[Number(step)] ?? {}) : ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']).map(key => <option key={key}>{key}</option>)}</datalist>
+        <datalist id={`${id}-outputs`}>{(source === 'result' ? stepResultPaths(jobs[producer]?.steps?.[Number(step)] ?? {}, store.getSnapshot().workflow?.schemas) : ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']).map(key => <option key={key}>{key}</option>)}</datalist>
         {source === 'result' ? <p>Use text or a structured field path. For fields named text, outputs, status, or error, use outputs.structured followed by the field path. Reusable and per-item jobs expose their declared outputs instead.</p> : <label className="aw-field">Job output name<input value={name} onChange={event => change(() => setName(event.target.value))} /></label>}
       </>}
     <button type="button" disabled={!producer} onClick={() => attempt(() => setPreview(store.previewJobResult({ target: path, producer, selection,

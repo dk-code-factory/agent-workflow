@@ -327,12 +327,19 @@ export class WorkflowDocument {
     if (this.entryDeletionImpact(path).length && !confirmed) throw new Error('Deletion has references; confirmation is required');
     this.edit(doc => { if (!doc.deleteIn(path)) throw new Error('Unknown entry'); });
   }
+  private schemaConsumers(name: string): { job: string; index: number }[] {
+    return Object.entries(this.snapshot.workflow!.jobs).flatMap(([job, value]) => (value.steps ?? []).flatMap((step, index) => {
+      const output = step.with?.output;
+      return stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name ? [{ job, index }] : [];
+    }));
+  }
   deletionImpact(job: string, stepIndex?: number): Path[] {
     const result: Path[] = [];
     const stepID = stepIndex == null ? undefined : effectiveStepID(this.snapshot.workflow!.jobs[job].steps![stepIndex], stepIndex);
+    const schemas = new Set(Object.keys(this.snapshot.workflow!.schemas ?? {}).filter(name => this.schemaConsumers(name).some(consumer => consumer.job === job)));
     const walk = (value: unknown, path: Path) => {
       if (typeof value === 'string') {
-        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && ref.id === stepID && pathJob(path) === job) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
+        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && ref.id === stepID && (pathJob(path) === job || path[0] === 'schemas' && schemas.has(String(path[1])))) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
       } else if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...path, i]));
       else if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => walk(v, [...path, k]));
     };
@@ -373,10 +380,27 @@ export class WorkflowDocument {
     const old = effectiveStepID(steps[index], index);
     if (next === old) return;
     if (!identifier.test(next) || steps.some((s, i) => i !== index && effectiveStepID(s, i) === next)) throw new Error('Choose a unique valid step ID');
+    const namedReferences = new Set(this.deletionImpact(job, index).filter(path => path[0] === 'schemas' && this.schemaConsumers(String(path[1])).some(consumer => consumer.job === job)).map(path => String(path[1])));
     this.edit(doc => {
       doc.setIn(['jobs', job, 'steps', index, 'id'], next);
+      const renamedSchemas = new Set<string>();
+      const names = Object.keys(this.snapshot.workflow!.schemas ?? {});
+      for (const name of namedReferences) {
+        const consumers = this.schemaConsumers(name);
+        let target = name;
+        if (consumers.some(consumer => consumer.job !== job)) {
+          // Step IDs are job-local; retain the original contract for other jobs.
+          target = this.unique(`${name}_${job}`, names); names.push(target);
+          const declaration = doc.getIn(['schemas', name], true) as Node;
+          const declarations = doc.getIn(['schemas'], true);
+          if (!isMap(declarations)) throw new Error('Expected schema declarations');
+          declarations.set(doc.createNode(target), declaration.clone());
+          for (const consumer of consumers.filter(consumer => consumer.job === job)) doc.setIn(['jobs', job, 'steps', consumer.index, 'with', 'output', 'schema'], target);
+        }
+        renamedSchemas.add(target);
+      }
       this.rewriteReferences(doc, (ref, path) => {
-        if (ref.scope === 'steps' && ref.id === old && pathJob(path) === job) return referenceText({ ...ref, id: next });
+        if (ref.scope === 'steps' && ref.id === old && (pathJob(path) === job || path[0] === 'schemas' && renamedSchemas.has(String(path[1])))) return referenceText({ ...ref, id: next });
         if ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === old) return referenceText({ ...ref, step: next });
         return undefined;
       });

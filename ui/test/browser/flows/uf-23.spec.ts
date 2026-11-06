@@ -43,8 +43,8 @@ test('property expression hints are limited to fields the runner evaluates', asy
 
 test('concise result suggestions expose completed local and dependency fields', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ jobs: {
-    review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } } } }, { id: 'finish', agent: 'claude', prompt: 'Next' }] },
+  await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: { Review: { type: 'object', properties: { approved: { type: 'boolean' } } } }, jobs: {
+    review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { format: 'json', schema: 'Review' } } }, { id: 'finish', agent: 'claude', prompt: 'Next' }] },
     summarize: { needs: ['review'], steps: [{ id: 'summary', agent: 'claude', prompt: 'Read' }] },
   } }) }));
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();

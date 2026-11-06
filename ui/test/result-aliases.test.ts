@@ -106,6 +106,46 @@ describe('named step result references', () => {
     ]);
     expect(references('${{ inputs.config.needs.review.steps.analyze.text }}')).toEqual([expect.objectContaining({ scope: 'inputs', id: 'config', step: undefined })]);
   });
+  it('resolves named output schemas for local, dependency and workflow completion', () => {
+    const value = structuredClone(workflow);
+    const schema = value.jobs.review.steps[0].with!.output.schema;
+    const named = { ...value, schemas: { Review: schema } };
+    Object.assign(named.jobs.review.steps[0].with!.output, { schema: 'Review' });
+    const parsed = parseWorkflow(JSON.stringify(named));
+    expect(expressionSuggestions(parsed.workflow, 'review', 1)).toContain('steps.analyze.details.reason');
+    expect(expressionSuggestions(parsed.workflow, 'summarize', 0)).toContain('needs.review.steps.analyze.approved');
+    expect(expressionSuggestions(parsed.workflow)).toContain('jobs.review.steps.analyze.details.reason');
+  });
+  it.each([
+    ['preceding', 'steps.first.text', false],
+    ['self', 'steps.consume.text', true],
+    ['forward', 'steps.last.text', true],
+    ['dependency', 'needs.producer.steps.analyze.text', false],
+    ['wrong root', 'jobs.producer.steps.analyze.text', true],
+  ])('checks %s references inside named schemas in the consuming step context', (_name, expression, invalid) => {
+    const parsed = parseWorkflow(JSON.stringify({ schemas: { Result: { type: 'string', enum: ['${{ ' + expression + ' }}'] } }, jobs: {
+      producer: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Produce' }] },
+      consumer: { needs: ['producer'], steps: [
+        { id: 'first', agent: 'claude', prompt: 'First' },
+        { id: 'consume', agent: 'claude', prompt: 'Consume', with: { output: { schema: 'Result' } } },
+        { id: 'last', agent: 'claude', prompt: 'Last' },
+      ] },
+    } }));
+    expect(parsed.diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(invalid);
+  });
+  it('rewrites concise references in shared named contracts and dependent declarations together', () => {
+    const doc = new WorkflowDocument({ source: 'schemas: {Shared: {type: string, enum: ["${{ steps.local.text }}"]}, Dependent: {type: string, enum: ["${{ needs.review.steps.local.text }}"]}}\njobs: {review: {steps: [{id: local, agent: claude, prompt: Produce}, {agent: claude, prompt: Consume, with: {output: {schema: Shared}}}]}, second: {steps: [{id: local, agent: claude, prompt: Produce}, {agent: claude, prompt: Consume, with: {output: {schema: Shared}}}]}, summarize: {needs: review, steps: [{agent: claude, prompt: Summarize, with: {output: {schema: Dependent}}}]}}' });
+    const original = doc.getSnapshot().source;
+    doc.renameStep('review', 0, 'renamed');
+    const snapshot = doc.getSnapshot();
+    expect(snapshot.workflow!.schemas!.Shared.enum).toEqual(['${{ steps.local.text }}']);
+    expect(snapshot.workflow!.schemas!.Shared_review.enum).toEqual(['${{ steps.renamed.text }}']);
+    expect(snapshot.workflow!.schemas!.Dependent.enum).toEqual(['${{ needs.review.steps.renamed.text }}']);
+    expect(Object.keys(snapshot.workflow!.schemas!)).toEqual(['Shared', 'Dependent', 'Shared_review']);
+    expect(snapshot.diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+    expect(doc.deletionImpact('review', 0)).toContainEqual(['schemas', 'Dependent', 'enum', 0]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+  });
 });
 
 describe('direct named result wiring', () => {

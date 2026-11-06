@@ -11,11 +11,12 @@ import type { WorkflowDocument } from './document';
 import type { Path, Step, Workflow } from './types';
 import { hasExpressionReferences, isExpressionPath } from './expressions';
 import { dependencies, effectiveStepID, identifier, mapping, stepAction } from './validation';
-export function stepResultPaths(step: Step): string[] {
+export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}): string[] {
   if (!stepAction(step)?.startsWith('agent/')) return [];
   const result = ['text'];
   const contract = step.with?.output;
-  const schema = mapping(contract) ? contract.schema : undefined;
+  const rawSchema = mapping(contract) ? contract.schema : undefined;
+  const schema = typeof rawSchema === 'string' ? schemas[rawSchema] : rawSchema;
   const visit = (value: unknown, prefix = '') => {
     if (!mapping(value) || !mapping(value.properties)) return;
     for (const [key, property] of Object.entries(value.properties)) {
@@ -35,12 +36,12 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
     const producer = workflow.jobs[dep];
     for (const output of Object.keys(producer?.outputs ?? {})) result.push(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`);
-    if (!producer?.uses && !producer?.['for-each']) producer?.steps?.forEach((step, i) => stepResultPaths(step).forEach(field => result.push(`${job ? 'needs' : 'jobs'}.${dep}.steps.${effectiveStepID(step, i)}.${field}`)));
+    if (!producer?.uses && !producer?.['for-each']) producer?.steps?.forEach((step, i) => stepResultPaths(step, workflow.schemas).forEach(field => result.push(`${job ? 'needs' : 'jobs'}.${dep}.steps.${effectiveStepID(step, i)}.${field}`)));
   }
   if (job?.['for-each']) result.push('item', 'iteration.key', 'iteration.number');
   const conciseLocal = stepIndex !== undefined || path?.[2] === 'outputs' || path?.[2] === 'repeat' && path[3] === 'until';
   job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => {
-    if (conciseLocal) stepResultPaths(s).forEach(field => result.push(`steps.${effectiveStepID(s, i)}.${field}`));
+    if (conciseLocal) stepResultPaths(s, workflow.schemas).forEach(field => result.push(`steps.${effectiveStepID(s, i)}.${field}`));
     ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`));
   });
   return result;

@@ -80,7 +80,7 @@ test('Escape closes the native result dialog and restores field focus without ed
 });
 
 test('named step result wiring inserts a nested field without declaring a job output', async ({ page }) => {
-  const ui = await open(page, 'jobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review}]}, summarize: {steps: [{id: summary, agent: claude, prompt: "Read: "}]}}');
+  const ui = await open(page, 'schemas: {Review: {type: object, properties: {details: {type: object, properties: {reason: {type: string}}}}}}\njobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review, with: {output: {schema: Review}}}]}, summarize: {steps: [{id: summary, agent: claude, prompt: "Read: "}]}}');
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. summary', exact: true }).click();
   const prompt = ui.getByLabel('Prompt', { exact: true });
   await prompt.focus(); await prompt.press('ControlOrMeta+End');
@@ -88,6 +88,7 @@ test('named step result wiring inserts a nested field without declaring a job ou
   await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).click();
   const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
   await picker.getByLabel('Result source', { exact: true }).selectOption('result');
+  await expect(picker.locator('datalist option').filter({ hasText: /^details.reason$/ })).toHaveCount(1);
   await picker.getByLabel('Result field', { exact: true }).fill('details.reason');
   await expect(picker.getByLabel('Job output name', { exact: true })).toHaveCount(0);
   await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();

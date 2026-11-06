@@ -161,6 +161,37 @@ jobs:
 	}
 }
 
+func TestConciseReferencesInNamedSchemas(t *testing.T) {
+	for _, test := range []struct{ name, expression, diagnostic string }{
+		{"preceding", "steps.first.text", ""},
+		{"self", "steps.consumer.text", "unavailable"},
+		{"forward", "steps.last.text", "unavailable"},
+		{"missing", "steps.absent.text", "producer step not found"},
+		{"declared dependency", "needs.producer.steps.result.text", ""},
+		{"undeclared dependency", "needs.other.steps.result.text", "not a declared needs dependency"},
+		{"workflow root", "jobs.producer.steps.result.text", "only available in workflow_call outputs"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			w := &Workflow{Schemas: map[string]map[string]any{"Result": {"type": "string", "enum": []any{"${{ " + test.expression + " }}"}}}, Jobs: map[string]Job{
+				"producer": {Steps: []Step{{ID: "result", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}}}},
+				"other":    {Steps: []Step{{ID: "result", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}}}},
+				"main": {Needs: []string{"producer"}, Steps: []Step{
+					{ID: "first", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}},
+					{ID: "consumer", Uses: "agent/reviewer", With: map[string]any{"prompt": "Consume", "output": map[string]any{"schema": "Result"}}},
+					{ID: "last", Uses: "agent/reviewer", With: map[string]any{"prompt": "Later"}},
+				}},
+			}}
+			err := Validate(w)
+			if test.diagnostic == "" && err != nil || test.diagnostic != "" && (err == nil || !strings.Contains(err.Error(), test.diagnostic)) {
+				t.Fatalf("got %v; want diagnostic %q", err, test.diagnostic)
+			}
+			if w.Jobs["main"].Steps[1].With["output"].(map[string]any)["schema"] != "Result" {
+				t.Fatal("admission mutated the authored named reference")
+			}
+		})
+	}
+}
+
 func TestConciseResultsExecuteAcrossJobsAndResume(t *testing.T) {
 	const source = `on:
   workflow_call:
