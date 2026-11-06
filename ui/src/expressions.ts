@@ -4,16 +4,39 @@ export interface Reference {
   step?: string; output?: string; tail?: string; offset: number;
 }
 export function mapReferences(text: string, callback: (ref: Reference) => string | undefined, bareExpression = false): string {
-  const mapBody = (body: string) => body.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?<![\w.-])(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)((?:\.[A-Za-z_][A-Za-z0-9_-]*)*)/g,
-    (token: string, scope: Reference['scope'] | undefined, id: string, suffix: string, offset: number) => {
-      if (!scope) return token;
+  const mapBody = (body: string, offset = 0): string => {
+    const expression = body.trim();
+    const leading = body.length - body.trimStart().length;
+    const mapOperand = (): string => {
+      // Match the runner's operands so structured keys need not be identifiers.
+      let quote = '', escaped = false;
+      for (let index = 0; index < expression.length; index++) {
+        const character = expression[index];
+        if (quote) {
+          if (escaped) escaped = false;
+          else if (character === '\\') escaped = true;
+          else if (character === quote) quote = '';
+        } else if (character === '"' || character === "'") quote = character;
+        else if (expression.startsWith(' and ', index)) return mapBody(expression.slice(0, index), offset + leading) + ' and ' + mapBody(expression.slice(index + 5), offset + leading + index + 5);
+      }
+      if (/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(expression)) return expression;
+      for (const operator of [' == ', ' != ', ' >= ', ' <= ', ' > ', ' < ']) {
+        const index = expression.indexOf(operator);
+        if (index >= 0) return mapBody(expression.slice(0, index), offset + leading) + operator + mapBody(expression.slice(index + operator.length), offset + leading + index + operator.length);
+      }
+      if (expression.startsWith('not ')) return 'not ' + mapBody(expression.slice(4), offset + leading + 4);
+      const match = /^(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)(\.[\s\S]*)?$/.exec(expression);
+      if (!match) return expression;
+      const [, scope, id, suffix = ''] = match;
       const parts = suffix.split('.').slice(1);
       let step: string | undefined;
       let output: string | undefined;
       if ((scope === 'jobs' || scope === 'needs') && parts[0] === 'steps' && parts.length >= 2) { parts.shift(); step = parts.shift(); }
       if (parts[0] === 'outputs' && parts.length >= 2) { parts.shift(); output = parts.shift(); }
-      return callback({ scope, id, step, output, tail: parts.length ? '.' + parts.join('.') : undefined, offset }) ?? token;
-    });
+      return callback({ scope: scope as Reference['scope'], id, step, output, tail: parts.length ? '.' + parts.join('.') : undefined, offset: offset + leading }) ?? expression;
+    };
+    return body.slice(0, leading) + mapOperand() + body.slice(leading + expression.length);
+  };
   // Conditions and repeat.until also accept expressions without interpolation
   // delimiters. Other strings are prose unless enclosed in ${{ ... }}.
   if (bareExpression && !text.trim().startsWith('${{')) return mapBody(text);

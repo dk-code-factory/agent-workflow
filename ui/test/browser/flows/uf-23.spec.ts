@@ -58,4 +58,11 @@ test('concise result suggestions expose completed local and dependency fields', 
   await editor.getByRole('button', { name: '1. summary', exact: true }).click();
   await editor.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('needs.review.steps.analyze.approved');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.summarize.steps[0].prompt)).toContain('${{ needs.review.steps.analyze.approved }}');
+  await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await editor.getByRole('button', { name: '1. analyze', exact: true }).click();
+  const prompt = editor.getByLabel('Prompt', { exact: true });
+  await prompt.fill('${{ steps.finish.$value }}'); await prompt.press('Tab');
+  await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toBeVisible();
+  await prompt.fill('${{ "steps.finish.$value" }}'); await prompt.press('Tab');
+  await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toHaveCount(0);
 });

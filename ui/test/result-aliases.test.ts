@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowDocument } from '../src/document';
-import { references } from '../src/expressions';
+import { mapReferences, references, referenceText } from '../src/expressions';
 import { expressionSuggestions } from '../src/source';
 import { parseWorkflow } from '../src/validation';
 
@@ -46,6 +46,15 @@ describe('named step result references', () => {
   });
   it.each([
     ['forward', 'steps.finish.text', 'review', 0],
+    ['forward Unicode field', 'steps.finish.é', 'review', 0],
+    ['forward symbol field', 'steps.finish.$value', 'review', 0],
+    ['forward numeric field', 'steps.finish.0', 'review', 0],
+    ['forward spaced field', 'steps.finish.with space', 'review', 0],
+    ['forward metadata prefix', 'steps.finish.outputsé', 'review', 0],
+    ['forward error prefix', 'steps.finish.error code', 'review', 0],
+    ['self arbitrary field', 'steps.analyze.$value', 'review', 0],
+    ['comparison operand', '"literal" == steps.finish.$value', 'review', 0],
+    ['logical operand', 'true and not steps.finish.é', 'review', 0],
     ['undeclared dependency', 'needs.review.steps.analyze.text', 'isolated', 0],
     ['job root inside a job', 'jobs.review.steps.analyze.text', 'summarize', 0],
     ['unknown dependency step', 'needs.review.steps.absent.text', 'summarize', 0],
@@ -106,6 +115,30 @@ describe('named step result references', () => {
     ]);
     expect(references('${{ inputs.config.needs.review.steps.analyze.text }}')).toEqual([expect.objectContaining({ scope: 'inputs', id: 'config', step: undefined })]);
   });
+  it('preserves arbitrary suffixes, operand offsets, whitespace and quoted literals during renames', () => {
+    const body = "  'steps.analyze.$value and needs.review.steps.analyze.é' == steps.analyze.$value and not needs.review.steps.analyze.with space  ";
+    expect(references('${{' + body + '}}')).toEqual([
+      { scope: 'steps', id: 'analyze', step: undefined, output: undefined, tail: '.$value', offset: body.indexOf('steps.analyze.$value and not') },
+      { scope: 'needs', id: 'review', step: 'analyze', output: undefined, tail: '.with space', offset: body.lastIndexOf('needs.review') },
+    ]);
+    expect(mapReferences('${{' + body + '}}', ref => referenceText({ ...ref, ...(ref.scope === 'steps' ? { id: 'inspect' } : { step: 'inspect' }) }))).toBe(
+      "${{  'steps.analyze.$value and needs.review.steps.analyze.é' == steps.inspect.$value and not needs.review.steps.inspect.with space  }}");
+    const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
+    doc.setField(['jobs', 'review', 'steps', 1, 'prompt'], '${{ steps.analyze.outputsé }} ${{ steps.analyze.0.é }}');
+    doc.setField(['jobs', 'summarize', 'steps', 0, 'prompt'], '${{ needs.review.steps.analyze.with space }}');
+    doc.renameStep('review', 0, 'inspect');
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].prompt).toBe('${{ steps.inspect.outputsé }} ${{ steps.inspect.0.é }}');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.steps.inspect.with space }}');
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+  });
+  it('checks job-level arbitrary-field references while preserving legacy fields and literals', () => {
+    const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
+    doc.setField(['jobs', 'review', 'if'], 'steps.analyze.with space');
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['jobs', 'review', 'if'] }));
+    doc.setField(['jobs', 'review', 'if'], 'steps.analyze.status');
+    doc.setField(['jobs', 'review', 'steps', 0, 'prompt'], '${{ "steps.finish.$value" }} plain steps.finish.é');
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+  });
   it('resolves named output schemas for local, dependency and workflow completion', () => {
     const value = structuredClone(workflow);
     const schema = value.jobs.review.steps[0].with!.output.schema;
@@ -120,6 +153,9 @@ describe('named step result references', () => {
     ['preceding', 'steps.first.text', false],
     ['self', 'steps.consume.text', true],
     ['forward', 'steps.last.text', true],
+    ['forward arbitrary field', 'steps.last.$value', true],
+    ['self arbitrary field', 'steps.consume.outputsé', true],
+    ['preceding arbitrary field', 'steps.first.with space', false],
     ['dependency', 'needs.producer.steps.analyze.text', false],
     ['wrong root', 'jobs.producer.steps.analyze.text', true],
   ])('checks %s references inside named schemas in the consuming step context', (_name, expression, invalid) => {
