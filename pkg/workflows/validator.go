@@ -14,6 +14,9 @@ func Validate(w *Workflow) error {
 	if w == nil || len(w.Jobs) == 0 {
 		return fmt.Errorf("at least one job is required")
 	}
+	if err := validateNamedSchemas(w); err != nil {
+		return err
+	}
 	if len(w.Gates) != 0 {
 		return fmt.Errorf("gates require PicoClaw and are unsupported")
 	}
@@ -177,8 +180,12 @@ func Validate(w *Workflow) error {
 			if step.With["prompt"] == nil && step.With["message"] == nil {
 				return fmt.Errorf("step %s requires prompt or message", sid)
 			}
-			if _, err := ParseAgentOutputContract(step.With["output"]); err != nil {
-				return fmt.Errorf("step %s: %w", sid, err)
+			output, err := resolveNamedOutput(w, step.With["output"])
+			if err == nil {
+				_, err = ParseAgentOutputContract(output)
+			}
+			if err != nil {
+				return fmt.Errorf("jobs.%s.steps.%s.with.output: %w", id, sid, err)
 			}
 		}
 	}

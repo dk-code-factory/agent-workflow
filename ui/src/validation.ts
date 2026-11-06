@@ -43,7 +43,7 @@ const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const schema: Shape = {
-  name: 'string', gates: { '*': 'any' },
+  name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
     manual: { '*': 'any' }, schedule: [{ cron: 'string' }],
     channel_message: { channels: 'list', chats: 'list', senders: 'list', mentioned: 'boolean', command: 'string', text_matches: 'string', passthrough: 'boolean', conversation: context },
@@ -245,6 +245,21 @@ export function parseWorkflow(source: string): Parsed {
 type Add = (code: string, message: string, path?: Path, node?: Node | null, source?: Diagnostic['source'], severity?: Diagnostic['severity']) => void;
 function validateWorkflow(w: Workflow, add: Add) {
   const jobs = w.jobs;
+  const namedKeywords = new Set(['type', 'title', 'description', '$comment', 'pattern', 'properties', 'items', 'additionalProperties', 'required', 'enum', 'minLength', 'maxLength', 'maxItems', 'minimum']);
+  const inspectSchema = (value: unknown, path: Path) => {
+    if (!mapping(value)) { add('schema', 'Expected a schema mapping', path); return; }
+    for (const [key, child] of Object.entries(value)) {
+      if (!namedKeywords.has(key)) add('schema', `Unsupported schema keyword "${key}"; references and composition are unsupported`, [...path, key]);
+      else if (key === 'properties' && mapping(child)) {
+        for (const [name, property] of Object.entries(child)) inspectSchema(property, [...path, key, name]);
+      } else if (key === 'items' || key === 'additionalProperties' && typeof child !== 'boolean') inspectSchema(child, [...path, key]);
+    }
+  };
+  for (const [name, declaration] of Object.entries(w.schemas ?? {})) {
+    if (!identifier.test(name)) add('identifier', 'Invalid schema name', ['schemas', name]);
+    inspectSchema(declaration, ['schemas', name]);
+    add('host-schema', 'Named schema constraints require runner schema admission', ['schemas', name], undefined, 'host', 'info');
+  }
   const dependencySets = new Map<string, Set<string>>();
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
@@ -309,6 +324,9 @@ function validateWorkflow(w: Workflow, add: Add) {
           for (const key of Object.keys(params)) if (!['model', 'prompt', 'message', 'workspace', 'output'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           if (params.prompt == null && params.message == null) add('action', 'Agent requires prompt or message', [...sp, 'with']);
           if (params.output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
+          if (mapping(params.output) && typeof params.output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, params.output.schema)) {
+            add('schema-reference', `Unknown workflow-local schema "${params.output.schema}"`, [...sp, 'with', 'output', 'schema']);
+          }
         }
       }
       if (mapping(step.context) && Object.values(step.context).some(Boolean)) add('standalone', 'Step context is unsupported standalone', [...sp, 'context']);

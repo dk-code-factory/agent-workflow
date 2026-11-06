@@ -241,12 +241,15 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract.
 
 - **Starting point:** I add or select an agent step.
 - **My flow:** I choose the agent under **Step type**, or edit **Action target**
   → write the **Prompt** → optionally set **Message**, **Model**, **Workspace**,
   and a **Structured output contract (YAML)**.
+- **Named contracts:** Declare a workflow-level `schemas` map in YAML, then set
+  `schema: Review` inside the structured output contract to reuse its local
+  `Review` declaration. Definitions and references remain in exported YAML.
 - **What I see:** The step definition and graph label update. If the host
   supplies an agent catalog, an unavailable agent produces a warning. Output
   contracts may still require host validation before execution.

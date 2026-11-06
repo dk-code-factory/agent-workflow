@@ -4,6 +4,42 @@ import { parseWorkflow } from '../src/validation';
 import { references } from '../src/expressions';
 const source = `# preserved header\nname: Example # inline\njobs:\n  build:\n    outputs:\n      result: \${{ steps.step_1.outputs.text }}\n    steps:\n      # prompt comment\n      - uses: agent/claude\n        with:\n          prompt: |\n            Hello\n            world \${{ inputs.task }}\n      - argv: [echo, done]\n  test:\n    needs: build\n    steps:\n      - argv: [echo, '\${{ needs.build.outputs.result }}']\n`;
 describe('document edits', () => {
+  it('preserves named schemas and references through edits, history and reparsing', () => {
+    const original = `# shared contract\nschemas:\n  Review: # keep schema name\n    type: object\n    properties: {approved: {type: boolean}}\njobs:\n  build:\n    steps:\n      - uses: agent/claude\n        with: {prompt: Review, output: {schema: Review, repair-attempts: 0}}\n`;
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'prompt'], 'Review carefully');
+    const edited = doc.getSnapshot();
+    expect(edited.workflow!.schemas).toEqual({ Review: { type: 'object', properties: { approved: { type: 'boolean' } } } });
+    expect(edited.workflow!.jobs.build.steps![0].with!.output).toEqual({ schema: 'Review', 'repair-attempts': 0 });
+    expect(edited.source).toContain('# keep schema name');
+    expect(parseWorkflow(edited.source).workflow).toEqual(edited.workflow);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'output', 'schema'], 'Missing');
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'schema-reference', path: ['jobs', 'build', 'steps', 0, 'with', 'output', 'schema'] }));
+  });
+  it.each([
+    ['Review: null', ['schemas', 'Review'], 'Expected a schema mapping'],
+    ['Review: string', ['schemas', 'Review'], 'Expected a schema mapping'],
+    ['Review: {$ref: other.json}', ['schemas', 'Review', '$ref'], 'Unsupported schema keyword'],
+    ['Review: {type: array, items: {$ref: other.json}}', ['schemas', 'Review', 'items', '$ref'], 'Unsupported schema keyword'],
+    ['Review: {type: object, properties: {answer: {anyOf: []}}}', ['schemas', 'Review', 'properties', 'answer', 'anyOf'], 'Unsupported schema keyword'],
+  ])('reports named-schema declarations at their original field: %s', (declaration, path, message) => {
+    const text = `schemas: {${declaration}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: Review}}]}}`;
+    const doc = new WorkflowDocument({ source: text });
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'schema', path, message: expect.stringContaining(message) }));
+    doc.setField(['name'], 'Still a draft');
+    expect(doc.getSnapshot().workflow!.schemas!.Review).toEqual(parseWorkflow(text).workflow!.schemas!.Review);
+  });
+  it('keeps schema property names, enum data and declaration metadata literal', () => {
+    const doc = new WorkflowDocument({ source: `schemas:\n  Review:\n    type: object\n    description: '\${{ inputs.task }}'\n    properties: {$ref: {enum: [{$ref: literal}]}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: '\${{ inputs.task }}', output: {schema: Review}}}]}}` });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.setField(['on', 'workflow_call', 'inputs'], { task: { type: 'string' } });
+    doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'request');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.description).toBe('${{ inputs.task }}');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.prompt).toBe('${{ inputs.request }}');
+  });
   it('keeps agent parameters, YAML comments and block prompts across provider changes', () => {
     const doc = new WorkflowDocument({ source });
     doc.setStepKind('build', 0, 'agent/codex');

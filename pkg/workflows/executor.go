@@ -124,6 +124,22 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if err := Validate(w); err != nil {
 			return fmt.Errorf("%s: %w", ref, err)
 		}
+		// Expand local names before snapshotting. Resume uses admitted definitions.
+		for id, job := range w.Jobs {
+			for i, step := range job.Steps {
+				if !strings.HasPrefix(step.Uses, "agent/") {
+					continue
+				}
+				output, err := resolveNamedOutput(w, step.With["output"])
+				if err != nil {
+					return err
+				}
+				if output != nil {
+					job.Steps[i].With["output"] = output
+				}
+			}
+			w.Jobs[id] = job
+		}
 		if len(all) >= 128 {
 			return fmt.Errorf("workflow closure exceeds 128 definitions")
 		}

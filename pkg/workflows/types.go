@@ -8,10 +8,11 @@ import (
 )
 
 type Workflow struct {
-	Name  string           `json:"name,omitempty"  yaml:"name,omitempty"`
-	On    WorkflowTriggers `json:"on,omitempty"    yaml:"on,omitempty"`
-	Gates map[string]any   `json:"gates,omitempty" yaml:"gates,omitempty"`
-	Jobs  map[string]Job   `json:"jobs"            yaml:"jobs"`
+	Schemas map[string]map[string]any `json:"schemas,omitempty" yaml:"schemas,omitempty"`
+	Name    string                    `json:"name,omitempty"  yaml:"name,omitempty"`
+	On      WorkflowTriggers          `json:"on,omitempty"    yaml:"on,omitempty"`
+	Gates   map[string]any            `json:"gates,omitempty" yaml:"gates,omitempty"`
+	Jobs    map[string]Job            `json:"jobs"            yaml:"jobs"`
 }
 
 type WorkflowTriggers struct {
@@ -171,6 +172,10 @@ func (w *Workflow) UnmarshalYAML(value *yaml.Node) error {
 		case "on", "true":
 			if err := val.Decode(&w.On); err != nil {
 				return err
+			}
+		case "schemas":
+			if err := val.Decode(&w.Schemas); err != nil {
+				return fmt.Errorf("schemas: %w", err)
 			}
 		case "gates":
 			if err := val.Decode(&w.Gates); err != nil {
