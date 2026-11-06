@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConciseResultPathsAndCollisions(t *testing.T) {
@@ -124,7 +127,7 @@ jobs:
 		{"incomplete", "needs.producer.steps.review.approved", "needs.producer.steps.review", "step id and result field"},
 		{"quoted", "prompt: Review", "prompt: '${{ \"steps.missing.text\" }}'", ""},
 		{"quoted unicode", "prompt: Review", "prompt: '${{ \"steps.missing.é\" }}'", ""},
-		{"quoted comparison text", "prompt: Review", "prompt: '${{ \"steps.missing.é == steps.use.$value\" }}'", ""},
+		{"quoted comparison operands", "prompt: Review", "prompt: '${{ \"steps.missing.é == steps.use.$value\" }}'", "unavailable"},
 		{"data path", "prompt: Review", "prompt: '${{ inputs.config.steps.missing.$value }}'", ""},
 		{"literal", "prompt: Review", "prompt: steps.missing.text", ""},
 	} {
@@ -255,12 +258,81 @@ jobs:
 }
 
 func TestInvalidConciseReferenceHasNoProviderEffects(t *testing.T) {
-	e, _ := durableExecutor(t, "jobs:\n  x:\n    steps:\n      - agent: reviewer\n        prompt: '${{ steps.later.text }}'\n      - id: later\n        agent: reviewer\n        prompt: later\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
-		t.Error("invalid reference reached provider")
-		return nil, errors.New("invalid reference reached provider")
-	}))
-	if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
-		t.Fatalf("bad admission error: %v", err)
+	for name, expression := range map[string]string{
+		"ordinary":        "${{ steps.later.text }}",
+		"quoted braces":   `${{ "}}" == "}}" and steps.later.text }}`,
+		"escaped operand": `'\' == steps.later.text'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			definition := Workflow{Jobs: map[string]Job{"x": {Steps: []Step{
+				{Uses: "agent/reviewer", With: map[string]any{"prompt": "before"}},
+				{Uses: "agent/reviewer", If: expression, With: map[string]any{"prompt": "consume"}},
+				{ID: "later", Uses: "agent/reviewer", With: map[string]any{"prompt": "later"}},
+			}}}}
+			source, err := json.Marshal(definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, _ := durableExecutor(t, string(source), agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+				t.Error("invalid reference reached provider")
+				return nil, errors.New("invalid reference reached provider")
+			}))
+			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+				t.Fatalf("bad admission error: %v", err)
+			}
+		})
+	}
+}
+
+func TestConciseAdmissionMatchesConditionOperands(t *testing.T) {
+	ctx := expressionContext{Steps: map[string]StepExecution{"review": {
+		Status: RunStatusSucceeded, Outputs: map[string]any{"text": "ready", "structured": map[string]any{"text'": `\`}},
+	}}}
+	for _, test := range []struct{ expression, path string }{
+		{`${{ "}}" == "}}" and steps.review.text }}`, "steps.review.text"},
+		{`'\' == steps.review.text'`, "steps.review.text'"},
+	} {
+		if allowed, err := evalIf(test.expression, ctx); err != nil || !allowed {
+			t.Fatalf("runner does not evaluate %q: %v, %v", test.expression, allowed, err)
+		}
+		var paths []string
+		if err := walkResultReferences(test.expression, true, func(parts []string) error {
+			if newResultReference(parts) {
+				paths = append(paths, strings.Join(parts, "."))
+			}
+			return nil
+		}); err != nil || !reflect.DeepEqual(paths, []string{test.path}) {
+			t.Fatalf("lost runner operand in %q: %v, %v", test.expression, paths, err)
+		}
+	}
+}
+
+func TestLongConciseResultConditions(t *testing.T) {
+	const helper = "WORKFLOW_LONG_RESULT_CONDITION_TEST"
+	if os.Getenv(helper) != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLongConciseResultConditions$")
+		command.Env = append(os.Environ(), helper+"=1")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("bounded condition helper failed: %v: %s", err, output)
+		}
+		return
+	}
+	for _, prefix := range []string{"not ", "true and ", "true == ", "true != ", "true >= ", "true <= ", "true > ", "true < ", "'quoted and text' == "} {
+		for _, suffix := range []string{"true", "steps.later.text"} {
+			condition := "false and " + strings.Repeat(prefix, 100_000) + suffix
+			w := &Workflow{Jobs: map[string]Job{"main": {If: condition, Steps: []Step{
+				{ID: "later", Argv: []string{"echo", "skipped"}},
+			}}}}
+			err := Validate(w)
+			if suffix == "true" && err != nil || suffix != "true" && (err == nil || !strings.Contains(err.Error(), "unavailable")) {
+				t.Fatalf("long %q condition: %v", prefix, err)
+			}
+			if allowed, err := evalIf(condition, expressionContext{}); err != nil || allowed {
+				t.Fatalf("lost runtime short circuit for %q: %v, %v", prefix, allowed, err)
+			}
+		}
 	}
 }
 

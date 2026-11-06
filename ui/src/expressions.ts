@@ -50,7 +50,6 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
       const and = item.scanAnd ? nextAnd[0][boundary] : -1;
       let index = and >= offset && and + 5 <= end ? and - offset : -1;
       let operator = index >= 0 ? ' and ' : '';
-      if (index < 0 && /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(expression)) { result.push(expression); continue; }
       if (index < 0 && item.scanComparison) for (const candidate of comparisons) {
         const offsets = positions.get(candidate)!;
         const found = offsets[lowerBound(offsets.length, index => offsets[index], offset)];
@@ -84,7 +83,15 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
   };
   // Conditions and repeat.until also accept expressions without interpolation
   // delimiters. Other strings are prose unless enclosed in ${{ ... }}.
-  if (bareExpression && !text.trim().startsWith('${{')) return mapBody(text);
+  if (bareExpression) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('${{') && trimmed.endsWith('}}')) {
+      const start = text.length - text.trimStart().length + 3;
+      const end = text.trimEnd().length - 2;
+      return text.slice(0, start) + mapBody(text.slice(start, end)) + text.slice(end);
+    }
+    return mapBody(text);
+  }
   return text.replace(/\$\{\{([\s\S]*?)\}\}/g, (_expression: string, body: string) => {
     return '${{' + mapBody(body) + '}}';
   });

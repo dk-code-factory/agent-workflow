@@ -54,6 +54,7 @@ describe('named step result references', () => {
     ['forward error prefix', 'steps.finish.error code', 'review', 0],
     ['self arbitrary field', 'steps.analyze.$value', 'review', 0],
     ['comparison operand', '"literal" == steps.finish.$value', 'review', 0],
+    ['escaped comparison operand', String.raw`'\' == steps.finish.text'`, 'review', 0],
     ['logical operand', 'true and not steps.finish.é', 'review', 0],
     ['undeclared dependency', 'needs.review.steps.analyze.text', 'isolated', 0],
     ['job root inside a job', 'jobs.review.steps.analyze.text', 'summarize', 0],
@@ -138,6 +139,23 @@ describe('named step result references', () => {
     doc.setField(['jobs', 'review', 'if'], 'steps.analyze.status');
     doc.setField(['jobs', 'review', 'steps', 0, 'prompt'], '${{ "steps.finish.$value" }} plain steps.finish.é');
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+  });
+  it.each([
+    ['${{ "}}" == "}}" and steps.analyze.text }}', '.text'],
+    [String.raw`'\' == steps.analyze.text'`, ".text'"],
+  ])('tracks executable condition operands in %s through rename and Undo', (condition, tail) => {
+    const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
+    const path = ['jobs', 'review', 'steps', 1, 'if'];
+    doc.setField(path, condition);
+    const source = doc.getSnapshot().source;
+    expect(references(condition, true)).toEqual([
+      expect.objectContaining({ scope: 'steps', id: 'analyze', tail }),
+    ]);
+    doc.renameStep('review', 0, 'inspect');
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].if).toBe(condition.replace('steps.analyze.', 'steps.inspect.'));
+    doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+    doc.setField(path, condition.replace('steps.analyze.', 'steps.finish.'));
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path }));
   });
   it.each(['true and ', 'not ', 'true == '])('keeps long %s conditions editable with reference offsets intact', prefix => {
     const condition = prefix.repeat(10_000) + 'inputs.task';

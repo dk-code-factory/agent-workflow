@@ -41,7 +41,7 @@ test('property expression hints are limited to fields the runner evaluates', asy
   await expect(first.getByLabel('Action target', { exact: true })).not.toHaveAttribute('list');
 });
 
-test('concise result suggestions expose completed local and dependency fields', async ({ page }) => {
+test('concise result suggestions and operand diagnostics follow runner scopes', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: { Review: { type: 'object', properties: { approved: { type: 'boolean' } } } }, jobs: {
     review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { format: 'json', schema: 'Review' } } }, { id: 'finish', agent: 'claude', prompt: 'Next' }] },
@@ -64,5 +64,13 @@ test('concise result suggestions expose completed local and dependency fields', 
   await prompt.fill('${{ steps.finish.$value }}'); await prompt.press('Tab');
   await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toBeVisible();
   await prompt.fill('${{ "steps.finish.$value" }}'); await prompt.press('Tab');
+  await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toHaveCount(0);
+  await prompt.fill(String.raw`${'${{'} '\' == steps.finish.text' }}`); await prompt.press('Tab');
+  await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toBeVisible();
+  await prompt.fill('Review'); await prompt.press('Tab');
+  const condition = editor.getByLabel('Condition', { exact: true });
+  await condition.fill('${{ "}}" == "}}" and steps.finish.text }}'); await condition.press('Tab');
+  await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toBeVisible();
+  await condition.fill('${{ "}}" == "}}" }}'); await condition.press('Tab');
   await expect(editor.locator('.aw-diagnostics').getByRole('button', { name: /Step result "finish" is unavailable here/ })).toHaveCount(0);
 });

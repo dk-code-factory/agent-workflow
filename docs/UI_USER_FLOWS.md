@@ -351,7 +351,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-23.spec.ts)
 
-- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic.
+- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it.
 
 - **Starting point:** I am editing a field that supports expressions.
 - **My flow:** I use field suggestions, choose **Insert expression…** in a

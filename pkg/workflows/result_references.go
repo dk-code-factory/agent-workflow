@@ -2,11 +2,10 @@ package workflows
 
 import (
 	"fmt"
-	"regexp"
+	"sort"
 	"strings"
+	"unicode"
 )
-
-var quotedResultOperandPattern = regexp.MustCompile(`^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$`)
 
 func validateResultReferences(w *Workflow) error {
 	check := func(value any, field, jobID string, available int, bare bool) error {
@@ -129,8 +128,12 @@ func walkResultReferences(value any, bare bool, check func([]string) error) erro
 	switch value := value.(type) {
 	case string:
 		bodies := []string{}
-		if bare && !strings.HasPrefix(strings.TrimSpace(value), "${{") {
-			bodies = append(bodies, value)
+		if bare {
+			body := strings.TrimSpace(value)
+			if strings.HasPrefix(body, "${{") && strings.HasSuffix(body, "}}") {
+				body = strings.TrimSpace(body[3 : len(body)-2])
+			}
+			bodies = append(bodies, body)
 		} else {
 			for _, match := range expressionPattern.FindAllStringSubmatch(value, -1) {
 				bodies = append(bodies, match[1])
@@ -165,28 +168,104 @@ func walkResultReferences(value any, bare bool, check func([]string) error) erro
 
 // Follow expression operands instead of restricting structured object keys to identifiers.
 func walkResultExpression(expression string, check func([]string) error) error {
-	expression = strings.TrimSpace(expression)
-	if terms, ok := splitExpressionLogicalAND(expression); ok {
-		for _, term := range terms {
-			if err := walkResultExpression(term, check); err != nil {
-				return err
+	operators := []string{" == ", " != ", " >= ", " <= ", " > ", " < "}
+	positions := make([][]int, len(operators))
+	for index, operator := range operators {
+		for cursor := 0; cursor < len(expression); {
+			found := strings.Index(expression[cursor:], operator)
+			if found < 0 {
+				break
 			}
-		}
-		return nil
-	}
-	if quotedResultOperandPattern.MatchString(expression) {
-		return nil
-	}
-	for _, operator := range []string{" == ", " != ", " >= ", " <= ", " > ", " < "} {
-		if index := strings.Index(expression, operator); index >= 0 {
-			if err := walkResultExpression(expression[:index], check); err != nil {
-				return err
-			}
-			return walkResultExpression(expression[index+len(operator):], check)
+			cursor += found
+			positions[index] = append(positions[index], cursor)
+			cursor++
 		}
 	}
-	if strings.HasPrefix(expression, "not ") {
-		return walkResultExpression(strings.TrimPrefix(expression, "not "), check)
+	type boundary struct {
+		offset  int
+		quote   int
+		escaped bool
 	}
-	return check(strings.Split(expression, "."))
+	var boundaries []boundary
+	backslashes := 0
+	for offset := 0; offset < len(expression); offset++ {
+		character := expression[offset]
+		switch {
+		case character == '\'' || character == '"':
+			quote := 1
+			if character == '"' {
+				quote = 2
+			}
+			boundaries = append(boundaries, boundary{offset, quote, backslashes%2 == 1})
+		case character == ' ' && strings.HasPrefix(expression[offset:], " and "):
+			boundaries = append(boundaries, boundary{offset: offset})
+		}
+		if character == '\\' {
+			backslashes++
+		} else {
+			backslashes = 0
+		}
+	}
+	// Comparisons reset quote state when their operands are evaluated independently.
+	var nextAnd [3][]int
+	for state := range nextAnd {
+		nextAnd[state] = make([]int, len(boundaries)+1)
+		nextAnd[state][len(boundaries)] = -1
+	}
+	for index := len(boundaries) - 1; index >= 0; index-- {
+		item := boundaries[index]
+		for state := range nextAnd {
+			if state == 0 && item.quote == 0 {
+				nextAnd[state][index] = item.offset
+				continue
+			}
+			nextState := state
+			if item.quote != 0 && state == 0 {
+				nextState = item.quote
+			} else if item.quote == state && !item.escaped {
+				nextState = 0
+			}
+			nextAnd[state][index] = nextAnd[nextState][index+1]
+		}
+	}
+	type operand struct {
+		start, end int
+		scan       bool
+	}
+	pending := []operand{{0, len(expression), true}}
+	for len(pending) > 0 {
+		item := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		body := expression[item.start:item.end]
+		trimmed := strings.TrimSpace(body)
+		item.start += len(body) - len(strings.TrimLeftFunc(body, unicode.IsSpace))
+		item.end = item.start + len(trimmed)
+		if item.scan {
+			boundaryIndex := sort.Search(len(boundaries), func(index int) bool { return boundaries[index].offset >= item.start })
+			found := nextAnd[0][boundaryIndex]
+			width := 5
+			if found < item.start || found+width > item.end {
+				found = -1
+				for index, offsets := range positions {
+					position := sort.SearchInts(offsets, item.start)
+					if position < len(offsets) && offsets[position]+len(operators[index]) <= item.end {
+						found, width = offsets[position], len(operators[index])
+						break
+					}
+				}
+			}
+			if found >= 0 {
+				pending = append(pending, operand{found + width, item.end, true}, operand{item.start, found, true})
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, "not ") {
+			pending = append(pending, operand{item.start + 4, item.end, false})
+			continue
+		}
+		if err := check(strings.Split(trimmed, ".")); err != nil {
+			return err
+		}
+	}
+	return nil
 }

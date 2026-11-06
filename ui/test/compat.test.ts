@@ -25,12 +25,13 @@ describe('advisory reference dependencies', () => {
     expect(result.workflow!.jobs.consumer.needs).toEqual(needs.map(id => id.trim()));
   });
 
-  it('bounds repeated advisories while retaining distinct consuming fields and producers', () => {
+  it.each(['bare', 'wrapped'])('bounds repeated advisories in %s conditions while retaining distinct consuming fields and producers', format => {
     const expression = '${{ needs.first.outputs.text }} ${{ needs.second.outputs.text }}';
+    const condition = Array(200).fill('needs.first.outputs.text and needs.second.outputs.text').join(' and ');
     const result = parseWorkflow(JSON.stringify({ jobs: {
       first: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
       second: { outputs: { text: 'world' }, steps: [{ argv: ['echo'] }] },
-      consumer: { if: expression.repeat(200), steps: [{ uses: 'agent/claude', with: { prompt: expression.repeat(200) } }] },
+      consumer: { if: format === 'wrapped' ? '${{ ' + condition + ' }}' : condition, steps: [{ uses: 'agent/claude', with: { prompt: expression.repeat(200) } }] },
     } }));
     const warnings = result.diagnostics.filter(d => d.code === 'expression-dependency');
     expect(warnings).toHaveLength(4);
