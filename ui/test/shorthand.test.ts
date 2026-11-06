@@ -32,6 +32,8 @@ describe('concise agent steps', () => {
     'agent: claude, with: {prompt: Review, model: sonnet}',
     'agent: claude, with: {message: Review}',
     "agent: claude, prompt: ''",
+    'agent: claude, prompt: Review, argv: [], run: "", shell: "", timeout: "", working-directory: ""',
+    'agent: claude, prompt: Review, argv: null, run: null, shell: null, timeout: null, working-directory: null',
   ])('accepts %s and keeps its authoring shape through visual edits', step => {
     const source = `# keep\njobs: {review: {steps: [{id: ask, ${step}}]}}`;
     const doc = new WorkflowDocument({ source });
@@ -50,12 +52,15 @@ describe('concise agent steps', () => {
     ['agent: claude, prompt: Review, with: {prompt: null}', 'prompt'],
     ['uses: agent/claude, prompt: Review', 'prompt'],
     ['agent: invalid/role, prompt: Review', 'agent'],
-    ['agent: claude, prompt: Review, argv: []', 'agent'],
-    ['agent: claude, prompt: Review, run: null', 'agent'],
     ['agent: claude', 'with'],
   ])('diagnoses %s at its field', (step, field) => {
     const result = parseWorkflow(`jobs: {review: {steps: [{${step}}]}}`);
     expect(result.diagnostics.some(d => d.severity === 'error' && d.path.at(-1) === field)).toBe(true);
+  });
+
+  it.each(['argv: [echo]', 'run: echo', 'shell: sh', 'timeout: 1m', 'working-directory: /work'])('rejects active command fields: %s', command => {
+    const result = parseWorkflow(`jobs: {review: {steps: [{agent: claude, prompt: Review, ${command}}]}}`);
+    expect(result.diagnostics.some(d => d.severity === 'error' && d.code === 'command')).toBe(true);
   });
 
   it.each(['agent: null, prompt: Review', 'agent: true, prompt: Review', 'agent: claude, prompt: 42', 'agent: claude, prompt: [Review]', 'agent: claude, prompt: null'])('rejects nonstring shorthand fields: %s', step => {

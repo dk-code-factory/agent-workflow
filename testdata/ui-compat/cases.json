@@ -468,6 +468,18 @@
     "valid": true
   },
   {
+    "name": "concise-empty-command-fields",
+    "file": "concise-empty-command-fields.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "concise-null-command-fields",
+    "file": "concise-null-command-fields.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
     "name": "input-wait-extra",
     "file": "input-wait-extra.yml",
     "parse": true,

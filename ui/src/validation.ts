@@ -314,7 +314,6 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
       if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
-      if ((shorthand || prompt) && ['argv', 'run', 'shell', 'timeout', 'working-directory'].some(key => Object.hasOwn(step, key))) add('agent', 'agent and prompt cannot be combined with command fields', [...sp, shorthand ? 'agent' : 'prompt']);
       const command = !!(step.argv?.length || step.run);
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {

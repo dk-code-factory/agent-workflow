@@ -475,7 +475,8 @@ supported task options (`message`, `model`, `workspace`, and `output`) stay unde
 An `agent` step may instead use the existing `with.prompt` or `with.message`
 form when top-level `prompt` is absent. Top-level `prompt` requires `agent`.
 Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
-even when their values match. Command fields cannot combine with an agent call.
+even when their values match. Nonempty command fields cannot combine with an
+agent call; empty or null command fields remain inactive in either authoring form.
 
 The shorthand resolves to the existing agent operation before admission. Role
 permissions, `${{ ... }}` interpolation, literal input data, structured-output

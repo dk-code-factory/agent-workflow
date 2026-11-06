@@ -1,13 +1,16 @@
 import { expect, test } from '@playwright/test';
 
-test('empty command fields do not disguise an imported agent step', async ({ page }) => {
+for (const declaration of ['uses: agent/claude, with: {prompt: Review}', 'agent: claude, prompt: Review']) {
+test(`empty command fields do not disguise an imported agent step: ${declaration}`, async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {build: {steps: [{id: review, argv: null, run: null, shell: null, uses: agent/claude, with: {prompt: Review}}]}}' }));
+  await page.evaluate(declaration => (window as any).first.update({ source: `jobs: {build: {steps: [{id: review, argv: [], run: null, shell: null, timeout: null, working-directory: '', ${declaration}}]}}` }), declaration);
   await first.getByRole('button', { name: 'review agent/claude', exact: true }).click();
   await expect(first.getByLabel('Step type', { exact: true })).toHaveValue('agent/claude');
   await expect(first.getByLabel('Prompt', { exact: true })).toHaveValue('Review');
   await expect(first.getByLabel('Command', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.filter((d: any) => d.severity === 'error'))).toEqual([]);
 });
+}
 
 
 test('configure agent prompt optional settings and output contract', async ({ page }) => {

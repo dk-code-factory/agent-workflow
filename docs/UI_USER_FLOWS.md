@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings.
 
 - **Starting point:** I add or select an agent step.
 - **My flow:** I choose the agent under **Step type**, or edit **Action target**
