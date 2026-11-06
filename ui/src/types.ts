@@ -57,7 +57,8 @@ export interface WorkflowCatalogEntry extends CatalogEntry {
 export interface JobResultRequest {
   target: Path;
   producer: string;
-  source: { kind: 'output'; output: string } | { kind: 'step'; step: number; output: string; name: string };
+  source: { kind: 'output'; output: string } | { kind: 'step'; step: number; output: string; name: string }
+    | { kind: 'result'; step: number; field: string };
   /** Replace this text selection, or append when omitted. */
   selection?: { start: number; end: number };
 }

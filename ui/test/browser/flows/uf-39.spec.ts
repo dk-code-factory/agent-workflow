@@ -78,3 +78,26 @@ test('Escape closes the native result dialog and restores field focus without ed
   await expect(picker).toHaveCount(0); await expect(ui.getByLabel('Prompt', { exact: true })).toBeFocused();
   expect((await snapshot(page)).source).toBe(before);
 });
+
+test('named step result wiring inserts a nested field without declaring a job output', async ({ page }) => {
+  const ui = await open(page, 'jobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review}]}, summarize: {steps: [{id: summary, agent: claude, prompt: "Read: "}]}}');
+  await job(page, 'summarize'); await ui.getByRole('button', { name: '1. summary', exact: true }).click();
+  const prompt = ui.getByLabel('Prompt', { exact: true });
+  await prompt.focus(); await prompt.press('ControlOrMeta+End');
+  const before = (await snapshot(page)).source;
+  await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).click();
+  const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
+  await picker.getByLabel('Result source', { exact: true }).selectOption('result');
+  await picker.getByLabel('Result field', { exact: true }).fill('details.reason');
+  await expect(picker.getByLabel('Job output name', { exact: true })).toHaveCount(0);
+  await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
+  await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('${{ needs.review.steps.analyze.details.reason }}');
+  expect((await snapshot(page)).source).toBe(before);
+  await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  await expect(prompt).toBeFocused();
+  const jobs = (await snapshot(page)).workflow.jobs;
+  expect(jobs.review.outputs).toBeUndefined(); expect(jobs.summarize.needs).toEqual(['review']);
+  expect(jobs.summarize.steps[0].prompt).toBe('Read: ${{ needs.review.steps.analyze.details.reason }}');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
+});

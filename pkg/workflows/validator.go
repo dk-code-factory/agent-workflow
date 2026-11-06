@@ -188,7 +188,10 @@ func Validate(w *Workflow) error {
 		}
 	}
 	_, err := topoJobs(w.Jobs)
-	return err
+	if err != nil {
+		return err
+	}
+	return validateResultReferences(w)
 }
 
 func stepID(step Step, i int) string {

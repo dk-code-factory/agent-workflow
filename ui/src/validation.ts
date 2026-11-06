@@ -1,5 +1,5 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
-import { hasExpressionReferences, isExpressionPath, references } from './expressions';
+import { hasExpressionReferences, isConciseStepReference, isExpressionPath, references } from './expressions';
 import type { Diagnostic, Job, Mapping, Path, Workflow } from './types';
 
 export function diagnosticLabel(value: string | number): string {
@@ -372,8 +372,23 @@ function validateWorkflow(w: Workflow, add: Add) {
           warnedProducers.add(ref.id);
           add('expression-dependency', `Job "${diagnosticLabel(ref.id)}" is missing from Dependencies of "${diagnosticLabel(jobID)}". Review Dependencies and explicitly add the producer if needed.`, path, undefined, 'browser', 'warning');
         }
-        if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
+        if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.step === undefined && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
           add('expression-reference', `Unknown output "${ref.output}" of job "${ref.id}"`, path);
+        }
+        if (ref.step !== undefined) {
+          if (ref.scope === 'jobs' && jobID || ref.scope === 'needs' && !jobID) add('expression-reference', `${ref.scope} step results are unavailable in this scope`, path);
+          if (ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id)) add('expression-reference', `Step results require a declared dependency on "${ref.id}"`, path);
+          if (exists) {
+            const producer = jobs[ref.id];
+            if (producer.uses || producer['for-each']) add('expression-reference', `Job "${ref.id}" does not expose individual step results; use its outputs or items`, path);
+            else if (!producer.steps?.some((step, index) => effectiveStepID(step, index) === ref.step)) add('expression-reference', `Unknown step "${ref.step}" of job "${ref.id}"`, path);
+          }
+        }
+        if (exists && isConciseStepReference(ref) && jobID) {
+          const index = jobs[jobID].steps?.findIndex((step, i) => effectiveStepID(step, i) === ref.id) ?? -1;
+          const inStep = path[2] === 'steps' && typeof path[3] === 'number';
+          const afterSteps = path[2] === 'outputs' || path[2] === 'repeat' && path[3] === 'until';
+          if (!inStep && !afterSteps || inStep && index >= Number(path[3])) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
         }
       }
     }

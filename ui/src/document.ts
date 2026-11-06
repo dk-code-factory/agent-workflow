@@ -179,9 +179,16 @@ export class WorkflowDocument {
     const outputs = jobs[producer].outputs ?? {};
     let output: string;
     let declaration: string | undefined;
+    let directReference: string | undefined;
     if (source.kind === 'output') {
       output = source.output;
       if (!identifier.test(output) || !Object.hasOwn(outputs, output)) throw new Error('Unknown producer output');
+    } else if (source.kind === 'result') {
+      const step = jobs[producer].steps?.[source.step];
+      if (!step || jobs[producer].uses || jobs[producer]['for-each']) throw new Error('Producer does not expose individual step results');
+      if (!source.field.split('.').every(part => identifier.test(part))) throw new Error('Choose a valid result field path');
+      output = source.field;
+      directReference = `${consumer ? 'needs' : 'jobs'}.${producer}.steps.${effectiveStepID(step, source.step)}.${source.field}`;
     } else {
       const step = jobs[producer].steps?.[source.step];
       if (!step || jobs[producer].uses) throw new Error('Unknown producer step');
@@ -193,7 +200,7 @@ export class WorkflowDocument {
       output = Object.keys(outputs).find(key => matches(outputs[key])) ?? source.name;
       if (!Object.hasOwn(outputs, output)) declaration = value;
     }
-    const reference = `${consumer ? 'needs' : 'jobs'}.${producer}.outputs.${output}`;
+    const reference = directReference ?? `${consumer ? 'needs' : 'jobs'}.${producer}.outputs.${output}`;
     const expression = isExpressionPath(target) && text.trim() && !text.trim().startsWith('${{') ? reference : '${{ ' + reference + ' }}';
     const { start, end } = request.selection ?? { start: text.length, end: text.length };
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > text.length) throw new Error('Invalid text selection');
@@ -285,7 +292,7 @@ export class WorkflowDocument {
       return ref.scope === path[2] && ref.id === key;
     }
     if (path.length === 4 && path[0] === 'jobs' && path[2] === 'outputs') {
-      return (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === path[1] && ref.output === key;
+      return (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === path[1] && ref.step === undefined && ref.output === key;
     }
     throw new Error('Expected a callable interface entry or job output path');
   }
@@ -325,7 +332,7 @@ export class WorkflowDocument {
     const stepID = stepIndex == null ? undefined : effectiveStepID(this.snapshot.workflow!.jobs[job].steps![stepIndex], stepIndex);
     const walk = (value: unknown, path: Path) => {
       if (typeof value === 'string') {
-        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? ref.scope === 'steps' && ref.id === stepID && pathJob(path) === job : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
+        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && ref.id === stepID && pathJob(path) === job) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
       } else if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...path, i]));
       else if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => walk(v, [...path, k]));
     };
@@ -368,7 +375,11 @@ export class WorkflowDocument {
     if (!identifier.test(next) || steps.some((s, i) => i !== index && effectiveStepID(s, i) === next)) throw new Error('Choose a unique valid step ID');
     this.edit(doc => {
       doc.setIn(['jobs', job, 'steps', index, 'id'], next);
-      this.rewrite(doc, (scope, id, path) => scope === 'steps' && id === old && pathJob(path) === job ? next : undefined);
+      this.rewriteReferences(doc, (ref, path) => {
+        if (ref.scope === 'steps' && ref.id === old && pathJob(path) === job) return referenceText({ ...ref, id: next });
+        if ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === old) return referenceText({ ...ref, step: next });
+        return undefined;
+      });
     });
   }
   duplicateStep(job: string, index: number) {

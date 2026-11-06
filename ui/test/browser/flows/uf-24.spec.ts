@@ -26,3 +26,20 @@ test('named callable entries can be renamed and deleted with impact review', asy
   await first.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference'))).toBe(true);
 });
+
+test('step renames update concise local and dependency results and deletion reviews consumers', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review}, {id: finish, agent: claude, prompt: "${{ steps.analyze.text }}"}]}, summarize: {needs: review, steps: [{agent: claude, prompt: "${{ needs.review.steps.analyze.text }}"}]}}' }));
+  await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await editor.getByRole('button', { name: '1. analyze', exact: true }).click();
+  const id = editor.getByLabel('Step ID', { exact: true });
+  await id.fill('inspect'); await id.press('Enter');
+  const workflow = await page.evaluate(() => (window as any).first.getSnapshot().workflow);
+  expect(workflow.jobs.review.steps[1].prompt).toBe('${{ steps.inspect.text }}');
+  expect(workflow.jobs.summarize.steps[0].prompt).toBe('${{ needs.review.steps.inspect.text }}');
+  await editor.getByRole('button', { name: 'Delete step', exact: true }).click();
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.summarize.steps.0.prompt');
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.prompt');
+  await editor.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.message.includes('Unknown step "inspect"')))).toBe(true);
+});

@@ -1,8 +1,19 @@
 import type { Path } from './types';
-export interface Reference { scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets'; id: string; output?: string; offset: number }
+export interface Reference {
+  scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets'; id: string;
+  step?: string; output?: string; tail?: string; offset: number;
+}
 export function mapReferences(text: string, callback: (ref: Reference) => string | undefined, bareExpression = false): string {
-  const mapBody = (body: string) => body.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?<![\w.-])(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)(?:\.outputs\.([A-Za-z_][A-Za-z0-9_-]*))?/g,
-      (token: string, scope: Reference['scope'] | undefined, id: string, output: string | undefined, offset: number) => scope ? callback({ scope, id, output, offset }) ?? token : token);
+  const mapBody = (body: string) => body.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?<![\w.-])(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)((?:\.[A-Za-z_][A-Za-z0-9_-]*)*)/g,
+    (token: string, scope: Reference['scope'] | undefined, id: string, suffix: string, offset: number) => {
+      if (!scope) return token;
+      const parts = suffix.split('.').slice(1);
+      let step: string | undefined;
+      let output: string | undefined;
+      if ((scope === 'jobs' || scope === 'needs') && parts[0] === 'steps' && parts.length >= 2) { parts.shift(); step = parts.shift(); }
+      if (parts[0] === 'outputs' && parts.length >= 2) { parts.shift(); output = parts.shift(); }
+      return callback({ scope, id, step, output, tail: parts.length ? '.' + parts.join('.') : undefined, offset }) ?? token;
+    });
   // Conditions and repeat.until also accept expressions without interpolation
   // delimiters. Other strings are prose unless enclosed in ${{ ... }}.
   if (bareExpression && !text.trim().startsWith('${{')) return mapBody(text);
@@ -10,9 +21,10 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
     return '${{' + mapBody(body) + '}}';
   });
 }
-export function referenceText(ref: Pick<Reference, 'scope' | 'id' | 'output'>): string {
-  return `${ref.scope}.${ref.id}${ref.output === undefined ? '' : `.outputs.${ref.output}`}`;
+export function referenceText(ref: Pick<Reference, 'scope' | 'id' | 'step' | 'output' | 'tail'>): string {
+  return `${ref.scope}.${ref.id}${ref.step === undefined ? '' : `.steps.${ref.step}`}${ref.output === undefined ? '' : `.outputs.${ref.output}`}${ref.tail ?? ''}`;
 }
+export const isConciseStepReference = (ref: Reference) => ref.scope === 'steps' && ref.output === undefined && !!ref.tail && !/^\.(outputs|status|error)(\.|$)/.test(ref.tail);
 export function references(text: string, bareExpression = false) {
   const result: Reference[] = [];
   mapReferences(text, ref => { result.push(ref); return undefined; }, bareExpression);

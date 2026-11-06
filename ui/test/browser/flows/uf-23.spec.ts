@@ -39,3 +39,22 @@ test('property expression hints are limited to fields the runner evaluates', asy
   expect((await new AxeBuilder({ page }).include('#a').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
   await expect(first.getByLabel('Action target', { exact: true })).not.toHaveAttribute('list');
 });
+
+test('concise result suggestions expose completed local and dependency fields', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ jobs: {
+    review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } } } }, { id: 'finish', agent: 'claude', prompt: 'Next' }] },
+    summarize: { needs: ['review'], steps: [{ id: 'summary', agent: 'claude', prompt: 'Read' }] },
+  } }) }));
+  await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await editor.getByRole('button', { name: '2. finish', exact: true }).click();
+  const options = editor.getByLabel('Insert expression into Prompt', { exact: true });
+  await expect(options.locator('option[value="steps.analyze.approved"]')).toHaveCount(1);
+  await expect(options.locator('option[value="steps.finish.text"]')).toHaveCount(0);
+  await options.selectOption('steps.analyze.approved');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.review.steps[1].prompt)).toContain('${{ steps.analyze.approved }}');
+  await editor.getByRole('button', { name: 'Inspect job summarize', exact: true }).click();
+  await editor.getByRole('button', { name: '1. summary', exact: true }).click();
+  await editor.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('needs.review.steps.analyze.approved');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.summarize.steps[0].prompt)).toContain('${{ needs.review.steps.analyze.approved }}');
+});

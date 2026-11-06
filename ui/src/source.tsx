@@ -8,17 +8,40 @@ import { classHighlighter } from '@lezer/highlight';
 import { yaml } from '@codemirror/lang-yaml';
 import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
-import type { Workflow } from './types';
+import type { Path, Step, Workflow } from './types';
 import { hasExpressionReferences, isExpressionPath } from './expressions';
-import { dependencies, effectiveStepID } from './validation';
-export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number): string[] {
+import { dependencies, effectiveStepID, identifier, mapping } from './validation';
+export function stepResultPaths(step: Step): string[] {
+  const result = ['text'];
+  const contract = step.with?.output;
+  const schema = mapping(contract) ? contract.schema : undefined;
+  const visit = (value: unknown, prefix = '') => {
+    if (!mapping(value) || !mapping(value.properties)) return;
+    for (const [key, property] of Object.entries(value.properties)) {
+      if (!identifier.test(key) || !prefix && ['text', 'outputs', 'status', 'error'].includes(key)) continue;
+      const path = prefix ? `${prefix}.${key}` : key;
+      result.push(path); visit(property, path);
+    }
+  };
+  visit(schema);
+  return result;
+}
+export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path): string[] {
   if (!workflow) return [];
   const callable = workflow.on?.workflow_call as { inputs?: Record<string, unknown> } | undefined;
   const result = Object.keys(callable?.inputs ?? {}).map(id => `inputs.${id}`);
   const job = jobID ? workflow.jobs[jobID] : undefined;
-  for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) for (const output of Object.keys(workflow.jobs[dep]?.outputs ?? {})) result.push(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`);
+  for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
+    const producer = workflow.jobs[dep];
+    for (const output of Object.keys(producer?.outputs ?? {})) result.push(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`);
+    if (!producer?.uses && !producer?.['for-each']) producer?.steps?.forEach((step, i) => stepResultPaths(step).forEach(field => result.push(`${job ? 'needs' : 'jobs'}.${dep}.steps.${effectiveStepID(step, i)}.${field}`)));
+  }
   if (job?.['for-each']) result.push('item', 'iteration.key', 'iteration.number');
-  job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`)));
+  const conciseLocal = stepIndex !== undefined || path?.[2] === 'outputs' || path?.[2] === 'repeat' && path[3] === 'until';
+  job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => {
+    if (conciseLocal) stepResultPaths(s).forEach(field => result.push(`steps.${effectiveStepID(s, i)}.${field}`));
+    ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`));
+  });
   return result;
 }
 export function SourceEditor({ store, jobID, stepIndex, navigationKey, target }: { store: WorkflowDocument; jobID?: string; stepIndex?: number; navigationKey?: number; target?: { from: number; to: number; revision: number } }) {
@@ -36,7 +59,7 @@ export function SourceEditor({ store, jobID, stepIndex, navigationKey, target }:
       const linePrefix = context.state.sliceDoc(context.state.doc.lineAt(context.pos).from, context.pos);
       const insideExpression = linePrefix.lastIndexOf('${{') > linePrefix.lastIndexOf('}}');
       if (!context.explicit && !insideExpression && !isExpressionPath(path)) return null;
-      const suggestions = expressionSuggestions(store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow, jobID, stepIndex);
+      const suggestions = expressionSuggestions(store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow, jobID, stepIndex, path);
       return { from: word.from, options: suggestions.map(label => ({ label, type: 'variable', apply: insideExpression || isExpressionPath(path) ? label : '${{ ' + label + ' }}' })) };
     };
     let syncing = false;
