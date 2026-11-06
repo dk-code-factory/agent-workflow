@@ -139,6 +139,21 @@ describe('named step result references', () => {
     doc.setField(['jobs', 'review', 'steps', 0, 'prompt'], '${{ "steps.finish.$value" }} plain steps.finish.é');
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
   });
+  it.each(['true and ', 'not ', 'true == '])('keeps long %s conditions editable with reference offsets intact', prefix => {
+    const condition = prefix.repeat(10_000) + 'inputs.task';
+    const source = JSON.stringify({ on: { workflow_call: { inputs: { task: { type: 'boolean' } } } }, jobs: {
+      build: { if: condition, steps: [{ argv: ['echo', 'ready'] }] },
+    } });
+    const doc = new WorkflowDocument({ source });
+    expect(doc.getSnapshot().stale).toBe(false);
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(references(condition, true)).toEqual([
+      { scope: 'inputs', id: 'task', step: undefined, output: undefined, tail: undefined, offset: prefix.length * 10_000 },
+    ]);
+    doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'ready');
+    expect(doc.getSnapshot().workflow!.jobs.build.if).toBe(prefix.repeat(10_000) + 'inputs.ready');
+    doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+  });
   it('resolves named output schemas for local, dependency and workflow completion', () => {
     const value = structuredClone(workflow);
     const schema = value.jobs.review.steps[0].with!.output.schema;
