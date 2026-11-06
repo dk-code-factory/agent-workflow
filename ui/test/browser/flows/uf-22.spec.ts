@@ -76,3 +76,34 @@ jobs:
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).workflow.schemas.Shared_build).toBeUndefined();
 });
+
+test('renaming an outer step rejects capture by the new ID in a handler scope', async ({ page }) => {
+  const ui = await open(page, `schemas:
+  Shared: {type: string, enum: ['\${{ steps.earlier.text }}']}
+jobs:
+  build:
+    steps:
+      - {id: earlier, agent: claude, prompt: Prepare}
+      - agent: claude
+        prompt: Work
+        finally:
+          - {id: prepared, agent: codex, prompt: Local}
+          - {agent: claude, prompt: '\${{ steps.earlier.text }}', with: {output: {schema: Shared}}}
+`);
+  const original = await snapshot(page);
+  await job(page); await step(page, '1. earlier');
+  const id = ui.getByLabel('Step ID', { exact: true });
+  await id.fill('prepared'); await id.press('Tab');
+  await expect(id).toHaveAttribute('aria-invalid', 'true');
+  await expect(ui.getByRole('alert')).toContainText('Choose a step ID that is not shadowed by a handler sibling');
+  expect((await snapshot(page)).source).toBe(original.source);
+  await id.fill('ready'); await id.press('Tab');
+  await expect(id).toHaveAttribute('aria-invalid', 'false');
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.build.steps[1].finally[1].prompt).toBe('${{ steps.ready.text }}');
+  expect(edited.workflow.schemas.Shared.enum).toEqual(['${{ steps.ready.text }}']);
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toContain('steps.ready.text');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(original.source);
+});

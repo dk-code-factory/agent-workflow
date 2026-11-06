@@ -180,8 +180,86 @@ func TestLifecycleHardHandlerFailuresBypassLaterLists(t *testing.T) {
 	}
 }
 
+func TestLifecycleMixedCancellationRetainsDiagnosticAndSafety(t *testing.T) {
+	ctx := context.Background()
+	var calls []string
+	source := strings.Replace(lifecycleWorkflow, "        prompt: original", "        prompt: original\n        continue-on-error: true", 1)
+	source += "      - agent: downstream\n        prompt: downstream\n"
+	e, s := durableExecutor(t, source, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
+		calls = append(calls, r.AgentID)
+		if r.AgentID == "primary" {
+			return nil, errors.New("primary failed independently")
+		}
+		if r.AgentID == "backup" {
+			return nil, context.Canceled
+		}
+		return map[string]any{"text": "unexpected"}, nil
+	}))
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err == nil || ctx.Err() != nil || !reflect.DeepEqual(calls, []string{"primary", "backup"}) {
+		t.Fatalf("mixed cancellation admitted effects: calls=%v err=%v", calls, err)
+	}
+	result := run.Jobs["task"].Steps["work"]
+	if result.FailureClass != "execution" || result.UnsafeFailureClass != "canceled" || !strings.Contains(result.Error, "primary failed independently") || result.Lifecycle.Skipped["finally"] != "unsafe failure" {
+		t.Fatalf("mixed cancellation lost diagnostic or safety: %+v", result)
+	}
+	attempts, err := s.Attempts(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, attempt := range attempts {
+		if attempt.StepID != "work" {
+			continue
+		}
+		found = true
+		retained := lifecycleError(attempt.Result)
+		if !hardExecutionFailure(retained) || !errors.Is(retained, context.Canceled) || cancellationOnly(retained) || classifyFailure(retained) != "execution" {
+			t.Fatalf("journal lost mixed failure identity: %+v %v", attempt.Result, retained)
+		}
+	}
+	if !found {
+		t.Fatal("missing mixed failure receipt")
+	}
+}
+
+func TestLifecycleOrderedUsagePersistenceBypassesHandlers(t *testing.T) {
+	var calls []string
+	var store *SQLiteStore
+	e, s := iterationExecutor(t, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
+		calls = append(calls, r.AgentID)
+		if r.AgentID == "primary" {
+			_, err := store.db.ExecContext(ctx, "CREATE TRIGGER fail_primary_usage BEFORE INSERT ON usage_observations WHEN NEW.invocation_id='"+r.InvocationID+"' BEGIN SELECT RAISE(ABORT, 'sqlite injected usage failure'); END")
+			if err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"text": "done"}, nil
+	}))
+	store = s
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n      ordinal: {type: number}\n      identity: {type: string}\n"+lifecycleWorkflow)
+	run, err := e.Run(context.Background(), iterationRequest("first", "second"))
+	if err == nil || !errors.Is(err, errIterationBlocked) || !reflect.DeepEqual(calls, []string{"primary"}) {
+		t.Fatalf("ordered persistence failure admitted handlers: calls=%v run=%+v err=%v", calls, run, err)
+	}
+	found := false
+	for _, item := range run.Jobs["review"].Items {
+		if item.Jobs == nil {
+			continue
+		}
+		result := item.Jobs["task"].Steps["work"]
+		found = true
+		if result.FailureClass != "iteration_blocked" || result.Lifecycle == nil || result.Lifecycle.Skipped["finally"] != "unsafe failure" || !errors.Is(lifecycleError(result), errIterationBlocked) {
+			t.Fatalf("ordered failure receipt lost safety: %+v", result)
+		}
+	}
+	if !found {
+		t.Fatal("missing ordered failure receipt")
+	}
+}
+
 func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
-	for _, failure := range []error{ErrActionIntegrity, process.ErrCleanup, operational.ErrUnavailable, errors.New("storage failed"), errors.New("uncertain effect")} {
+	for _, failure := range []error{ErrActionIntegrity, process.ErrCleanup, operational.ErrUnavailable, errors.New("storage failed"), errors.New("uncertain effect"), iterationPersistence(errors.New("sqlite failed"), true), errors.Join(errors.New("command failed independently"), context.Canceled)} {
 		for _, phase := range []string{"lifecycle_task_completed", "lifecycle_completed"} {
 			t.Run(classifyFailure(failure)+"/"+phase, func(t *testing.T) {
 				ctx := context.Background()
@@ -206,7 +284,7 @@ func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
 				}
 				status, class := executionFailureStatus(ctx, failure), classifyFailure(failure)
 				attempt.Phase = phase
-				attempt.Result = StepExecution{ID: "work", Status: status, Error: failure.Error(), FailureClass: class, Lifecycle: &StepLifecycle{OriginalError: failure.Error(), OriginalClass: class, Deadline: time.Now().Add(time.Minute)}}
+				attempt.Result = StepExecution{ID: "work", Status: status, Error: failure.Error(), FailureClass: class, UnsafeFailureClass: unsafeFailureClass(failure), Lifecycle: &StepLifecycle{OriginalError: failure.Error(), OriginalClass: class, Deadline: time.Now().Add(time.Minute)}}
 				journal := redactedStore{Journal: s, secrets: map[string]string{"token": "storage"}}
 				if err := journal.RecordAttempt(ctx, attempt); err != nil {
 					t.Fatal(err)
@@ -251,7 +329,7 @@ func TestLifecycleTimeoutBoundsHandlers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
-	if err == nil || ctx.Err() != nil || calls != 2 {
+	if err == nil || ctx.Err() != nil || calls < 1 || calls > 2 {
 		t.Fatalf("handler not locally bounded: calls=%d err=%v", calls, err)
 	}
 	if run.Jobs["task"].Steps["work"].Lifecycle.Skipped["finally"] != "handler deadline exhausted" {

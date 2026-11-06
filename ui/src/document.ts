@@ -398,7 +398,14 @@ export class WorkflowDocument {
     const old = effectiveStepID(steps[index], index);
     if (next === old) return;
     if (!identifier.test(next) || steps.some((s, i) => i !== index && effectiveStepID(s, i) === next)) throw new Error('Choose a unique valid step ID');
-    const namedReferences = new Set(this.deletionImpact(job, index).filter(path => path[0] === 'schemas' && this.schemaConsumers(String(path[1])).some(consumer => consumer.job === job)).map(path => String(path[1])));
+    const impact = this.deletionImpact(job, index);
+    for (const path of impact) {
+      const scopes = path[0] === 'schemas'
+        ? this.schemaConsumers(String(path[1])).filter(consumer => this.schemaConsumerReferencesStep(consumer, job, index, old)).map(consumer => consumer.path)
+        : pathJob(path) === job && (stepPathLength(path) ?? 0) > 4 ? [path] : [];
+      if (scopes.some(scope => (completedSteps(this.snapshot.workflow!, scope).get(next)?.path.length ?? 0) > 4)) throw new Error('Choose a step ID that is not shadowed by a handler sibling');
+    }
+    const namedReferences = new Set(impact.filter(path => path[0] === 'schemas' && this.schemaConsumers(String(path[1])).some(consumer => consumer.job === job)).map(path => String(path[1])));
     this.edit(doc => {
       doc.setIn(['jobs', job, 'steps', index, 'id'], next);
       const renamedSchemas = new Set<string>();

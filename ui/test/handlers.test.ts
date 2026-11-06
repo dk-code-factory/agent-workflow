@@ -78,6 +78,25 @@ describe('step lifecycle handler authoring', () => {
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Shared_build', 'enum', 0] }));
   });
 
+  it.each(['prompt', 'schema'])('rejects rename capture by a sibling matching the new ID in %s', kind => {
+    const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
+      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
+      { agent: 'claude', prompt: 'Work', finally: [
+        { id: 'prepared', agent: 'codex', prompt: 'Local' },
+        kind === 'prompt' ? { agent: 'claude', prompt: '${{ steps.earlier.text }}' } : { agent: 'claude', prompt: 'Inherited', with: { output: { schema: 'Shared' } } },
+      ] },
+    ] } } });
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(() => doc.renameStep('build', 0, 'prepared')).toThrow('shadowed by a handler sibling');
+    expect(doc.getSnapshot().source).toBe(original);
+    expect(doc.getSnapshot().canUndo).toBe(false);
+    doc.renameStep('build', 0, 'ready');
+    expect(doc.getSnapshot().source).toContain('steps.ready.text');
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+  });
+
   it.each(['earlier', 'task', 'fallback', 'later', 'missing'])('validates named handler schemas against the local scope: %s', reference => {
     const yaml = stringify({ schemas: { Result: { type: 'string', enum: [`\${{ steps.${reference}.text }}`] } }, jobs: { build: { steps: [
       { id: 'earlier', agent: 'claude', prompt: 'Prepare' },

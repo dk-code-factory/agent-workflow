@@ -122,12 +122,27 @@ func executionFailureStatus(ctx context.Context, err error) string {
 }
 
 func hardExecutionFailure(err error) bool {
-	return hardFailureClass(classifyFailure(err))
+	return unsafeFailureClass(err) != ""
+}
+
+// Admission considers cancellation in every branch without replacing the
+// diagnostic for an independent failure joined with that cancellation.
+func unsafeFailureClass(err error) string {
+	if retained, ok := err.(*retainedLifecycleFailure); ok && retained.unsafeClass != "" {
+		return retained.unsafeClass
+	}
+	if class := classifyFailure(err); hardFailureClass(class) {
+		return class
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	return ""
 }
 
 func hardFailureClass(class string) bool {
 	switch class {
-	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":
+	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled", "iteration_blocked":
 		return true
 	}
 	return false

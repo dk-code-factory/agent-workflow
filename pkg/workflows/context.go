@@ -36,15 +36,16 @@ type StepLifecycle struct {
 }
 
 type StepExecution struct {
-	Lifecycle    *StepLifecycle `json:"lifecycle,omitempty"`
-	FailureClass string         `json:"failure_class,omitempty"`
-	AttemptID    string         `json:"attempt_id,omitempty"`
-	StartedAt    time.Time      `json:"started_at,omitempty"`
-	FinishedAt   time.Time      `json:"finished_at,omitempty"`
-	ID           string         `json:"id"`
-	Status       string         `json:"status"`
-	Outputs      map[string]any `json:"outputs,omitempty"`
-	Error        string         `json:"error,omitempty"`
+	Lifecycle          *StepLifecycle `json:"lifecycle,omitempty"`
+	FailureClass       string         `json:"failure_class,omitempty"`
+	UnsafeFailureClass string         `json:"unsafe_failure_class,omitempty"`
+	AttemptID          string         `json:"attempt_id,omitempty"`
+	StartedAt          time.Time      `json:"started_at,omitempty"`
+	FinishedAt         time.Time      `json:"finished_at,omitempty"`
+	ID                 string         `json:"id"`
+	Status             string         `json:"status"`
+	Outputs            map[string]any `json:"outputs,omitempty"`
+	Error              string         `json:"error,omitempty"`
 }
 
 type JobIteration struct {

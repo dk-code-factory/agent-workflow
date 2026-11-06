@@ -57,8 +57,8 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 }
 
 type retainedLifecycleFailure struct {
-	message, class string
-	cause          error
+	message, class, unsafeClass string
+	cause                       error
 }
 
 func (err *retainedLifecycleFailure) Error() string { return err.message }
@@ -78,6 +78,8 @@ func lifecycleError(result StepExecution) error {
 		cause = ErrProviderFailure
 	case "usage_exhausted":
 		cause = ErrUsageExhausted
+	case "iteration_blocked":
+		cause = errIterationBlocked
 	case "action_integrity":
 		cause = ErrActionIntegrity
 	case "prerequisite":
@@ -87,7 +89,10 @@ func lifecycleError(result StepExecution) error {
 			cause = process.ErrCleanup
 		}
 	}
-	return &retainedLifecycleFailure{message: result.Error, class: result.FailureClass, cause: cause}
+	if result.UnsafeFailureClass == "canceled" && result.FailureClass != "canceled" {
+		cause = errors.Join(errors.New(result.Error), context.Canceled)
+	}
+	return &retainedLifecycleFailure{message: result.Error, class: result.FailureClass, unsafeClass: result.UnsafeFailureClass, cause: cause}
 }
 
 func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}, retry bool, child bool) (result StepExecution, returned error) {
@@ -97,6 +102,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			result.Status = executionFailureStatus(ctx, returned)
 			result.Error = returned.Error()
 			result.FailureClass = classifyFailure(returned)
+			result.UnsafeFailureClass = unsafeFailureClass(returned)
 		}
 	}()
 	if err := ctx.Err(); err != nil {
@@ -145,6 +151,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			result.Status = executionFailureStatus(ctx, err)
 			result.Error = err.Error()
 			result.FailureClass = classifyFailure(err)
+			result.UnsafeFailureClass = unsafeFailureClass(err)
 		}
 		if hasLifecycle(step) {
 			bound := 30 * time.Second
@@ -254,6 +261,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.Status = executionFailureStatus(ctx, err)
 		result.Error = err.Error()
 		result.FailureClass = classifyFailure(err)
+		result.UnsafeFailureClass = unsafeFailureClass(err)
 	}
 	if durable {
 		if hasLifecycle(step) || child {
