@@ -42,10 +42,13 @@ func classifyFailure(err error) string {
 	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		causes = []error{wrapped.Unwrap()}
 	}
+	classes := make(map[string]bool, len(causes))
 	for _, cause := range causes {
-		if class := classifyFailure(cause); class != "canceled" && hardFailureClass(class) {
+		class := classifyFailure(cause)
+		if class != "canceled" && hardFailureClass(class) {
 			return class
 		}
+		classes[class] = true
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
@@ -61,19 +64,19 @@ func classifyFailure(err error) string {
 	}
 	text := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
+	case classes["authentication"], strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
 		return "authentication"
 	case strings.Contains(text, "database"), strings.Contains(text, "sqlite"), strings.Contains(text, "disk"), strings.Contains(text, "storage"):
 		return "storage"
 	case strings.Contains(text, "explicit --retry"), strings.Contains(text, "uncertain"), strings.Contains(text, "unexpected remote"), strings.Contains(text, "reconcil"):
 		return "needs_attention"
-	case strings.Contains(text, "conflict"):
+	case classes["integration"], strings.Contains(text, "conflict"):
 		return "integration"
-	case strings.Contains(text, "structured output"):
+	case classes["schema"], strings.Contains(text, "structured output"):
 		return "schema"
-	case strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
+	case classes["limit"], strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
 		return "limit"
-	case strings.Contains(text, "command failed"):
+	case classes["command"], strings.Contains(text, "command failed"):
 		return "command"
 	}
 	return "execution"
