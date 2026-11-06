@@ -36,11 +36,22 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   if (!workflow) return [];
   const callable = workflow.on?.workflow_call as { inputs?: Record<string, unknown> } | undefined;
   const result: string[] = [];
+  const schemaPaths = new Map<unknown, Map<string, string[]>>();
   const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
   const addStep = (step: Step, base: string) => {
     const start = base + '.';
-    if (start.startsWith(prefix) || prefix.startsWith(start)) {
-      for (const field of stepResultPaths(step, workflow.schemas, prefix.startsWith(start) ? prefix.slice(start.length) : '', expressionSuggestionLimit - result.length)) {
+    if (stepAction(step)?.startsWith('agent/') && (start.startsWith(prefix) || prefix.startsWith(start))) {
+      const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
+      const contract = step.with?.output;
+      const schema = mapping(contract) ? contract.schema : undefined;
+      let byPrefix = schemaPaths.get(schema);
+      if (!byPrefix) schemaPaths.set(schema, byPrefix = new Map());
+      let fields = byPrefix.get(fieldPrefix);
+      if (!fields) {
+        fields = stepResultPaths(step, workflow.schemas, fieldPrefix);
+        byPrefix.set(fieldPrefix, fields);
+      }
+      for (const field of fields) {
         if (add(start + field)) return true;
       }
     }

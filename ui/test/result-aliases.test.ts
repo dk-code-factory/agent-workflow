@@ -316,6 +316,35 @@ describe('named step result references', () => {
     expect(stepResultPaths(producer, schemas, 'field99999')).toEqual(['field99999']);
     expect(reads).toBeLessThan(250);
   });
+  it('scans rejected shared-schema keys once per suggestion request across producers and remaining limits', () => {
+    const parsed = parseWorkflow(JSON.stringify({
+      schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`$field${index}`, {}])) } },
+      jobs: {
+        producer: { steps: Array.from({ length: 200 }, (_, index) => ({ id: `result${index}`, agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } })) },
+        consumer: { needs: ['producer'], steps: [{ agent: 'claude', prompt: 'Read' }] },
+      },
+    }));
+    expect(parsed.usable).toBe(true);
+    expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    const schema = parsed.workflow!.schemas!.Shared as { properties: Record<string, unknown> };
+    let checks = 0;
+    schema.properties = new Proxy(schema.properties, { getOwnPropertyDescriptor(target, key) {
+      if (++checks > 4_000) throw new Error('Repeated rejected schema-key scan exceeded local budget');
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    } });
+    for (const job of [undefined, 'consumer', 'producer']) {
+      checks = 0;
+      const suggestions = expressionSuggestions(parsed.workflow, job, job ? 200 : undefined);
+      expect(suggestions).toHaveLength(200);
+      expect(suggestions).toContain(`${job === 'producer' ? 'steps' : `${job ? 'needs' : 'jobs'}.producer.steps`}.result0.text`);
+      expect(checks).toBeLessThanOrEqual(2_000);
+    }
+    Object.assign(schema.properties, { later: { type: 'string' } });
+    checks = 0;
+    const prefix = 'needs.producer.steps.result199.later';
+    expect(expressionSuggestions(parsed.workflow, 'consumer', 0, undefined, prefix)).toEqual([prefix]);
+    expect(checks).toBeLessThanOrEqual(2_002);
+  });
   it.each([
     ['preceding', 'steps.first.text', false],
     ['self', 'steps.consume.text', true],
