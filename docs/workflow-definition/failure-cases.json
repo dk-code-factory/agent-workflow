@@ -1,0 +1,232 @@
+{
+  "defaultFailure": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        }
+      }
+    ]
+  },
+  "failImmediately": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        },
+        "onError": [
+          {
+            "fail": true
+          }
+        ]
+      }
+    ]
+  },
+  "agentHandoff": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        },
+        "onError": [
+          {
+            "agent": "backupWorker",
+            "prompt": "Complete the original task: {{ $.failed.prompt }}",
+            "with": {
+              "error": "$.error",
+              "failed": "$.failed"
+            },
+            "output": "Result"
+          }
+        ]
+      }
+    ]
+  },
+  "collaborativeRecovery": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        },
+        "onError": [
+          {
+            "recover": "debugger",
+            "maxTurns": 4
+          }
+        ]
+      }
+    ]
+  },
+  "scriptRecovery": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        },
+        "onError": [
+          {
+            "run": [
+              "python3",
+              "./recover.py"
+            ],
+            "with": {
+              "error": "$.error",
+              "failed": "$.failed"
+            },
+            "output": "Result"
+          }
+        ]
+      }
+    ]
+  },
+  "scriptReportThenFail": {
+    "version": "0.2",
+    "schemas": {
+      "Result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": "Result",
+    "steps": [
+      {
+        "id": "work",
+        "agent": "worker",
+        "prompt": "Complete {{ $.input.task }}",
+        "output": "Result",
+        "breaker": {
+          "failures": 3,
+          "cooldownMs": 30000
+        },
+        "onError": [
+          {
+            "run": [
+              "python3",
+              "./report-error.py"
+            ],
+            "with": {
+              "error": "$.error",
+              "failed": "$.failed"
+            }
+          },
+          {
+            "fail": true
+          }
+        ]
+      }
+    ]
+  }
+}

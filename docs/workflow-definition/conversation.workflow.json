@@ -1,0 +1,51 @@
+{
+  "$schema": "./workflow.schema.json",
+  "version": "0.2",
+  "name": "Coder and reviewer solve a task",
+  "schemas": {
+    "Result": {
+      "type": "object",
+      "properties": {
+        "approved": {"const": true},
+        "summary": {"type": "string", "minLength": 1}
+      },
+      "required": ["approved", "summary"],
+      "additionalProperties": false
+    }
+  },
+  "output": "Result",
+  "limits": {
+    "timeoutMs": 300000,
+    "maxTaskAttempts": 12
+  },
+  "steps": [
+    {
+      "id": "solution",
+      "conversation": ["coder", "reviewer"],
+      "start": "coder",
+      "finishBy": "reviewer",
+      "prompt": "Solve {{ $.input.task }}. Coder: propose a solution and send it to reviewer. Reviewer: check it and send requested fixes to coder. Continue until reviewer can approve. Reviewer then calls finish with approved=true and a summary.",
+      "output": "Result",
+      "maxTurns": 8,
+      "breaker": {"failures": 3, "cooldownMs": 30000},
+      "onError": [
+        {
+          "agent": "backupReviewer",
+          "prompt": "The conversation failed. Independently solve and check this task: {{ $.input.task }}. Use the attached error and conversation as context. Return approval only if you can verify your solution.",
+          "with": {
+            "error": "$.error",
+            "conversation": "$.failed"
+          },
+          "output": "Result"
+        }
+      ]
+    }
+  ],
+  "onFailure": [
+    {
+      "run": ["python3", "docs/workflow-definition/report-error.py"],
+      "with": {"error": "$.error"}
+    }
+  ],
+  "return": "$.steps.solution"
+}

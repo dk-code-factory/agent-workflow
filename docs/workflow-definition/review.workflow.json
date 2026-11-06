@@ -1,0 +1,102 @@
+{
+  "$schema": "./workflow.schema.json",
+  "version": "0.2",
+  "name": "Revise until approved",
+  "sources": {
+    "config": {
+      "file": "./review-config.json"
+    }
+  },
+  "schemas": {
+    "Review": {
+      "type": "object",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "feedback": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approved",
+        "feedback"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "output": "Review",
+  "steps": [
+    {
+      "repeat": 3,
+      "initial": {
+        "review": {
+          "feedback": ""
+        }
+      },
+      "until": "$.steps.review.approved",
+      "steps": [
+        {
+          "id": "draft",
+          "agent": "writer",
+          "prompt": "Propose a solution for {{ $.input.task }}. Address this feedback: {{ $.previous.review.feedback }}"
+        },
+        {
+          "parallel": [
+            {
+              "id": "quality",
+              "agent": "reviewer",
+              "prompt": "Check correctness and tests in {{ $.steps.draft.text }}"
+            },
+            {
+              "id": "security",
+              "if": "$.config.securityReview",
+              "then": [
+                {
+                  "agent": "reviewer",
+                  "prompt": "Check security in {{ $.steps.draft.text }}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "agent": "judge",
+          "prompt": "Judge the proposal: {{ $.steps.draft.text }}. Quality review: {{ $.steps.quality.text }}. Security review (null means disabled): {{ $.steps.security }}. Return approval and feedback.",
+          "output": "Review",
+          "retry": 2,
+          "onError": [
+            {
+              "agent": "backupReviewer",
+              "prompt": "{{ $.failed.prompt }}",
+              "output": "Review"
+            }
+          ],
+          "breaker": {
+            "failures": 3,
+            "cooldownMs": 30000
+          }
+        }
+      ]
+    }
+  ],
+  "onFailure": [
+    {
+      "action": "audit.record",
+      "with": {
+        "event": "workflow.failed",
+        "error": "$.error"
+      }
+    }
+  ],
+  "finally": [
+    {
+      "action": "audit.record",
+      "with": {
+        "event": "workflow.finished",
+        "runId": "$.run.id"
+      }
+    }
+  ]
+}

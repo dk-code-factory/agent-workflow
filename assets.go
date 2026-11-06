@@ -8,3 +8,8 @@ import "embed"
 //
 //go:embed workflows/*.yml agents.yml
 var Examples embed.FS
+
+// WorkflowDefinitionSchema is the versioned JSON authoring contract.
+//
+//go:embed docs/workflow-definition/workflow.schema.json
+var WorkflowDefinitionSchema []byte

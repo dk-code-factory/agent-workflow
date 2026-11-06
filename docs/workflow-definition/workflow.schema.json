@@ -1,0 +1,1021 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-workflow:definition:0.2",
+  "title": "Simple workflow definition proposal version 0.2",
+  "description": "Authoring format only. See ../WORKFLOW_DEFINITION.md for compiler and runtime semantics.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "const": "0.2"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {
+      "$ref": "#/$defs/schemaUse"
+    },
+    "output": {
+      "$ref": "#/$defs/schemaUse"
+    },
+    "schemas": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/schemaResource"
+      }
+    },
+    "sources": {
+      "type": "object",
+      "propertyNames": {
+        "allOf": [
+          {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          {
+            "not": {
+              "enum": [
+                "input",
+                "steps",
+                "previous",
+                "item",
+                "error",
+                "failed",
+                "event",
+                "run",
+                "breaker"
+              ]
+            }
+          }
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "steps": {
+      "$ref": "#/$defs/stepList"
+    },
+    "return": {
+      "$ref": "#/$defs/data"
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800000
+        },
+        "maxTaskAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "hookTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "cleanupTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "onStart": {
+      "$ref": "#/$defs/stepList"
+    },
+    "onSuccess": {
+      "$ref": "#/$defs/stepList"
+    },
+    "onFailure": {
+      "$ref": "#/$defs/stepList"
+    },
+    "finally": {
+      "$ref": "#/$defs/stepList"
+    },
+    "onError": {
+      "$ref": "#/$defs/stepList"
+    }
+  },
+  "required": [
+    "version",
+    "steps"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "schemaResource": {
+      "type": [
+        "object",
+        "boolean"
+      ],
+      "description": "Self-contained JSON Schema 2020-12; separately meta-validate and resolve local references."
+    },
+    "schemaUse": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        {
+          "$ref": "#/$defs/schemaResource"
+        }
+      ]
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^\\$",
+      "description": "RFC 9535 JSONPath; compiler validates complete syntax."
+    },
+    "data": {
+      "description": "JSON value; recursively resolve $-prefixed strings, with exact literal/all escape objects."
+    },
+    "stepList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      },
+      "minItems": 1
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/path"
+            },
+            "equals": true
+          },
+          "required": [
+            "path",
+            "equals"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/path"
+            },
+            "matches": {
+              "$ref": "#/$defs/schemaUse"
+            }
+          },
+          "required": [
+            "path",
+            "matches"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "all"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "any"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/condition"
+            }
+          },
+          "required": [
+            "not"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "agentStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "with": {
+          "$ref": "#/$defs/data"
+        },
+        "output": {
+          "$ref": "#/$defs/schemaUse"
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credentials": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          }
+        },
+        "agent": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "breaker": {
+          "$ref": "#/$defs/breaker"
+        }
+      },
+      "required": [
+        "agent",
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    "actionStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "with": {
+          "$ref": "#/$defs/data"
+        },
+        "output": {
+          "$ref": "#/$defs/schemaUse"
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credentials": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          }
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "commandStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "with": {
+          "$ref": "#/$defs/data"
+        },
+        "output": {
+          "$ref": "#/$defs/schemaUse"
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credentials": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          }
+        },
+        "run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "valueStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "value": {
+          "$ref": "#/$defs/data"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "sequenceStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "steps": {
+          "$ref": "#/$defs/stepList"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "additionalProperties": false
+    },
+    "parallelStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "parallel": {
+          "$ref": "#/$defs/stepList"
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "parallel"
+      ],
+      "additionalProperties": false
+    },
+    "ifStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "if": {
+          "$ref": "#/$defs/condition"
+        },
+        "then": {
+          "$ref": "#/$defs/stepList"
+        },
+        "else": {
+          "$ref": "#/$defs/stepList"
+        }
+      },
+      "required": [
+        "if",
+        "then"
+      ],
+      "additionalProperties": false
+    },
+    "repeatStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "repeat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "until": {
+          "$ref": "#/$defs/condition"
+        },
+        "steps": {
+          "$ref": "#/$defs/stepList"
+        },
+        "initial": {
+          "$ref": "#/$defs/data"
+        }
+      },
+      "required": [
+        "repeat",
+        "steps"
+      ],
+      "additionalProperties": false
+    },
+    "eachStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "each": {
+          "$ref": "#/$defs/path"
+        },
+        "steps": {
+          "$ref": "#/$defs/stepList"
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "each",
+        "steps"
+      ],
+      "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/agentStep"
+        },
+        {
+          "$ref": "#/$defs/actionStep"
+        },
+        {
+          "$ref": "#/$defs/commandStep"
+        },
+        {
+          "$ref": "#/$defs/valueStep"
+        },
+        {
+          "$ref": "#/$defs/sequenceStep"
+        },
+        {
+          "$ref": "#/$defs/parallelStep"
+        },
+        {
+          "$ref": "#/$defs/ifStep"
+        },
+        {
+          "$ref": "#/$defs/repeatStep"
+        },
+        {
+          "$ref": "#/$defs/eachStep"
+        },
+        {
+          "$ref": "#/$defs/recoverStep"
+        },
+        {
+          "$ref": "#/$defs/failStep"
+        },
+        {
+          "$ref": "#/$defs/conversationStep"
+        }
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1
+            },
+            "schema": {
+              "$ref": "#/$defs/schemaUse"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parse": {
+              "enum": [
+                "text",
+                "json"
+              ]
+            },
+            "default": true,
+            "schema": {
+              "$ref": "#/$defs/schemaUse"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": true,
+            "schema": {
+              "$ref": "#/$defs/schemaUse"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "secret": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "secret"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "breaker": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "failures": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldownMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "failures",
+            "cooldownMs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "failures": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldownMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "agent": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+            },
+            "prompt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "failures": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldownMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "run": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "recoverStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "recover": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "recover"
+      ],
+      "additionalProperties": false
+    },
+    "failStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "fail": {
+          "oneOf": [
+            {
+              "const": true
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        }
+      },
+      "required": [
+        "fail"
+      ],
+      "additionalProperties": false
+    },
+    "conversationStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onStart": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onSuccess": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/stepList"
+        },
+        "finally": {
+          "$ref": "#/$defs/stepList"
+        },
+        "onError": {
+          "$ref": "#/$defs/stepList"
+        },
+        "conversation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "minItems": 2,
+          "uniqueItems": true
+        },
+        "start": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "finishBy": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "output": {
+          "$ref": "#/$defs/schemaUse"
+        },
+        "breaker": {
+          "$ref": "#/$defs/breaker"
+        }
+      },
+      "required": [
+        "conversation",
+        "prompt",
+        "finishBy"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
