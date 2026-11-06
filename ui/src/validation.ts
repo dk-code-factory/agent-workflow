@@ -340,11 +340,13 @@ function validateWorkflow(w: Workflow, add: Add) {
   };
   Object.keys(jobs).forEach(visit);
   // Expression paths are inspected, never evaluated. Only recognized dot paths are rewritten.
-  const inspect = (value: unknown, path: Path, jobID?: string) => {
+  const inspect = (value: unknown, path: Path, jobID?: string, namedContext = false) => {
     if (typeof value === 'string') {
       if (!hasExpressionReferences(path)) return;
       const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
+        // Shared declarations have no local job until an agent uses them.
+        if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs') !== namedContext) continue;
         if (ref.scope === 'inputs' || ref.scope === 'secrets') {
           // Manual runs may receive inputs and secrets from their host. A
           // callable interface makes these names statically knowable.
@@ -366,10 +368,16 @@ function validateWorkflow(w: Workflow, add: Add) {
         }
       }
     }
-    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID));
-    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID));
+    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID, namedContext));
+    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID, namedContext));
   };
   inspect(w, []);
+  for (const [jobID, job] of Object.entries(jobs)) for (const step of job.steps ?? []) {
+    const output = step.with?.output;
+    if (!step.uses?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
+    const declaration = w.schemas?.[output.schema];
+    if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, true);
+  }
 }
 function validDuration(value: string) {
   if (!/^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/.test(value)) return false;

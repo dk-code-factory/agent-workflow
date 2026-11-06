@@ -93,6 +93,9 @@ func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {
 		{"additionalProperties: false", "additionalProperties: {type: unknown}", "schemas.Review.additionalProperties.type"},
 		{"approved: {type: boolean}", "approved: {type: string, maxLength: 0}", "schemas.Review.properties.approved.maxLength"},
 		{"approved: {type: boolean}", "approved: {type: array, items: {type: invalid}}", "schemas.Review.properties.approved.items.type"},
+		{"approved: {type: boolean}", "approved: {type: number, minimum: 'NaN'}", "schemas.Review.properties.approved.minimum"},
+		{"approved: {type: boolean}", "approved: {type: number, minimum: '-Inf'}", "schemas.Review.properties.approved.minimum"},
+		{"approved: {type: boolean}", "approved: {type: array, items: {type: number, minimum: 'Infinity'}}", "schemas.Review.properties.approved.items.minimum"},
 	} {
 		t.Run(tc.replacement, func(t *testing.T) {
 			root := t.TempDir()

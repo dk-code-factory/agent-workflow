@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 )
@@ -143,7 +144,7 @@ func validateNamedSchema(schema map[string]any, path string, depth int) error {
 			if schema["type"] != "number" && schema["type"] != "integer" {
 				return fmt.Errorf("%s: requires type: number or integer", field)
 			}
-			if _, ok := asFloat(value); !ok {
+			if number, ok := asFloat(value); !ok || math.IsNaN(number) || math.IsInf(number, 0) {
 				return invalid()
 			}
 		default:

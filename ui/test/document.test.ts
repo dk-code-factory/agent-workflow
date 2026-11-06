@@ -32,13 +32,35 @@ describe('document edits', () => {
     doc.setField(['name'], 'Still a draft');
     expect(doc.getSnapshot().workflow!.schemas!.Review).toEqual(parseWorkflow(text).workflow!.schemas!.Review);
   });
-  it('keeps schema property names, enum data and declaration metadata literal', () => {
+  it('rewrites named schema expression values while preserving property names and enum object keys', () => {
     const doc = new WorkflowDocument({ source: `schemas:\n  Review:\n    type: object\n    description: '\${{ inputs.task }}'\n    properties: {$ref: {enum: [{$ref: literal}]}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: '\${{ inputs.task }}', output: {schema: Review}}}]}}` });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     doc.setField(['on', 'workflow_call', 'inputs'], { task: { type: 'string' } });
     doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'request');
-    expect(doc.getSnapshot().workflow!.schemas!.Review.description).toBe('${{ inputs.task }}');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.description).toBe('${{ inputs.request }}');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.properties).toEqual({ $ref: { enum: [{ $ref: 'literal' }] } });
     expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.prompt).toBe('${{ inputs.request }}');
+  });
+  it('tracks callable references in named schema values through rename, history and deletion', () => {
+    const original = `on: {workflow_call: {inputs: {task: {type: string}}}}\nschemas:\n  Review: {type: string, enum: ['\${{ inputs.task }}']}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}]}}`;
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+    doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'request');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.enum).toEqual(['${{ inputs.request }}']);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo();
+    expect(doc.entryDeletionImpact(['on', 'workflow_call', 'inputs', 'request'])).toContainEqual(['schemas', 'Review', 'enum', 0]);
+    expect(() => doc.deleteEntry(['on', 'workflow_call', 'inputs', 'request'])).toThrow('references');
+    doc.deleteEntry(['on', 'workflow_call', 'inputs', 'request'], true);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown inputs reference "request"' }));
+  });
+  it('checks named step and dependency references in each consuming job context', () => {
+    const doc = new WorkflowDocument({ source: `schemas:\n  Review: {type: string, enum: ['\${{ steps.local.outputs.text }}', '\${{ needs.build.outputs.result }}']}\njobs:\n  build: {outputs: {result: done}, steps: [{argv: [echo, done]}]}\n  review:\n    needs: build\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}\n  second:\n    needs: build\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}` });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code.startsWith('expression-'))).toEqual([]);
+    doc.setField(['jobs', 'second', 'needs'], []);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-dependency', path: ['schemas', 'Review', 'enum', 1], message: expect.stringContaining('"second"') }));
+    doc.setField(['jobs', 'second', 'steps', 0, 'id'], 'other');
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown steps reference "local"' }));
   });
   it('keeps agent parameters, YAML comments and block prompts across provider changes', () => {
     const doc = new WorkflowDocument({ source });

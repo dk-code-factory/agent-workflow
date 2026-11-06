@@ -17,12 +17,15 @@ test('rejected identifier can be corrected and viewer fields remain immutable', 
 });
 test('named callable entries can be renamed and deleted with impact review', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'on: {workflow_call: {inputs: {task: {type: string}}}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: "${{ inputs.task }}"}}]}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: 'on: {workflow_call: {inputs: {task: {type: string}}}}\nschemas: {Review: {type: string, enum: ["${{ inputs.task }}"]}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: "${{ inputs.task }}", output: {schema: Review}}}]}}' }));
   await first.getByText('Callable inputs', { exact: true }).click();
   await first.getByLabel('Identifier: task', { exact: true }).fill('request'); await page.keyboard.press('Enter');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.prompt)).toBe('${{ inputs.request }}');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.schemas.Review.enum)).toEqual(['${{ inputs.request }}']);
   await first.getByRole('button', { name: 'Delete request', exact: true }).click();
   await expect(first.getByRole('alertdialog')).toContainText('jobs.build.steps.0.with.prompt');
+  await expect(first.getByRole('alertdialog')).toContainText('schemas.Review.enum.0');
   await first.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference'))).toBe(true);
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Review.enum.0'))).toBe(true);
 });
