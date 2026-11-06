@@ -337,6 +337,171 @@ func TestLifecycleTimeoutBoundsHandlers(t *testing.T) {
 	}
 }
 
+func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
+	for _, hook := range []string{"finally", "onError"} {
+		for _, nesting := range []string{"direct", "child_bound", "ancestor_bound"} {
+			t.Run(hook+"/"+nesting, func(t *testing.T) {
+				bound, childBound := "500ms", "5m"
+				if nesting == "child_bound" {
+					bound, childBound = "5m", "500ms"
+				}
+				child := "          - agent: blocker\n            prompt: wait\n            continue-on-error: true\n"
+				if nesting != "direct" {
+					child = "          - agent: nested\n            prompt: nested\n            continue-on-error: true\n            handlerTimeout: " + childBound + "\n            finally:\n    " + strings.ReplaceAll(strings.TrimSuffix(child, "\n"), "\n", "\n    ") + "\n"
+				}
+				source := "jobs:\n  task:\n    steps:\n      - id: work\n        agent: primary\n        prompt: primary\n        continue-on-error: true\n        handlerTimeout: " + bound + "\n        " + hook + ":\n"
+				if hook == "onError" {
+					source += "          - agent: replacement\n            prompt: replacement\n"
+				}
+				source += child + "      - agent: downstream\n        prompt: downstream\n"
+				blocked, downstream := false, false
+				e, _ := durableExecutor(t, source, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
+					switch r.AgentID {
+					case "primary":
+						if hook == "onError" {
+							return nil, errors.New("ordinary primary failure")
+						}
+					case "blocker":
+						blocked = true
+						<-ctx.Done()
+						return nil, ctx.Err()
+					case "downstream":
+						downstream = true
+					}
+					return map[string]any{"text": r.AgentID}, nil
+				}))
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				if err == nil || !blocked || downstream || ctx.Err() != nil || run.Jobs["task"].Steps["work"].Status == RunStatusSucceeded {
+					t.Fatalf("continued handler deadline: blocked=%v downstream=%v run=%+v err=%v", blocked, downstream, run, err)
+				}
+			})
+		}
+	}
+}
+
+type interruptLifecycleTaskJournal struct{ Journal }
+
+func (s interruptLifecycleTaskJournal) RecordAttempt(ctx context.Context, attempt Attempt) error {
+	if err := s.Journal.RecordAttempt(ctx, attempt); err != nil {
+		return err
+	}
+	if attempt.Phase == "lifecycle_task_completed" {
+		return errors.New("simulated interruption after task receipt")
+	}
+	return nil
+}
+
+func TestLifecycleRestartPreservesEnclosingDeadline(t *testing.T) {
+	for _, lateSuccess := range []bool{false, true} {
+		t.Run(map[bool]string{false: "returned_timeout", true: "late_success"}[lateSuccess], func(t *testing.T) {
+			calls := 0
+			e, s := durableExecutor(t, strings.Replace(lifecycleWorkflow, "        prompt: original", "        prompt: original\n        handlerTimeout: 5m", 1), agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
+				calls++
+				if r.AgentID != "primary" {
+					t.Error("expired execution admitted handler", r.AgentID)
+					return nil, nil
+				}
+				<-ctx.Done()
+				if lateSuccess {
+					return map[string]any{"text": "late result"}, nil
+				}
+				return nil, ctx.Err()
+			}))
+			e.Store = interruptLifecycleTaskJournal{Journal: s}
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || run == nil || calls != 1 {
+				t.Fatalf("did not interrupt original task: calls=%d run=%+v err=%v", calls, run, err)
+			}
+			attempts, err := s.Attempts(context.Background(), run.ID)
+			if err != nil || len(attempts) != 1 || attempts[0].Phase != "lifecycle_task_completed" || attempts[0].Result.FailureClass != "timeout" || attempts[0].Result.UnsafeFailureClass != "canceled" {
+				t.Fatalf("enclosing deadline lost from receipt: %+v err=%v", attempts, err)
+			}
+			e.Store = s
+			if err := s.Recover(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := e.Resume(context.Background(), run.ID, nil, false)
+			if err == nil || resumed == nil || calls != 1 || resumed.Jobs["task"].Steps["work"].UnsafeFailureClass != "canceled" {
+				t.Fatalf("resumed expired execution admitted handlers: calls=%d run=%+v err=%v", calls, resumed, err)
+			}
+		})
+	}
+}
+
+func TestLifecycleExpiredRestartRetainsHardChildren(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "nested"}[nested], func(t *testing.T) {
+			ctx := context.Background()
+			source := strings.Replace(lifecycleWorkflow, "        prompt: original", "        prompt: original\n        continue-on-error: true", 1)
+			source += "      - agent: downstream\n        prompt: downstream\n"
+			if nested {
+				source = strings.Replace(source, "            prompt: '${{ failed.prompt }}|${{ error.class }}'", "            prompt: backup\n            finally:\n              - id: leaf\n                agent: leaf\n                prompt: leaf", 1)
+			}
+			calls := 0
+			e, s := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+				calls++
+				return map[string]any{"text": "unexpected"}, nil
+			}))
+			run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.Status = RunStatusRunning
+			if err := s.Save(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+			original, _, err := s.Begin(ctx, run.ID, "task", "work", 1, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original.Phase = "lifecycle_task_completed"
+			original.Result = StepExecution{ID: "work", Status: RunStatusFailed, Error: "primary failed", FailureClass: "execution", Lifecycle: &StepLifecycle{OriginalError: "primary failed", OriginalClass: "execution", Deadline: time.Now().Add(-time.Minute)}}
+			if err := s.RecordAttempt(ctx, original); err != nil {
+				t.Fatal(err)
+			}
+			childID := "work/onError/backup"
+			if nested {
+				parent, _, err := s.Begin(ctx, run.ID, "task", childID, 1, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				parent.Phase = "lifecycle_task_completed"
+				parent.Result = StepExecution{ID: childID, Status: RunStatusSucceeded, Lifecycle: &StepLifecycle{Deadline: time.Now().Add(-time.Minute)}}
+				if err := s.RecordAttempt(ctx, parent); err != nil {
+					t.Fatal(err)
+				}
+				childID += "/finally/leaf"
+			}
+			child, _, err := s.Begin(ctx, run.ID, "task", childID, 1, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child.Phase = "lifecycle_completed"
+			if err := s.Complete(ctx, child, StepExecution{ID: childID, Status: RunStatusNeedsAttention, Error: ErrActionIntegrity.Error(), FailureClass: "action_integrity"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := e.Resume(ctx, run.ID, nil, false)
+			if err == nil || resumed == nil || calls != 0 || resumed.Status != RunStatusNeedsAttention || resumed.Jobs["task"].Steps["work"].FailureClass != "action_integrity" {
+				t.Fatalf("expired resume lost hard child: calls=%d run=%+v err=%v", calls, resumed, err)
+			}
+			restored := resumed.Jobs["task"].Steps["work"].Lifecycle.Handlers["onError"]
+			if len(restored) != 1 || restored[0].ID != "backup" {
+				t.Fatalf("lost completed handler evidence: %+v", restored)
+			}
+			if nested && (restored[0].Lifecycle == nil || len(restored[0].Lifecycle.Handlers["finally"]) != 1) {
+				t.Fatalf("lost nested handler evidence: %+v", restored[0])
+			}
+		})
+	}
+}
+
 func TestLifecycleAdmissionRejectsUnsupportedAndDuplicateScopes(t *testing.T) {
 	for _, source := range []string{
 		"onError: []\njobs: {x: {steps: [{argv: [true]}]}}",

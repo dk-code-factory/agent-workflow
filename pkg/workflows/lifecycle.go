@@ -95,10 +95,66 @@ func lifecycleError(result StepExecution) error {
 	return &retainedLifecycleFailure{message: result.Error, class: result.FailureClass, unsafeClass: result.UnsafeFailureClass, cause: cause}
 }
 
+func lifecycleContextError(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		return err
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if hardExecutionFailure(err) {
+		return err
+	}
+	return &retainedLifecycleFailure{message: err.Error(), class: classifyFailure(err), unsafeClass: "canceled", cause: errors.Join(err, context.Canceled)}
+}
+
+func lifecycleAttempts(ctx context.Context, store RunStore, run string) ([]Attempt, error) {
+	if redacted, ok := store.(redactedStore); ok {
+		return lifecycleAttempts(ctx, redacted.Journal, run)
+	}
+	if journal, ok := store.(interface {
+		Attempts(context.Context, string) ([]Attempt, error)
+	}); ok {
+		return journal.Attempts(ctx, run)
+	}
+	return nil, fmt.Errorf("%w: lifecycle resume requires readable child receipts", ErrActionIntegrity)
+}
+
+// Restore observed children before admission checks, including nested failures
+// whose parent had not yet published its final receipt when execution stopped.
+func restoreLifecycleHandlers(step Step, life *StepLifecycle, attempts map[string]Attempt) error {
+	var unsafe error
+	for _, hook := range []struct {
+		kind string
+		list []Step
+	}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+		for i, child := range hook.list {
+			sid := stepID(child, i)
+			child.ID = step.ID + "/" + hook.kind + "/" + sid
+			a, ok := attempts[child.ID]
+			if !ok || (a.Phase != "lifecycle_completed" && a.Phase != "lifecycle_task_completed") {
+				continue
+			}
+			r := a.Result
+			if r.Lifecycle != nil && a.Phase == "lifecycle_task_completed" {
+				r.Lifecycle.Handlers = map[string][]StepExecution{}
+				unsafe = errors.Join(unsafe, restoreLifecycleHandlers(child, r.Lifecycle, attempts))
+			}
+			if failure := lifecycleError(r); hardExecutionFailure(failure) {
+				unsafe = errors.Join(unsafe, failure)
+			}
+			r.ID = sid
+			life.Handlers[hook.kind] = append(life.Handlers[hook.kind], r)
+		}
+	}
+	return unsafe
+}
+
 func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}, retry bool, child bool) (result StepExecution, returned error) {
 	result = StepExecution{ID: step.ID, Status: RunStatusSucceeded}
 	defer func() {
 		if returned != nil {
+			returned = lifecycleContextError(ctx, returned)
 			result.Status = executionFailureStatus(ctx, returned)
 			result.Error = returned.Error()
 			result.FailureClass = classifyFailure(returned)
@@ -147,6 +203,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.StartedAt = time.Now().UTC()
 		result.AttemptID = attempt.ID
 		result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
+		err = lifecycleContextError(ctx, err)
 		if err != nil {
 			result.Status = executionFailureStatus(ctx, err)
 			result.Error = err.Error()
@@ -179,6 +236,20 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		if life.Skipped == nil {
 			life.Skipped = map[string]string{}
 		}
+		if resuming {
+			attempts, loadErr := lifecycleAttempts(ctx, e.Store, ec.RunID)
+			if loadErr != nil {
+				return result, errors.Join(err, loadErr)
+			}
+			latest := map[string]Attempt{}
+			for _, a := range attempts {
+				if a.JobID == ec.JobID && a.Iteration == ec.IterationNumber && a.Number > latest[a.StepID].Number {
+					latest[a.StepID] = a
+				}
+			}
+			life.Handlers = map[string][]StepExecution{}
+			err = errors.Join(err, restoreLifecycleHandlers(step, life, latest))
+		}
 		// This receipt is persisted before any handler effect. Its absolute deadline
 		// also bounds a resumed handler instead of granting a fresh time budget.
 		hctx, cancel := context.WithDeadline(ctx, life.Deadline)
@@ -206,7 +277,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 				}
 				life.Skipped[kind] = reason
 				if hctx.Err() != nil && ctx.Err() == nil && !hardExecutionFailure(err) {
-					return nil, fmt.Errorf("%s: %w", kind, hctx.Err())
+					return nil, fmt.Errorf("%s: %w", kind, lifecycleContextError(hctx, hctx.Err()))
 				}
 				return nil, nil
 			}
@@ -224,6 +295,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 				childResult.ID = sid
 				life.Handlers[kind] = append(life.Handlers[kind], childResult)
 				local.Steps[sid] = childResult
+				if hctx.Err() != nil {
+					childErr = errors.Join(childErr, lifecycleContextError(hctx, hctx.Err()))
+				}
 				if childErr != nil && (!childStep.ContinueOnError || hardExecutionFailure(childErr)) {
 					return nil, fmt.Errorf("%s %s: %w", kind, sid, childErr)
 				}
@@ -256,6 +330,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		_, finalErr := run("finally", step.Finally)
 		err = errors.Join(err, finalErr)
 	}
+	err = lifecycleContextError(ctx, err)
 	result.FinishedAt = time.Now().UTC()
 	if err != nil {
 		result.Status = executionFailureStatus(ctx, err)
