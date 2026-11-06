@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { controllerParameters, dependencies, effectiveStepID, stepAction } from './validation';
 import { blockKind } from './step-tree';
 import { parseDocument, stringify } from 'yaml';
@@ -61,6 +61,13 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
   const errorID = useId();
   const registry = useContext(InspectorDraftContext);
   const cursor = useRef<{ start: number; end: number } | undefined>(undefined);
+  const [insertedCursor, setInsertedCursor] = useState<{ value: string; position: number }>();
+  useLayoutEffect(() => {
+    const element = control.current;
+    if (!insertedCursor || !(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || element.value !== insertedCursor.value) return;
+    element.focus();
+    element.setSelectionRange(insertedCursor.position, insertedCursor.position);
+  }, [insertedCursor]);
   const badNumber = () => control.current instanceof HTMLInputElement && control.current.validity.badInput;
   const pending = () => current.current !== applied.current || badNumber();
   const updateDraft = (next: string) => { current.current = next; setDraft(next); registry?.changed(); };
@@ -112,9 +119,8 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
       const expression = '${{ ' + event.target.value + ' }}';
       const range = cursor.current ?? { start: draft.length, end: draft.length };
       const next = draft.slice(0, range.start) + expression + draft.slice(range.end);
+      setInsertedCursor({ value: next, position: range.start + expression.length });
       updateDraft(next); apply();
-      const position = range.start + expression.length;
-      requestAnimationFrame(() => { control.current?.focus(); if (control.current instanceof HTMLInputElement || control.current instanceof HTMLTextAreaElement) control.current.setSelectionRange(position, position); });
     }}><option value="" disabled>Insert expression…</option>{suggestionValues.map(value => <option key={value} value={value}>{value}</option>)}</select>}
     {result && <button type="button" disabled={readOnly} aria-label={`Use job result in ${label}`} onClick={() => {
       const rejected = registry?.apply();

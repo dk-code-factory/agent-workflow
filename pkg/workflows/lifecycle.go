@@ -253,7 +253,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			}
 			latest := map[string]Attempt{}
 			for _, a := range attempts {
-				if a.JobID == ec.JobID && a.Iteration == ec.IterationNumber && a.Number > latest[a.StepID].Number {
+				if a.RunID == ec.RunID && a.JobID == ec.JobID && a.Iteration == ec.IterationNumber && a.Number > latest[a.StepID].Number {
 					latest[a.StepID] = a
 				}
 			}

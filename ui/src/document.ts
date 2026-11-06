@@ -456,9 +456,17 @@ export class WorkflowDocument {
       const node = (seq.items[index] as Node).clone() as Node;
       if (!isMap(node)) throw new Error('Expected a step mapping');
       const entries = stepEntries(this.snapshot.workflow!.jobs[job].steps);
+      const copied = entries.filter(entry => entry.path[1] === index);
       const used = entries.map(entry => entry.id);
+      const reserveHandlerIDs = (step: Step) => {
+        for (const kind of ['onError', 'onFailure', 'finally'] as const) (step[kind] ?? []).forEach((child, index) => {
+          used.push(effectiveStepID(child, index));
+          reserveHandlerIDs(child);
+        });
+      };
+      copied.forEach(entry => reserveHandlerIDs(entry.step));
       const renamed = new Map<string, string>();
-      for (const entry of entries.filter(entry => entry.path[1] === index)) {
+      for (const entry of copied) {
         const id = this.unique(`${entry.id}_copy`, used); used.push(id); renamed.set(entry.id, id);
         node.setIn([...entry.path.slice(2), 'id'], id);
       }

@@ -177,6 +177,44 @@ describe('step lifecycle handler authoring', () => {
     }
   });
 
+  it.each(['onError', 'onFailure', 'finally'] as const)('avoids generated IDs captured by direct and nested %s siblings', kind => {
+    const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
+      { id: 'group', sequence: [
+        { id: 'seed', agent: 'claude', prompt: 'Seed' },
+        { id: 'work', agent: 'claude', prompt: 'Work', [kind]: [
+          { id: 'seed_copy', agent: 'codex', prompt: 'Local copy name' },
+          { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } }, finally: [
+            { id: 'seed_copy_2', agent: 'codex', prompt: 'Nested copy name' },
+            { agent: 'claude', prompt: '${{ steps.seed.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}', with: { output: { schema: 'Shared' } } },
+          ] },
+          { id: 'seed', agent: 'codex', prompt: 'Local source name' },
+          { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
+        ] },
+      ] },
+    ] } } });
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.duplicateStep('build', 0);
+    const edited = doc.getSnapshot();
+    const sequence = edited.workflow!.jobs.build.steps![1].sequence!;
+    const handlers = sequence[1][kind]!;
+    expect(sequence[0].id).toBe('seed_copy_3');
+    expect(handlers[0].id).toBe('seed_copy');
+    expect(handlers[1].prompt).toBe('${{ steps.seed_copy_3.text }}');
+    expect(handlers[1].with!.output).toEqual({ schema: 'Shared_copy' });
+    expect(handlers[1].finally![0].id).toBe('seed_copy_2');
+    expect(handlers[1].finally![1].prompt).toBe('${{ steps.seed_copy_3.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}');
+    expect(handlers[1].finally![1].with!.output).toEqual({ schema: 'Shared_copy' });
+    expect(handlers[3].prompt).toBe('${{ steps.seed.text }}');
+    expect(handlers[3].with!.output).toEqual({ schema: 'Shared' });
+    expect(edited.workflow!.schemas!.Shared_copy.enum).toEqual(['${{ steps.seed_copy_3.text }}']);
+    expect(edited.workflow!.schemas!.Shared.enum).toEqual(['${{ steps.seed.text }}']);
+    expect(edited.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(parseWorkflow(edited.source).workflow).toEqual(edited.workflow);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+  });
+
   it.each(['parallel', 'sequence'])('rejects structural %s blocks in handler lists and hooks on blocks', kind => {
     const leaf = { argv: ['echo'] };
     expect(parseWorkflow(stringify({ jobs: { build: { steps: [{ [kind]: [{ argv: ["echo"] }], finally: [{ argv: ["echo"] }] }] } } })).diagnostics.some(d => d.code === 'block')).toBe(true);

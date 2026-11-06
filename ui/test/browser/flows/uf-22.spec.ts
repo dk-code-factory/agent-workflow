@@ -108,7 +108,7 @@ jobs:
   expect((await snapshot(page)).source).toBe(original.source);
 });
 
-test('copying a parallel block preserves handler scopes and diagnoses structural handler children', async ({ page }) => {
+test('copying a parallel block avoids handler ID capture and diagnoses structural handler children', async ({ page }) => {
   const ui = await open(page, `schemas:
   Shared: {type: string, enum: ['\${{ steps.seed.text }}']}
 jobs:
@@ -122,7 +122,13 @@ jobs:
                 agent: claude
                 prompt: Work
                 onError:
-                  - {agent: codex, prompt: '\${{ failed.prompt }} \${{ steps.seed.text }}', with: {output: {schema: Shared}}}
+                  - {id: seed_copy, agent: codex, prompt: Local copy name}
+                  - agent: codex
+                    prompt: '\${{ failed.prompt }} \${{ steps.seed.text }}'
+                    with: {output: {schema: Shared}}
+                    finally:
+                      - {id: seed_copy_2, agent: codex, prompt: Nested copy name}
+                      - {agent: claude, prompt: '\${{ steps.seed.text }} \${{ steps.seed_copy.text }} \${{ steps.seed_copy_2.text }}', with: {output: {schema: Shared}}}
                   - {id: seed, agent: codex, prompt: Local}
                   - {agent: claude, prompt: '\${{ steps.seed.text }}', with: {output: {schema: Shared}}}
           - {id: sibling, agent: claude, prompt: Sibling}
@@ -131,14 +137,19 @@ jobs:
   await job(page); await step(page, '1. group');
   await ui.getByRole('button', { name: 'Duplicate step', exact: true }).click();
   const edited = await snapshot(page);
+  expect(edited.workflow.jobs.build.steps[1].parallel[0].sequence[0].id).toBe('seed_copy_3');
   const fallback = edited.workflow.jobs.build.steps[1].parallel[0].sequence[1].onError;
-  expect(fallback[0].prompt).toBe('${{ failed.prompt }} ${{ steps.seed_copy.text }}');
-  expect(fallback[0].with.output.schema).toBe('Shared_copy');
-  expect(fallback[2].prompt).toBe('${{ steps.seed.text }}');
-  expect(fallback[2].with.output.schema).toBe('Shared');
-  expect(edited.workflow.schemas.Shared_copy.enum).toEqual(['${{ steps.seed_copy.text }}']);
+  expect(fallback[0].id).toBe('seed_copy');
+  expect(fallback[1].prompt).toBe('${{ failed.prompt }} ${{ steps.seed_copy_3.text }}');
+  expect(fallback[1].with.output.schema).toBe('Shared_copy');
+  expect(fallback[1].finally[0].id).toBe('seed_copy_2');
+  expect(fallback[1].finally[1].prompt).toBe('${{ steps.seed_copy_3.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}');
+  expect(fallback[1].finally[1].with.output.schema).toBe('Shared_copy');
+  expect(fallback[3].prompt).toBe('${{ steps.seed.text }}');
+  expect(fallback[3].with.output.schema).toBe('Shared');
+  expect(edited.workflow.schemas.Shared_copy.enum).toEqual(['${{ steps.seed_copy_3.text }}']);
   expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
-  expect(await downloadText(page)).toContain('steps.seed_copy.text');
+  expect(await downloadText(page)).toContain('steps.seed_copy_3.text');
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(original.source);
   await ui.getByRole('button', { name: 'YAML', exact: true }).click();
