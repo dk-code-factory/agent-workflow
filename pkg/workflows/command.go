@@ -76,6 +76,9 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if step.stdin != nil {
+		cmd.Stdin = bytes.NewReader(step.stdin)
+	}
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir

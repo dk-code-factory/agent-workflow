@@ -83,7 +83,7 @@
   ],
   "onFailure": [
     {
-      "action": "audit.record",
+      "action": "audit_record",
       "with": {
         "event": "workflow.failed",
         "error": "$.error"
@@ -92,7 +92,7 @@
   ],
   "finally": [
     {
-      "action": "audit.record",
+      "action": "audit_record",
       "with": {
         "event": "workflow.finished",
         "runId": "$.run.id"

@@ -84,8 +84,8 @@ func CanonicalLocalRef(ref string) (string, error) {
 		return "", fmt.Errorf("workflow ref %q must start with workflows/", ref)
 	}
 	ext := strings.ToLower(path.Ext(clean))
-	if ext != ".yml" && ext != ".yaml" {
-		return "", fmt.Errorf("workflow ref %q must end with .yml or .yaml", ref)
+	if ext != ".yml" && ext != ".yaml" && ext != ".json" {
+		return "", fmt.Errorf("workflow ref %q must end with .yml, .yaml or .json", ref)
 	}
 	return clean, nil
 }

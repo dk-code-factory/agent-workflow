@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/workflowdef"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,6 +16,19 @@ import (
 func Parse(data []byte) (*Workflow, error) {
 	if len(data) > 4<<20 {
 		return nil, fmt.Errorf("workflow exceeds 4 MiB")
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+		raw, err := workflowdef.DecodeJSON(data)
+		if err != nil {
+			return nil, err
+		}
+		if m, ok := raw.(map[string]any); ok && m["version"] != nil {
+			definition, err := workflowdef.Parse(data)
+			if err != nil {
+				return nil, err
+			}
+			return definitionWorkflow(definition), nil
+		}
 	}
 	d := yaml.NewDecoder(bytes.NewReader(data))
 	var node yaml.Node

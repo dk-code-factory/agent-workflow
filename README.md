@@ -7,10 +7,11 @@ iterations, worker mailboxes, isolated Git workspaces, and GitHub publication.
 Embedding Go applications can also [register typed application actions](docs/REGISTERED_ACTIONS.md)
 with durable provenance, checkpoint validation, and receipt-based mutation recovery.
 
-A [workflow definition proposal](docs/WORKFLOW_DEFINITION.md) describes a new JSON
-format with a JSON Schema, JSONPath bindings, structured control flow, and failure
-handling, including bounded agent recovery and circuit breakers. It includes
-complete examples; engine and UI support are future work.
+[Simple JSON workflows](docs/WORKFLOW_DEFINITION.md) provide JSON Schema contracts,
+JSONPath bindings, loops, parallel/conditional execution, failure handlers, and
+bounded agent conversations. Circuit breakers can use an agent or script. Run
+version `0.2` files from `workflows/*.json` with the existing CLI/controller; the
+guided editor continues to use YAML.
 
 **Release status: implementation candidate, not yet production certified.** See
 [release evidence and outstanding gates](docs/RELEASE.md). The deterministic CLI

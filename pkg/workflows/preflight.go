@@ -13,6 +13,11 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 		return fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
 	}
 	for _, w := range all {
+		if w.Definition != nil {
+			if err := e.preflightDefinition(w.Definition); err != nil {
+				return err
+			}
+		}
 		for _, j := range w.Jobs {
 			if j.ForEach != nil && iterationJournal(e.Store) == nil {
 				return fmt.Errorf("for-each requires a durable IterationJournal (%s)", OrderedDynamicIterationV1)

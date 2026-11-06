@@ -12,6 +12,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflowdef"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,20 +28,21 @@ const (
 )
 
 type Run struct {
-	Usage        *UsageSummary           `json:"normalized_usage,omitempty"`
-	Generation   int64                   `json:"execution_generation,omitempty"`
-	Owner        string                  `json:"-"`
-	FailureClass string                  `json:"failure_class,omitempty"`
-	OriginID     string                  `json:"origin_run_id,omitempty"`
-	Version      int                     `json:"version,omitempty"`
-	ID           string                  `json:"id"`
-	WorkflowRef  string                  `json:"workflow_ref"`
-	Status       string                  `json:"status"`
-	StartedAt    time.Time               `json:"started_at"`
-	FinishedAt   time.Time               `json:"finished_at,omitempty"`
-	Jobs         map[string]JobExecution `json:"jobs"`
-	Outputs      map[string]any          `json:"outputs,omitempty"`
-	Error        string                  `json:"error,omitempty"`
+	DefinitionState *workflowdef.State      `json:"definition_state,omitempty"`
+	Usage           *UsageSummary           `json:"normalized_usage,omitempty"`
+	Generation      int64                   `json:"execution_generation,omitempty"`
+	Owner           string                  `json:"-"`
+	FailureClass    string                  `json:"failure_class,omitempty"`
+	OriginID        string                  `json:"origin_run_id,omitempty"`
+	Version         int                     `json:"version,omitempty"`
+	ID              string                  `json:"id"`
+	WorkflowRef     string                  `json:"workflow_ref"`
+	Status          string                  `json:"status"`
+	StartedAt       time.Time               `json:"started_at"`
+	FinishedAt      time.Time               `json:"finished_at,omitempty"`
+	Jobs            map[string]JobExecution `json:"jobs"`
+	Outputs         map[string]any          `json:"outputs,omitempty"`
+	Error           string                  `json:"error,omitempty"`
 }
 
 type RunStore interface {
@@ -189,6 +191,9 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 			return nil, err
 		}
 	}
+	if err = e.pinDefinitionSources(all, &req); err != nil {
+		return nil, err
+	}
 	req.actionContracts = e.actionContracts
 	ref, _ := CanonicalLocalRef(req.Ref)
 	limit := e.MaxParallel
@@ -266,6 +271,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		ctx = fenceContext(ctx, run)
 	}
 	req.runID = run.ID
+	if w.Definition != nil {
+		return e.executeDefinition(ctx, w.Definition, run, req, inputs, slots, depth)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type completion struct {
@@ -382,6 +390,10 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if runErr != nil {
 		run.Error = runErr.Error()
 	}
+	return e.finalizeRun(ctx, run, runErr, req, depth)
+}
+
+func (e *Executor) finalizeRun(ctx context.Context, run *Run, runErr error, req RunRequest, depth int) (*Run, error) {
 	if depth == 0 {
 		if store := invocationStore(e.Store); store != nil {
 			if err := store.BeginFinalization(context.WithoutCancel(ctx), run); err != nil {

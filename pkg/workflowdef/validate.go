@@ -46,7 +46,9 @@ func (d *Definition) validate() error {
 		if slices.Contains(reserved, name) {
 			return fmt.Errorf("reserved source name %q", name)
 		}
-		s.roots[name] = true
+		if _, secret := object(value)["secret"]; !secret {
+			s.roots[name] = true
+		}
 		if use, exists := object(value)["schema"]; exists {
 			if err := v.schema(use); err != nil {
 				return err
@@ -78,7 +80,7 @@ func (d *Definition) validate() error {
 			return err
 		}
 	}
-	return v.handlers(d.Data, end)
+	return v.handlers(d.Data, s, end)
 }
 
 func (v *validation) resourceID(use any) error {
@@ -115,6 +117,7 @@ func (v *validation) sequence(steps []any, s scope) (scope, error) {
 
 func (v *validation) step(node map[string]any, s scope) (scope, error) {
 	s = s.copy()
+	startScope := s.copy()
 	if id := text(node["id"]); id != "" {
 		if v.ids[id] {
 			return s, fmt.Errorf("duplicate step ID %q", id)
@@ -155,6 +158,9 @@ func (v *validation) step(node map[string]any, s scope) (scope, error) {
 	}
 	if policy, exists := node["breaker"]; exists {
 		for _, role := range roles {
+			if text(object(policy)["agent"]) == role {
+				return s, fmt.Errorf("breaker checker must differ from guarded role %q", role)
+			}
 			if previous, exists := v.policies[role]; exists && !reflect.DeepEqual(previous, policy) {
 				return s, fmt.Errorf("conflicting breaker policies for role %q", role)
 			}
@@ -193,8 +199,9 @@ func (v *validation) step(node map[string]any, s scope) (scope, error) {
 		if err := v.condition(node["if"], s); err != nil {
 			return s, err
 		}
+		branchScope := s.copy()
 		for _, branch := range []string{"then", "else"} {
-			out, err := v.sequence(list(node[branch]), s)
+			out, err := v.sequence(list(node[branch]), branchScope)
 			if err != nil {
 				return s, err
 			}
@@ -228,7 +235,7 @@ func (v *validation) step(node map[string]any, s scope) (scope, error) {
 			return s, err
 		}
 	}
-	if err := v.handlers(node, s); err != nil {
+	if err := v.handlers(node, startScope, s); err != nil {
 		return s, err
 	}
 	if id := text(node["id"]); id != "" {
@@ -237,9 +244,12 @@ func (v *validation) step(node map[string]any, s scope) (scope, error) {
 	return s, nil
 }
 
-func (v *validation) handlers(node map[string]any, s scope) error {
+func (v *validation) handlers(node map[string]any, start, s scope) error {
 	for _, phase := range []string{"onStart", "onSuccess", "onFailure", "finally", "onError"} {
 		hs := s.copy()
+		if phase == "onStart" || phase == "onError" || phase == "onFailure" || phase == "finally" {
+			hs = start.copy()
+		}
 		if phase == "onError" {
 			hs.roots["error"], hs.roots["failed"] = true, true
 			hs.recover = text(node["agent"]) != ""

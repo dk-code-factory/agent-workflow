@@ -30,7 +30,7 @@ func (e *Executor) Discover() ([]Definition, error) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".yml" && ext != ".yaml" {
+		if ext != ".yml" && ext != ".yaml" && ext != ".json" {
 			return nil
 		}
 		relative, err := filepath.Rel(dir, path)

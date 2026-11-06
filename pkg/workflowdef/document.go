@@ -214,6 +214,12 @@ func text(value any) string           { s, _ := value.(string); return s }
 
 func clone(value any) any {
 	switch v := value.(type) {
+	case json.Number:
+		n, err := v.Float64()
+		if err == nil {
+			return n
+		}
+		return v
 	case map[string]any:
 		m := make(map[string]any, len(v))
 		for key, item := range v {

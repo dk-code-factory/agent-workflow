@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflowdef"
 	"sort"
 	"strings"
 )
@@ -28,6 +29,14 @@ func redactStep(step StepExecution, secrets map[string]string) StepExecution {
 }
 func redactRun(run *Run, secrets map[string]string) *Run {
 	safe := *run
+	if run.DefinitionState != nil {
+		encoded, _ := json.Marshal(run.DefinitionState)
+		var value any
+		_ = json.Unmarshal(encoded, &value)
+		encoded, _ = json.Marshal(redactValue(value, secrets))
+		safe.DefinitionState = new(workflowdef.State)
+		_ = json.Unmarshal(encoded, safe.DefinitionState)
+	}
 	safe.Error = Redact(run.Error, secrets)
 	safe.Outputs, _ = redactValue(run.Outputs, secrets).(map[string]any)
 	safe.Jobs = map[string]JobExecution{}

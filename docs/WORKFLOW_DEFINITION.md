@@ -1,9 +1,9 @@
-# Simple workflow definition proposal
+# Simple JSON workflows
 
-Status: proposed version `0.2`, replacing the verbose `0.1` draft. The current
-engine and UI do not implement it. See the [schema](workflow-definition/workflow.schema.json)
-and [complete example](workflow-definition/review.workflow.json). Existing
-runtime recovery guarantees remain the implementation baseline.
+Version `0.2` runs through the existing CLI/controller and durable executor.
+See the [schema](workflow-definition/workflow.schema.json) and
+[complete example](workflow-definition/review.workflow.json). The guided UI
+editor continues to use the existing YAML format.
 
 An AI should be able to write an ordinary workflow from this explanation:
 
@@ -49,7 +49,7 @@ identities.
 | --- | --- |
 | `{"agent":"writer","prompt":"..."}` | Call a registered role; default result is `{"text":"..."}` |
 | `{"conversation":["coder","reviewer"],"prompt":"...","finishBy":"reviewer"}` | Create persistent participant sessions and route their messages until the authorized finisher completes |
-| `{"action":"audit.record","with":{"runId":"$.run.id"}}` | Call a registered application action with JSON input |
+| `{"action":"audit_record","with":{"runId":"$.run.id"}}` | Call a registered application action with JSON input |
 | `{"run":["go","test","./..."]}` | Run an argument array without shell expansion |
 | `{"recover":"debugger","maxTurns":4}` | In an agent's error handler, let a helper work with that original agent to recover |
 | `{"fail":true}` | End the workflow with the current error, bypassing ancestor fallback handlers |
@@ -464,8 +464,37 @@ turn. The allowed original session and its permissions are pinned at admission;
 recovery participants cannot nominate an unrelated session.
 
 The complete example needs host roles `writer`, `reviewer`, `judge`, and
-`backupReviewer`, plus the registered idempotent action `audit.record`.
+`backupReviewer`, plus the registered idempotent action `audit_record`.
 The [failure examples](workflow-definition/failure-cases.json) give independent
 definitions for stopping, agent handoff, collaborative recovery, script recovery,
 and script reporting followed by failure. Script examples require a caller-supplied
 `recover.py` or `report-error.py`; no script is executed by definition validation.
+
+
+## Running a definition
+
+Save a definition as `workflows/example.json`, configure its agent roles in
+`agents.yml`, then use the normal commands:
+
+```sh
+agent-workflow validate workflows/example.json
+agent-workflow run --input task='Review this repository' workflows/example.json
+agent-workflow status RUN_ID
+agent-workflow resume --retry-uncertain RUN_ID
+```
+
+Flags precede the workflow reference. JSON workflows require the durable journal
+used by the CLI/controller. Nonsecret sources are resolved relative to the
+definition file and pinned before admission. Configure a session-capable adapter
+with managed tool policy for conversations and collaborative recovery. The
+engine checks these capabilities before dispatch.
+
+The built-in executor uses the credentials configured on admitted roles. It
+rejects task `credentials` slots at admission because its provider adapters do
+not implement credential-slot injection; a custom `workflowdef.Host` may
+implement those slots. Ordinary secret bindings are never resolved as data.
+
+Object results are exposed directly in a run's `outputs`. Nonobject final values
+are exposed as `{"result": value}` to fit the existing run API. Scripts execute
+relative to the workspace. The schema and deterministic tests do not contact
+providers or publish anything.

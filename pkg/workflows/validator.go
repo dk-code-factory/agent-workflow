@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"fmt"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflowdef"
 	"regexp"
 	"sort"
 	"strings"
@@ -11,6 +12,10 @@ import (
 var idPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 func Validate(w *Workflow) error {
+	if w != nil && w.Definition != nil {
+		_, err := workflowdef.Parse(mustDefinitionJSON(w.Definition))
+		return err
+	}
 	if w == nil || len(w.Jobs) == 0 {
 		return fmt.Errorf("at least one job is required")
 	}
