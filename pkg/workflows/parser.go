@@ -39,7 +39,7 @@ func Parse(data []byte) (*Workflow, error) {
 		var err error
 		job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) { return normalizeAgentStep(step) })
 		if err != nil {
-			return nil, fmt.Errorf("job %s: %w", id, err)
+			return nil, fmt.Errorf("job %s %w", id, err)
 		}
 		w.Jobs[id] = job
 	}

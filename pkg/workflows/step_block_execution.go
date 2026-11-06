@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -97,21 +98,36 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	return
 }
 
-func branchContext(ec expressionContext) expressionContext {
-	// Admitted contexts are JSON data. Preserve typed execution records and JSON
-	// numbers while detaching nested output maps from other branches.
-	data, _ := json.Marshal(ec)
+func branchContext(ec expressionContext) (expressionContext, error) {
+	// Preserve typed execution records and JSON numbers while detaching nested
+	// output maps. Non-durable callers can supply values JSON cannot encode.
+	data, err := json.Marshal(ec)
+	if err != nil {
+		return expressionContext{}, err
+	}
 	var copy expressionContext
-	_ = decodeJSONWithNumbers(data, &copy)
+	if err := decodeJSONWithNumbers(data, &copy); err != nil {
+		return expressionContext{}, err
+	}
 	if copy.Steps == nil {
 		copy.Steps = map[string]StepExecution{}
 	}
 	copy.Attempt = nil
-	return copy
+	return copy, nil
 }
 
 func (e *Executor) executeStepBlock(ctx context.Context, step Step, path string, ec expressionContext, req RunRequest, slots chan struct{}) (result StepExecution, err error) {
 	result = StepExecution{ID: step.ID, Status: RunStatusSucceeded, StartedAt: time.Now().UTC()}
+	// Prepare every snapshot before starting branches or recording orchestration.
+	// A serialization failure must not dispatch work with an empty context.
+	contexts := make([]expressionContext, len(step.Parallel))
+	for i := range contexts {
+		contexts[i], err = branchContext(ec)
+		if err != nil {
+			result.FinishedAt = time.Now().UTC()
+			return result, fmt.Errorf("parallel branch snapshot: %w", err)
+		}
+	}
 	journal, durable := e.Store.(Journal)
 	var attempt Attempt
 	var reused bool
@@ -150,7 +166,7 @@ func (e *Executor) executeStepBlock(ctx context.Context, step Step, path string,
 			if child.ID == "" {
 				child.ID = childPath
 			}
-			childEC := branchContext(ec)
+			childEC := contexts[i]
 			go func(i int, child Step, childPath string, childEC expressionContext) {
 				r, failure := e.executeDeclaredStep(branchCtx, child, childPath, childEC, req, slots)
 				childEC.Steps[child.ID] = r

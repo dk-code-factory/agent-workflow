@@ -307,12 +307,71 @@ func TestStepBlocksInputWaitJoinsAndResumesCompletedSibling(t *testing.T) {
 
 func TestStepBlocksSnapshotDetachesNestedState(t *testing.T) {
 	ec := expressionContext{Inputs: map[string]any{"nested": map[string]any{"value": "initial"}}, Steps: map[string]StepExecution{"before": {Outputs: map[string]any{"nested": map[string]any{"value": "initial"}}}}}
-	a, b := branchContext(ec), branchContext(ec)
+	a, err := branchContext(ec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := branchContext(ec)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a.Inputs["nested"].(map[string]any)["value"] = "changed"
 	a.Steps["before"].Outputs["nested"].(map[string]any)["value"] = "changed"
 	a.Steps["new"] = StepExecution{}
 	if b.Inputs["nested"].(map[string]any)["value"] != "initial" || b.Steps["before"].Outputs["nested"].(map[string]any)["value"] != "initial" || len(b.Steps) != 1 {
 		t.Fatal("parallel branches share mutable state")
+	}
+}
+
+func TestStepBlocksRejectUnserializableSnapshotBeforeStartingBranches(t *testing.T) {
+	for _, value := range []string{".nan", ".inf", "-.inf"} {
+		t.Run(value, func(t *testing.T) {
+			root := t.TempDir()
+			writeWorkflow(t, root, "main.yml", `on:
+  workflow_call:
+    inputs:
+      unused: {type: number, default: `+value+`}
+      task: {type: string, default: Review}
+jobs:
+  review:
+    steps:
+      - id: branches
+        parallel:
+          - agent: a
+            prompt: '${{ inputs.task }}'
+          - agent: a
+            prompt: independent
+`)
+			var calls atomic.Int32
+			e := Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+				calls.Add(1)
+				return map[string]any{"text": req.Prompt}, nil
+			})}
+			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || !strings.Contains(err.Error(), "parallel branch snapshot") || calls.Load() != 0 {
+				t.Fatalf("snapshot failure did not stop dispatch: run=%+v err=%v calls=%d", run, err, calls.Load())
+			}
+			if run == nil || run.Status != RunStatusFailed || run.Jobs["review"].Steps["branches"].Status != RunStatusFailed {
+				t.Fatalf("snapshot failure was not recorded: %+v", run)
+			}
+		})
+	}
+}
+
+func TestStepBlocksNormalizationErrorIdentifiesStep(t *testing.T) {
+	for _, test := range []struct{ name, steps, id string }{
+		{"top-level explicit", "[{id: bad, agent: 'bad role'}]", "bad"},
+		{"top-level anonymous", "[{agent: a, prompt: ok}, {agent: 'bad role'}]", "step_2"},
+		{"nested explicit", "[{parallel: [{sequence: [{id: bad, agent: 'bad role'}]}]}]", "bad"},
+		{"nested anonymous", "[{parallel: [{sequence: [{agent: 'bad role'}]}]}]", "step_1_parallel_1_sequence_1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Parse([]byte("jobs: {review: {steps: " + test.steps + "}}"))
+			want := "job review step " + test.id + ": agent requires a valid role name"
+			if err == nil || err.Error() != want {
+				t.Fatalf("diagnostic = %v, want %q", err, want)
+			}
+		})
 	}
 }
 

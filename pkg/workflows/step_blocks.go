@@ -33,11 +33,15 @@ func stepPath(prefix string, index int) string {
 func mapSteps(steps []Step, prefix string, f func(Step) (Step, error)) ([]Step, error) {
 	out := make([]Step, len(steps))
 	for i, source := range steps {
+		path := stepPath(prefix, i)
 		step, err := f(source)
 		if err != nil {
-			return nil, err
+			id := source.ID
+			if id == "" {
+				id = path
+			}
+			return nil, fmt.Errorf("step %s: %w", id, err)
 		}
-		path := stepPath(prefix, i)
 		if step.Parallel != nil {
 			step.Parallel, err = mapSteps(step.Parallel, path+"_parallel", f)
 			if err != nil {
