@@ -86,6 +86,51 @@ describe('nested step blocks', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it('copies named contracts with descendant references while preserving other consumers', () => {
+    const original = `schemas:
+  Shared: # preserve this contract comment
+    type: string
+    enum: ['\${{ steps.collect.outputs.stdout }}']
+  Shared_copy: {type: boolean}
+  Static: {type: string}
+jobs:
+  review:
+    steps:
+      - id: reviews
+        parallel:
+          - sequence:
+              - {id: collect, argv: [echo, collect]}
+              - {id: first, agent: claude, prompt: Review, with: {output: {schema: Shared}}}
+              - {id: second, uses: agent/claude, with: {prompt: Again, output: {schema: Shared, repair: false}}}
+              - {id: fixed, agent: claude, prompt: Static, with: {output: {schema: Static}}}
+          - {id: other, argv: [echo, other]}
+      - {id: after, agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+  other:
+    steps:
+      - {id: collect, argv: [echo, other]}
+      - {agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+`;
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.duplicateStep('review', 0);
+    const edited = doc.getSnapshot();
+    const copied = edited.workflow!.jobs.review.steps![1].parallel![0].sequence!;
+    expect(copied.slice(1, 3).map(step => (step.with!.output as any).schema)).toEqual(['Shared_copy_2', 'Shared_copy_2']);
+    expect(copied[2].with!.output).toEqual({ schema: 'Shared_copy_2', repair: false });
+    expect(copied[3].with!.output).toEqual({ schema: 'Static' });
+    expect(Object.keys(edited.workflow!.schemas!)).toEqual(['Shared', 'Shared_copy', 'Static', 'Shared_copy_2']);
+    expect(edited.workflow!.schemas!.Shared_copy_2.enum).toEqual(['${{ steps.collect_copy.outputs.stdout }}']);
+    expect(edited.workflow!.schemas!.Shared.enum).toEqual(['${{ steps.collect.outputs.stdout }}']);
+    expect(edited.workflow!.jobs.review.steps![2].with!.output).toEqual({ schema: 'Shared' });
+    expect(edited.workflow!.jobs.other.steps![1].with!.output).toEqual({ schema: 'Shared' });
+    expect(edited.source.match(/# preserve this contract comment/g)).toHaveLength(2);
+    expect(edited.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+    doc.moveStep('review', 1, 0);
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+
   it('wires nested producer results without declaring output aliases', () => {
     const doc = new WorkflowDocument({ source });
     const preview = doc.previewJobResult({ target: ['jobs', 'summarize', 'steps', 0, 'prompt'], producer: 'review', source: { kind: 'result', step: ['steps', 1, 'parallel', 1, 'sequence', 1], field: 'text' } });

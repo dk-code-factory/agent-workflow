@@ -430,12 +430,29 @@ export class WorkflowDocument {
         const id = this.unique(`${entry.id}_copy`, used); used.push(id); renamed.set(entry.id, id);
         node.setIn([...entry.path.slice(2), 'id'], id);
       }
-      const rewrite = (value: Node | null, path: Path) => {
-        if (isScalar(value) && typeof value.value === 'string' && hasExpressionReferences(['jobs', job, 'steps', index, ...path])) value.value = mapReferences(value.value, ref => ref.scope === 'steps' && renamed.has(ref.id) ? referenceText({ ...ref, id: renamed.get(ref.id)! }) : undefined, isExpressionPath(['jobs', job, 'steps', index, ...path]));
-        else if (isSeq(value)) value.items.forEach((item, i) => rewrite(item as Node, [...path, i]));
-        else if (isMap(value)) value.items.forEach(item => rewrite(item.value as Node, [...path, String(isScalar(item.key) ? item.key.value : item.key)]));
+      const rewrite = (value: Node | null, path: Path): boolean => {
+        if (isScalar(value) && typeof value.value === 'string' && hasExpressionReferences(path)) {
+          const next = mapReferences(value.value, ref => ref.scope === 'steps' && renamed.has(ref.id) ? referenceText({ ...ref, id: renamed.get(ref.id)! }) : undefined, isExpressionPath(path));
+          const changed = next !== value.value; value.value = next; return changed;
+        }
+        if (isSeq(value)) return value.items.map((item, i) => rewrite(item as Node, [...path, i])).some(Boolean);
+        if (isMap(value)) return value.items.map(item => rewrite(item.value as Node, [...path, String(isScalar(item.key) ? item.key.value : item.key)])).some(Boolean);
+        return false;
       };
-      rewrite(node, []);
+      rewrite(node, ['jobs', job, 'steps', index]);
+      const names = Object.keys(this.snapshot.workflow!.schemas ?? {});
+      for (const name of [...names]) {
+        const consumers = this.schemaConsumers(name).filter(consumer => consumer.job === job && consumer.path[1] === index);
+        if (!consumers.length) continue;
+        const declaration = (doc.getIn(['schemas', name], true) as Node).clone() as Node;
+        if (!rewrite(declaration, ['schemas', name])) continue;
+        // Keep other consumers on the original contract while the copy follows its own producers.
+        const target = this.unique(`${name}_copy`, names); names.push(target);
+        const declarations = doc.getIn(['schemas'], true);
+        if (!isMap(declarations)) throw new Error('Expected schema declarations');
+        declarations.set(doc.createNode(target), declaration);
+        for (const consumer of consumers) node.setIn([...consumer.path.slice(2), 'with', 'output', 'schema'], target);
+      }
       seq.items.splice(index + 1, 0, node);
     });
   }

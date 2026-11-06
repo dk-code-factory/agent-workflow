@@ -77,3 +77,34 @@ test('add a parallel block from the palette', async ({ page }) => {
   expect(parallel[0].id).not.toBe(parallel[1].id);
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
+
+test('duplicated nested consumers use contracts bound to their copied producers', async ({ page }) => {
+  const ui = await open(page, `schemas:
+  Shared:
+    type: string
+    enum: ['\${{ steps.collect.outputs.stdout }}']
+jobs:
+  review:
+    steps:
+      - id: reviews
+        parallel:
+          - sequence:
+              - {id: collect, argv: [echo, collect]}
+              - {id: consume, agent: claude, prompt: Review, with: {output: {schema: Shared}}}
+          - {id: other, argv: [echo, other]}
+      - {id: after, agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+`);
+  const before = (await snapshot(page)).source;
+  await step(page, 'reviews parallel block');
+  await ui.getByRole('button', { name: 'Duplicate step', exact: true }).click();
+  const copied = await snapshot(page);
+  expect(copied.workflow.jobs.review.steps[1].parallel[0].sequence[1].with.output.schema).toBe('Shared_copy');
+  expect(copied.workflow.schemas.Shared_copy.enum).toEqual(['${{ steps.collect_copy.outputs.stdout }}']);
+  expect(copied.workflow.schemas.Shared.enum).toEqual(['${{ steps.collect.outputs.stdout }}']);
+  expect(copied.workflow.jobs.review.steps[2].with.output.schema).toBe('Shared');
+  expect(copied.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(copied.source);
+});
