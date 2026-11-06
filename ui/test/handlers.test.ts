@@ -141,6 +141,17 @@ describe('step lifecycle handler authoring', () => {
     expect(parseWorkflow(yaml).diagnostics.some(d => d.code === code && d.severity === 'error')).toBe(true);
   });
 
+  it.each(['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class'])('rejects output traversal through scalar handler context %s', reference => {
+    for (const suffix of ['.outputs.foo', '.outputs.', '.outputs.foo.bar']) {
+      const yaml = source.replace('failed.prompt', reference + suffix);
+      expect(parseWorkflow(yaml).diagnostics).toContainEqual(expect.objectContaining({
+        code: 'handler-context', severity: 'error',
+        message: `Unknown ${reference.split('.')[0]} context field "${reference.split('.')[1]}${suffix}"`,
+      }));
+    }
+    expect(parseWorkflow(source.replace('failed.prompt', reference)).diagnostics).toEqual([]);
+  });
+
   it('keeps handler scopes and contracts inside structural branches through duplicate and undo', () => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
       { id: 'group', parallel: [

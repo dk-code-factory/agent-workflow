@@ -339,7 +339,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. A fallback prompt that traverses outputs beneath a scalar error field shows its complete invalid path in a diagnostic; correcting the reference clears it. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
@@ -354,7 +354,9 @@ fields. Escape discards an uncommitted field edit.
   unsafe failures skip handlers. These hooks are step-only and support agents
   and commands. Handler prompts can reference redacted `failed.id`,
   `failed.uses`, `failed.prompt`, `error.message`, and `error.class`; source
-  completion offers these fields inside a handler. Lists accept nested handlers;
+  completion offers these fields inside a handler. These fields are scalar;
+  accessing an output beneath one produces a diagnostic that clears when I
+  restore the field reference. Lists accept nested handlers;
   the browser diagnoses invalid child steps, timeouts above five minutes, more
   than eight nested levels, and more than 100 handler steps per job. Agent and
   command leaves inside parallel or sequence blocks support the same handlers;

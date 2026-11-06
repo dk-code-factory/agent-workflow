@@ -23,6 +23,19 @@ test('YAML completion offers redacted context inside a nested handler', async ({
   expect((await snapshot(page)).source).toContain('${{ failed.prompt');
 });
 
+test('handler context diagnoses scalar output traversal and clears after correction', async ({ page }) => {
+  const ui = await open(page); await step(page);
+  await ui.getByText('Failure handlers and finalization', { exact: true }).click();
+  await field(page, 'Fallback steps (YAML)', '- agent: codex\n  prompt: "${{ error.message.outputs.foo }}"');
+  await expect(ui.locator('.aw-diagnostics')).toContainText('Unknown error context field "message.outputs.foo"');
+  expect((await snapshot(page)).diagnostics).toContainEqual(expect.objectContaining({
+    code: 'handler-context', path: ['jobs', 'build', 'steps', 0, 'onError', 0, 'prompt'],
+  }));
+  await field(page, 'Fallback steps (YAML)', '- agent: codex\n  prompt: "${{ error.message }}"');
+  await expect(ui.locator('.aw-diagnostics')).not.toContainText('Unknown error context field');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+});
+
 test('author bounded fallback, reporting and finalization without losing nested handlers', async ({ page }) => {
   const ui = await open(page); await step(page);
   await ui.getByText('Failure handlers and finalization', { exact: true }).click();

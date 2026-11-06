@@ -404,8 +404,9 @@ function validateWorkflow(w: Workflow, add: Add) {
         if (ref.scope === 'failed' || ref.scope === 'error') {
           if (path[0] === 'schemas' && !namedStepPath) continue;
           const fields = ref.scope === 'failed' ? ['id', 'uses', 'prompt'] : ['message', 'class'];
+          const field = `${ref.id}${ref.output !== undefined ? `.outputs.${ref.output}` : ''}${ref.tail ?? ''}`;
           if (!inHandlerPath(contextPath)) add('handler-context', `${ref.scope} context is available only inside step handlers`, path);
-          else if (!fields.includes(ref.id) || ref.tail) add('handler-context', `Unknown ${ref.scope} context field "${ref.id}${ref.tail ?? ''}"`, path);
+          else if (!fields.includes(field)) add('handler-context', `Unknown ${ref.scope} context field "${field}"`, path);
           continue;
         }
         if (ref.scope === 'steps' && inHandlerPath(contextPath)) {
