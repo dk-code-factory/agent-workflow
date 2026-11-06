@@ -469,8 +469,9 @@ jobs:
 ```
 
 Declare the `reviewer` role in `agents.yml` as usual. The role name is a literal
-identifier; both `agent` and `prompt` must be YAML strings. The other supported
-task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
+identifier; both `agent` and `prompt` must be YAML strings. Quote date-like
+prompts such as `prompt: "2026-11-06"` so YAML treats them as strings. The other
+supported task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
 An `agent` step may instead use the existing `with.prompt` or `with.message`
 form when top-level `prompt` is absent. Top-level `prompt` requires `agent`.
 Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected

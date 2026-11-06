@@ -462,6 +462,12 @@
     "valid": false
   },
   {
+    "name": "concise-prompt-edited-date",
+    "file": "concise-prompt-edited-date.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
     "name": "input-wait-extra",
     "file": "input-wait-extra.yml",
     "parse": true,

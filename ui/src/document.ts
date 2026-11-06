@@ -1,6 +1,6 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
-import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow } from './validation';
+import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
@@ -145,6 +145,10 @@ export class WorkflowDocument {
       }
     }
     doc.setIn(path, value);
+    if (path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[4] === 'prompt' && typeof value === 'string' && runnerTimestamp(value)) {
+      const node = doc.getIn(path, true);
+      if (isScalar(node)) node.type = 'QUOTE_DOUBLE';
+    }
   }
   setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value), preservesInspectorOwner(path)); }
   moveArgument(path: Path, from: number, to?: number) {

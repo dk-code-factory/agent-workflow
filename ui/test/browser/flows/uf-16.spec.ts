@@ -55,3 +55,16 @@ jobs:
   expect(state.source).toContain('# concise task'); expect(state.source).toContain('# retain option');
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
+
+test('quote a date entered in a concise prompt for runner admission', async ({ page }) => {
+  await page.goto('/test/browser.html'); const ui = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {build: {steps: [{id: review, agent: claude, prompt: Review}]}}' }));
+  await ui.getByRole('button', { name: 'review agent/claude', exact: true }).click();
+  await ui.getByLabel('Prompt', { exact: true }).fill('2026-11-06');
+  await ui.getByLabel('Prompt', { exact: true }).press('Tab');
+  const state = await page.evaluate(() => (window as any).first.getSnapshot());
+  expect(state.source).toContain('prompt: "2026-11-06"');
+  expect(state.workflow.jobs.build.steps[0].prompt).toBe('2026-11-06');
+  expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('2026-11-06');
+});

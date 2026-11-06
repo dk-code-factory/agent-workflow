@@ -82,6 +82,11 @@ test('paste concise agent YAML, diagnose competing declarations and recover the 
   await expect(ui.getByRole('button', { name: /prompt cannot be combined with with.prompt/ })).toBeVisible();
   await yaml.fill(source.replace('prompt: Review', 'prompt: 42'));
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'shape' && d.path.at(-1) === 'prompt')).toBe(true);
+  await yaml.fill(source.replace('prompt: Review', 'prompt: 2026-11-06'));
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'shape' && d.path.at(-1) === 'prompt')).toBe(true);
+  await yaml.fill(source.replace('prompt: Review', 'prompt: "2026-11-06"'));
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].prompt).toBe('2026-11-06');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await yaml.fill(source);
   await ui.getByRole('button', { name: 'ask agent/claude', exact: true }).click();
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review');

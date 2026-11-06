@@ -18,6 +18,22 @@ export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(s
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// Match yaml.v3's allowedTimestampFormats and time.Parse ranges, including
+// short date/time fields and fractional seconds. YAML core leaves these strings.
+export function runnerTimestamp(value: string): boolean {
+  const match = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:([Tt]| +)(\d{1,2}):(\d{1,2}):(\d{1,2})(?:[.,]\d+)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(value);
+  if (!match || match[0] !== value) return false;
+  const [, year, month, day, separator, hour, minute, second, zone] = match;
+  const y = Number(year), m = Number(month), d = Number(day);
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (m < 1 || m > 12 || d < 1 || d > days[m - 1]) return false;
+  if (!separator) return true;
+  if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return false;
+  if (separator.trim() ? !zone : !!zone) return false;
+  return !zone || zone === 'Z' || (Number(zone.slice(1, 3)) <= 24 && Number(zone.slice(4)) <= 60);
+}
+
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
 function runnerInteger(value: unknown, source?: string): number | undefined {
@@ -155,7 +171,10 @@ export function parseWorkflow(source: string): Parsed {
       let valid = true;
       if (typeof shape === 'string') {
         if (shape === 'strict-string') {
-          valid = typeof value === 'string';
+          const node = doc!.getIn(path, true);
+          valid = typeof value === 'string' && isScalar(node)
+            && (!node.tag || node.tag === 'tag:yaml.org,2002:str')
+            && !(node.type === 'PLAIN' && !node.tag && runnerTimestamp(value));
         } else if (shape === 'list') {
           // Go StringList accepts scalar values decoded as strings, trims them,
           // and discards empty/null entries. Use YAML scalar text for numbers

@@ -2,8 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { parseWorkflow } from '../src/validation';
 import { WorkflowDocument } from '../src/document';
 import { stepConversionImpact } from '../src/conversion';
+import { readFileSync } from 'node:fs';
+import timestampCases from '../../testdata/ui-compat/concise-timestamps.json';
 
 describe('concise agent steps', () => {
+  it.each(timestampCases)('matches runner string admission for $value', ({ value, timestamp }) => {
+    const result = parseWorkflow(`jobs:\n  review:\n    steps:\n      - agent: claude\n        prompt: ${value}\n`);
+    expect(result.diagnostics.some(d => d.code === 'shape' && d.path.at(-1) === 'prompt')).toBe(timestamp);
+    const quoted = parseWorkflow(`jobs: {review: {steps: [{agent: claude, prompt: ${JSON.stringify(value)}}]}}`);
+    expect(quoted.diagnostics).toEqual([]);
+  });
+
+  it('accepts explicit string tags and rejects other scalar tags', () => {
+    expect(parseWorkflow('jobs: {review: {steps: [{agent: claude, prompt: !!str 2026-11-06}]}}').diagnostics).toEqual([]);
+    expect(parseWorkflow('jobs: {review: {steps: [{agent: claude, prompt: !custom Review}]}}').diagnostics.some(d => d.code === 'shape')).toBe(true);
+  });
+
+  it('quotes an edited date prompt to match the runner-accepted fixture', () => {
+    const expected = readFileSync(new URL('../../testdata/ui-compat/concise-prompt-edited-date.yml', import.meta.url), 'utf8');
+    const doc = new WorkflowDocument({ source: 'jobs: {review: {steps: [{agent: claude, prompt: Review}]}}' });
+    doc.setField(['jobs', 'review', 'steps', 0, 'prompt'], '2026-11-06');
+    expect(doc.getSnapshot().source).toBe(expected);
+    expect(doc.getSnapshot().diagnostics).toEqual([]);
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![0].prompt).toBe('2026-11-06');
+  });
+
   it.each([
     'agent: claude, prompt: Review',
     'agent: claude, with: {prompt: Review, model: sonnet}',

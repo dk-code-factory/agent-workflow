@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings.
 
 - **Starting point:** I add or select an agent step.
 - **My flow:** I choose the agent under **Step type**, or edit **Action target**
@@ -432,7 +432,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction.
+- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,

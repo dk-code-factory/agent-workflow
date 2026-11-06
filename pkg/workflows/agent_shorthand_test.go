@@ -2,11 +2,49 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestConciseTimestampCompatibility(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/ui-compat/concise-timestamps.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Value     string
+		Timestamp bool
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.Value, func(t *testing.T) {
+			_, err := Parse([]byte("jobs:\n  review:\n    steps:\n      - agent: claude\n        prompt: " + tc.Value + "\n"))
+			if (err != nil) != tc.Timestamp {
+				t.Fatalf("timestamp=%t: Parse error=%v", tc.Timestamp, err)
+			}
+			quoted, err := json.Marshal(tc.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := Parse([]byte("jobs: {review: {steps: [{agent: claude, prompt: " + string(quoted) + "}]}}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(w); err != nil {
+				t.Fatal(err)
+			}
+			if got := w.Jobs["review"].Steps[0].With["prompt"]; got != tc.Value {
+				t.Fatalf("prompt=%v, want %q", got, tc.Value)
+			}
+		})
+	}
+}
 
 func TestConciseAgentNormalizesToLegacyStep(t *testing.T) {
 	legacy := `jobs:
@@ -70,6 +108,7 @@ func TestConciseAgentRejectsInvalidDeclarations(t *testing.T) {
 		{`agent: reviewer, prompt: null`, "prompt must be a string"},
 		{`agent: reviewer, prompt: [hi]`, "prompt must be a string"},
 		{`agent: reviewer, prompt: {text: hi}`, "prompt must be a string"},
+		{`agent: reviewer, prompt: !custom hi`, "prompt must be a string"},
 		{`agent: '', prompt: hi`, "agent requires a valid role name"},
 		{`agent: ' reviewer ', prompt: hi`, "agent requires a valid role name"},
 		{`agent: agent/reviewer, prompt: hi`, "agent requires a valid role name"},
@@ -93,6 +132,7 @@ func TestConciseAgentRejectsInvalidDeclarations(t *testing.T) {
 		`agent: reviewer, with: {prompt: hi}`,
 		`agent: reviewer, with: {message: hi}`,
 		`agent: 'true', prompt: '42'`,
+		`agent: reviewer, prompt: !!str 2026-11-06`,
 	} {
 		w, err := Parse([]byte("jobs: {review: {steps: [{" + step + "}]}}"))
 		if err == nil {
