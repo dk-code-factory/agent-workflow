@@ -22,6 +22,7 @@ test('YAML expression completion follows the cursor and only offers preceding st
   await yaml.fill('jobs:\n  build:\n    steps:\n      - id: earlier\n        argv: [echo]\n      - id: current\n        uses: agent/claude\n        with:\n          prompt: |\n            ${{ steps.');
   await yaml.press('Control+Space');
   await expect(first.getByRole('option', { name: 'steps.earlier.outputs.stdout', exact: true })).toBeVisible();
+  await expect(first.getByRole('option', { name: 'steps.earlier.text', exact: true })).toHaveCount(0);
   await expect(first.getByRole('option', { name: 'steps.current.outputs.stdout', exact: true })).toHaveCount(0);
 });
 

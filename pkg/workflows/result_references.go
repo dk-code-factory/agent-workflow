@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// Quoted operands are consumed first so literal prose never becomes a reference.
-var resultReferencePattern = regexp.MustCompile(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:steps|needs|jobs)\.[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*`)
+var quotedResultOperandPattern = regexp.MustCompile(`^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$`)
 
 func validateResultReferences(w *Workflow) error {
 	check := func(value any, field, jobID string, available int, bare bool) error {
@@ -126,17 +125,8 @@ func walkResultReferences(value any, bare bool, check func([]string) error) erro
 			}
 		}
 		for _, body := range bodies {
-			for _, match := range resultReferencePattern.FindAllStringIndex(body, -1) {
-				token := body[match[0]:match[1]]
-				if token[0] == '\'' || token[0] == '"' {
-					continue
-				}
-				if match[0] > 0 && strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-", rune(body[match[0]-1])) {
-					continue
-				}
-				if err := check(strings.Split(token, ".")); err != nil {
-					return err
-				}
+			if err := walkResultExpression(body, check); err != nil {
+				return err
 			}
 		}
 	case map[string]any:
@@ -159,4 +149,32 @@ func walkResultReferences(value any, bare bool, check func([]string) error) erro
 		}
 	}
 	return nil
+}
+
+// Follow expression operands instead of restricting structured object keys to identifiers.
+func walkResultExpression(expression string, check func([]string) error) error {
+	expression = strings.TrimSpace(expression)
+	if terms, ok := splitExpressionLogicalAND(expression); ok {
+		for _, term := range terms {
+			if err := walkResultExpression(term, check); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if quotedResultOperandPattern.MatchString(expression) {
+		return nil
+	}
+	for _, operator := range []string{" == ", " != ", " >= ", " <= ", " > ", " < "} {
+		if index := strings.Index(expression, operator); index >= 0 {
+			if err := walkResultExpression(expression[:index], check); err != nil {
+				return err
+			}
+			return walkResultExpression(expression[index+len(operator):], check)
+		}
+	}
+	if strings.HasPrefix(expression, "not ") {
+		return walkResultExpression(strings.TrimPrefix(expression, "not "), check)
+	}
+	return check(strings.Split(expression, "."))
 }

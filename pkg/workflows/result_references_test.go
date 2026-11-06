@@ -103,6 +103,17 @@ jobs:
 	for _, test := range []struct{ name, old, replacement, diagnostic string }{
 		{"valid", "", "", ""},
 		{"forward", "prompt: Review", "prompt: '${{ steps.use.text }}'", "unavailable"},
+		{"forward unicode field", "prompt: Review", "prompt: '${{ steps.use.é }}'", "unavailable"},
+		{"forward symbol field", "prompt: Review", "prompt: '${{ steps.use.$value }}'", "unavailable"},
+		{"forward numeric field", "prompt: Review", "prompt: '${{ steps.use.0 }}'", "unavailable"},
+		{"forward spaced field", "prompt: Review", "prompt: '${{ steps.use.with space }}'", "unavailable"},
+		{"forward metadata prefix", "prompt: Review", "prompt: '${{ steps.use.outputsé }}'", "unavailable"},
+		{"forward comparison operand", "prompt: Review", "prompt: '${{ \"literal\" == steps.use.$value == \"literal\" }}'", "unavailable"},
+		{"forward logical operand", "prompt: Review", "prompt: '${{ true and not steps.use.é }}'", "unavailable"},
+		{"unicode dependency field", "needs.producer.steps.review.approved", "needs.producer.steps.review.é", ""},
+		{"symbol dependency field", "needs.producer.steps.review.approved", "needs.producer.steps.review.$value", ""},
+		{"numeric dependency field", "needs.producer.steps.review.approved", "needs.producer.steps.review.0", ""},
+		{"spaced dependency field", "needs.producer.steps.review.approved", "needs.producer.steps.review.with space", ""},
 		{"self", "prompt: Review", "prompt: '${{ steps.review.text }}'", "unavailable"},
 		{"missing", "steps.review.text", "steps.absent.text", "producer step not found"},
 		{"undeclared", "needs: [producer]", "needs: []", "not a declared needs dependency"},
@@ -112,6 +123,9 @@ jobs:
 		{"unknown workflow producer", "jobs.producer.steps.review.text", "jobs.absent.steps.review.text", "producer job not found"},
 		{"incomplete", "needs.producer.steps.review.approved", "needs.producer.steps.review", "step id and result field"},
 		{"quoted", "prompt: Review", "prompt: '${{ \"steps.missing.text\" }}'", ""},
+		{"quoted unicode", "prompt: Review", "prompt: '${{ \"steps.missing.é\" }}'", ""},
+		{"quoted comparison text", "prompt: Review", "prompt: '${{ \"steps.missing.é == steps.use.$value\" }}'", ""},
+		{"data path", "prompt: Review", "prompt: '${{ inputs.config.steps.missing.$value }}'", ""},
 		{"literal", "prompt: Review", "prompt: steps.missing.text", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {

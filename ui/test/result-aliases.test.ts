@@ -75,6 +75,31 @@ describe('named step result references', () => {
     expect(expressionSuggestions(parsed.workflow, 'review')).not.toContain('steps.analyze.text');
     expect(expressionSuggestions(parsed.workflow, 'review', undefined, ['jobs', 'review', 'outputs', 'result'])).toContain('steps.analyze.text');
   });
+  it('only offers concise results for agent producers in every scope', () => {
+    const parsed = parseWorkflow(JSON.stringify({ jobs: {
+      build: { steps: [
+        { id: 'command', argv: ['echo', 'ready'] },
+        { id: 'shell', run: 'echo ready', shell: 'sh' },
+        { id: 'controller', uses: 'workspace/create' },
+        { id: 'legacy', uses: 'agent/claude', with: { prompt: 'Review', output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } } } },
+        { id: 'concise', agent: 'claude', prompt: 'Summarize' },
+        { id: 'consume', agent: 'claude', prompt: 'Read' },
+      ] },
+      consumer: { needs: ['build'], steps: [{ agent: 'claude', prompt: 'Read' }] },
+    } }));
+    expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    for (const [suggestions, prefix] of [
+      [expressionSuggestions(parsed.workflow, 'build', 5), 'steps'],
+      [expressionSuggestions(parsed.workflow, 'consumer', 0), 'needs.build.steps'],
+      [expressionSuggestions(parsed.workflow), 'jobs.build.steps'],
+    ] as const) {
+      expect(suggestions).toContain(`${prefix}.legacy.text`);
+      expect(suggestions).toContain(`${prefix}.legacy.approved`);
+      expect(suggestions).toContain(`${prefix}.concise.text`);
+      for (const id of ['command', 'shell', 'controller']) expect(suggestions).not.toContain(`${prefix}.${id}.text`);
+    }
+    expect(expressionSuggestions(parsed.workflow, 'build', 5)).toContain('steps.command.outputs.stdout');
+  });
   it('keeps data roots and quoted expressions distinct from cross-job step references', () => {
     expect(references("${{ 'needs.review.steps.analyze.text' == needs.review.steps.analyze.outputs.structured.status }}")).toEqual([
       expect.objectContaining({ scope: 'needs', id: 'review', step: 'analyze', output: 'structured', tail: '.status' }),

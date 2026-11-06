@@ -10,8 +10,9 @@ import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
 import type { Path, Step, Workflow } from './types';
 import { hasExpressionReferences, isExpressionPath } from './expressions';
-import { dependencies, effectiveStepID, identifier, mapping } from './validation';
+import { dependencies, effectiveStepID, identifier, mapping, stepAction } from './validation';
 export function stepResultPaths(step: Step): string[] {
+  if (!stepAction(step)?.startsWith('agent/')) return [];
   const result = ['text'];
   const contract = step.with?.output;
   const schema = mapping(contract) ? contract.schema : undefined;
