@@ -354,6 +354,58 @@ work. YAML parsing rejects duplicate keys, aliases, unknown fields, and cycles.
 The small expression grammar supports paths, literals, comparisons, `not`, and
 `and`; it does not add general scripting, parentheses, OR, or expression functions.
 
+### Named step results
+
+Successfully completed agent results have concise paths:
+
+```yaml
+jobs:
+  review:
+    steps:
+      - id: decision
+        agent: reviewer
+        prompt: Review the change.
+        with:
+          output:
+            format: json
+            schema:
+              type: object
+              properties: {approved: {type: boolean}}
+              required: [approved]
+      - agent: reporter
+        prompt: 'Approved: ${{ steps.decision.approved }}'
+  publish:
+    needs: [review]
+    steps:
+      - agent: reporter
+        prompt: 'Review: ${{ needs.review.steps.decision.text }}'
+```
+
+`steps.<id>.<field>` reads a field from the validated structured object, including
+nested paths. `steps.<id>.text` reads the original text result. The `outputs`,
+`status`, and `error` names retain their legacy meanings, and `text` is reserved
+for the text result. Read a colliding structured field explicitly through
+`steps.<id>.outputs.structured.<field>`. Existing mappings and expressions keep
+their meaning; a whole `steps.<id>` value retains its original metadata shape.
+Structured arrays and scalars remain available through `outputs.structured`.
+
+Within a job only preceding completed steps are available; job outputs and
+`repeat.until` can use all completed steps in that attempt. A declared direct
+dependency exposes `needs.<job>.steps.<id>.<field>` without a job output alias.
+Only callable workflow output expressions can use the workflow-wide form
+`jobs.<job>.steps.<id>.<field>`. Unknown producers, forward references, and
+references outside these scopes are rejected before execution. New data aliases
+fail explicitly for skipped or failed steps, absent result fields, or a missing
+text/structured result; legacy `outputs`, `status`, and `error` access keeps its
+existing behavior. Cross-job `steps` paths also allow these explicit metadata
+fields and report missing fields as errors.
+
+Repeated step jobs expose the final attempt's retained steps to dependents.
+Reusable workflow internals remain private, including ordered `for-each` jobs;
+consume their declared workflow outputs or ordered item outputs instead.
+Aliases derive from the existing retained results, so resume uses admitted
+definitions and checkpointed values, with the same redaction and replay rules.
+
 ### Commands and bounded iterations
 
 ```yaml

@@ -260,6 +260,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("step %q not found", parts[1])
 		}
+		if len(parts) > 2 && parts[2] != "" && !legacyStepField(parts[2]) {
+			return lookupStepResult(path, step, parts[2:])
+		}
 		cur = map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}
 		parts = append([]string{parts[0]}, parts[2:]...)
 	case "needs":
@@ -270,6 +273,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("needed job %q not found", parts[1])
 		}
+		if len(parts) > 2 && parts[2] == "steps" {
+			return lookupJobStepResult(path, job, parts[3:])
+		}
 		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error, "items": iterationItemsValue(job.Items), "complete": job.Complete}
 		parts = append([]string{parts[0]}, parts[2:]...)
 	case "jobs":
@@ -279,6 +285,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		job, ok := ctx.Jobs[parts[1]]
 		if !ok {
 			return nil, fmt.Errorf("job %q not found", parts[1])
+		}
+		if len(parts) > 2 && parts[2] == "steps" {
+			return lookupJobStepResult(path, job, parts[3:])
 		}
 		cur = map[string]any{"outputs": job.Outputs, "status": job.Status, "error": job.Error, "items": iterationItemsValue(job.Items), "complete": job.Complete}
 		parts = append([]string{parts[0]}, parts[2:]...)
@@ -303,6 +312,53 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		}
 	}
 	return cur, nil
+}
+
+func legacyStepField(field string) bool {
+	return field == "outputs" || field == "status" || field == "error"
+}
+
+func lookupJobStepResult(path string, job JobExecution, parts []string) (any, error) {
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("%s: step id and result field are required", path)
+	}
+	step, ok := job.Steps[parts[0]]
+	if !ok {
+		return nil, fmt.Errorf("%s: completed step %q not found", path, parts[0])
+	}
+	return lookupStepResult(path, step, parts[1:])
+}
+
+// Aliases are views of retained results, never separately persisted values.
+// Metadata keeps its legacy meaning even when a structured result has the same key.
+func lookupStepResult(path string, step StepExecution, parts []string) (any, error) {
+	var value any
+	if legacyStepField(parts[0]) {
+		value = map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}
+	} else {
+		if step.Status != RunStatusSucceeded {
+			return nil, fmt.Errorf("%s: result unavailable for step %q with status %q", path, step.ID, step.Status)
+		}
+		if parts[0] == "text" {
+			value = map[string]any{"text": step.Outputs["text"]}
+			if _, ok := step.Outputs["text"]; !ok {
+				return nil, fmt.Errorf("%s: step has no text result", path)
+			}
+		} else {
+			value, _ = step.Outputs["structured"].(map[string]any)
+		}
+	}
+	for _, part := range parts {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: cannot access result field %q on non-object", path, part)
+		}
+		value, ok = object[part]
+		if !ok {
+			return nil, fmt.Errorf("%s: result field %q not found", path, part)
+		}
+	}
+	return value, nil
 }
 
 func stringMapAny(values map[string]string) map[string]any {

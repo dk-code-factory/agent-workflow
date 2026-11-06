@@ -1,5 +1,5 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
-import { hasExpressionReferences, isExpressionPath, references } from './expressions';
+import { hasExpressionReferences, isConciseStepReference, isExpressionPath, references } from './expressions';
 import type { Diagnostic, Job, Mapping, Path, Workflow } from './types';
 
 export function diagnosticLabel(value: string | number): string {
@@ -283,6 +283,7 @@ function validateWorkflow(w: Workflow, add: Add) {
     add('host-schema', 'Named schema constraints require runner schema admission', ['schemas', name], undefined, 'host', 'info');
   }
   const dependencySets = new Map<string, Set<string>>();
+  const stepIndexes = new Map(Object.entries(jobs).map(([id, job]) => [id, new Map((job.steps ?? []).map((step, index) => [effectiveStepID(step, index), index]))]));
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
   for (const key of ['schedule', 'channel_message', 'command', 'runtime_event', 'event']) {
@@ -369,13 +370,14 @@ function validateWorkflow(w: Workflow, add: Add) {
   };
   Object.keys(jobs).forEach(visit);
   // Expression paths are inspected, never evaluated. Only recognized dot paths are rewritten.
-  const inspect = (value: unknown, path: Path, jobID?: string, namedContext = false) => {
+  const inspect = (value: unknown, path: Path, jobID?: string, namedStepIndex?: number) => {
     if (typeof value === 'string') {
       if (!hasExpressionReferences(path)) return;
       const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
         // Shared declarations have no local job until an agent uses them.
-        if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs') !== namedContext) continue;
+        if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs' || ref.scope === 'jobs') && namedStepIndex === undefined) continue;
+        if (path[0] === 'schemas' && (ref.scope === 'inputs' || ref.scope === 'secrets') && namedStepIndex !== undefined) continue;
         if (ref.scope === 'inputs' || ref.scope === 'secrets') {
           // Manual runs may receive inputs and secrets from their host. A
           // callable interface makes these names statically knowable.
@@ -386,26 +388,42 @@ function validateWorkflow(w: Workflow, add: Add) {
           }
           continue;
         }
-        const exists = ref.scope === 'steps' ? jobID && jobs[jobID]?.steps?.some((s, i) => effectiveStepID(s, i) === ref.id) : Object.hasOwn(jobs, ref.id);
+        const exists = ref.scope === 'steps' ? jobID && stepIndexes.get(jobID)?.has(ref.id) : Object.hasOwn(jobs, ref.id);
         if (!exists) add('expression-reference', `Unknown ${ref.scope} reference "${ref.id}"`, path);
         if (exists && ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id) && !warnedProducers.has(ref.id)) {
           warnedProducers.add(ref.id);
           add('expression-dependency', `Job "${diagnosticLabel(ref.id)}" is missing from Dependencies of "${diagnosticLabel(jobID)}". Review Dependencies and explicitly add the producer if needed.`, path, undefined, 'browser', 'warning');
         }
-        if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
+        if (exists && (ref.scope === 'jobs' || ref.scope === 'needs') && ref.step === undefined && ref.output !== undefined && !jobs[ref.id].uses && !Object.hasOwn(jobs[ref.id].outputs ?? {}, ref.output)) {
           add('expression-reference', `Unknown output "${ref.output}" of job "${ref.id}"`, path);
+        }
+        if (ref.step !== undefined) {
+          if (ref.scope === 'jobs' && jobID || ref.scope === 'needs' && !jobID) add('expression-reference', `${ref.scope} step results are unavailable in this scope`, path);
+          if (ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id)) add('expression-reference', `Step results require a declared dependency on "${ref.id}"`, path);
+          if (exists) {
+            const producer = jobs[ref.id];
+            if (producer.uses || producer['for-each']) add('expression-reference', `Job "${ref.id}" does not expose individual step results; use its outputs or items`, path);
+            else if (!stepIndexes.get(ref.id)?.has(ref.step)) add('expression-reference', `Unknown step "${ref.step}" of job "${ref.id}"`, path);
+          }
+        }
+        if (exists && isConciseStepReference(ref) && jobID) {
+          const index = stepIndexes.get(jobID)?.get(ref.id) ?? -1;
+          const consumerIndex = namedStepIndex ?? (path[2] === 'steps' && typeof path[3] === 'number' ? path[3] : undefined);
+          const inStep = consumerIndex !== undefined;
+          const afterSteps = path[2] === 'outputs' || path[2] === 'repeat' && path[3] === 'until';
+          if (!inStep && !afterSteps || inStep && index >= consumerIndex) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
         }
       }
     }
-    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID, namedContext));
-    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID, namedContext));
+    else if (Array.isArray(value)) value.forEach((item, i) => inspect(item, [...path, i], jobID, namedStepIndex));
+    else if (mapping(value)) Object.entries(value).forEach(([key, item]) => inspect(item, [...path, key], path.length === 1 && path[0] === 'jobs' ? key : jobID, namedStepIndex));
   };
   inspect(w, []);
-  for (const [jobID, job] of Object.entries(jobs)) for (const step of job.steps ?? []) {
+  for (const [jobID, job] of Object.entries(jobs)) for (const [index, step] of (job.steps ?? []).entries()) {
     const output = step.with?.output;
     if (!stepAction(step)?.startsWith('agent/') || !mapping(output) || typeof output.schema !== 'string') continue;
     const declaration = w.schemas?.[output.schema];
-    if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, true);
+    if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, index);
   }
 }
 function validDuration(value: string) {
