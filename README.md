@@ -354,6 +354,10 @@ work. YAML parsing rejects duplicate keys, aliases, unknown fields, and cycles.
 The small expression grammar supports paths, literals, comparisons, `not`, and
 `and`; it does not add general scripting, parentheses, OR, or expression functions.
 
+Agent and command steps can declare `onError` fallback, `onFailure` reporting,
+and bounded `finally` cleanup lists. See [YAML step failure handlers](docs/YAML_HANDLERS.md)
+for output replacement, expression scope, cancellation, and durable recovery.
+
 ### Named step results
 
 Successfully completed agent results have concise paths:

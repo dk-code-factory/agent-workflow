@@ -84,6 +84,55 @@ func validateResultReferences(w *Workflow) error {
 				return err
 			}
 		}
+		available := map[string]bool{}
+		var handlers func([]Step, map[string]bool, string) error
+		handlers = func(steps []Step, inherited map[string]bool, path string) error {
+			local := map[string]bool{}
+			for key, value := range inherited {
+				local[key] = value
+			}
+			for index, step := range steps {
+				sid := stepID(step, index)
+				for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+					err := walkResultReferences(value, field == "if", func(parts []string) error {
+						if len(parts) > 1 && parts[0] == "steps" {
+							if !local[parts[1]] {
+								return fmt.Errorf("%s.%s: step result %s unavailable before completion", path, field, parts[1])
+							}
+							return nil
+						}
+						if len(parts) > 0 && (parts[0] == "needs" || parts[0] == "jobs") {
+							return check("${{ "+strings.Join(parts, ".")+" }}", path+"."+field, id, len(job.Steps), false)
+						}
+						return nil
+					})
+					if err != nil {
+						return err
+					}
+				}
+				for _, entry := range []struct {
+					name  string
+					steps []Step
+				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+					if err := handlers(entry.steps, local, path+"."+sid+"."+entry.name); err != nil {
+						return err
+					}
+				}
+				local[sid] = true
+			}
+			return nil
+		}
+		for index, step := range job.Steps {
+			for _, entry := range []struct {
+				name  string
+				steps []Step
+			}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+				if err := handlers(entry.steps, available, prefix+"."+stepID(step, index)+"."+entry.name); err != nil {
+					return err
+				}
+			}
+			available[stepID(step, index)] = true
+		}
 		for index, source := range job.Steps {
 			step, err := normalizeAgentStep(source)
 			if err != nil {

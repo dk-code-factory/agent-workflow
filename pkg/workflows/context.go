@@ -27,7 +27,16 @@ type Delivery struct {
 	ReplyHandles                                                    map[string]string
 }
 
+type StepLifecycle struct {
+	OriginalError string                     `json:"original_error,omitempty"`
+	OriginalClass string                     `json:"original_class,omitempty"`
+	Deadline      time.Time                  `json:"deadline"`
+	Handlers      map[string][]StepExecution `json:"handlers,omitempty"`
+	Skipped       map[string]string          `json:"skipped,omitempty"`
+}
+
 type StepExecution struct {
+	Lifecycle    *StepLifecycle `json:"lifecycle,omitempty"`
 	FailureClass string         `json:"failure_class,omitempty"`
 	AttemptID    string         `json:"attempt_id,omitempty"`
 	StartedAt    time.Time      `json:"started_at,omitempty"`

@@ -314,6 +314,20 @@ func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, ite
 		if err = decodeJSONWithNumbers(b, &last); err != nil {
 			return last, false, err
 		}
+		if last.Phase == "lifecycle_completed" || last.Phase == "lifecycle_task_completed" {
+			if fingerprint != "" && last.InputFingerprint != fingerprint {
+				return last, false, fmt.Errorf("%w: lifecycle effect input changed for %s/%s", ErrActionIntegrity, job, step)
+			}
+			if logical != "" && last.RunID != run && last.Status != RunStatusSucceeded {
+				return last, false, fmt.Errorf("%w: incomplete lifecycle item requires application reconciliation before fresh physical replay", ErrActionIntegrity)
+			}
+		}
+		if last.Phase == "lifecycle_completed" {
+			return last, true, nil
+		}
+		if last.Phase == "lifecycle_task_completed" {
+			return last, false, nil
+		}
 		if last.Status == RunStatusSucceeded || last.Status == RunStatusSkipped {
 			if fingerprint == "" || last.InputFingerprint == fingerprint {
 				return last, true, nil

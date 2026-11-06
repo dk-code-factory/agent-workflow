@@ -339,13 +339,24 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
+  For an agent or command step, I open **Failure handlers and finalization**,
+  set **Handler timeout**, and author **Fallback steps (YAML)**, **Failure
+  reporting steps (YAML)**, or **Finalization steps (YAML)** as step lists.
 - **What I see:** The YAML updates and the graph shows the corresponding
   condition or error-handling indicator. The UI does not evaluate the condition
   or predict its execution result.
+  `onError` can replace a failed task result, `onFailure` reports a remaining
+  failure, and `finally` runs after success or safe failure. Cancellation and
+  unsafe failures skip handlers. These hooks are step-only and support agents
+  and commands. Handler prompts can reference redacted `failed.id`,
+  `failed.uses`, `failed.prompt`, `error.message`, and `error.class`; source
+  completion offers these fields inside a handler. Lists accept nested handlers;
+  the browser diagnoses invalid child steps, timeouts above five minutes, more
+  than eight nested levels, and more than 100 handler steps per job.
 
 ### UF-23 — Insert a reference into an expression
 

@@ -1,6 +1,6 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
-import { hasExpressionReferences, isConciseStepReference, isExpressionPath, references } from './expressions';
-import type { Diagnostic, Job, Mapping, Path, Workflow } from './types';
+import { completedSteps, hasExpressionReferences, isConciseStepReference, isExpressionPath, references, stepPathLength } from './expressions';
+import type { Diagnostic, Job, Mapping, Path, Step, Workflow } from './types';
 
 export function diagnosticLabel(value: string | number): string {
   const text = String(value);
@@ -59,6 +59,10 @@ type Shape = 'strict-string' | 'string' | 'boolean' | 'integer' | 'any' | 'list'
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
+const stepShape: { [key: string]: Shape } = { id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
+  argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string' };
+export const handlerKinds = ['onError', 'onFailure', 'finally'] as const;
+for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 const schema: Shape = {
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
@@ -74,8 +78,7 @@ const schema: Shape = {
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
     'for-each': { items: 'any', key: 'string' },
-    steps: [{ id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
-      argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string' }],
+    steps: [stepShape],
   } },
 };
 export interface Parsed { doc?: Document; workflow?: Workflow; diagnostics: Diagnostic[]; usable: boolean }
@@ -317,9 +320,11 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!job.steps?.length) add('steps', 'Job requires steps', [...p, 'steps']);
       if ((mapping(job.with) && Object.keys(job.with).length) || job.secrets != null) add('job-kind', 'with/secrets require a reusable workflow', p);
     }
+    let handlerCount = 0;
+    const validateSteps = (steps: Step[], parent: Path, depth = 0) => {
     const seen = new Set<string>();
-    job.steps?.forEach((step, i) => {
-      const sp = [...p, 'steps', i];
+    steps.forEach((step, i) => {
+      const sp = [...parent, i];
       const sid = effectiveStepID(step, i);
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
@@ -331,6 +336,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
       const command = !!(step.argv?.length || step.run);
+      if ((depth > 0 || handlerKinds.some(kind => step[kind]?.length)) && !command && !uses?.startsWith('agent/')) add('handler-action', 'Lifecycle handlers support agent and command steps only', sp);
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {
         if (uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
@@ -360,7 +366,16 @@ function validateWorkflow(w: Workflow, add: Add) {
         }
       }
       if (mapping(step.context) && Object.values(step.context).some(Boolean)) add('standalone', 'Step context is unsupported standalone', [...sp, 'context']);
+      if (step.handlerTimeout && (!validDuration(step.handlerTimeout, 300000000000n) || !handlerKinds.some(kind => step[kind]?.length))) add('handler-timeout', 'Handler timeout requires handlers and a positive duration no greater than 5m', [...sp, 'handlerTimeout']);
+      for (const kind of handlerKinds) if (step[kind]?.length) {
+        handlerCount += step[kind]!.length;
+        if (depth >= 8) add('handler-depth', 'Handler nesting exceeds 8', [...sp, kind]);
+        else validateSteps(step[kind]!, [...sp, kind], depth + 1);
+      }
     });
+    };
+    validateSteps(job.steps ?? [], [...p, 'steps']);
+    if (handlerCount > 100) add('handler-count', 'A job cannot contain more than 100 handler steps', [...p, 'steps']);
   }
   const state = new Map<string, number>();
   const visit = (id: string) => {
@@ -375,6 +390,17 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!hasExpressionReferences(path)) return;
       const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
+        if (ref.scope === 'failed' || ref.scope === 'error') {
+          const length = stepPathLength(path);
+          const fields = ref.scope === 'failed' ? ['id', 'uses', 'prompt'] : ['message', 'class'];
+          if (length === undefined || length <= 4) add('handler-context', `${ref.scope} context is available only inside step handlers`, path);
+          else if (!fields.includes(ref.id) || ref.tail) add('handler-context', `Unknown ${ref.scope} context field "${ref.id}${ref.tail ?? ''}"`, path);
+          continue;
+        }
+        if (ref.scope === 'steps' && (stepPathLength(path) ?? 0) > 4) {
+          if (!completedSteps(w, path).has(ref.id)) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
+          continue;
+        }
         // Shared declarations have no local job until an agent uses them.
         if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs' || ref.scope === 'jobs') && namedStepIndex === undefined) continue;
         if (path[0] === 'schemas' && (ref.scope === 'inputs' || ref.scope === 'secrets') && namedStepIndex !== undefined) continue;
@@ -426,7 +452,7 @@ function validateWorkflow(w: Workflow, add: Add) {
     if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, index);
   }
 }
-function validDuration(value: string) {
+function validDuration(value: string, maximum = 9223372036854775807n) {
   if (!/^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/.test(value)) return false;
   const units: Record<string, bigint> = { ns: 1n, us: 1000n, 'µs': 1000n, 'μs': 1000n, ms: 1000000n, s: 1000000000n, m: 60000000000n, h: 3600000000000n };
   let total = 0n;
@@ -436,7 +462,7 @@ function validDuration(value: string) {
     if (integer.length > 19) return false;
     const digits = fraction.slice(0, 19);
     total += BigInt(integer) * units[match[2]] + (digits ? BigInt(digits) * units[match[2]] / (10n ** BigInt(digits.length)) : 0n);
-    if (total > 9223372036854775807n) return false;
+    if (total > maximum) return false;
   }
   return total > 0n;
 }

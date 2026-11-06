@@ -1,6 +1,6 @@
-import type { Path } from './types';
+import type { Path, Step, Workflow } from './types';
 export interface Reference {
-  scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets'; id: string;
+  scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets' | 'failed' | 'error'; id: string;
   step?: string; output?: string; tail?: string; offset: number;
 }
 const expressionSpace = /^\p{White_Space}$/u;
@@ -76,7 +76,7 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
         pending.push({ body: expression.slice(4), offset: offset + 4, scanAnd: false, scanComparison: false });
         continue;
       }
-      const match = /^(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)(\.[\s\S]*)?$/.exec(expression);
+      const match = /^(jobs|needs|steps|inputs|secrets|failed|error)\.([A-Za-z_][A-Za-z0-9_-]*)(\.[\s\S]*)?$/.exec(expression);
       if (!match) { result.push(expression); continue; }
       const [, scope, id, suffix = ''] = match;
       const parts = suffix.split('.').slice(1);
@@ -113,11 +113,31 @@ export function references(text: string, bareExpression = false) {
   return result;
 }
 export function pathJob(path: Path): string | undefined { return path[0] === 'jobs' ? String(path[1]) : undefined; }
+// Locate the innermost step without confusing nested parameter keys with hooks.
+export function stepPathLength(path: Path): number | undefined {
+  if (path[0] !== 'jobs' || path[2] !== 'steps' || typeof path[3] !== 'number') return;
+  let length = 4;
+  while (['onError', 'onFailure', 'finally'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
+  return length;
+}
+export function completedSteps(workflow: Workflow, path: Path): Map<string, { step: Step; path: Path }> {
+  const result = new Map<string, { step: Step; path: Path }>();
+  const length = stepPathLength(path);
+  if (length === undefined) return result;
+  let sequence = workflow.jobs[String(path[1])]?.steps ?? [];
+  for (let at = 3; at < length; at += 2) {
+    const index = Number(path[at]);
+    sequence.slice(0, index).forEach((step, i) => result.set(String(step.id || `step_${i + 1}`), { step, path: [...path.slice(0, at), i] }));
+    if (at + 2 < length) sequence = sequence[index]?.[path[at + 1] as 'onError' | 'onFailure' | 'finally'] ?? [];
+  }
+  return result;
+}
 export function isExpressionPath(path: Path): boolean {
+  const step = stepPathLength(path);
   return path[0] === 'jobs' && (path.length === 3 && path[2] === 'if'
     || path.length === 4 && path[2] === 'for-each' && path[3] === 'key'
     || path.length === 4 && path[2] === 'repeat' && path[3] === 'until'
-    || path.length === 5 && path[2] === 'steps' && path[4] === 'if');
+    || step !== undefined && path.length === step + 1 && path[step] === 'if');
 }
 // Keep literal metadata and callable defaults intact. These are the value
 // fields rendered by executor.go and command.go; with mappings are recursive,
@@ -131,8 +151,9 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path.length === 4 && path[2] === 'for-each' && path[3] === 'items') return true;
   if ((path[2] === 'with' || path[2] === 'secrets') && path.length >= 4) return true;
   if (path[2] === 'outputs' && path.length === 4) return true;
-  if (path[2] !== 'steps' || typeof path[3] !== 'number') return false;
-  return (path[4] === 'with' && path.length >= 6)
-    || (path[4] === 'argv' && path.length === 6 && typeof path[5] === 'number')
-    || (path.length === 5 && (path[4] === 'run' || path[4] === 'working-directory' || path[4] === 'prompt'));
+  const step = stepPathLength(path);
+  if (step === undefined) return false;
+  return (path[step] === 'with' && path.length >= step + 2)
+    || (path[step] === 'argv' && path.length === step + 2 && typeof path[step + 1] === 'number')
+    || (path.length === step + 1 && (path[step] === 'run' || path[step] === 'working-directory' || path[step] === 'prompt'));
 }

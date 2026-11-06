@@ -9,7 +9,7 @@ import { yaml } from '@codemirror/lang-yaml';
 import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
 import type { Path, Step, Workflow } from './types';
-import { hasExpressionReferences, isExpressionPath } from './expressions';
+import { completedSteps, hasExpressionReferences, isExpressionPath, stepPathLength } from './expressions';
 import { dependencies, effectiveStepID, identifier, mapping, stepAction } from './validation';
 export const expressionSuggestionLimit = 200;
 export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
@@ -59,6 +59,8 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   };
   for (const id of Object.keys(callable?.inputs ?? {})) if (add(`inputs.${id}`)) return result;
   const job = jobID ? workflow.jobs[jobID] : undefined;
+  const handler = path !== undefined && (stepPathLength(path) ?? 0) > 4;
+  if (handler) for (const value of ['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
     const producer = workflow.jobs[dep];
     for (const output of Object.keys(producer?.outputs ?? {})) if (add(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`)) return result;
@@ -68,6 +70,14 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   }
   if (job?.['for-each']) for (const value of ['item', 'iteration.key', 'iteration.number']) if (add(value)) return result;
   const conciseLocal = stepIndex !== undefined || path?.[2] === 'outputs' || path?.[2] === 'repeat' && path[3] === 'until';
+  if (handler) {
+    for (const [id, { step }] of completedSteps(workflow, path!)) {
+      const base = `steps.${id}`;
+      if (addStep(step, base)) return result;
+      for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+    }
+    return result;
+  }
   for (const [i, step] of (job?.steps ?? []).entries()) {
     if (stepIndex !== undefined && i >= stepIndex) break;
     const base = `steps.${effectiveStepID(step, i)}`;

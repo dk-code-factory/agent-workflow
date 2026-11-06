@@ -9,6 +9,9 @@ export function stepConversion(step: Step, kind: string) {
   const command = kind === 'argv' || kind === 'shell';
   const remove: Path[] = [];
   const set: { path: Path; value: unknown }[] = [];
+  if (!command && !kind.startsWith('agent/')) for (const key of ['onError', 'onFailure', 'finally', 'handlerTimeout']) {
+    if (Object.hasOwn(step, key)) remove.push([key]);
+  }
   for (const key of command ? ['uses', 'agent', 'prompt', 'with'] : ['argv', 'run', 'shell', 'timeout', 'working-directory']) {
     if (Object.hasOwn(step, key)) remove.push([key]);
   }

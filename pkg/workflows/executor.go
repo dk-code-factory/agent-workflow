@@ -124,22 +124,14 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if err := Validate(w); err != nil {
 			return fmt.Errorf("%s: %w", ref, err)
 		}
-		// Expand local names before snapshotting. Resume uses admitted definitions.
+		// Expand local names before snapshotting, including handler contracts.
 		for id, job := range w.Jobs {
-			for i, step := range job.Steps {
-				if !strings.HasPrefix(step.Uses, "agent/") {
-					continue
-				}
-				output, err := resolveNamedOutput(w, step.With["output"])
-				if err != nil {
-					return err
-				}
-				if output != nil {
-					job.Steps[i].With["output"] = output
-				}
+			if err := expandLifecycleOutputs(w, job.Steps); err != nil {
+				return err
 			}
 			w.Jobs[id] = job
 		}
+
 		if len(all) >= 128 {
 			return fmt.Errorf("workflow closure exceeds 128 definitions")
 		}
@@ -165,7 +157,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 	if catalog, ok := e.Agents.(interface{ HasAgent(string) bool }); ok {
 		for ref, w := range all {
 			for _, j := range w.Jobs {
-				for _, s := range j.Steps {
+				for _, s := range lifecycleSteps(j.Steps) {
 					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(strings.TrimPrefix(s.Uses, "agent/")) {
 						return nil, fmt.Errorf("%s references unconfigured agent %q", ref, s.Uses)
 					}
@@ -667,7 +659,9 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			out.Steps[sid] = result
 			continue
 		}
-		if err == nil && step.Uses == "input/wait" {
+		if err == nil && hasLifecycle(step) {
+			result, err = e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)
+		} else if err == nil && step.Uses == "input/wait" {
 			result, err = e.executeInputWait(ctx, step, ec)
 		} else if err == nil && isApplicationAction(step.Uses) {
 			result, err = e.executeApplicationAction(ctx, step, ec)

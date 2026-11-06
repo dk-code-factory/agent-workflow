@@ -51,6 +51,16 @@ func Parse(data []byte) (*Workflow, error) {
 // normalizeAgentStep lowers the authoring shorthand to the existing execution
 // contract before role admission, expression evaluation, and durable snapshots.
 func normalizeAgentStep(step Step) (Step, error) {
+	for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+		for i := range list {
+			normalized, err := normalizeAgentStep(list[i])
+			if err != nil {
+				return Step{}, err
+			}
+			list[i] = normalized
+		}
+	}
+
 	if step.Agent == nil {
 		if step.Prompt != nil {
 			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")

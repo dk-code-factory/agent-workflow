@@ -71,128 +71,14 @@ func Validate(w *Workflow) error {
 				return fmt.Errorf("job %s: with/secrets require a reusable workflow", id)
 			}
 		}
-		seen := map[string]bool{}
-		for i, step := range job.Steps {
-			sid := stepID(step, i)
-			var err error
-			step, err = normalizeAgentStep(step)
-			if err != nil {
-				return fmt.Errorf("job %s step %s: %w", id, sid, err)
-			}
-			if !idPattern.MatchString(sid) || seen[sid] {
-				return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
-			}
-			seen[sid] = true
-			command := len(step.Argv) > 0 || step.Run != ""
-			if command {
-				if step.Uses != "" || len(step.With) > 0 {
-					return fmt.Errorf("step %s: commands cannot have uses or with", sid)
-				}
-				if step.Run != "" && (step.Shell == "" || len(step.Argv) > 0) {
-					return fmt.Errorf("step %s: run requires an explicit shell and cannot have argv", sid)
-				}
-				if step.Run == "" && step.Shell != "" {
-					return fmt.Errorf("step %s: shell requires run", sid)
-				}
-				if step.Context != (RunContext{}) {
-					return fmt.Errorf("step %s: command context is unsupported", sid)
-				}
-				if step.Timeout != "" {
-					d, err := time.ParseDuration(step.Timeout)
-					if err != nil || d <= 0 {
-						return fmt.Errorf("step %s: invalid timeout", sid)
-					}
-				}
-				continue
-			}
-			if step.Shell != "" || step.Timeout != "" || step.WorkingDirectory != "" {
-				return fmt.Errorf("step %s: command fields require argv or run", sid)
-			}
-			if step.Uses == "input/wait" {
-				for key := range step.With {
-					if key != "prompt" && key != "evidence-id" && key != "payload" {
-						return fmt.Errorf("step %s: unsupported input/wait parameter %q", sid, key)
-					}
-				}
-				for _, key := range []string{"prompt", "evidence-id"} {
-					v, ok := step.With[key].(string)
-					if !ok || strings.TrimSpace(v) == "" {
-						return fmt.Errorf("step %s: input/wait requires string %s", sid, key)
-					}
-				}
-				if step.Context != (RunContext{}) {
-					return fmt.Errorf("step %s: input/wait cannot use session context", sid)
-				}
-				continue
-			}
-			if isApplicationAction(step.Uses) {
-				if !idPattern.MatchString(strings.TrimPrefix(step.Uses, "action/")) {
-					return fmt.Errorf("step %s: invalid registered action name", sid)
-				}
-				if step.Context != (RunContext{}) {
-					return fmt.Errorf("step %s: registered actions cannot use session context", sid)
-				}
-				continue
-			}
-			if IsControllerAction(step.Uses) {
-				allowed := map[string]bool{}
-				switch step.Uses {
-				case "workspace/create":
-					allowed = map[string]bool{"commit": true, "independent": true}
-				case "workspace/snapshot":
-					allowed = map[string]bool{"commit": true}
-				case "workspace/integrate":
-					allowed = map[string]bool{"path": true, "commits": true}
-				case "git/commit":
-					allowed = map[string]bool{"path": true, "message": true}
-				case "github/pr":
-					allowed = map[string]bool{"path": true, "commit": true, "title": true, "body": true}
-				}
-				for key := range step.With {
-					if !allowed[key] {
-						return fmt.Errorf("step %s: unsupported controller action parameter %q", sid, key)
-					}
-				}
-				if step.Uses == "workspace/integrate" || step.Uses == "git/commit" || step.Uses == "github/pr" {
-					if step.With["path"] == nil {
-						return fmt.Errorf("step %s requires managed path", sid)
-					}
-				}
-				if step.Uses == "github/pr" && (step.With["commit"] == nil || step.With["title"] == nil) {
-					return fmt.Errorf("step %s requires commit and title", sid)
-				}
-				if step.Uses == "git/commit" && step.With["message"] == nil {
-					return fmt.Errorf("step %s requires message", sid)
-				}
-				if step.Context != (RunContext{}) {
-					return fmt.Errorf("controller actions cannot use session context")
-				}
-				continue
-			}
-			if !strings.HasPrefix(step.Uses, "agent/") || !idPattern.MatchString(strings.TrimPrefix(step.Uses, "agent/")) {
-				return fmt.Errorf("step %s: only agent/<name> targets are supported", sid)
-			}
-			if step.Context != (RunContext{}) {
-				return fmt.Errorf("step %s: session/delivery context requires PicoClaw", sid)
-			}
-			for key := range step.With {
-				switch key {
-				case "model", "prompt", "message", "workspace", "output":
-				default:
-					return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
-				}
-			}
-			if step.With["prompt"] == nil && step.With["message"] == nil {
-				return fmt.Errorf("step %s requires prompt or message", sid)
-			}
-			output, err := resolveNamedOutput(w, step.With["output"])
-			if err == nil {
-				_, err = ParseAgentOutputContract(output)
-			}
-			if err != nil {
-				return fmt.Errorf("jobs.%s.steps.%s.with.output: %w", id, sid, err)
-			}
+		count := 0
+		if err := validateLifecycleShape(job.Steps, 0, &count); err != nil {
+			return fmt.Errorf("job %s: %w", id, err)
 		}
+		if err := validateStepSequence(w, id, job.Steps); err != nil {
+			return err
+		}
+
 	}
 	_, err := topoJobs(w.Jobs)
 	if err != nil {
@@ -244,4 +130,137 @@ func topoJobs(jobs map[string]Job) ([]string, error) {
 		}
 	}
 	return order, nil
+}
+
+func validateStepSequence(w *Workflow, id string, steps []Step) error {
+	seen := map[string]bool{}
+	for i, step := range steps {
+		sid := stepID(step, i)
+		var err error
+		step, err = normalizeAgentStep(step)
+		if err != nil {
+			return fmt.Errorf("job %s step %s: %w", id, sid, err)
+		}
+		if !idPattern.MatchString(sid) || seen[sid] {
+			return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
+		}
+		seen[sid] = true
+		command := len(step.Argv) > 0 || step.Run != ""
+		if command {
+			if step.Uses != "" || len(step.With) > 0 {
+				return fmt.Errorf("step %s: commands cannot have uses or with", sid)
+			}
+			if step.Run != "" && (step.Shell == "" || len(step.Argv) > 0) {
+				return fmt.Errorf("step %s: run requires an explicit shell and cannot have argv", sid)
+			}
+			if step.Run == "" && step.Shell != "" {
+				return fmt.Errorf("step %s: shell requires run", sid)
+			}
+			if step.Context != (RunContext{}) {
+				return fmt.Errorf("step %s: command context is unsupported", sid)
+			}
+			if step.Timeout != "" {
+				d, err := time.ParseDuration(step.Timeout)
+				if err != nil || d <= 0 {
+					return fmt.Errorf("step %s: invalid timeout", sid)
+				}
+			}
+			continue
+		}
+		if step.Shell != "" || step.Timeout != "" || step.WorkingDirectory != "" {
+			return fmt.Errorf("step %s: command fields require argv or run", sid)
+		}
+		if step.Uses == "input/wait" {
+			for key := range step.With {
+				if key != "prompt" && key != "evidence-id" && key != "payload" {
+					return fmt.Errorf("step %s: unsupported input/wait parameter %q", sid, key)
+				}
+			}
+			for _, key := range []string{"prompt", "evidence-id"} {
+				v, ok := step.With[key].(string)
+				if !ok || strings.TrimSpace(v) == "" {
+					return fmt.Errorf("step %s: input/wait requires string %s", sid, key)
+				}
+			}
+			if step.Context != (RunContext{}) {
+				return fmt.Errorf("step %s: input/wait cannot use session context", sid)
+			}
+			continue
+		}
+		if isApplicationAction(step.Uses) {
+			if !idPattern.MatchString(strings.TrimPrefix(step.Uses, "action/")) {
+				return fmt.Errorf("step %s: invalid registered action name", sid)
+			}
+			if step.Context != (RunContext{}) {
+				return fmt.Errorf("step %s: registered actions cannot use session context", sid)
+			}
+			continue
+		}
+		if IsControllerAction(step.Uses) {
+			allowed := map[string]bool{}
+			switch step.Uses {
+			case "workspace/create":
+				allowed = map[string]bool{"commit": true, "independent": true}
+			case "workspace/snapshot":
+				allowed = map[string]bool{"commit": true}
+			case "workspace/integrate":
+				allowed = map[string]bool{"path": true, "commits": true}
+			case "git/commit":
+				allowed = map[string]bool{"path": true, "message": true}
+			case "github/pr":
+				allowed = map[string]bool{"path": true, "commit": true, "title": true, "body": true}
+			}
+			for key := range step.With {
+				if !allowed[key] {
+					return fmt.Errorf("step %s: unsupported controller action parameter %q", sid, key)
+				}
+			}
+			if step.Uses == "workspace/integrate" || step.Uses == "git/commit" || step.Uses == "github/pr" {
+				if step.With["path"] == nil {
+					return fmt.Errorf("step %s requires managed path", sid)
+				}
+			}
+			if step.Uses == "github/pr" && (step.With["commit"] == nil || step.With["title"] == nil) {
+				return fmt.Errorf("step %s requires commit and title", sid)
+			}
+			if step.Uses == "git/commit" && step.With["message"] == nil {
+				return fmt.Errorf("step %s requires message", sid)
+			}
+			if step.Context != (RunContext{}) {
+				return fmt.Errorf("controller actions cannot use session context")
+			}
+			continue
+		}
+		if !strings.HasPrefix(step.Uses, "agent/") || !idPattern.MatchString(strings.TrimPrefix(step.Uses, "agent/")) {
+			return fmt.Errorf("step %s: only agent/<name> targets are supported", sid)
+		}
+		if step.Context != (RunContext{}) {
+			return fmt.Errorf("step %s: session/delivery context requires PicoClaw", sid)
+		}
+		for key := range step.With {
+			switch key {
+			case "model", "prompt", "message", "workspace", "output":
+			default:
+				return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
+			}
+		}
+		if step.With["prompt"] == nil && step.With["message"] == nil {
+			return fmt.Errorf("step %s requires prompt or message", sid)
+		}
+		output, err := resolveNamedOutput(w, step.With["output"])
+		if err == nil {
+			_, err = ParseAgentOutputContract(output)
+		}
+		if err != nil {
+			return fmt.Errorf("jobs.%s.steps.%s.with.output: %w", id, sid, err)
+		}
+	}
+	for _, step := range steps {
+		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+			if err := validateStepSequence(w, id, list); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

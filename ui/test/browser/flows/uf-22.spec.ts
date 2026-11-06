@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, job, step } from './harness';
+import { open, snapshot, field, job, step, downloadText } from './harness';
 
 test('configure job and step conditions and error handling', async ({ page }) => {
   const ui = await open(page); await job(page);
@@ -9,4 +9,35 @@ test('configure job and step conditions and error handling', async ({ page }) =>
   const build = (await snapshot(page)).workflow.jobs.build;
   expect(build).toMatchObject({ if: 'true', 'continue-on-error': true, steps: [{ if: 'false', 'continue-on-error': true }] });
   await expect(ui.getByRole('article', { name: 'Job build', exact: true })).toContainText('continue on error');
+});
+
+test('YAML completion offers redacted context inside a nested handler', async ({ page }) => {
+  const ui = await open(page);
+  await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+  const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
+  await yaml.fill('jobs:\n  build:\n    steps:\n      - agent: claude\n        prompt: Work\n        onError:\n          - agent: codex\n            prompt: |\n              ${{ failed.');
+  await yaml.press('Control+Space');
+  await expect(ui.getByRole('option', { name: 'failed.prompt', exact: true })).toBeVisible();
+  await expect(ui.getByRole('option', { name: 'failed.credentials', exact: true })).toHaveCount(0);
+  await ui.getByRole('option', { name: 'failed.prompt', exact: true }).click();
+  expect((await snapshot(page)).source).toContain('${{ failed.prompt');
+});
+
+test('author bounded fallback, reporting and finalization without losing nested handlers', async ({ page }) => {
+  const ui = await open(page); await step(page);
+  await ui.getByText('Failure handlers and finalization', { exact: true }).click();
+  await field(page, 'Handler timeout', '45s');
+  await field(page, 'Fallback steps (YAML)', '- id: backup\n  agent: codex\n  prompt: "${{ failed.prompt }}"\n  finally:\n    - argv: [echo, cleanup-backup]');
+  await field(page, 'Failure reporting steps (YAML)', '- argv: [echo, "${{ error.class }}"]');
+  await field(page, 'Finalization steps (YAML)', '- argv: [echo, cleanup]');
+  const configured = (await snapshot(page)).workflow.jobs.build.steps[0];
+  expect(configured).toMatchObject({ handlerTimeout: '45s', onError: [{ id: 'backup', agent: 'codex', prompt: '${{ failed.prompt }}', finally: [{ argv: ['echo', 'cleanup-backup'] }] }], onFailure: [{ argv: ['echo', '${{ error.class }}'] }], finally: [{ argv: ['echo', 'cleanup'] }] });
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await field(page, 'Prompt', 'Revised original task');
+  const exported = await downloadText(page);
+  expect(exported).toContain('cleanup-backup'); expect(exported).toContain('failed.prompt');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual(configured);
+  await field(page, 'Handler timeout', '6m');
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'handler-timeout')).toBe(true);
 });

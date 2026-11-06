@@ -1,7 +1,7 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow, runnerTimestamp } from './validation';
-import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
+import { completedSteps, hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
 // Whole workflow/job/step replacements may change anonymous owners; field leaves do not.
@@ -145,7 +145,7 @@ export class WorkflowDocument {
       }
     }
     doc.setIn(path, value);
-    if (path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[4] === 'prompt' && typeof value === 'string' && runnerTimestamp(value)) {
+    if (stepPathLength(path) === path.length - 1 && path.at(-1) === 'prompt' && typeof value === 'string' && runnerTimestamp(value)) {
       const node = doc.getIn(path, true);
       if (isScalar(node)) node.type = 'QUOTE_DOUBLE';
     }
@@ -339,7 +339,16 @@ export class WorkflowDocument {
     const schemas = new Set(Object.keys(this.snapshot.workflow!.schemas ?? {}).filter(name => this.schemaConsumers(name).some(consumer => consumer.job === job)));
     const walk = (value: unknown, path: Path) => {
       if (typeof value === 'string') {
-        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && ref.id === stepID && (pathJob(path) === job || path[0] === 'schemas' && schemas.has(String(path[1])))) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
+        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => {
+          if (!stepID) return (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job;
+          if ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) return true;
+          if (ref.scope !== 'steps' || ref.id !== stepID) return false;
+          if (path[0] === 'schemas') return schemas.has(String(path[1]));
+          if (pathJob(path) !== job) return false;
+          if ((stepPathLength(path) ?? 0) <= 4) return true;
+          const producer = completedSteps(this.snapshot.workflow!, path).get(stepID);
+          return producer?.path.length === 4 && producer.path[3] === stepIndex;
+        })) result.push(path);
       } else if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...path, i]));
       else if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => walk(v, [...path, k]));
     };
@@ -400,7 +409,13 @@ export class WorkflowDocument {
         renamedSchemas.add(target);
       }
       this.rewriteReferences(doc, (ref, path) => {
-        if (ref.scope === 'steps' && ref.id === old && (pathJob(path) === job || path[0] === 'schemas' && renamedSchemas.has(String(path[1])))) return referenceText({ ...ref, id: next });
+        if (ref.scope === 'steps' && ref.id === old && (pathJob(path) === job || path[0] === 'schemas' && renamedSchemas.has(String(path[1])))) {
+          if ((stepPathLength(path) ?? 0) > 4) {
+            const producer = completedSteps(this.snapshot.workflow!, path).get(old);
+            if (!producer || producer.path.length !== 4 || producer.path[3] !== index) return undefined;
+          }
+          return referenceText({ ...ref, id: next });
+        }
         if ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === old) return referenceText({ ...ref, step: next });
         return undefined;
       });
