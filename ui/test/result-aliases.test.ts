@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WorkflowDocument } from '../src/document';
 import { mapReferences, references, referenceText } from '../src/expressions';
 import { expressionSuggestions } from '../src/source';
@@ -153,6 +153,42 @@ describe('named step result references', () => {
     doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'ready');
     expect(doc.getSnapshot().workflow!.jobs.build.if).toBe(prefix.repeat(10_000) + 'inputs.ready');
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+  });
+  it.each([' == ', ' != ', ' >= ', ' <= ', ' > ', ' < '])('keeps quoted %s chains editable without repeated character scans', operator => {
+    const prefix = 'true' + operator;
+    const condition = prefix.repeat(50_000) + "'literal and text'" + operator + 'inputs.task';
+    const source = JSON.stringify({ on: { workflow_call: { inputs: { task: { type: 'boolean' } } } }, jobs: {
+      build: { if: condition, steps: [{ argv: ['echo', 'ready'] }] },
+    } });
+    const startsWith = String.prototype.startsWith;
+    let scans = 0;
+    // Stop a regressed synchronous character scan locally before it blocks the worker.
+    const scan = vi.spyOn(String.prototype, 'startsWith').mockImplementation(function (this: string, search, position) {
+      if (++scans > 2_000_000) throw new Error('Expression character scan budget exceeded');
+      return startsWith.call(this, search, position);
+    });
+    try {
+      const doc = new WorkflowDocument({ source });
+      expect(doc.getSnapshot().stale).toBe(false);
+      expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+      expect(references(condition, true)).toEqual([
+        { scope: 'inputs', id: 'task', step: undefined, output: undefined, tail: undefined, offset: condition.indexOf('inputs.task') },
+      ]);
+      doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'ready');
+      expect(doc.getSnapshot().workflow!.jobs.build.if).toBe(prefix.repeat(50_000) + "'literal and text'" + operator + 'inputs.ready');
+      doc.undo(); expect(doc.getSnapshot().source).toBe(source);
+    } finally { scan.mockRestore(); }
+  });
+  it.each([
+    ["'literal == inputs.task and inputs.other", ['task', 'other']],
+    ['"literal != inputs.task and inputs.other', ['task', 'other']],
+    ["'escaped\\' and literal' == inputs.task", ['task']],
+    ['"escaped\\" and literal" == inputs.task', ['task']],
+    ["'literal and text' == inputs.task and inputs.other", ['task', 'other']],
+  ])('preserves quote boundaries after operand splits in %s', (condition, ids) => {
+    expect(references(condition, true).map(ref => ref.id)).toEqual(ids);
+    expect(mapReferences(condition, ref => referenceText({ ...ref, id: 'renamed' }), true)).toBe(
+      condition.replace(/inputs\.(task|other)/g, 'inputs.renamed'));
   });
   it('resolves named output schemas for local, dependency and workflow completion', () => {
     const value = structuredClone(workflow);

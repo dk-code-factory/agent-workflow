@@ -6,7 +6,33 @@ export interface Reference {
 export function mapReferences(text: string, callback: (ref: Reference) => string | undefined, bareExpression = false): string {
   const mapBody = (body: string): string => {
     const result: string[] = [];
-    const hasQuotes = body.includes('"') || body.includes("'");
+    const comparisons = [' == ', ' != ', ' >= ', ' <= ', ' > ', ' < '];
+    const positions = new Map(comparisons.map(operator => [operator, [] as number[]]));
+    const boundaries: { offset: number; token: string; escaped: boolean }[] = [];
+    for (const match of body.matchAll(/(?=(["']| and | == | != | >= | <= | > | < ))/g)) {
+      const token = match[1], offset = match.index;
+      if (positions.has(token)) { positions.get(token)!.push(offset); continue; }
+      let backslashes = 0;
+      if (token !== ' and ') for (let cursor = offset - 1; cursor >= 0 && body[cursor] === '\\'; cursor--) backslashes++;
+      boundaries.push({ offset, token, escaped: backslashes % 2 === 1 });
+    }
+    const lowerBound = (length: number, offsetAt: (index: number) => number, offset: number) => {
+      let low = 0, high = length;
+      while (low < high) { const middle = (low + high) >>> 1; if (offsetAt(middle) < offset) low = middle + 1; else high = middle; }
+      return low;
+    };
+    // A comparison can reset quote boundaries. Index AND for every starting
+    // quote state so each resulting operand can be inspected without rescanning.
+    const nextAnd = Array.from({ length: 3 }, () => new Int32Array(boundaries.length + 1).fill(-1));
+    for (let index = boundaries.length - 1; index >= 0; index--) {
+      const boundary = boundaries[index];
+      for (let state = 0; state < 3; state++) {
+        if (state === 0 && boundary.token === ' and ') { nextAnd[state][index] = boundary.offset; continue; }
+        const quote = boundary.token === '"' ? 1 : boundary.token === "'" ? 2 : 0;
+        const nextState = quote && !state ? quote : quote === state && !boundary.escaped ? 0 : state;
+        nextAnd[state][index] = nextAnd[nextState][index + 1];
+      }
+    }
     // Flat operator chains use a worklist instead of growing the call stack.
     const pending: (string | { body: string; offset: number; scanAnd: boolean; scanComparison: boolean })[] = [{ body, offset: 0, scanAnd: true, scanComparison: true }];
     while (pending.length) {
@@ -19,28 +45,22 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
       const trailing = item.body.slice(leading + expression.length);
       if (trailing) pending.push(trailing);
       // Match the runner's operands so structured keys need not be identifiers.
-      let quote = '', escaped = false, index = -1, operator = '';
-      for (let cursor = 0; item.scanAnd && cursor < expression.length; cursor++) {
-        const character = expression[cursor];
-        if (quote) {
-          if (escaped) escaped = false;
-          else if (character === '\\') escaped = true;
-          else if (character === quote) quote = '';
-        } else if (character === '"' || character === "'") quote = character;
-        else if (expression.startsWith(' and ', cursor)) { index = cursor; operator = ' and '; break; }
-      }
-      const logical = index >= 0;
+      const end = offset + expression.length;
+      const boundary = lowerBound(boundaries.length, index => boundaries[index].offset, offset);
+      const and = item.scanAnd ? nextAnd[0][boundary] : -1;
+      let index = and >= offset && and + 5 <= end ? and - offset : -1;
+      let operator = index >= 0 ? ' and ' : '';
       if (index < 0 && /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(expression)) { result.push(expression); continue; }
-      if (index < 0 && item.scanComparison) for (const candidate of [' == ', ' != ', ' >= ', ' <= ', ' > ', ' < ']) {
-        index = expression.indexOf(candidate);
-        if (index >= 0) { operator = candidate; break; }
+      if (index < 0 && item.scanComparison) for (const candidate of comparisons) {
+        const offsets = positions.get(candidate)!;
+        const found = offsets[lowerBound(offsets.length, index => offsets[index], offset)];
+        if (found !== undefined && found + candidate.length <= end) { index = found - offset; operator = candidate; break; }
       }
       if (index >= 0) {
-        // Only quote boundaries can reveal another AND after a comparison split.
         pending.push(
-          { body: expression.slice(index + operator.length), offset: offset + index + operator.length, scanAnd: logical || hasQuotes, scanComparison: true },
+          { body: expression.slice(index + operator.length), offset: offset + index + operator.length, scanAnd: true, scanComparison: true },
           operator,
-          { body: expression.slice(0, index), offset, scanAnd: logical || hasQuotes, scanComparison: true },
+          { body: expression.slice(0, index), offset, scanAnd: true, scanComparison: true },
         );
         continue;
       }
