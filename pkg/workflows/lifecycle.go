@@ -266,10 +266,12 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		defer cancel()
 		handlerEC := ec
 		prompt := ""
-		if args, renderErr := renderMap(step.With, ec); renderErr == nil {
-			prompt = nativeString(args, "prompt")
-			if prompt == "" {
-				prompt = nativeString(args, "message")
+		for _, field := range []string{"prompt", "message"} {
+			if value, renderErr := renderValue(step.With[field], ec); renderErr == nil {
+				prompt, _ = value.(string)
+				if prompt != "" {
+					break
+				}
 			}
 		}
 		handlerEC.Failed = map[string]any{"id": step.ID, "uses": step.Uses, "prompt": Redact(prompt, e.redactions(ec.Secrets))}
@@ -363,11 +365,11 @@ func validateLifecycleReplacement(step Step, outputs map[string]any, ec expressi
 	if !strings.HasPrefix(step.Uses, "agent/") {
 		return nil
 	}
-	args, err := renderMap(step.With, ec)
+	output, err := renderValue(step.With["output"], ec)
 	if err != nil {
 		return err
 	}
-	contract, err := ParseAgentOutputContract(args["output"])
+	contract, err := ParseAgentOutputContract(output)
 	if err != nil || contract == nil {
 		return err
 	}
