@@ -112,7 +112,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Tools != nil && req.Tools.Binding != nil && !req.RepairOnly {
 		catalog := []map[string]any{}
 		for _, d := range req.Tools.Binding.Catalog() {
-			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d)})
+			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d), "controller_validation": d.ControllerValidation})
 		}
 		input["broker_tools"] = catalog
 	}

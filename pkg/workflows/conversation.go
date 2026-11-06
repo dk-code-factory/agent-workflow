@@ -122,7 +122,8 @@ func validateConversationStep(w *Workflow, step Step) error {
 
 type conversationJournal interface {
 	stepBlockJournal
-	ConversationAttempt(context.Context, string, string, string, int) (Attempt, bool, error)
+	BeginConversation(context.Context, string, string, string, int, string, string) (Attempt, bool, error)
+	ConversationAttempt(context.Context, string, string, string, int, string) (Attempt, bool, error)
 }
 
 func conversationJournalFor(store RunStore) conversationJournal {
@@ -199,7 +200,12 @@ func (c *conversationExecution) fail(ctx context.Context, err error, integrity b
 func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec expressionContext, req RunRequest, slots chan struct{}) (result StepExecution, err error) {
 	result = StepExecution{ID: step.ID, Status: RunStatusSucceeded, StartedAt: time.Now().UTC()}
 	journal := e.Store.(Journal)
-	attempt, reused, err := conversationJournalFor(e.Store).BeginBlock(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber)
+	definition, err := renderMap(map[string]any{"participants": step.Conversation, "start": step.Start, "finishBy": step.FinishBy, "maxTurns": step.MaxTurns, "maxMessages": step.MaxMessages, "timeout": step.Timeout, "prompt": conversationPrompt(step), "with": step.With}, ec)
+	if err != nil {
+		return result, err
+	}
+	logical := nativeString(ec.Metadata, "iteration_logical_run_id")
+	attempt, reused, err := conversationJournalFor(e.Store).BeginConversation(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, actionHash(definition), logical)
 	if err != nil {
 		return result, err
 	}
@@ -275,7 +281,7 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 		// consuming a durable receipt does not launch provider work.
 		if c.state.Active != nil {
 			turnID := step.ID + "/conversation/" + fmt.Sprint(c.state.Turns)
-			retained, found, readErr := conversationJournalFor(e.Store).ConversationAttempt(context.WithoutCancel(ctx), ec.RunID, ec.JobID, turnID, ec.IterationNumber)
+			retained, found, readErr := conversationJournalFor(e.Store).ConversationAttempt(context.WithoutCancel(ctx), ec.RunID, ec.JobID, turnID, ec.IterationNumber, logical)
 			if readErr != nil {
 				return result, errors.Join(errStepPersistence, readErr)
 			}
@@ -326,7 +332,14 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 		active := *c.state.Active
 		// Internal turn IDs cannot collide with user-defined step IDs.
 		turnID := step.ID + "/conversation/" + fmt.Sprint(c.state.Turns)
-		turn, reused, err := journal.Begin(ctx, ec.RunID, ec.JobID, turnID, ec.IterationNumber, false)
+		var turn Attempt
+		var reused bool
+		var err error
+		if req.ordered {
+			turn, reused, err = iterationJournal(e.Store).BeginInput(ctx, ec.RunID, ec.JobID, turnID, ec.IterationNumber, false, actionHash([]any{definition, active}), false, logical)
+		} else {
+			turn, reused, err = journal.Begin(ctx, ec.RunID, ec.JobID, turnID, ec.IterationNumber, false)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -341,7 +354,11 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 					child.With[key] = value
 				}
 			}
-			runner := &conversationAgent{base: e.Agents, conversation: c, role: active.To, session: c.state.Sessions[active.To], owner: actionHash([]any{ec.RunID, ec.JobID, step.ID, ec.IterationNumber, active.To})[:32]}
+			ownerRun := logical
+			if ownerRun == "" {
+				ownerRun = ec.RunID
+			}
+			runner := &conversationAgent{base: e.Agents, conversation: c, role: active.To, session: c.state.Sessions[active.To], owner: actionHash([]any{ownerRun, ec.JobID, step.ID, ec.IterationNumber, active.To})[:32]}
 			execution := *e
 			execution.Agents = runner
 			baseBinder := e.BindTools
@@ -463,6 +480,7 @@ func (b *conversationTools) Catalog() []ToolDefinition {
 	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{"to": map[string]any{"enum": b.execution.state.Roles}, "message": map[string]any{"type": "string", "maxLength": 65536}}, "required": []string{"to", "message"}, "additionalProperties": false})
 	finish, _ := json.Marshal(b.execution.contract.Schema)
 	for _, t := range []ToolDefinition{{Server: conversationToolServer, Name: "send", Description: "Send a message to a declared peer. The controller authenticates the sender.", InputSchema: schema}, {Server: conversationToolServer, Name: "finish", Description: "Complete the conversation. Only the designated finisher may call this.", InputSchema: finish}} {
+		t.ControllerValidation = true
 		t.Fingerprint = actionHash(t.InputSchema)
 		out = append(out, t)
 	}

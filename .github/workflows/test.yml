@@ -40,7 +40,7 @@ jobs:
       - run: make test check build
       - run: npm ci --prefix bridge/claude --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
-      - run: go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker)AgainstFakeGateway' -count=1
+      - run: go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker|Conversation)AgainstFakeGateway' -count=1
         env:
           AGENT_WORKFLOW_SDK_TEST: '1'
       - run: python3 scripts/build-release.py --platform '${{ matrix.platform }}' --smoke

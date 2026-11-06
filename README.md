@@ -798,7 +798,7 @@ make build
 agent-workflow bridge setup --directory bridge/claude
 node --check bridge/claude/bridge.mjs
 # Actual pinned SDK against a local fake API; no upstream model calls:
-AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run TestSDKBridgeAgainstFakeGateway
+AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker|Conversation)AgainstFakeGateway'
 # Optional Linux container conformance using an already available pinned image:
 AGENT_WORKFLOW_CONTAINER_IMAGE=sha256:IMAGE_ID go test ./pkg/clirunner -run TestContainer
 ```

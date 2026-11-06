@@ -298,6 +298,9 @@ func (s *SQLiteStore) Begin(ctx context.Context, run, job, step string, iteratio
 func (s *SQLiteStore) BeginBlock(ctx context.Context, run, job, step string, iteration int) (Attempt, bool, error) {
 	return s.beginInput(ctx, run, job, step, iteration, true, "", true, "", "orchestration")
 }
+func (s *SQLiteStore) BeginConversation(ctx context.Context, run, job, step string, iteration int, fingerprint, logical string) (Attempt, bool, error) {
+	return s.beginInput(ctx, run, job, step, iteration, true, fingerprint, false, logical, "conversation")
+}
 func (s *SQLiteStore) BeginInput(ctx context.Context, run, job, step string, iteration int, retry bool, fingerprint string, replaySafe bool, logical string) (Attempt, bool, error) {
 	return s.beginInput(ctx, run, job, step, iteration, retry, fingerprint, replaySafe, logical, "")
 }
@@ -321,6 +324,9 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 		if err = decodeJSONWithNumbers(b, &last); err != nil {
 			return last, false, err
 		}
+		if phase == "conversation" && last.InputFingerprint != fingerprint {
+			return last, false, fmt.Errorf("%w: conversation input changed for %s/%s", ErrActionIntegrity, job, step)
+		}
 		if last.Status == RunStatusSucceeded || last.Status == RunStatusSkipped {
 			if fingerprint == "" || last.InputFingerprint == fingerprint {
 				return last, true, nil
@@ -329,7 +335,7 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 				return last, false, fmt.Errorf("%w: completed effect input changed for %s/%s", ErrActionIntegrity, job, step)
 			}
 		}
-		if logical != "" && last.RunID != run && !replaySafe {
+		if logical != "" && last.RunID != run && !replaySafe && phase != "conversation" {
 			return last, false, fmt.Errorf("%w: incomplete item effect %s/%s requires application reconciliation before fresh physical replay", ErrActionIntegrity, job, step)
 		}
 		if !retry && !schemaPhase(last.Phase) && last.Status != RunStatusSucceeded && last.Status != RunStatusSkipped {
@@ -342,7 +348,7 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 		return Attempt{}, false, err
 	}
 	a := Attempt{Phase: phase, InputFingerprint: fingerprint, ID: newID(), RunID: run, JobID: job, StepID: step, Iteration: iteration, Number: last.Number + 1, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
-	if phase == "orchestration" && last.Conversation != nil {
+	if (phase == "orchestration" || phase == "conversation") && last.Conversation != nil {
 		a.Conversation = last.Conversation
 	}
 	if schemaPhase(last.Phase) {
@@ -733,9 +739,9 @@ func sqliteDSN(path string, readOnly bool) (string, error) {
 	return u.String(), nil
 }
 
-// ConversationAttempt reads the latest physical turn receipt without admitting
-// work. Recovery can consume completed turns after the conversation deadline.
-func (s *SQLiteStore) ConversationAttempt(ctx context.Context, run, job, step string, iteration int) (Attempt, bool, error) {
+// ConversationAttempt reads a turn receipt without admitting work. Ordered item
+// retries share logical receipts, including after the conversation deadline.
+func (s *SQLiteStore) ConversationAttempt(ctx context.Context, run, job, step string, iteration int, logical string) (Attempt, bool, error) {
 	var data []byte
 	var a Attempt
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -746,7 +752,11 @@ func (s *SQLiteStore) ConversationAttempt(ctx context.Context, run, job, step st
 	if err := checkFence(ctx, tx); err != nil {
 		return a, false, err
 	}
-	err = tx.QueryRowContext(ctx, "SELECT record FROM attempts WHERE run_id=? AND job_id=? AND step_id=? AND iteration=? ORDER BY number DESC LIMIT 1", run, job, step, iteration).Scan(&data)
+	if logical == "" {
+		err = tx.QueryRowContext(ctx, "SELECT record FROM attempts WHERE run_id=? AND job_id=? AND step_id=? AND iteration=? ORDER BY number DESC LIMIT 1", run, job, step, iteration).Scan(&data)
+	} else {
+		err = tx.QueryRowContext(ctx, `SELECT a.record FROM attempts a JOIN runs r ON r.id=a.run_id WHERE json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=? AND a.job_id=? AND a.step_id=? AND a.iteration=? ORDER BY a.rowid DESC LIMIT 1`, logical, job, step, iteration).Scan(&data)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, false, nil
 	}

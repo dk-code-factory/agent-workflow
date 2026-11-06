@@ -577,7 +577,7 @@ func (s *SQLiteStore) recoverInputWaits(ctx context.Context) error {
 			continue
 		}
 		var uncertain int
-		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE origin_id=?) AND status NOT IN ('succeeded','skipped') AND NOT EXISTS(SELECT 1 FROM action_attempts a WHERE a.attempt_id=attempts.id) AND COALESCE(json_extract(CAST(record AS TEXT),'$.phase'),'') != 'orchestration'`, r.ID).Scan(&uncertain); err != nil {
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE origin_id=?) AND status NOT IN ('succeeded','skipped') AND NOT EXISTS(SELECT 1 FROM action_attempts a WHERE a.attempt_id=attempts.id) AND COALESCE(json_extract(CAST(record AS TEXT),'$.phase'),'') NOT IN ('orchestration','conversation')`, r.ID).Scan(&uncertain); err != nil {
 			return err
 		}
 		if uncertain > 0 {

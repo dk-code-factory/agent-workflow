@@ -66,10 +66,10 @@ func TestYAMLConversationRoutingSessionsAuthorityAndResult(t *testing.T) {
 	runner := newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
 		result := conversationEvent(req, emit)
 		if req.SessionOwnerID == "" {
-			t.Fatal("missing stable session state owner")
+			return result, errors.New("missing stable session state owner")
 		}
 		if previous := owners[req.AgentID]; previous != "" && previous != req.SessionOwnerID {
-			t.Fatal("participant state owner changed")
+			return result, errors.New("participant state owner changed")
 		}
 		owners[req.AgentID] = req.SessionOwnerID
 		order = append(order, req.AgentID)
@@ -80,41 +80,41 @@ func TestYAMLConversationRoutingSessionsAuthorityAndResult(t *testing.T) {
 			t.Errorf("session not resumed: %+v", req)
 		}
 		if req.Tools == nil || len(req.Tools.Binding.Catalog()) != 2 {
-			t.Fatal("missing managed messaging tools")
+			return result, errors.New("missing managed messaging tools")
 		}
 		switch len(order) {
 		case 1:
 			if err := conversationCall(ctx, req, "unauthorized", "finish", `{"answer":"wrong"}`); err == nil {
-				t.Fatal("non-finisher completed")
+				return result, errors.New("non-finisher completed")
 			}
 			if err := conversationCall(ctx, req, "spoof", "send", `{"to":"reviewer","message":"review","from":"reviewer"}`); err == nil {
-				t.Fatal("sender spoof accepted")
+				return result, errors.New("sender spoof accepted")
 			}
 			if err := conversationCall(ctx, req, "first", "send", `{"to":"reviewer","message":"review"}`); err != nil {
-				t.Fatal(err)
+				return result, err
 			}
 			if err := conversationCall(ctx, req, "first", "send", `{"to":"reviewer","message":"review"}`); err != nil {
-				t.Fatal(err)
+				return result, err
 			}
 		case 2:
 			for _, to := range []string{"reviewer", "outsider"} {
 				if err := conversationCall(ctx, req, "invalid-"+to, "send", fmt.Sprintf(`{"to":%q,"message":"bad"}`, to)); err == nil {
-					t.Fatalf("invalid peer accepted: %s", to)
+					return result, fmt.Errorf("invalid peer accepted: %s", to)
 				}
 			}
 			if err := conversationCall(ctx, req, "changes", "send", `{"to":"builder","message":"correct it"}`); err != nil {
-				t.Fatal(err)
+				return result, err
 			}
 		case 3:
 			if err := conversationCall(ctx, req, "updated", "send", `{"to":"reviewer","message":"fixed"}`); err != nil {
-				t.Fatal(err)
+				return result, err
 			}
 		case 4:
 			if err := conversationCall(ctx, req, "done", "finish", `{"answer":"approved"}`); err != nil {
-				t.Fatal(err)
+				return result, err
 			}
 		default:
-			t.Fatal("extra participant turn")
+			return result, errors.New("extra participant turn")
 		}
 		return result, nil
 	})
@@ -153,7 +153,7 @@ func TestYAMLConversationInvalidOutputIsTerminalWithoutRepair(t *testing.T) {
 		}
 		// A provider swallowing the tool error cannot turn validation into success.
 		if err := conversationCall(ctx, req, "invalid", "finish", `{"answer":42}`); err == nil {
-			t.Fatal("invalid output accepted")
+			return result, errors.New("invalid output accepted")
 		}
 		return result, nil
 	})
@@ -252,10 +252,10 @@ func TestYAMLConversationIntegrityAndSessionIdentity(t *testing.T) {
 					return result, nil
 				}
 				if err := conversationCall(ctx, req, "same", "send", `{"to":"reviewer","message":"one"}`); err != nil {
-					t.Fatal(err)
+					return result, err
 				}
 				if err := conversationCall(ctx, req, "same", "send", `{"to":"reviewer","message":"two"}`); err == nil {
-					t.Fatal("conflicting tool identity accepted")
+					return result, errors.New("conflicting tool identity accepted")
 				}
 				return result, nil
 			})
@@ -275,8 +275,8 @@ func TestYAMLConversationAdmissionBeforeEffects(t *testing.T) {
 	}{
 		{"legacy-runner", func(e *Executor, s *conversationSession) {
 			e.Agents = agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
-				t.Fatal("effect before admission")
-				return nil, nil
+				t.Error("effect before admission")
+				return nil, errors.New("effect before admission")
 			})
 		}},
 		{"no-journal", func(e *Executor, s *conversationSession) { e.Store = nil }},
@@ -287,8 +287,8 @@ func TestYAMLConversationAdmissionBeforeEffects(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := newConversationSession(func(context.Context, SessionRequest, func(ProviderEvent)) (SessionResult, error) {
-				t.Fatal("effect before admission")
-				return SessionResult{}, nil
+				t.Error("effect before admission")
+				return SessionResult{}, errors.New("effect before admission")
 			})
 			e, _ := durableExecutor(t, conversationYAML, runner)
 			tc.change(e, runner)
@@ -396,7 +396,7 @@ func TestYAMLConversationResumeDoesNotResendUncertainTurn(t *testing.T) {
 	runner := newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
 		result := conversationEvent(req, emit)
 		if err := conversationCall(ctx, req, "sent", "send", `{"to":"reviewer","message":"review"}`); err != nil {
-			t.Fatal(err)
+			return result, err
 		}
 		return result, errors.New("lost provider outcome")
 	})
@@ -521,7 +521,7 @@ func TestYAMLConversationJSONFormatHasObjectToolSchema(t *testing.T) {
 				catalog := req.Tools.Binding.Catalog()
 				var schema map[string]any
 				if err := json.Unmarshal(catalog[1].InputSchema, &schema); err != nil || schema["type"] != "object" {
-					t.Fatalf("invalid MCP object schema: %s %v", catalog[1].InputSchema, err)
+					return result, fmt.Errorf("invalid MCP object schema: %s %v", catalog[1].InputSchema, err)
 				}
 				return result, conversationCall(ctx, req, "done", "finish", `{"arbitrary":"object"}`)
 			})
@@ -530,6 +530,124 @@ func TestYAMLConversationJSONFormatHasObjectToolSchema(t *testing.T) {
 			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusSucceeded {
 				t.Fatalf("JSON contract failed: %+v %v", run, err)
+			}
+		})
+	}
+}
+
+type conversationItemSession struct {
+	*conversationSession
+	after atomic.Int32
+}
+
+func (s *conversationItemSession) RunAgent(context.Context, AgentRequest) (map[string]any, error) {
+	if s.after.Add(1) == 1 {
+		return nil, errors.New("later item step failed")
+	}
+	return map[string]any{"text": "recovered"}, nil
+}
+
+func TestYAMLConversationOrderedItemRetryRetainsReceiptsAndBounds(t *testing.T) {
+	for _, mode := range []string{"uncertain", "completed", "checkpoint", "budget", "messages", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			var builderOwner string
+			runner := &conversationItemSession{conversationSession: newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+				result := conversationEvent(req, emit)
+				if req.AgentID == "builder" {
+					if mode == "checkpoint" && builderOwner != "" {
+						if req.SessionOwnerID != builderOwner || req.SessionID != "session-builder" {
+							return result, errors.New("physical retry replaced participant session")
+						}
+						return result, conversationCall(ctx, req, "done", "finish", `{"answer":"approved"}`)
+					}
+					builderOwner = req.SessionOwnerID
+					if err := conversationCall(ctx, req, "sent", "send", `{"to":"reviewer","message":"review"}`); err != nil {
+						return result, err
+					}
+					if mode == "uncertain" {
+						return result, errors.New("lost provider outcome")
+					}
+					return result, nil
+				}
+				if mode == "checkpoint" || mode == "messages" {
+					return result, conversationCall(ctx, req, "next", "send", `{"to":"builder","message":"approved"}`)
+				}
+				return result, conversationCall(ctx, req, "done", "finish", `{"answer":"approved"}`)
+			})}
+			e, store := iterationExecutor(t, runner)
+			child := "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n      ordinal: {type: number}\n      identity: {type: string}\n" + conversationYAML
+			if mode == "completed" {
+				child += "      - id: after\n        uses: agent/reviewer\n        with: {prompt: after}\n"
+			}
+			if mode == "budget" {
+				child = strings.Replace(child, "finishBy: reviewer", "finishBy: reviewer\n        maxTurns: 1", 1)
+			}
+			if mode == "messages" {
+				child = strings.Replace(child, "finishBy: reviewer", "finishBy: reviewer\n        maxMessages: 1", 1)
+			}
+			if mode == "checkpoint" {
+				child = strings.Replace(child, "finishBy: reviewer", "finishBy: builder", 1)
+			}
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", child)
+			if mode == "checkpoint" || mode == "budget" || mode == "messages" || mode == "deadline" {
+				e.Store = &conversationFaultStore{SQLiteStore: store, loseCheckpoint: true, loseCompletion: true}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			run, err := e.Run(ctx, iterationRequest("task"))
+			if err == nil {
+				t.Fatal("missing initial item failure")
+			}
+			before := runner.calls.Load()
+			firstChild := run.Jobs["review"].Items[0].ChildID
+			attempts, err := store.Attempts(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state *ConversationState
+			for _, attempt := range attempts {
+				if attempt.Conversation != nil {
+					state = attempt.Conversation
+					if mode == "deadline" {
+						state.Deadline = time.Now().Add(-time.Hour)
+						if err := store.RecordAttempt(ctx, attempt); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			if state == nil || state.Calls != int(before) || state.Messages != 1 {
+				t.Fatalf("missing retained conversation: %+v calls=%d", state, before)
+			}
+			e.Store = store
+			resumed, err := e.Resume(ctx, run.ID, nil, true)
+			items := resumed.Jobs["review"].Items
+			if len(items) != 1 || items[0].ChildID == firstChild {
+				t.Fatalf("fresh physical retry not reached: %+v %v", resumed, err)
+			}
+			switch mode {
+			case "completed":
+				if err != nil || resumed.Status != RunStatusSucceeded || runner.calls.Load() != before || runner.after.Load() != 2 {
+					t.Fatalf("completed conversation repeated: calls=%d after=%d run=%+v err=%v", runner.calls.Load(), runner.after.Load(), resumed, err)
+				}
+			case "checkpoint":
+				if err != nil || resumed.Status != RunStatusSucceeded || runner.calls.Load() != before+2 {
+					t.Fatalf("completed turn not reconstructed: calls=%d run=%+v err=%v", runner.calls.Load(), resumed, err)
+				}
+			case "messages":
+				if err == nil || !strings.Contains(err.Error(), "message budget") || runner.calls.Load() != before+1 {
+					t.Fatalf("retry reset message budget: calls=%d run=%+v err=%v", runner.calls.Load(), resumed, err)
+				}
+			default:
+				want := "incomplete item effect"
+				if mode == "budget" {
+					want = "turn budget"
+				} else if mode == "deadline" {
+					want = "deadline exceeded"
+				}
+				if err == nil || !strings.Contains(err.Error(), want) || runner.calls.Load() != before {
+					t.Fatalf("retry reset retained boundary: calls=%d want=%s run=%+v err=%v", runner.calls.Load(), want, resumed, err)
+				}
 			}
 		})
 	}
