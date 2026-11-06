@@ -23,3 +23,19 @@ test('deletion shows impact, confirms and removes structural dependencies', asyn
   await expect(first.getByRole('button', { name: 'Inspect job build', exact: true })).toHaveCount(0);
   await expect(first.getByRole('button', { name: 'Inspect job test', exact: true })).toBeVisible();
 });
+
+test('step deletion reviews named-schema references before leaving repair diagnostics', async ({ page }) => {
+  await page.goto('/test/browser.html'); const first = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: 'schemas: {Review: {type: string, enum: ["${{ steps.local.outputs.text }}"]}}\njobs: {review: {steps: [{id: local, argv: [echo, local]}, {agent: claude, prompt: Review, with: {output: {schema: Review}}}]}}' }));
+  await first.getByRole('button', { name: 'local direct command', exact: true }).click();
+  await first.getByRole('button', { name: 'Delete step', exact: true }).click();
+  await expect(first.getByRole('alertdialog')).toContainText('schemas.Review.enum.0');
+  const original = await page.evaluate(() => (window as any).first.getSnapshot().source);
+  await first.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe(original);
+  await first.getByRole('button', { name: 'Delete step', exact: true }).click();
+  await first.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Review.enum.0'))).toBe(true);
+  await first.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe(original);
+});

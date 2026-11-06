@@ -27,9 +27,10 @@ export function isExpressionPath(path: Path): boolean {
 }
 // Keep literal metadata and callable defaults intact. These are the value
 // fields rendered by executor.go and command.go; with mappings are recursive,
-// including structured-output schema values passed through renderMap.
+// including named schema values expanded into with.output before renderMap.
 export function hasExpressionReferences(path: Path): boolean {
   if (isExpressionPath(path)) return true;
+  if (path[0] === 'schemas' && path.length >= 3) return true;
   if (path.length === 5 && path[0] === 'on' && path[1] === 'workflow_call' && path[2] === 'outputs' && path[4] === 'value') return true;
   if (path[0] !== 'jobs') return false;
   // Array item payloads are literal data. Only the whole items expression renders.

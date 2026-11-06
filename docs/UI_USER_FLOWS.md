@@ -241,12 +241,15 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract.
 
 - **Starting point:** I add or select an agent step.
 - **My flow:** I choose the agent under **Step type**, or edit **Action target**
   → write the **Prompt** → optionally set **Message**, **Model**, **Workspace**,
   and a **Structured output contract (YAML)**.
+- **Named contracts:** Declare a workflow-level `schemas` map in YAML, then set
+  `schema: Review` inside the structured output contract to reuse its local
+  `Review` declaration. Definitions and references remain in exported YAML.
 - **What I see:** The step definition and graph label update. If the host
   supplies an agent catalog, an unavailable agent produces a warning. Output
   contracts may still require host validation before execution. Imported concise `agent: ROLE` and top-level `prompt` steps retain that spelling when I edit their agent controls.
@@ -364,7 +367,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-24.spec.ts)
 
-- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite references and deletion exposes affected paths.
+- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update local references in named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo.
 
 - **Starting point:** I select a job, step, callable interface entry, or job output.
 - **My flow:** I edit **Job ID**, **Step ID**, or the entry's **Identifier** →
@@ -403,7 +406,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-27.spec.ts)
 
-- **Coverage:** Deletion exposes structural impacts; Cancel preserves source and a host replacement invalidates a pending confirmation.
+- **Coverage:** Deletion exposes structural impacts and consumed named-schema paths for local step references; Cancel preserves source and a host replacement invalidates a pending confirmation. Confirmed producer deletion reports the remaining named-contract reference, and Undo restores its source.
 
 - **Starting point:** I select the item and its delete control.
 - **My flow:** I read the confirmation and affected document paths → choose

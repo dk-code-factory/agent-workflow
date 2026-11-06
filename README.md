@@ -501,6 +501,54 @@ Reported `cost_usd` is included when the provider supplies it; native Codex
 subscription usage has no dollar figure. Deduplicate cached task usage by
 `task_attempt_id` when aggregating resumed attempt records.
 
+YAML workflows can reuse a workflow-local output schema:
+
+```yaml
+schemas:
+  Review:
+    type: object
+    required: [approved]
+    additionalProperties: false
+    properties:
+      approved: {type: boolean}
+jobs:
+  review:
+    steps:
+      - uses: agent/reviewer
+        with:
+          prompt: Review the change.
+          output: {format: json, schema: Review, repair-attempts: 0}
+      - uses: agent/reviewer
+        with:
+          prompt: Review the tests.
+          output: {schema: Review}
+```
+
+`output.schema` accepts a literal schema name or the existing inline mapping.
+Named contracts use the same output validation and repair controls as equivalent
+inline contracts; `format: json` is optional when `schema` is present. Names use
+the job-ID identifier syntax. Every declaration is validated, even when unused,
+and unknown names fail before any workflow effects. Reusable workflow files
+have independent schema maps: they neither import nor override caller schemas.
+Admission expands names into the durable definition snapshot, so resume uses
+the admitted contract even after source files change.
+
+Named declarations accept the output validator's supported subset: a single
+`type` (`object`, `array`, `string`, `integer`, `number`, `boolean`, or `null`),
+`properties`, `required`, `additionalProperties` (boolean or schema), `items`,
+`enum`, RE2 `pattern`, `minLength`, `maxLength`, `maxItems`, and `minimum`, plus
+`title`, `description`, and `$comment`. Object, array, and length constraints
+require the corresponding explicit `type`; `minimum` requires `number` or
+`integer`. Length/item bounds are positive integers (`minLength` also accepts
+zero); `maxLength` follows the existing validator's UTF-8 byte limit. Required
+names must be nonempty, unique strings without surrounding whitespace. Schema
+references such as `$ref`, composition, boolean schemas, union types, and other
+keywords are rejected with a field path. Existing inline schema admission
+retains its historical behavior. After expansion, schema strings interpolate
+through the same step expressions as inline schemas. The YAML editor preserves
+declarations and references during visual edits and export; complete constraint
+admission remains a host check.
+
 ### Development and publication
 
 [develop.yml](workflows/develop.yml) runs planning, bounded implementation/test/
