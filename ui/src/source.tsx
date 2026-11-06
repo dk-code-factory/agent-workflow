@@ -9,8 +9,9 @@ import { yaml } from '@codemirror/lang-yaml';
 import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
 import type { Path, Step, Workflow } from './types';
-import { completedSteps, hasExpressionReferences, isExpressionPath, stepPathLength } from './expressions';
-import { dependencies, effectiveStepID, identifier, mapping, stepAction } from './validation';
+import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath } from './expressions';
+import { dependencies, identifier, mapping, stepAction } from './validation';
+import { containingStep, stepEntries } from './step-tree';
 export const expressionSuggestionLimit = 200;
 export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
   if (limit <= 0 || !stepAction(step)?.startsWith('agent/')) return [];
@@ -59,13 +60,13 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   };
   for (const id of Object.keys(callable?.inputs ?? {})) if (add(`inputs.${id}`)) return result;
   const job = jobID ? workflow.jobs[jobID] : undefined;
-  const handler = path !== undefined && (stepPathLength(path) ?? 0) > 4;
+  const handler = path !== undefined && inHandlerPath(path);
   if (handler) for (const value of ['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
     const producer = workflow.jobs[dep];
     for (const output of Object.keys(producer?.outputs ?? {})) if (add(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`)) return result;
     if (!producer?.uses && !producer?.['for-each']) {
-      for (const [i, step] of (producer?.steps ?? []).entries()) if (addStep(step, `${job ? 'needs' : 'jobs'}.${dep}.steps.${effectiveStepID(step, i)}`)) return result;
+      for (const { step, id } of stepEntries(producer?.steps)) if (addStep(step, `${job ? 'needs' : 'jobs'}.${dep}.steps.${id}`)) return result;
     }
   }
   if (job?.['for-each']) for (const value of ['item', 'iteration.key', 'iteration.number']) if (add(value)) return result;
@@ -78,10 +79,12 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
     }
     return result;
   }
-  for (const [i, step] of (job?.steps ?? []).entries()) {
-    if (stepIndex !== undefined && i >= stepIndex) break;
-    const base = `steps.${effectiveStepID(step, i)}`;
-    if (conciseLocal && addStep(step, base)) return result;
+  const entries = stepEntries(job?.steps);
+  const consumer = containingStep(entries, path?.slice(2) ?? (stepIndex === undefined ? [] : ['steps', stepIndex]));
+  for (const { step, id } of entries) {
+    if (consumer && !consumer.available.has(id)) continue;
+    const base = `steps.${id}`;
+    if ((conciseLocal || consumer) && addStep(step, base)) return result;
     for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
   }
   return result;

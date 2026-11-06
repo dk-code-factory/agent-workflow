@@ -141,6 +141,49 @@ describe('step lifecycle handler authoring', () => {
     expect(parseWorkflow(yaml).diagnostics.some(d => d.code === code && d.severity === 'error')).toBe(true);
   });
 
+  it('keeps handler scopes and contracts inside structural branches through duplicate and undo', () => {
+    const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
+      { id: 'group', parallel: [
+        { sequence: [
+          { id: 'seed', agent: 'claude', prompt: 'Seed' },
+          { id: 'work', agent: 'claude', prompt: 'Work', onError: [
+            { agent: 'codex', prompt: '${{ failed.prompt }} ${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
+            { id: 'seed', agent: 'codex', prompt: 'Local' },
+            { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
+          ] },
+        ] },
+        { id: 'sibling', agent: 'claude', prompt: 'Sibling' },
+      ] },
+    ] } } });
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    const owner = ['jobs', 'build', 'steps', 0, 'parallel', 0, 'sequence', 1];
+    const suggestions = expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'onError', 0, 'prompt']);
+    expect(suggestions).toEqual(expect.arrayContaining(['failed.prompt', 'steps.seed.text']));
+    expect(suggestions).not.toContain('steps.sibling.text');
+    expect(expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'prompt'])).not.toContain('failed.prompt');
+    doc.duplicateStep('build', 0);
+    const copy = doc.getSnapshot().workflow!.jobs.build.steps![1].parallel![0].sequence![1].onError!;
+    expect(copy[0].prompt).toContain('steps.seed_copy.text');
+    expect(copy[2].prompt).toBe('${{ steps.seed.text }}');
+    expect(copy[0].with!.output).toEqual({ schema: 'Shared_copy' });
+    expect(copy[2].with!.output).toEqual({ schema: 'Shared' });
+    expect(doc.getSnapshot().workflow!.schemas!.Shared_copy.enum).toEqual(['${{ steps.seed_copy.text }}']);
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    for (const reference of ['steps.sibling.text', 'steps.work.text']) {
+      const invalid = original.replace('failed.prompt }} ${{ steps.seed.text', 'failed.prompt }} ${{ ' + reference);
+      expect(parseWorkflow(invalid).diagnostics.some(d => d.code === 'expression-reference')).toBe(true);
+    }
+  });
+
+  it.each(['parallel', 'sequence'])('rejects structural %s blocks in handler lists and hooks on blocks', kind => {
+    const leaf = { argv: ['echo'] };
+    expect(parseWorkflow(stringify({ jobs: { build: { steps: [{ [kind]: [{ argv: ["echo"] }], finally: [{ argv: ["echo"] }] }] } } })).diagnostics.some(d => d.code === 'block')).toBe(true);
+    expect(parseWorkflow(stringify({ jobs: { build: { steps: [{ argv: ["echo"], onError: [{ [kind]: [{ argv: ["echo"] }] }] }] } } })).diagnostics.some(d => d.code === 'handler-action')).toBe(true);
+    expect(stepConversionImpact({ ...leaf, finally: [leaf], handlerTimeout: '30s' }, kind)).toEqual(expect.arrayContaining(['finally', 'handlerTimeout']));
+  });
+
   it('bounds nesting and handler count', () => {
     let nested: object = { argv: ['echo'] };
     for (let i = 0; i < 9; i++) nested = { argv: ['echo'], onError: [nested] };

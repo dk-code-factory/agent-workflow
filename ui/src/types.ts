@@ -4,6 +4,7 @@ export interface Step extends Mapping {
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
+  parallel?: Step[]; sequence?: Step[];
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;
@@ -58,8 +59,8 @@ export interface WorkflowCatalogEntry extends CatalogEntry {
 export interface JobResultRequest {
   target: Path;
   producer: string;
-  source: { kind: 'output'; output: string } | { kind: 'step'; step: number; output: string; name: string }
-    | { kind: 'result'; step: number; field: string };
+  source: { kind: 'output'; output: string } | { kind: 'step'; step: number | Path; output: string; name: string }
+    | { kind: 'result'; step: number | Path; field: string };
   /** Replace this text selection, or append when omitted. */
   selection?: { start: number; end: number };
 }

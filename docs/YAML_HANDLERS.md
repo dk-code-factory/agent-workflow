@@ -5,6 +5,10 @@ step lists. These fields are supported at step scope only; workflow and job
 hooks are rejected. Handler children can themselves declare handlers. Registered
 application actions, controller actions, and `input/wait` cannot own or appear
 inside handlers: their reconciliation and suspension protocols remain separate.
+Agent and command leaves inside `parallel` or `sequence` blocks may own handlers.
+Structural blocks cannot own handlers or appear inside a handler list. A handler
+inherits its leaf's incoming results, excluding concurrent sibling branches;
+completed preceding handler siblings remain local to that handler list.
 
 ```yaml
 jobs:

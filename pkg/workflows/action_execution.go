@@ -128,10 +128,10 @@ func (e *Executor) validateActionRecovery(ctx context.Context, run string, snap 
 	if actionHash(e.actionContracts) != actionHash(snap.ActionContracts) && !(len(e.actionContracts) == 0 && len(snap.ActionContracts) == 0) {
 		for _, w := range snap.Definitions {
 			for job, j := range w.Jobs {
-				for i, step := range j.Steps {
+				for _, step := range FlattenSteps(j.Steps) {
 					name := strings.TrimPrefix(step.Uses, "action/")
 					if isApplicationAction(step.Uses) && actionHash(e.actionContracts[name]) != actionHash(snap.ActionContracts[name]) {
-						return actionFailure(ActionContext{RunID: run, JobID: job, StepID: stepID(step, i)}, fmt.Errorf("action/%s admitted implementation/schema/effect manifest changed", name))
+						return actionFailure(ActionContext{RunID: run, JobID: job, StepID: step.ID}, fmt.Errorf("action/%s admitted implementation/schema/effect manifest changed", name))
 					}
 				}
 			}

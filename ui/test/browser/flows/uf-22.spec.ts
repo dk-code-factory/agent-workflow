@@ -107,3 +107,43 @@ jobs:
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(original.source);
 });
+
+test('copying a parallel block preserves handler scopes and diagnoses structural handler children', async ({ page }) => {
+  const ui = await open(page, `schemas:
+  Shared: {type: string, enum: ['\${{ steps.seed.text }}']}
+jobs:
+  build:
+    steps:
+      - id: group
+        parallel:
+          - sequence:
+              - {id: seed, agent: claude, prompt: Seed}
+              - id: work
+                agent: claude
+                prompt: Work
+                onError:
+                  - {agent: codex, prompt: '\${{ failed.prompt }} \${{ steps.seed.text }}', with: {output: {schema: Shared}}}
+                  - {id: seed, agent: codex, prompt: Local}
+                  - {agent: claude, prompt: '\${{ steps.seed.text }}', with: {output: {schema: Shared}}}
+          - {id: sibling, agent: claude, prompt: Sibling}
+`);
+  const original = await snapshot(page);
+  await job(page); await step(page, '1. group');
+  await ui.getByRole('button', { name: 'Duplicate step', exact: true }).click();
+  const edited = await snapshot(page);
+  const fallback = edited.workflow.jobs.build.steps[1].parallel[0].sequence[1].onError;
+  expect(fallback[0].prompt).toBe('${{ failed.prompt }} ${{ steps.seed_copy.text }}');
+  expect(fallback[0].with.output.schema).toBe('Shared_copy');
+  expect(fallback[2].prompt).toBe('${{ steps.seed.text }}');
+  expect(fallback[2].with.output.schema).toBe('Shared');
+  expect(edited.workflow.schemas.Shared_copy.enum).toEqual(['${{ steps.seed_copy.text }}']);
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toContain('steps.seed_copy.text');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(original.source);
+  await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+  const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
+  await yaml.press('ControlOrMeta+a');
+  await page.keyboard.insertText('jobs:\n  build:\n    steps:\n      - argv: [echo]\n        onError:\n          - parallel:\n              - argv: [echo]\n');
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'handler-action')).toBe(true);
+});

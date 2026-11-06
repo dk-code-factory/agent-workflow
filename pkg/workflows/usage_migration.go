@@ -91,11 +91,8 @@ func backfillUsage(ctx context.Context, tx *sql.Tx) error {
 		role := ""
 		workflow := snapshot.Definitions[run.WorkflowRef]
 		if workflow != nil {
-			for index, step := range workflow.Jobs[attempt.JobID].Steps {
+			for _, step := range FlattenSteps(workflow.Jobs[attempt.JobID].Steps) {
 				id := step.ID
-				if id == "" {
-					id = "step_" + strconv.Itoa(index+1)
-				}
 				if id == attempt.StepID && strings.HasPrefix(step.Uses, "agent/") {
 					role = strings.TrimPrefix(step.Uses, "agent/")
 					break

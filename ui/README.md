@@ -76,6 +76,18 @@ The browser does not evaluate expressions or provide a complete runner/runtime a
 
 Concise YAML agent steps use `agent: ROLE` and a top-level string `prompt`, with optional `with` settings such as `model`, `message`, `workspace`, and `output`. Imported concise steps use the normal agent inspector and graph labels; prompt and role edits preserve the concise spelling. Changing between agents retains prompts and options. Converting to a command or controller action confirms discarded fields and removes incompatible shorthand. The browser rejects competing `agent`/`uses` or `prompt`/`with.prompt` declarations; top-level `prompt` requires `agent`. Prompt expressions participate in reference diagnostics, renames, and result wiring; the agent role remains a literal identifier.
 
+YAML jobs can contain nested `parallel` and `sequence` blocks. Add them through
+the palette and edit their children through **Parallel branches (YAML)** or
+**Sequence steps (YAML)**, or directly in the source; nested leaves do not have
+individual visual inspectors. Block inspectors support names, IDs and conditions.
+Blocks require nonempty child lists and cannot mix leaf action fields or
+`continue-on-error`. Results and IDs are job-scoped: parallel branches share
+the incoming result snapshot, sequences see their own preceding children, and
+all descendants become available after the join. Diagnostics and suggestions
+observe those boundaries. The job-result picker includes nested producer leaves.
+Reordering preserves anonymous descendant IDs; duplication assigns new IDs and
+rewrites references inside the copy. Type conversion confirms discarded branches.
+
 Durable `input/wait` steps use **Action target** and **Advanced parameters** to
 edit required string `prompt` and `evidence-id` fields and an optional JSON
 `payload`. YAML and visual edits preserve payloads and answer expressions. The

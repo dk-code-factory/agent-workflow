@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var errStepPersistence = errors.New("step journal storage persistence failed")
+
 func FailureClass(err error) string { return classifyFailure(err) }
 
 func classifyFailure(err error) string {
@@ -17,6 +19,9 @@ func classifyFailure(err error) string {
 	}
 	if retained, ok := err.(*retainedLifecycleFailure); ok {
 		return retained.class
+	}
+	if errors.Is(err, errStepPersistence) {
+		return "storage"
 	}
 	if errors.Is(err, errIterationBlocked) {
 		return "iteration_blocked"

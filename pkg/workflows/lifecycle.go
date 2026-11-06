@@ -13,12 +13,12 @@ import (
 
 func hasLifecycle(step Step) bool { return len(step.OnError)+len(step.OnFailure)+len(step.Finally) > 0 }
 
-// Each sequence has local IDs; effect IDs include its full handler ancestry.
+// Handler lists have local IDs; effect IDs include their full handler ancestry.
 func lifecycleSteps(steps []Step) []Step {
 	var out []Step
 	for _, step := range steps {
 		out = append(out, step)
-		for _, children := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+		for _, children := range [][]Step{step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
 			out = append(out, lifecycleSteps(children)...)
 		}
 	}
@@ -30,6 +30,16 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 		return fmt.Errorf("handler nesting exceeds 8")
 	}
 	for _, step := range steps {
+		if isStepBlock(step) {
+			if depth > 0 || hasLifecycle(step) || step.HandlerTimeout != "" {
+				return fmt.Errorf("structural blocks cannot own or appear inside lifecycle handlers")
+			}
+			for _, list := range [][]Step{step.Parallel, step.Sequence} {
+				if err := validateLifecycleShape(list, depth, count); err != nil {
+					return err
+				}
+			}
+		}
 		if depth > 0 {
 			*count++
 			if *count > 100 {
@@ -220,7 +230,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 				attempt.Phase = "lifecycle_task_completed"
 				attempt.Result = result
 				if persistErr := journal.RecordAttempt(context.WithoutCancel(ctx), attempt); persistErr != nil {
-					return result, errors.Join(err, persistErr)
+					return result, errors.Join(err, iterationPersistence(errors.Join(errStepPersistence, persistErr), ec.Ordered))
 				}
 			}
 		}
@@ -343,7 +353,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			attempt.Phase = "lifecycle_completed"
 		}
 		if persistErr := journal.Complete(context.WithoutCancel(ctx), attempt, result); persistErr != nil {
-			return result, errors.Join(err, persistErr)
+			return result, errors.Join(err, iterationPersistence(errors.Join(errStepPersistence, persistErr), ec.Ordered))
 		}
 	}
 	return result, err
@@ -382,7 +392,7 @@ func expandLifecycleOutputs(w *Workflow, steps []Step) error {
 				steps[i].With["output"] = output
 			}
 		}
-		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
 			if err := expandLifecycleOutputs(w, list); err != nil {
 				return err
 			}

@@ -75,7 +75,7 @@ func Validate(w *Workflow) error {
 		if err := validateLifecycleShape(job.Steps, 0, &count); err != nil {
 			return fmt.Errorf("job %s: %w", id, err)
 		}
-		if err := validateStepSequence(w, id, job.Steps); err != nil {
+		if err := validateStepSequence(w, id, FlattenSteps(job.Steps)); err != nil {
 			return err
 		}
 
@@ -145,6 +145,12 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
 		}
 		seen[sid] = true
+		if isStepBlock(step) {
+			if err := validateStepBlock(step); err != nil {
+				return fmt.Errorf("step %s: %w", sid, err)
+			}
+			continue
+		}
 		command := len(step.Argv) > 0 || step.Run != ""
 		if command {
 			if step.Uses != "" || len(step.With) > 0 {

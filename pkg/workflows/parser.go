@@ -36,12 +36,10 @@ func Parse(data []byte) (*Workflow, error) {
 		return nil, err
 	}
 	for id, job := range w.Jobs {
-		for i, step := range job.Steps {
-			normalized, err := normalizeAgentStep(step)
-			if err != nil {
-				return nil, fmt.Errorf("job %s step %s: %w", id, stepID(step, i), err)
-			}
-			job.Steps[i] = normalized
+		var err error
+		job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) { return normalizeAgentStep(step) })
+		if err != nil {
+			return nil, fmt.Errorf("job %s %w", id, err)
 		}
 		w.Jobs[id] = job
 	}
@@ -51,16 +49,6 @@ func Parse(data []byte) (*Workflow, error) {
 // normalizeAgentStep lowers the authoring shorthand to the existing execution
 // contract before role admission, expression evaluation, and durable snapshots.
 func normalizeAgentStep(step Step) (Step, error) {
-	for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
-		for i := range list {
-			normalized, err := normalizeAgentStep(list[i])
-			if err != nil {
-				return Step{}, err
-			}
-			list[i] = normalized
-		}
-	}
-
 	if step.Agent == nil {
 		if step.Prompt != nil {
 			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")
@@ -95,6 +83,18 @@ func checkAgentShorthand(n *yaml.Node) error {
 	fields := map[string]*yaml.Node{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		fields[n.Content[i].Value] = n.Content[i+1]
+	}
+	for _, key := range []string{"parallel", "sequence"} {
+		if block := fields[key]; block != nil {
+			if block.Kind != yaml.SequenceNode || len(block.Content) == 0 {
+				return fmt.Errorf("%s requires a nonempty step sequence", key)
+			}
+			for field := range fields {
+				if field != key && field != "id" && field != "name" && field != "if" {
+					return fmt.Errorf("%s block cannot combine with %s", key, field)
+				}
+			}
+		}
 	}
 	for _, key := range []string{"agent", "prompt"} {
 		if value := fields[key]; value != nil && (value.Kind != yaml.ScalarNode || value.Tag != "!!str") {

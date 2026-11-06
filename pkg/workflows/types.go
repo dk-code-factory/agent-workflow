@@ -132,6 +132,8 @@ type Step struct {
 	OnFailure        []Step         `json:"onFailure,omitempty" yaml:"onFailure,omitempty"`
 	Finally          []Step         `json:"finally,omitempty" yaml:"finally,omitempty"`
 	HandlerTimeout   string         `json:"handlerTimeout,omitempty" yaml:"handlerTimeout,omitempty"`
+	Parallel         []Step         `json:"parallel,omitempty" yaml:"parallel,omitempty"`
+	Sequence         []Step         `json:"sequence,omitempty" yaml:"sequence,omitempty"`
 	Agent            *string        `json:"agent,omitempty" yaml:"agent,omitempty"`
 	Prompt           *string        `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	Argv             []string       `json:"argv,omitempty" yaml:"argv,omitempty"`

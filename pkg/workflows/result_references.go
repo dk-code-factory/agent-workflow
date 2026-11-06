@@ -8,12 +8,12 @@ import (
 )
 
 func validateResultReferences(w *Workflow) error {
-	stepIndexes := make(map[string]map[string]int, len(w.Jobs))
+	stepIndexes := make(map[string]map[string]bool, len(w.Jobs))
 	dependencies := make(map[string]map[string]bool, len(w.Jobs))
 	for id, job := range w.Jobs {
-		indexes := make(map[string]int, len(job.Steps))
-		for index, step := range job.Steps {
-			indexes[stepID(step, index)] = index
+		indexes := make(map[string]bool)
+		for _, step := range FlattenSteps(job.Steps) {
+			indexes[step.ID] = true
 		}
 		stepIndexes[id] = indexes
 		declared := make(map[string]bool, len(job.Needs))
@@ -22,16 +22,16 @@ func validateResultReferences(w *Workflow) error {
 		}
 		dependencies[id] = declared
 	}
-	check := func(value any, field, jobID string, available int, bare bool) error {
+	check := func(value any, field, jobID string, available map[string]bool, bare bool) error {
 		return walkResultReferences(value, bare, func(parts []string) error {
-			if !newResultReference(parts) {
+			if !newResultReference(parts) && !(len(parts) >= 2 && parts[0] == "steps" && hasStepBlocks(w.Jobs[jobID].Steps)) {
 				return nil
 			}
 			fail := func(reason string) error { return fmt.Errorf("%s: %s: %s", field, strings.Join(parts, "."), reason) }
 			producer, step, limit := jobID, "", available
 			switch parts[0] {
 			case "steps":
-				if jobID == "" || available == 0 {
+				if jobID == "" || len(available) == 0 {
 					return fail("local step results are unavailable here")
 				}
 				step = parts[1]
@@ -49,7 +49,7 @@ func validateResultReferences(w *Workflow) error {
 					return fail("step id and result field are required")
 				}
 				step = parts[3]
-				limit = len(w.Jobs[producer].Steps)
+				limit = stepIndexes[producer]
 			}
 			job, ok := w.Jobs[producer]
 			if !ok {
@@ -58,8 +58,8 @@ func validateResultReferences(w *Workflow) error {
 			if job.Uses != "" {
 				return fail("reusable workflow steps are private; use its declared outputs")
 			}
-			if index, ok := stepIndexes[producer][step]; ok {
-				if index >= limit {
+			if stepIndexes[producer][step] {
+				if !limit[step] {
 					return fail("step result is unavailable before that step completes")
 				}
 				return nil
@@ -70,35 +70,31 @@ func validateResultReferences(w *Workflow) error {
 	for id, job := range w.Jobs {
 		prefix := "jobs." + id
 		for field, value := range map[string]any{"if": job.If, "with": job.With, "secrets": job.Secrets} {
-			if err := check(value, prefix+"."+field, id, 0, field == "if"); err != nil {
+			if err := check(value, prefix+"."+field, id, nil, field == "if"); err != nil {
 				return err
 			}
 		}
 		if job.ForEach != nil {
 			if text, ok := job.ForEach.Items.(string); ok {
-				if err := check(text, prefix+".for-each.items", id, 0, false); err != nil {
+				if err := check(text, prefix+".for-each.items", id, nil, false); err != nil {
 					return err
 				}
 			}
-			if err := check(job.ForEach.Key, prefix+".for-each.key", id, 0, true); err != nil {
+			if err := check(job.ForEach.Key, prefix+".for-each.key", id, nil, true); err != nil {
 				return err
 			}
 		}
-		available := map[string]bool{}
 		var handlers func([]Step, map[string]bool, string) error
 		handlers = func(steps []Step, inherited map[string]bool, path string) error {
-			local := map[string]bool{}
-			for key, value := range inherited {
-				local[key] = value
-			}
-			for index, step := range steps {
-				sid := stepID(step, index)
-				step, err := resolveReferenceStep(w, step)
+			local := copyStepScope(inherited)
+			for index, source := range steps {
+				sid := stepID(source, index)
+				step, err := resolveReferenceStep(w, source)
 				if err != nil {
 					return fmt.Errorf("%s.%s.with.output: %w", path, sid, err)
 				}
 				for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
-					err := walkResultReferences(value, field == "if", func(parts []string) error {
+					if err := walkResultReferences(value, field == "if", func(parts []string) error {
 						if len(parts) > 1 && parts[0] == "steps" {
 							if !local[parts[1]] {
 								return fmt.Errorf("%s.%s: step result %s unavailable before completion", path, field, parts[1])
@@ -106,11 +102,10 @@ func validateResultReferences(w *Workflow) error {
 							return nil
 						}
 						if len(parts) > 0 && (parts[0] == "needs" || parts[0] == "jobs") {
-							return check("${{ "+strings.Join(parts, ".")+" }}", path+"."+field, id, len(job.Steps), false)
+							return check("${{ "+strings.Join(parts, ".")+" }}", path+"."+field, id, nil, false)
 						}
 						return nil
-					})
-					if err != nil {
+					}); err != nil {
 						return err
 					}
 				}
@@ -126,42 +121,75 @@ func validateResultReferences(w *Workflow) error {
 			}
 			return nil
 		}
-		for index, step := range job.Steps {
-			for _, entry := range []struct {
-				name  string
-				steps []Step
-			}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
-				if err := handlers(entry.steps, available, prefix+"."+stepID(step, index)+"."+entry.name); err != nil {
+		var inspect func([]Step, map[string]bool) error
+		inspect = func(steps []Step, available map[string]bool) error {
+			for _, source := range steps {
+				sid := source.ID
+				step, err := normalizeAgentStep(source)
+				if err != nil {
 					return err
 				}
+				with := step.With
+				if strings.HasPrefix(step.Uses, "agent/") && step.With["output"] != nil {
+					output, err := resolveNamedOutput(w, step.With["output"])
+					if err != nil {
+						return fmt.Errorf("%s.steps.%s.with.output: %w", prefix, sid, err)
+					}
+					with = make(map[string]any, len(step.With))
+					for key, value := range step.With {
+						with[key] = value
+					}
+					with["output"] = output
+				}
+				for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+					if err := check(value, fmt.Sprintf("%s.steps.%s.%s", prefix, sid, field), id, available, field == "if"); err != nil {
+						return err
+					}
+				}
+				for _, entry := range []struct {
+					name  string
+					steps []Step
+				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+					if err := handlers(entry.steps, available, prefix+".steps."+sid+"."+entry.name); err != nil {
+						return err
+					}
+				}
+				if source.Parallel != nil {
+					for _, branch := range source.Parallel {
+						branchAvailable := copyStepScope(available)
+						if err := inspect([]Step{branch}, branchAvailable); err != nil {
+							return err
+						}
+					}
+					for _, descendant := range FlattenSteps(source.Parallel) {
+						available[descendant.ID] = true
+					}
+				} else if source.Sequence != nil {
+					if err := inspect(source.Sequence, available); err != nil {
+						return err
+					}
+				}
+				available[sid] = true
 			}
-			available[stepID(step, index)] = true
+			return nil
 		}
-		for index, source := range job.Steps {
-			step, err := resolveReferenceStep(w, source)
-			if err != nil {
-				return err
-			}
-			for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
-				if err := check(value, fmt.Sprintf("%s.steps[%d].%s", prefix, index, field), id, index, field == "if"); err != nil {
-					return err
-				}
-			}
+		if err := inspect(identifiedSteps(job.Steps, ""), map[string]bool{}); err != nil {
+			return err
 		}
 		for name, value := range job.Outputs {
-			if err := check(value, prefix+".outputs."+name, id, len(job.Steps), false); err != nil {
+			if err := check(value, prefix+".outputs."+name, id, stepIndexes[id], false); err != nil {
 				return err
 			}
 		}
 		if job.Repeat != nil {
-			if err := check(job.Repeat.Until, prefix+".repeat.until", id, len(job.Steps), true); err != nil {
+			if err := check(job.Repeat.Until, prefix+".repeat.until", id, stepIndexes[id], true); err != nil {
 				return err
 			}
 		}
 	}
 	if w.On.WorkflowCall != nil {
 		for name, output := range w.On.WorkflowCall.Outputs {
-			if err := check(output.Value, "on.workflow_call.outputs."+name+".value", "", 0, false); err != nil {
+			if err := check(output.Value, "on.workflow_call.outputs."+name+".value", "", nil, false); err != nil {
 				return err
 			}
 		}

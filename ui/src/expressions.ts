@@ -1,4 +1,5 @@
 import type { Path, Step, Workflow } from './types';
+import { containingStep, stepEntries } from './step-tree';
 export interface Reference {
   scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets' | 'failed' | 'error'; id: string;
   step?: string; output?: string; tail?: string; offset: number;
@@ -117,18 +118,29 @@ export function pathJob(path: Path): string | undefined { return path[0] === 'jo
 export function stepPathLength(path: Path): number | undefined {
   if (path[0] !== 'jobs' || path[2] !== 'steps' || typeof path[3] !== 'number') return;
   let length = 4;
-  while (['onError', 'onFailure', 'finally'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
+  while (['onError', 'onFailure', 'finally', 'parallel', 'sequence'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
   return length;
+}
+export function inHandlerPath(path: Path): boolean {
+  const length = stepPathLength(path) ?? 0;
+  for (let at = 4; at < length; at += 2) if (['onError', 'onFailure', 'finally'].includes(String(path[at]))) return true;
+  return false;
 }
 export function completedSteps(workflow: Workflow, path: Path): Map<string, { step: Step; path: Path }> {
   const result = new Map<string, { step: Step; path: Path }>();
   const length = stepPathLength(path);
   if (length === undefined) return result;
-  let sequence = workflow.jobs[String(path[1])]?.steps ?? [];
-  for (let at = 3; at < length; at += 2) {
-    const index = Number(path[at]);
-    sequence.slice(0, index).forEach((step, i) => result.set(String(step.id || `step_${i + 1}`), { step, path: [...path.slice(0, at), i] }));
-    if (at + 2 < length) sequence = sequence[index]?.[path[at + 1] as 'onError' | 'onFailure' | 'finally'] ?? [];
+  const entries = stepEntries(workflow.jobs[String(path[1])]?.steps);
+  const owner = containingStep(entries, path.slice(2));
+  if (!owner) return result;
+  for (const entry of entries) if (owner.available.has(entry.id)) result.set(entry.id, { step: entry.step, path: ['jobs', path[1], ...entry.path] });
+  let sequence: Step[] = [];
+  let current = owner.step;
+  for (let at = owner.path.length + 2; at < length; at += 2) {
+    sequence = current[path[at] as 'onError' | 'onFailure' | 'finally'] ?? [];
+    const index = Number(path[at + 1]);
+    sequence.slice(0, index).forEach((step, i) => result.set(String(step.id || `step_${i + 1}`), { step, path: [...path.slice(0, at + 1), i] }));
+    current = sequence[index] ?? {};
   }
   return result;
 }

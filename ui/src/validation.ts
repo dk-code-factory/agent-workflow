@@ -1,5 +1,6 @@
 import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
-import { completedSteps, hasExpressionReferences, isConciseStepReference, isExpressionPath, references, stepPathLength } from './expressions';
+import { completedSteps, hasExpressionReferences, inHandlerPath, isConciseStepReference, isExpressionPath, references } from './expressions';
+import { blockKind, containingStep, stepEntries } from './step-tree';
 import type { Diagnostic, Job, Mapping, Path, Step, Workflow } from './types';
 
 export function diagnosticLabel(value: string | number): string {
@@ -63,6 +64,7 @@ const stepShape: { [key: string]: Shape } = { id: 'string', name: 'string', uses
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string' };
 export const handlerKinds = ['onError', 'onFailure', 'finally'] as const;
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
+stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
@@ -286,7 +288,8 @@ function validateWorkflow(w: Workflow, add: Add) {
     add('host-schema', 'Named schema constraints require runner schema admission', ['schemas', name], undefined, 'host', 'info');
   }
   const dependencySets = new Map<string, Set<string>>();
-  const stepIndexes = new Map(Object.entries(jobs).map(([id, job]) => [id, new Map((job.steps ?? []).map((step, index) => [effectiveStepID(step, index), index]))]));
+  const trees = new Map(Object.entries(jobs).map(([id, job]) => [id, stepEntries(job.steps)]));
+  const stepIndexes = new Map([...trees].map(([id, entries]) => [id, new Map(entries.map((entry, index) => [entry.id, index]))]));
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
   for (const key of ['schedule', 'channel_message', 'command', 'runtime_event', 'event']) {
@@ -323,11 +326,18 @@ function validateWorkflow(w: Workflow, add: Add) {
     let handlerCount = 0;
     const validateSteps = (steps: Step[], parent: Path, depth = 0) => {
     const seen = new Set<string>();
-    steps.forEach((step, i) => {
-      const sp = [...parent, i];
-      const sid = effectiveStepID(step, i);
+    const entries = depth === 0 ? trees.get(id)! : steps.map((step, i) => ({ step, path: [...parent.slice(2), i], id: effectiveStepID(step, i) }));
+    entries.forEach(({ step, path, id: sid }) => {
+      const sp = [...p, ...path];
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
+      const kind = blockKind(step);
+      if (kind) {
+        if (depth > 0) add('handler-action', 'Structural blocks cannot appear inside lifecycle handlers', sp);
+        if (!step[kind]?.length) add('block', `${kind} requires at least one step`, [...sp, kind]);
+        for (const key of Object.keys(step)) if (!['id', 'name', 'if', kind].includes(key)) add('block', `Block cannot contain ${key}`, [...sp, key]);
+        return;
+      }
       const shorthand = Object.hasOwn(step, 'agent');
       const prompt = Object.hasOwn(step, 'prompt');
       const uses = stepAction(step);
@@ -387,26 +397,24 @@ function validateWorkflow(w: Workflow, add: Add) {
   // Expression paths are inspected, never evaluated. Only recognized dot paths are rewritten.
   const inspect = (value: unknown, path: Path, jobID?: string, namedStepPath?: Path) => {
     const contextPath = namedStepPath ?? path;
-    const namedStepIndex = namedStepPath?.[3] as number | undefined;
     if (typeof value === 'string') {
       if (!hasExpressionReferences(path)) return;
       const warnedProducers = new Set<string>();
       for (const ref of references(value, isExpressionPath(path))) {
         if (ref.scope === 'failed' || ref.scope === 'error') {
           if (path[0] === 'schemas' && !namedStepPath) continue;
-          const length = stepPathLength(contextPath);
           const fields = ref.scope === 'failed' ? ['id', 'uses', 'prompt'] : ['message', 'class'];
-          if (length === undefined || length <= 4) add('handler-context', `${ref.scope} context is available only inside step handlers`, path);
+          if (!inHandlerPath(contextPath)) add('handler-context', `${ref.scope} context is available only inside step handlers`, path);
           else if (!fields.includes(ref.id) || ref.tail) add('handler-context', `Unknown ${ref.scope} context field "${ref.id}${ref.tail ?? ''}"`, path);
           continue;
         }
-        if (ref.scope === 'steps' && (stepPathLength(contextPath) ?? 0) > 4) {
+        if (ref.scope === 'steps' && inHandlerPath(contextPath)) {
           if (!completedSteps(w, contextPath).has(ref.id)) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
           continue;
         }
         // Shared declarations have no local job until an agent uses them.
-        if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs' || ref.scope === 'jobs') && namedStepIndex === undefined) continue;
-        if (path[0] === 'schemas' && (ref.scope === 'inputs' || ref.scope === 'secrets') && namedStepIndex !== undefined) continue;
+        if (path[0] === 'schemas' && (ref.scope === 'steps' || ref.scope === 'needs' || ref.scope === 'jobs') && namedStepPath === undefined) continue;
+        if (path[0] === 'schemas' && (ref.scope === 'inputs' || ref.scope === 'secrets') && namedStepPath !== undefined) continue;
         if (ref.scope === 'inputs' || ref.scope === 'secrets') {
           // Manual runs may receive inputs and secrets from their host. A
           // callable interface makes these names statically knowable.
@@ -435,12 +443,11 @@ function validateWorkflow(w: Workflow, add: Add) {
             else if (!stepIndexes.get(ref.id)?.has(ref.step)) add('expression-reference', `Unknown step "${ref.step}" of job "${ref.id}"`, path);
           }
         }
-        if (exists && isConciseStepReference(ref) && jobID) {
-          const index = stepIndexes.get(jobID)?.get(ref.id) ?? -1;
-          const consumerIndex = namedStepIndex ?? (path[2] === 'steps' && typeof path[3] === 'number' ? path[3] : undefined);
-          const inStep = consumerIndex !== undefined;
+        if (exists && ref.scope === 'steps' && jobID && (isConciseStepReference(ref) || (trees.get(jobID) ?? []).some(entry => blockKind(entry.step)))) {
+          const entry = containingStep(trees.get(jobID) ?? [], contextPath.slice(2));
+          const inStep = entry !== undefined;
           const afterSteps = path[2] === 'outputs' || path[2] === 'repeat' && path[3] === 'until';
-          if (!inStep && !afterSteps || inStep && index >= consumerIndex) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
+          if (!inStep && !afterSteps || inStep && !entry.available.has(ref.id)) add('expression-reference', `Step result "${ref.id}" is unavailable here; reference a completed preceding step`, path);
         }
       }
     }
@@ -455,7 +462,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       const declaration = w.schemas?.[output.schema];
       if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, location);
     }
-    for (const kind of handlerKinds) inspectNamedOutputs(step[kind] ?? [], jobID, [...location, kind]);
+    for (const kind of [...handlerKinds, 'parallel', 'sequence'] as const) inspectNamedOutputs(step[kind] ?? [], jobID, [...location, kind]);
   });
   for (const [jobID, job] of Object.entries(jobs)) inspectNamedOutputs(job.steps ?? [], jobID, ['jobs', jobID, 'steps']);
 }

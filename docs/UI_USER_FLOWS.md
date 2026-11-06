@@ -339,7 +339,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block preserves inherited handler references, clones their named schema while retaining locally shadowed references, and survives export and Undo; a structural block inside fallback is diagnosed.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
@@ -356,7 +356,12 @@ fields. Escape discards an uncommitted field edit.
   `failed.uses`, `failed.prompt`, `error.message`, and `error.class`; source
   completion offers these fields inside a handler. Lists accept nested handlers;
   the browser diagnoses invalid child steps, timeouts above five minutes, more
-  than eight nested levels, and more than 100 handler steps per job.
+  than eight nested levels, and more than 100 handler steps per job. Agent and
+  command leaves inside parallel or sequence blocks support the same handlers;
+  structural blocks cannot own handlers or appear in handler lists. A handler
+  sees its leaf's incoming results and preceding handler siblings, excluding
+  concurrent branch siblings. Duplicating a block updates inherited producer
+  references and named schemas while preserving local handler shadowing.
   Renaming a preceding outer step updates its references in named handler output
   schemas while preserving references to a handler sibling with the same ID.
   A new ID that would redirect a reference to a preceding handler sibling is
@@ -583,15 +588,26 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-38.spec.ts)
 
-- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes.
+- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes. Local parallel blocks import without admission errors, expose branch YAML editing and the correct block type, and omit unsupported block-level continuation. Nested sequence references survive editing; duplication allocates unique descendant IDs and rewrites internal references. Named contracts consumed inside a copied block receive their own declaration when they reference copied descendants, while original consumers retain the original contract; Undo and Redo restore the complete duplication transaction. Cancelling conversion preserves the block. Joined nested results appear in a following prompt's expression picker, and Undo restores each source transaction. Adding a parallel block from the palette supplies two independently identified command branches.
 
 - **Starting point:** I want two independent reviews and a final summary.
 - **My flow:** I add jobs named `review_a`, `review_b`, and `summarize` → add
   the review steps → select `summarize` and check both review jobs under
   **Dependencies** → use **Auto layout** to inspect the structure.
+  For local composition inside one job, I choose **Parallel block** in the
+  palette, select the block, and edit **Parallel branches (YAML)**. Each branch
+  is a step or a `sequence` block; nested steps are edited through this YAML
+  field or the source. I add a following agent step and insert a joined result
+  such as `${{ steps.second.text }}` using **Insert expression…**.
 - **What I see:** Both review jobs lead into the summary job, with no dependency
   between the reviews. The definition allows the reviews to run independently
   before the summary, subject to the runner's execution capacity.
+  Local parallel branches inherit the same incoming results, while a sequence
+  can use its own preceding steps. Following steps can use all named results
+  after a successful join. IDs are unique within the job. Duplicating a block
+  gives its descendants new IDs and updates references within the copy;
+  changing its type asks before discarding its branches. Block failures
+  propagate, and blocks do not offer **Continue on error**.
 
 ### UF-39 — Pass a result from one job to another
 
