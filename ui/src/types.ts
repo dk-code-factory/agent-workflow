@@ -1,7 +1,7 @@
 export type Path = (string | number)[];
 export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
-  id?: string; name?: string; uses?: string; argv?: string[]; run?: string; shell?: string;
+  id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
 }
 export interface Job extends Mapping {

@@ -23,3 +23,35 @@ test('configure agent prompt optional settings and output contract', async ({ pa
   await ui.getByLabel('Structured output contract (YAML)', { exact: true }).press('Tab');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context', output: { type: 'object' } });
 });
+
+test('inspect and edit concise agent prompts and roles without expanding their YAML form', async ({ page }) => {
+  const source = `# concise task
+jobs:
+  build:
+    steps:
+      - id: review
+        agent: claude
+        prompt: |
+          Review the change.
+          Keep both lines.
+        with:
+          model: sonnet # retain option
+          workspace: /work
+`;
+  await page.goto('/test/browser.html'); const ui = page.locator('#a');
+  await page.evaluate(source => (window as any).first.update({ source }), source);
+  await ui.getByRole('button', { name: 'review agent/claude', exact: true }).click();
+  await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('agent/claude');
+  await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review the change.\nKeep both lines.\n');
+  await ui.getByLabel('Prompt', { exact: true }).fill('Revised review.\nKeep multiline text.');
+  await ui.getByLabel('Prompt', { exact: true }).press('Tab');
+  await ui.getByLabel('Action target', { exact: true }).fill('agent/codex');
+  await ui.getByLabel('Action target', { exact: true }).press('Tab');
+  await expect(ui.getByRole('button', { name: 'review agent/codex', exact: true })).toBeVisible();
+  await ui.getByLabel('Model', { exact: true }).fill('review-model');
+  await ui.getByLabel('Model', { exact: true }).press('Tab');
+  const state = await page.evaluate(() => (window as any).first.getSnapshot());
+  expect(state.workflow.jobs.build.steps[0]).toEqual({ id: 'review', agent: 'codex', prompt: 'Revised review.\nKeep multiline text.', with: { model: 'review-model', workspace: '/work' } });
+  expect(state.source).toContain('# concise task'); expect(state.source).toContain('# retain option');
+  expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+});

@@ -1,6 +1,6 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
-import { dependencies, effectiveStepID, identifier, parseWorkflow } from './validation';
+import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow } from './validation';
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
@@ -431,7 +431,7 @@ export class WorkflowDocument {
     if (w) for (const [id, job] of Object.entries(w.jobs)) {
       if (job.uses && this.options.workflows && !this.options.workflows.some(item => item.id.replace(/^\.\//, '') === job.uses!.replace(/^\.\//, ''))) diagnostics.push({ code: 'workflow-catalog', message: `Workflow ${job.uses} is unavailable in the host catalog`, path: ['jobs', id, 'uses'], source: 'host', severity: 'warning' });
       job.steps?.forEach((step, i) => {
-        if (step.uses?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === step.uses!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${step.uses} is unavailable in the host catalog`, path: ['jobs', id, 'steps', i, 'uses'], source: 'host', severity: 'warning' });
+        if (stepAction(step)?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === stepAction(step)!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, 'steps', i, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();

@@ -447,6 +447,44 @@ completion recovers a lost parent/item checkpoint without repeating its work.
 Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
 Legacy JSON stores cannot execute iteration workflows.
 
+### Concise YAML agent steps
+
+Inside a job, `agent: ROLE` and top-level `prompt` offer an alternative to
+`uses: agent/ROLE` and `with.prompt`:
+
+```yaml
+jobs:
+  review:
+    steps:
+      - id: review
+        agent: reviewer
+        prompt: |
+          Review the change for correctness and missing tests.
+          Task: ${{ inputs.task }}
+        with:
+          model: sonnet
+          output:
+            format: json
+            schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
+```
+
+Declare the `reviewer` role in `agents.yml` as usual. The role name is a literal
+identifier; both `agent` and `prompt` must be YAML strings. The other supported
+task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
+An `agent` step may instead use the existing `with.prompt` or `with.message`
+form when top-level `prompt` is absent. Top-level `prompt` requires `agent`.
+Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
+even when their values match. Command fields cannot combine with an agent call.
+
+The shorthand resolves to the existing agent operation before admission. Role
+permissions, `${{ ... }}` interpolation, literal input data, structured-output
+validation and repair, step/job outputs, and durable recovery follow the same
+rules. For example, the result remains available at
+`${{ steps.review.outputs.structured.approved }}`. Jobs, dependencies, reusable
+workflow calls, and legacy `uses` steps retain their existing syntax. Admitted
+runs retain their resolved definition even when the source YAML changes later.
+The YAML editor preserves and edits either authoring form.
+
 Structured output uses native schemas on session backends and strict-object
 contracts on current CLI backends, followed by engine validation.
 `output.repair-attempts: 0` disables repair. The older

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { controllerParameters, dependencies, effectiveStepID } from './validation';
+import { controllerParameters, dependencies, effectiveStepID, stepAction } from './validation';
 import { parseDocument, stringify } from 'yaml';
 import type { WorkflowDocument } from './document';
 import type { ActionDefinition, InputType, Mapping, Path } from './types';
@@ -260,7 +260,7 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
   // destroy raw host buffers before a replacement choice could protect them.
   useEffect(() => {
     const previous = rendered.current;
-    if (previous && previous.generation === generation && previous.job === job && previous.index === index && previous.uses === step.uses && previous.id === step.id && previous.readOnly === readOnly &&
+    if (previous && previous.generation === generation && previous.job === job && previous.index === index && previous.uses === stepAction(step) && previous.id === step.id && previous.readOnly === readOnly &&
       (previous.pending() || (previous.step === text && previous.render === definition.renderInspector))) return;
     rendered.current = undefined; previous?.dispose();
     const element = ref.current!;
@@ -269,7 +269,7 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
     const canEdit = () => {
       const snapshot = store.getSnapshot();
       const current = snapshot.workflow?.jobs[job]?.steps?.[index];
-      return active && generation === store.getInspectorGeneration() && !discarding && !readOnly && !snapshot.stale && !!current && current.id === step.id && current.uses === step.uses;
+      return active && generation === store.getInspectorGeneration() && !discarding && !readOnly && !snapshot.stale && !!current && current.id === step.id && stepAction(current) === stepAction(step);
     };
     const unregister = registry?.register({ identifier: false, custom: true, isPending: () => pending, apply: () => true, reveal: () => {}, discard: () => {
       if (!active || discarding || generation !== store.getInspectorGeneration()) return;
@@ -289,7 +289,7 @@ function CustomForm({ definition, store, job, index }: { definition: ActionDefin
         if (cleared) refresh(value => value + 1);
       },
     });
-    rendered.current = { step: text, generation, render: definition.renderInspector, job, index, uses: step.uses, id: step.id, readOnly, pending: () => pending, dispose: () => {
+    rendered.current = { step: text, generation, render: definition.renderInspector, job, index, uses: stepAction(step), id: step.id, readOnly, pending: () => pending, dispose: () => {
       active = false; unregister?.(); cleanup?.(); element.replaceChildren();
     } };
   });
@@ -309,9 +309,11 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
   const field = (label: string, key: string, multiline = false) => <Field path={[...path, key]} key={key} label={label} value={obj?.[key]} readOnly={disabled} multiline={multiline} suggestionValues={expressionSuggestions(w, selection.job, selection.step)} suggestions={hasExpressionReferences([...path, key]) ? suggestionsID : undefined} result={hasExpressionReferences([...path, key]) ? { store, path: [...path, key] } : undefined} onApply={value => applyEdit(() => store.setField([...path, key], value || undefined))} />;
   const advanced = (key: string, label = `${key} (YAML)`) => <StructuredField key={key} store={store} path={[...path, key]} label={label} replacement />;
   const common = <>{field('Condition', 'if')}<label className="aw-check" data-aw-path={JSON.stringify([...path, 'continue-on-error'])}><input type="checkbox" disabled={disabled} checked={!!obj?.['continue-on-error']} onChange={e => attempt(() => store.setField([...path, 'continue-on-error'], e.target.checked))} />Continue on error</label></>;
-  const action = step && store.getOptions().actions?.find(a => a.uses === step.uses);
+  const uses = step && stepAction(step);
+  const shorthand = step && Object.hasOwn(step, 'agent');
+  const action = step && store.getOptions().actions?.find(a => a.uses === uses);
   const params = step?.with ?? {};
-  const commandKind = step && (step.argv?.length ? 'argv' : step.run || step.shell ? 'shell' : step.uses ? undefined : step.argv ? 'argv' : step.run !== undefined ? 'shell' : undefined);
+  const commandKind = step && (step.argv?.length ? 'argv' : step.run || step.shell ? 'shell' : uses ? undefined : step.argv ? 'argv' : step.run !== undefined ? 'shell' : undefined);
   const paramField = (key: string, label: string, multiline = false, type?: string) => <Field path={[...path, 'with', key]} key={key} label={label} value={params[key]} readOnly={disabled} multiline={multiline} type={type} suggestionValues={expressionSuggestions(w, selection.job, selection.step)} suggestions={suggestionsID} result={{ store, path: [...path, 'with', key] }} onApply={value => applyEdit(() => store.setField([...path, 'with', key], value || undefined))} />;
   const confirmConversion = (fields: string[]) => !fields.length || window.confirm(`Changing type will discard:\n${fields.map(field => `• ${field}`).join('\n')}\n\nContinue? Undo can restore the complete previous definition.`);
   const changeStepKind = (kind: string) => {
@@ -345,16 +347,16 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
         <Field path={[...path, 'id']} identifier label="Step ID" value={effectiveStepID(step, selection.step!)} readOnly={disabled} onApply={value => applyEdit(() => store.renameStep(selection.job!, selection.step!, value))} />
         <div className="aw-button-row"><button type="button" disabled={disabled} onClick={() => attempt(() => store.duplicateStep(selection.job!, selection.step!))}>Duplicate step</button><button type="button" disabled={disabled} onClick={() => requestDelete(selection.job!, selection.step)}>Delete step</button><button type="button" disabled={disabled || selection.step === 0} onClick={() => attempt(() => { store.moveStep(selection.job!, selection.step!, selection.step! - 1); select({ ...selection, step: selection.step! - 1 }); })}>Move up</button><button type="button" disabled={disabled || selection.step === job!.steps!.length - 1} onClick={() => attempt(() => { store.moveStep(selection.job!, selection.step!, selection.step! + 1); select({ ...selection, step: selection.step! + 1 }); })}>Move down</button></div>
         {common}
-        <label className="aw-field" data-aw-path={!step.uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={commandKind ?? step.uses ?? 'agent/claude'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', ...(store.getOptions().agents ?? [{ id: 'claude' }, { id: 'codex' }]).map(a => `agent/${a.id}`), ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(step.uses ? [step.uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
+        <label className="aw-field" data-aw-path={!uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={commandKind ?? uses ?? 'agent/claude'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', ...(store.getOptions().agents ?? [{ id: 'claude' }, { id: 'codex' }]).map(a => `agent/${a.id}`), ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(uses ? [uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
         {commandKind === 'argv' && <CommandArguments store={store} path={[...path, 'argv']} suggestionsID={suggestionsID} attempt={attempt} />}
         {commandKind === 'shell' && <>{field('Shell', 'shell')}{field('Command', 'run', true)}</>}
         {commandKind && <>{field('Working directory', 'working-directory')}{field('Timeout', 'timeout')}</>}
-        {step.uses && <Field path={[...path, 'uses']} identifier label="Action target" value={step.uses} readOnly={disabled} onApply={value => applyEdit(() => {
+        {uses && <Field path={[...path, shorthand ? 'agent' : 'uses']} identifier label="Action target" value={uses} readOnly={disabled} onApply={value => applyEdit(() => {
           if (!value.trim()) throw new Error('Action target is required');
           if (!changeStepKind(value)) throw new Error('Type change cancelled; the previous configuration is unchanged');
         })} />}
-        {step.uses?.startsWith('agent/') && <>{paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
-        {(Object.hasOwn(controllerParameters, step.uses ?? '') ? controllerParameters[step.uses!] : undefined)?.map(key => key === 'independent' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', key])} key={key}><input type="checkbox" disabled={disabled} checked={!!params[key]} onChange={e => attempt(() => store.setField([...path, 'with', key], e.target.checked))} />Independent workspace</label> : key === 'commits' ? <StructuredField key={key} store={store} path={[...path, 'with', key]} label="Commits (YAML)" /> : paramField(key, key[0].toUpperCase() + key.slice(1), key === 'body'))}
+        {uses?.startsWith('agent/') && <>{shorthand && !Object.hasOwn(params, 'prompt') ? field('Prompt', 'prompt', true) : paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
+        {(Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : undefined)?.map(key => key === 'independent' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', key])} key={key}><input type="checkbox" disabled={disabled} checked={!!params[key]} onChange={e => attempt(() => store.setField([...path, 'with', key], e.target.checked))} />Independent workspace</label> : key === 'commits' ? <StructuredField key={key} store={store} path={[...path, 'with', key]} label="Commits (YAML)" /> : paramField(key, key[0].toUpperCase() + key.slice(1), key === 'body'))}
         {action?.fields?.map(f => f.type === 'yaml' ? <StructuredField key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} /> : f.type === 'number' ? <TypedValue key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} type="number" expressions suggestionsID={suggestionsID} /> : f.type === 'boolean' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', f.key])} key={f.key}><input type="checkbox" disabled={disabled} checked={!!params[f.key]} onChange={e => attempt(() => store.setField([...path, 'with', f.key], e.target.checked))} />{f.label}</label> : paramField(f.key, f.label, f.type === 'textarea'))}
         {action?.renderInspector && <CustomForm definition={action} store={store} job={selection.job!} index={selection.step!} />}
         <details><summary>Advanced parameters</summary>{advanced('with', 'Parameters (YAML)')}</details>

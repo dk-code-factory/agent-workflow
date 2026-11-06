@@ -39,5 +39,5 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path[2] !== 'steps' || typeof path[3] !== 'number') return false;
   return (path[4] === 'with' && path.length >= 6)
     || (path[4] === 'argv' && path.length === 6 && typeof path[5] === 'number')
-    || (path.length === 5 && (path[4] === 'run' || path[4] === 'working-directory'));
+    || (path.length === 5 && (path[4] === 'run' || path[4] === 'working-directory' || path[4] === 'prompt'));
 }
