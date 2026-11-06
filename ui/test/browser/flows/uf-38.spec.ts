@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, job } from './harness';
+import { open, snapshot, field, job, step } from './harness';
 
 test('author parallel reviews followed by a combined result', async ({ page }) => {
   const ui = await open(page, 'jobs: {}');
@@ -16,4 +16,64 @@ test('author parallel reviews followed by a combined result', async ({ page }) =
   expect(jobs.summarize.needs).toEqual(['review_a', 'review_b']);
   expect(jobs.review_a.needs).toBeUndefined(); expect(jobs.review_b.needs).toBeUndefined();
   await expect(ui.locator('.react-flow__edge')).toHaveCount(2);
+});
+
+test('edit a local parallel block and consume joined nested results', async ({ page }) => {
+  const ui = await open(page, `jobs:
+  review:
+    steps:
+      - id: reviews
+        parallel:
+          - id: first
+            agent: claude
+            prompt: First review
+          - sequence:
+              - id: collect
+                argv: [echo, collect]
+              - id: second
+                agent: claude
+                prompt: \${{ steps.collect.outputs.stdout }}
+      - id: combine
+        agent: claude
+        prompt: Combine reviews
+`);
+  const before = (await snapshot(page)).source;
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await step(page, 'reviews parallel block');
+  await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('parallel');
+  await expect(ui.getByRole('checkbox', { name: 'Continue on error', exact: true })).toHaveCount(0);
+  const branches = ui.getByLabel('Parallel branches (YAML)', { exact: true });
+  await expect(branches).toHaveValue(/sequence:/);
+  await field(page, 'Parallel branches (YAML)', '- id: first\n  agent: claude\n  prompt: Revised first review\n- sequence:\n    - id: collect\n      argv: [echo, collect]\n    - id: second\n      agent: claude\n      prompt: ${{ steps.collect.outputs.stdout }}\n');
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].parallel[0].prompt).toBe('Revised first review');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  const edited = (await snapshot(page)).source;
+  await ui.getByRole('button', { name: 'Duplicate step', exact: true }).click();
+  const copy = (await snapshot(page)).workflow.jobs.review.steps[1];
+  expect(copy.parallel[0].id).toBe('first_copy');
+  expect(copy.parallel[1].sequence[1].prompt).toContain('steps.collect_copy.outputs.stdout');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited);
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('parallel'); await dialog.dismiss(); });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).source).toBe(edited);
+  await step(page, 'combine agent/claude');
+  await ui.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('steps.second.text');
+  expect((await snapshot(page)).workflow.jobs.review.steps[1].prompt).toContain('${{ steps.second.text }}');
+  await expect(ui.getByLabel('Insert expression into Prompt', { exact: true }).locator('option[value="steps.first.text"]')).toHaveCount(1);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
+});
+
+test('add a parallel block from the palette', async ({ page }) => {
+  const ui = await open(page, 'jobs: {review: {steps: [{id: collect, argv: [echo]}]}}');
+  await job(page, 'review');
+  await ui.getByRole('button', { name: 'Parallel block', exact: true }).click();
+  await expect(ui.getByLabel('Parallel branches (YAML)', { exact: true })).toBeVisible();
+  const parallel = (await snapshot(page)).workflow.jobs.review.steps[1].parallel;
+  expect(parallel).toHaveLength(2);
+  expect(parallel[0].id).not.toBe(parallel[1].id);
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });

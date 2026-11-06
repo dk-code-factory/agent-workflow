@@ -128,6 +128,8 @@ type Job struct {
 }
 
 type Step struct {
+	Parallel         []Step         `json:"parallel,omitempty" yaml:"parallel,omitempty"`
+	Sequence         []Step         `json:"sequence,omitempty" yaml:"sequence,omitempty"`
 	Agent            *string        `json:"agent,omitempty" yaml:"agent,omitempty"`
 	Prompt           *string        `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	Argv             []string       `json:"argv,omitempty" yaml:"argv,omitempty"`

@@ -198,6 +198,40 @@ func TestManagedActionsThroughExecutor(t *testing.T) {
 	}
 }
 
+func TestNestedControllerActionsPinAdmissionBaseline(t *testing.T) {
+	r, _ := fixture(t)
+	ctx := context.Background()
+	head, err := r.git(ctx, r.Root, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `jobs:
+  writer:
+    steps:
+      - parallel:
+          - sequence:
+              - id: workspace
+                uses: workspace/create
+          - argv: [echo, independent]
+`
+	workflow, err := workflows.Parse([]byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := r.Admission(ctx, map[string]*workflows.Workflow{"nested.yml": workflow})
+	if err != nil || metadata["git_head"] != head {
+		t.Fatalf("nested baseline = %v, error = %v; want %s", metadata, err, head)
+	}
+	plain, err := workflows.Parse([]byte("jobs: {plain: {steps: [{parallel: [{argv: [echo, plain]}]}]}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err = r.Admission(ctx, map[string]*workflows.Workflow{"plain.yml": plain})
+	if err != nil || metadata != nil {
+		t.Fatalf("ordinary nested commands require no Git baseline: %v, %v", metadata, err)
+	}
+}
+
 func TestRetentionRemovesOnlyTerminalOwnedWorkspaces(t *testing.T) {
 	r, run := fixture(t)
 	writer := create(t, r, run, "writer")

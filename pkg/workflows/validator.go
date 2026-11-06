@@ -72,8 +72,8 @@ func Validate(w *Workflow) error {
 			}
 		}
 		seen := map[string]bool{}
-		for i, step := range job.Steps {
-			sid := stepID(step, i)
+		for _, step := range FlattenSteps(job.Steps) {
+			sid := step.ID
 			var err error
 			step, err = normalizeAgentStep(step)
 			if err != nil {
@@ -83,6 +83,12 @@ func Validate(w *Workflow) error {
 				return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
 			}
 			seen[sid] = true
+			if isStepBlock(step) {
+				if err := validateStepBlock(step); err != nil {
+					return fmt.Errorf("step %s: %w", sid, err)
+				}
+				continue
+			}
 			command := len(step.Argv) > 0 || step.Run != ""
 			if command {
 				if step.Uses != "" || len(step.With) > 0 {

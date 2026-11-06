@@ -1,6 +1,7 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow, runnerTimestamp } from './validation';
+import { blockKind, producerStep, stepEntries } from './step-tree';
 import { hasExpressionReferences, isExpressionPath, mapReferences, pathJob, references, referenceText, type Reference } from './expressions';
 import { stepConversion } from './conversion';
 
@@ -145,7 +146,7 @@ export class WorkflowDocument {
       }
     }
     doc.setIn(path, value);
-    if (path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[4] === 'prompt' && typeof value === 'string' && runnerTimestamp(value)) {
+    if (path[0] === 'jobs' && path[2] === 'steps' && path.at(-1) === 'prompt' && hasExpressionReferences(path) && typeof value === 'string' && runnerTimestamp(value)) {
       const node = doc.getIn(path, true);
       if (isScalar(node)) node.type = 'QUOTE_DOUBLE';
     }
@@ -184,16 +185,16 @@ export class WorkflowDocument {
       output = source.output;
       if (!identifier.test(output) || !Object.hasOwn(outputs, output)) throw new Error('Unknown producer output');
     } else if (source.kind === 'result') {
-      const step = jobs[producer].steps?.[source.step];
-      if (!step || jobs[producer].uses || jobs[producer]['for-each']) throw new Error('Producer does not expose individual step results');
+      const entry = producerStep(jobs[producer].steps, source.step);
+      if (!entry || blockKind(entry.step) || jobs[producer].uses || jobs[producer]['for-each']) throw new Error('Producer does not expose individual step results');
       if (!source.field.split('.').every(part => identifier.test(part))) throw new Error('Choose a valid result field path');
       output = source.field;
-      directReference = `${consumer ? 'needs' : 'jobs'}.${producer}.steps.${effectiveStepID(step, source.step)}.${source.field}`;
+      directReference = `${consumer ? 'needs' : 'jobs'}.${producer}.steps.${entry.id}.${source.field}`;
     } else {
-      const step = jobs[producer].steps?.[source.step];
-      if (!step || jobs[producer].uses) throw new Error('Unknown producer step');
+      const entry = producerStep(jobs[producer].steps, source.step);
+      if (!entry || blockKind(entry.step) || jobs[producer].uses) throw new Error('Unknown producer step');
       if (!identifier.test(source.output) || !identifier.test(source.name)) throw new Error('Choose valid output names');
-      const reference = 'steps.' + effectiveStepID(step, source.step) + '.outputs.' + source.output;
+      const reference = 'steps.' + entry.id + '.outputs.' + source.output;
       const value = '${{ ' + reference + ' }}';
       const matches = (value: string) => /^\s*\$\{\{\s*(\S+)\s*\}\}\s*$/.exec(value)?.[1] === reference;
       if (Object.hasOwn(outputs, source.name) && !matches(outputs[source.name])) throw new Error('Output name conflicts with an existing declaration');
@@ -242,6 +243,10 @@ export class WorkflowDocument {
     const step = this.snapshot.workflow?.jobs[id]?.steps?.[index];
     if (!step) throw new Error('Unknown step');
     const plan = stepConversion(step, kind);
+    const used = stepEntries(this.snapshot.workflow!.jobs[id].steps).map(entry => entry.id);
+    for (const entry of plan.set) if ((entry.path[0] === 'parallel' || entry.path[0] === 'sequence') && Array.isArray(entry.value)) {
+      for (const { step: child } of stepEntries(entry.value)) { child.id = this.unique('branch', used); used.push(child.id); }
+    }
     this.edit(doc => {
       const path: Path = ['jobs', id, 'steps', index];
       for (const key of plan.remove) doc.deleteIn([...path, ...key]);
@@ -327,19 +332,20 @@ export class WorkflowDocument {
     if (this.entryDeletionImpact(path).length && !confirmed) throw new Error('Deletion has references; confirmation is required');
     this.edit(doc => { if (!doc.deleteIn(path)) throw new Error('Unknown entry'); });
   }
-  private schemaConsumers(name: string): { job: string; index: number }[] {
-    return Object.entries(this.snapshot.workflow!.jobs).flatMap(([job, value]) => (value.steps ?? []).flatMap((step, index) => {
+  private schemaConsumers(name: string): { job: string; path: Path }[] {
+    return Object.entries(this.snapshot.workflow!.jobs).flatMap(([job, value]) => stepEntries(value.steps).flatMap(({ step, path }) => {
       const output = step.with?.output;
-      return stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name ? [{ job, index }] : [];
+      return stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name ? [{ job, path }] : [];
     }));
   }
   deletionImpact(job: string, stepIndex?: number): Path[] {
     const result: Path[] = [];
     const stepID = stepIndex == null ? undefined : effectiveStepID(this.snapshot.workflow!.jobs[job].steps![stepIndex], stepIndex);
+    const removed = new Set(stepIndex == null ? [] : stepEntries(this.snapshot.workflow!.jobs[job].steps).filter(entry => entry.path[1] === stepIndex).map(entry => entry.id));
     const schemas = new Set(Object.keys(this.snapshot.workflow!.schemas ?? {}).filter(name => this.schemaConsumers(name).some(consumer => consumer.job === job)));
     const walk = (value: unknown, path: Path) => {
       if (typeof value === 'string') {
-        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && ref.id === stepID && (pathJob(path) === job || path[0] === 'schemas' && schemas.has(String(path[1])))) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step === stepID) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
+        if (hasExpressionReferences(path) && references(value, isExpressionPath(path)).some(ref => stepID ? (ref.scope === 'steps' && removed.has(ref.id) && (pathJob(path) === job || path[0] === 'schemas' && schemas.has(String(path[1])))) || ((ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job && ref.step !== undefined && removed.has(ref.step)) : (ref.scope === 'jobs' || ref.scope === 'needs') && ref.id === job)) result.push(path);
       } else if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...path, i]));
       else if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => walk(v, [...path, k]));
     };
@@ -365,21 +371,25 @@ export class WorkflowDocument {
   disconnect(from: string, to: string) { this.setField(['jobs', to, 'needs'], dependencies(this.snapshot.workflow!.jobs[to]).filter(dep => dep !== from)); }
   private materialize(doc: Document, job: string) {
     const steps = this.snapshot.workflow!.jobs[job].steps ?? [];
-    steps.forEach((step, i) => { if (!step.id) doc.setIn(['jobs', job, 'steps', i, 'id'], effectiveStepID(step, i)); });
+    stepEntries(steps).forEach(({ step, path, id }) => { if (!step.id) doc.setIn(['jobs', job, ...path, 'id'], id); });
   }
   addStep(job: string, template: Step = { argv: ['echo', 'Hello'] }): number {
     const steps = this.snapshot.workflow!.jobs[job].steps ?? [];
     this.edit(doc => {
       this.materialize(doc, job);
       if (!doc.hasIn(['jobs', job, 'steps'])) doc.setIn(['jobs', job, 'steps'], doc.createNode([]));
-      doc.addIn(['jobs', job, 'steps'], { ...template, id: this.unique('step', steps.map(effectiveStepID)) });
+      const used = stepEntries(steps).map(entry => entry.id);
+      const fresh = structuredClone(template);
+      const entries = stepEntries([fresh]);
+      entries.forEach(({ step }, index) => { step.id = this.unique(index === 0 ? 'step' : 'branch', used); used.push(step.id); });
+      doc.addIn(['jobs', job, 'steps'], fresh);
     }); return steps.length;
   }
   renameStep(job: string, index: number, next: string) {
     const steps = this.snapshot.workflow!.jobs[job].steps!;
     const old = effectiveStepID(steps[index], index);
     if (next === old) return;
-    if (!identifier.test(next) || steps.some((s, i) => i !== index && effectiveStepID(s, i) === next)) throw new Error('Choose a unique valid step ID');
+    if (!identifier.test(next) || stepEntries(steps).some(entry => !(entry.path.length === 2 && entry.path[1] === index) && entry.id === next)) throw new Error('Choose a unique valid step ID');
     const namedReferences = new Set(this.deletionImpact(job, index).filter(path => path[0] === 'schemas' && this.schemaConsumers(String(path[1])).some(consumer => consumer.job === job)).map(path => String(path[1])));
     this.edit(doc => {
       doc.setIn(['jobs', job, 'steps', index, 'id'], next);
@@ -395,7 +405,7 @@ export class WorkflowDocument {
           const declarations = doc.getIn(['schemas'], true);
           if (!isMap(declarations)) throw new Error('Expected schema declarations');
           declarations.set(doc.createNode(target), declaration.clone());
-          for (const consumer of consumers.filter(consumer => consumer.job === job)) doc.setIn(['jobs', job, 'steps', consumer.index, 'with', 'output', 'schema'], target);
+          for (const consumer of consumers.filter(consumer => consumer.job === job)) doc.setIn(['jobs', job, ...consumer.path, 'with', 'output', 'schema'], target);
         }
         renamedSchemas.add(target);
       }
@@ -411,9 +421,21 @@ export class WorkflowDocument {
       this.materialize(doc, job);
       const seq = doc.getIn(['jobs', job, 'steps'], true);
       if (!isSeq(seq)) throw new Error('Missing steps');
-      const node = (seq.items[index] as Node).clone();
-      const id = this.unique(`${effectiveStepID(this.snapshot.workflow!.jobs[job].steps![index], index)}_copy`, this.snapshot.workflow!.jobs[job].steps!.map(effectiveStepID));
-      if (isMap(node)) node.set('id', id);
+      const node = (seq.items[index] as Node).clone() as Node;
+      if (!isMap(node)) throw new Error('Expected a step mapping');
+      const entries = stepEntries(this.snapshot.workflow!.jobs[job].steps);
+      const used = entries.map(entry => entry.id);
+      const renamed = new Map<string, string>();
+      for (const entry of entries.filter(entry => entry.path[1] === index)) {
+        const id = this.unique(`${entry.id}_copy`, used); used.push(id); renamed.set(entry.id, id);
+        node.setIn([...entry.path.slice(2), 'id'], id);
+      }
+      const rewrite = (value: Node | null, path: Path) => {
+        if (isScalar(value) && typeof value.value === 'string' && hasExpressionReferences(['jobs', job, 'steps', index, ...path])) value.value = mapReferences(value.value, ref => ref.scope === 'steps' && renamed.has(ref.id) ? referenceText({ ...ref, id: renamed.get(ref.id)! }) : undefined, isExpressionPath(['jobs', job, 'steps', index, ...path]));
+        else if (isSeq(value)) value.items.forEach((item, i) => rewrite(item as Node, [...path, i]));
+        else if (isMap(value)) value.items.forEach(item => rewrite(item.value as Node, [...path, String(isScalar(item.key) ? item.key.value : item.key)]));
+      };
+      rewrite(node, []);
       seq.items.splice(index + 1, 0, node);
     });
   }
@@ -469,8 +491,8 @@ export class WorkflowDocument {
     const w = this.parsed.workflow;
     if (w) for (const [id, job] of Object.entries(w.jobs)) {
       if (job.uses && this.options.workflows && !this.options.workflows.some(item => item.id.replace(/^\.\//, '') === job.uses!.replace(/^\.\//, ''))) diagnostics.push({ code: 'workflow-catalog', message: `Workflow ${job.uses} is unavailable in the host catalog`, path: ['jobs', id, 'uses'], source: 'host', severity: 'warning' });
-      job.steps?.forEach((step, i) => {
-        if (stepAction(step)?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === stepAction(step)!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, 'steps', i, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
+      stepEntries(job.steps).forEach(({ step, path }) => {
+        if (stepAction(step)?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === stepAction(step)!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();

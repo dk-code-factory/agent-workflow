@@ -113,11 +113,17 @@ export function references(text: string, bareExpression = false) {
   return result;
 }
 export function pathJob(path: Path): string | undefined { return path[0] === 'jobs' ? String(path[1]) : undefined; }
+function stepFieldOffset(path: Path): number | undefined {
+  if (path[0] !== 'jobs' || path[2] !== 'steps' || typeof path[3] !== 'number') return;
+  let offset = 4;
+  while ((path[offset] === 'parallel' || path[offset] === 'sequence') && typeof path[offset + 1] === 'number') offset += 2;
+  return offset;
+}
 export function isExpressionPath(path: Path): boolean {
   return path[0] === 'jobs' && (path.length === 3 && path[2] === 'if'
     || path.length === 4 && path[2] === 'for-each' && path[3] === 'key'
     || path.length === 4 && path[2] === 'repeat' && path[3] === 'until'
-    || path.length === 5 && path[2] === 'steps' && path[4] === 'if');
+    || stepFieldOffset(path) === path.length - 1 && path.at(-1) === 'if');
 }
 // Keep literal metadata and callable defaults intact. These are the value
 // fields rendered by executor.go and command.go; with mappings are recursive,
@@ -131,8 +137,9 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path.length === 4 && path[2] === 'for-each' && path[3] === 'items') return true;
   if ((path[2] === 'with' || path[2] === 'secrets') && path.length >= 4) return true;
   if (path[2] === 'outputs' && path.length === 4) return true;
-  if (path[2] !== 'steps' || typeof path[3] !== 'number') return false;
-  return (path[4] === 'with' && path.length >= 6)
-    || (path[4] === 'argv' && path.length === 6 && typeof path[5] === 'number')
-    || (path.length === 5 && (path[4] === 'run' || path[4] === 'working-directory' || path[4] === 'prompt'));
+  const offset = stepFieldOffset(path);
+  if (offset === undefined) return false;
+  return (path[offset] === 'with' && path.length >= offset + 2)
+    || (path[offset] === 'argv' && path.length === offset + 2 && typeof path[offset + 1] === 'number')
+    || (path.length === offset + 1 && ['run', 'working-directory', 'prompt'].includes(String(path[offset])));
 }
