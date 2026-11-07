@@ -11,6 +11,14 @@ conformance manifests/executable, bridge sources and exact dependency lockfile.
 `agent-workflow version`, health, MCP and conformance share one engine version.
 Release builds also record commit, dirty state and an exact source fingerprint.
 
+After updating Go dependencies, run `make go-deps` and commit `go.mod` and
+`go.sum`. This runs `go mod tidy` followed by `go mod download all` to retain
+checksums for the full release dependency inventory. Tidy alone can remove
+transitive checksums that ordinary builds and tests do not need. Run
+`make go-locks-check` to check the complete locks without changing the checkout;
+it prints the missing entries and repair command on failure. `make check`,
+native CI and release packaging all use this same check.
+
 Node 22+ and selected native provider CLIs remain explicit prerequisites.
 `agent-workflow bridge setup` installs only locked npm dependencies with lifecycle
 scripts disabled. It never installs/updates provider CLIs or refreshes login.

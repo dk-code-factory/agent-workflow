@@ -5,6 +5,7 @@ import hashlib
 import io
 import gzip
 from release_lib import source_fingerprint as fingerprint_source
+from go_locks import check_go_locks
 import json
 import os
 from pathlib import Path
@@ -29,10 +30,8 @@ scratch.mkdir(parents=True, exist_ok=True)
 def run(command, **kwargs):
     return subprocess.run(command, cwd=ROOT, check=True, **kwargs)
 
-locked_go_files = {name: (ROOT / name).read_bytes() for name in ["go.mod", "go.sum"]}
-run(["go", "mod", "download", "all"])
-if any((ROOT / name).read_bytes() != value for name, value in locked_go_files.items()):
-    raise SystemExit("Go dependency locks were incomplete; review and commit them before packaging")
+if not check_go_locks(ROOT):
+    raise SystemExit(1)
 
 metadata = json.loads(subprocess.check_output(["go", "run", "./cmd/agent-workflow", "version"], cwd=ROOT))
 pins = json.loads((ROOT / "images" / "pins.json").read_text())

@@ -12,11 +12,15 @@ check: release-tooling-test
 dist:
 	python3 scripts/build-release.py --smoke
 
-.PHONY: release-check release-tooling-test
+.PHONY: go-deps go-locks-check release-check release-tooling-test
+go-deps:
+	go mod tidy
+	go mod download all
+go-locks-check:
+	python3 scripts/go_locks.py
 release-check: release-tooling-test
 	python3 scripts/validate-release.py "$(TAG)"
-release-tooling-test:
-	go mod download
+release-tooling-test: go-locks-check
 	python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
 .PHONY: ui-install ui-check ui-test ui-build ui-browser-test

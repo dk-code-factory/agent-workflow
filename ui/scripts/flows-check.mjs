@@ -3,7 +3,8 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 let ts;
-try { ts = (await import('typescript')).default; } catch {
+// TypeScript 7 supplies tsc; Microsoft's compatibility package retains the AST API.
+try { ts = (await import('@typescript/typescript6')).default; } catch {
   console.error('UI flow checker needs the locked Node dependencies. Run: make ui-install');
   process.exit(1);
 }

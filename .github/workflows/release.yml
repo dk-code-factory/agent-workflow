@@ -37,7 +37,7 @@ jobs:
           go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.22.1'
+          node-version: '26.13.0'
       - run: python3 scripts/build-release.py --smoke
       - name: Require identical archive bytes on a second build
         run: |
@@ -88,8 +88,8 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          go install github.com/anchore/syft/cmd/syft@v1.55.0
-          go install github.com/aquasecurity/trivy/cmd/trivy@v0.76.1
+          go install github.com/anchore/syft/cmd/syft@v1.57.0
+          go install github.com/aquasecurity/trivy/cmd/trivy@v0.76.2
           syft "docker-archive:dist/worker-linux-$ARCH.docker.tar" -o "cyclonedx-json=dist/worker-linux-$ARCH.sbom.json"
           trivy image --input "dist/worker-linux-$ARCH.docker.tar" --severity HIGH,CRITICAL --exit-code 1 --format json --output "dist/worker-linux-$ARCH.vulnerabilities.json"
       - run: python3 scripts/compress-worker-image.py '${{ matrix.arch }}'

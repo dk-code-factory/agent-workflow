@@ -23,5 +23,5 @@ mkdirSync(standalone, { recursive: true });
 copyFileSync(resolve(root, 'consumers/standalone/index.html'), resolve(standalone, 'index.html'));
 for (const name of ['standalone.js', 'style.css']) copyFileSync(resolve(packed, name), resolve(standalone, name));
 // Verify declarations resolve from the packed package in a real TS consumer.
-run(process.execPath, [resolve(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--jsx', 'react-jsx', '--esModuleInterop', '--skipLibCheck', '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022', 'main.tsx'], fixture);
+run(process.execPath, [resolve(root, 'node_modules/typescript/bin/tsc'), '--ignoreConfig', '--noEmit', '--jsx', 'react-jsx', '--esModuleInterop', '--skipLibCheck', '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022', '--types', 'vite/client', 'main.tsx'], fixture);
 console.log('Packed React 18 and standalone consumer builds passed.');
