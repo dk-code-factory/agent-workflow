@@ -245,11 +245,13 @@ func TestYAMLConversationBudgetsAndStall(t *testing.T) {
 func TestYAMLConversationCancellationAndTimeout(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		t.Run(fmt.Sprint(timeout), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			source := conversationYAML
 			if timeout {
-				source = strings.Replace(source, "        finishBy: reviewer", "        timeout: 50ms\n        finishBy: reviewer", 1)
+				// Exercise timeout inside a started turn, allowing durable admission
+				// to finish first even on instrumented CI runners.
+				source = strings.Replace(source, "        finishBy: reviewer", "        timeout: 2s\n        finishBy: reviewer", 1)
 			}
 			runner := newConversationSession(func(tc context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
 				result := conversationEvent(req, emit)
