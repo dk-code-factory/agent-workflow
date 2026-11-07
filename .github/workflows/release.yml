@@ -24,7 +24,7 @@ jobs:
         run: python3 scripts/validate-release.py "$TAG"
   checks:
     needs: validate
-    uses: ./.github/workflows/test.yml
+    uses: ./.github/workflows/pre-release.yml
   archives:
     needs: checks
     runs-on: ubuntu-24.04

@@ -30,10 +30,33 @@ only by tag release jobs. PR CI has read-only permissions and no provider or
 publication credentials. Release jobs use the ephemeral Actions token for GHCR,
 release assets and OIDC attestations; no GPG private key is uploaded.
 
-CI must pass on Linux amd64/arm64 and macOS amd64/arm64, including race, vet,
-extracted-archive smoke and the locked SDK fake gateway. Linux additionally runs
-the bounded filesystem fixture and genuine Docker/rootless Podman on both
-architectures. `Required` rejects any failed, canceled or skipped prerequisite.
+PRs, merge queues, and main pushes use the four-job `test.yml`: Linux AMD64
+native checks, actionlint, the complete Chromium UI project, and `Required`.
+`Required` rejects any failed, cancelled, or skipped prerequisite.
+
+Full deterministic validation lives in `pre-release.yml`, available through
+`workflow_dispatch` and `workflow_call`. It runs Linux amd64/arm64 and macOS
+amd64/arm64, including race, vet, extracted-archive smoke/verification and the
+locked SDK fake gateway. Linux additionally runs the bounded filesystem fixture
+and genuine Docker/rootless Podman on both architectures. UI jobs run complete
+Chromium, Firefox, and WebKit projects, including flow synchronization, types,
+unit tests, and package/packed-consumer builds. `Pre-release Required` rejects
+any failed, cancelled, or skipped prerequisite. This workflow has read-only
+permissions, a separate concurrency group, and does not cancel active validation.
+It has no scheduled or main-push trigger and creates no release candidate or tag.
+For an optional manual run against a candidate branch or tag:
+
+```sh
+gh workflow run pre-release.yml --ref <candidate-branch-or-tag>
+```
+
+A manual success does not replace the mandatory fresh invocation by `release.yml`
+after release validation, using the reusable workflow from the same tagged commit.
+Release archive/image jobs depend on that invocation; publication depends on both
+artifact jobs. No release build or publication proceeds unless the full suite
+passes. Live provider and publication conformance remain separate signed-evidence
+gates requiring explicit scenario authorization.
+
 The weekly security workflow audits locked Go/npm dependencies. Dependabot opens
 proposals; merging an update never creates a version tag.
 
@@ -117,9 +140,11 @@ never authorizes publication. Neither command creates a tag or invokes a provide
 
 Create the annotated signed tag locally with your maintainer key, verify it with
 `git verify-tag v0.2.0`, then intentionally push that exact tag. Tag pushes start
-`release.yml`. The pipeline validates before running fresh deterministic CI,
-builds all four CLI archives twice and compares hashes, builds/tests worker
-images natively, audits Go/npm, and blocks high/critical image vulnerabilities.
+`release.yml`. The pipeline validates signed evidence and release policy, then
+requires fresh full pre-release validation on that exact tagged commit. After
+`Pre-release Required` passes, the pipeline builds all four CLI archives twice
+and compares hashes, builds/tests worker images natively, audits Go/npm, and
+blocks high/critical image vulnerabilities.
 Any reported scan failure requires repair before publication. Vulnerability DBs
 are current network inputs; scans are separate from deterministic tests.
 
