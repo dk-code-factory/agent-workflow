@@ -17,11 +17,22 @@ import (
 )
 
 type conversationContractRunner struct {
-	*Runner
-	calls int
+	runner *Runner
+	calls  int
 }
 
 func (r *conversationContractRunner) Preflight(context.Context, []string) error { return nil }
+func (r *conversationContractRunner) HasAgent(id string) bool                   { return r.runner.HasAgent(id) }
+func (r *conversationContractRunner) ValidateConversationOutput(id string, schema map[string]any) error {
+	return r.runner.ValidateConversationOutput(id, schema)
+}
+func (r *conversationContractRunner) Capabilities(string) (workflows.ProviderCapabilities, error) {
+	return workflows.ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true}, nil
+}
+func (r *conversationContractRunner) RunAgent(context.Context, workflows.AgentRequest) (map[string]any, error) {
+	r.calls++
+	return nil, fmt.Errorf("unexpected agent call")
+}
 func (r *conversationContractRunner) RunTurn(context.Context, workflows.SessionRequest, func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
 	r.calls++
 	return workflows.SessionResult{}, fmt.Errorf("unexpected participant call")
@@ -33,10 +44,6 @@ func TestSDKConversationRenderedContractAdmissionBeforeParticipants(t *testing.T
 		{"preceding-result", "      - {id: collect, argv: [printf, __proto__]}\n", "steps.collect.outputs.stdout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
-			if err != nil {
-				t.Fatal(err)
-			}
 			workspace := t.TempDir()
 			if err := os.Mkdir(filepath.Join(workspace, "workflows"), 0700); err != nil {
 				t.Fatal(err)
@@ -51,8 +58,8 @@ func TestSDKConversationRenderedContractAdmissionBeforeParticipants(t *testing.T
 			}
 			defer store.Close()
 			t.Setenv("SDK_RENDERED_CONTRACT_KEY", "fake-only")
-			agent := Agent{Provider: "claude-sdk", Bridge: bridge, Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_RENDERED_CONTRACT_KEY"}}
-			runner := &conversationContractRunner{Runner: &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}}
+			agent := Agent{Provider: "claude-sdk", Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_RENDERED_CONTRACT_KEY"}}
+			runner := &conversationContractRunner{runner: &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}}
 			ready := false
 			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: runner, Store: store, Ready: func(context.Context) error { ready = true; return nil }}
 			run, err := executor.Run(context.Background(), workflows.RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"property": "__proto__"}})
@@ -71,13 +78,12 @@ func TestSDKConversationContractAdmissionBeforeEffects(t *testing.T) {
 		"{type: object, properties: {__proto__: {type: boolean}}}",
 		"{type: object, required: [__proto__]}",
 		"{type: object, properties: {nested: {type: object, properties: {__proto__: {type: string}}}}}",
+		"{type: object, properties: {enum: {type: object, required: [__proto__]}}}",
+		"{type: object, properties: {values: {type: array, items: {type: object, required: [__proto__]}}}}",
+		"{type: object, additionalProperties: {type: object, required: [__proto__]}}",
 		"{type: object, enum: [{__proto__: true}]}",
 	} {
 		t.Run(schema, func(t *testing.T) {
-			bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
-			if err != nil {
-				t.Fatal(err)
-			}
 			workspace := t.TempDir()
 			if err := os.Mkdir(filepath.Join(workspace, "workflows"), 0700); err != nil {
 				t.Fatal(err)
@@ -91,8 +97,8 @@ func TestSDKConversationContractAdmissionBeforeEffects(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			agent := Agent{Provider: "claude-sdk", Bridge: bridge}
-			runner := &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}
+			agent := Agent{Provider: "claude-sdk"}
+			runner := &conversationContractRunner{runner: &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}}
 			ready := false
 			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: runner, Store: store, Ready: func(context.Context) error { ready = true; return nil }}
 			_, err = executor.Run(context.Background(), workflows.RunRequest{Ref: "workflows/main.yml"})
@@ -100,6 +106,19 @@ func TestSDKConversationContractAdmissionBeforeEffects(t *testing.T) {
 				t.Fatalf("unsupported contract was not rejected before effects: ready=%v err=%v", ready, err)
 			}
 		})
+	}
+}
+
+func TestSDKConversationContractAcceptsEnumData(t *testing.T) {
+	runner := &Runner{Config: Config{Agents: map[string]Agent{"builder": {Provider: "claude-sdk"}}}}
+	for _, value := range []any{
+		map[string]any{"required": []any{"__proto__"}},
+		map[string]any{"properties": map[string]any{"required": []any{"__proto__"}}},
+	} {
+		schema := map[string]any{"type": "object", "enum": []any{value}}
+		if err := runner.ValidateConversationOutput("builder", schema); err != nil {
+			t.Fatalf("transportable enum data rejected: value=%v err=%v", value, err)
+		}
 	}
 }
 
@@ -121,6 +140,7 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 		{"invalid-size", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": 42, "padding": strings.Repeat("x", 1<<20)}, true},
 		{"annotation-only", "{description: Completion}", map[string]any{"answer": "approved"}, false},
 		{"object-enum", "{type: object, enum: [{answer: approved}]}", map[string]any{"answer": "approved"}, false},
+		{"object-enum-required-data", "{type: object, enum: [{required: [__proto__]}]}", map[string]any{"required": []any{"__proto__"}}, false},
 		{"unconstrained-json", "{}", map[string]any{"answer": "approved", "nested": map[string]any{"retained": true}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

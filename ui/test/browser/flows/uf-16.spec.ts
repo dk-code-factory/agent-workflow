@@ -36,7 +36,8 @@ test('reject imported fractional conversation budgets and repair them as integer
     const ui = await open(page, source);
     await expect(ui.locator('.aw-diagnostics')).toContainText(budget);
     expect((await snapshot(page)).diagnostics).toContainEqual(expect.objectContaining({ severity: 'error', path: ['jobs', 'solve', 'steps', 0, budget] }));
-    await page.evaluate(source => (window as any).first.update({ source }), source.replace('1.9', '2'));
+    await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+    await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace('1.9', '2'));
     await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
     expect((await snapshot(page)).workflow.jobs.solve.steps[0][budget]).toBe(2);
   }

@@ -55,15 +55,6 @@ func (r *Runner) ValidateConversationOutput(id string, schema map[string]any) er
 				if key == "__proto__" {
 					return true
 				}
-				if key == "required" {
-					if names, ok := child.([]any); ok {
-						for _, name := range names {
-							if name == "__proto__" {
-								return true
-							}
-						}
-					}
-				}
 				if unsupported(child) {
 					return true
 				}
@@ -77,7 +68,30 @@ func (r *Runner) ValidateConversationOutput(id string, schema map[string]any) er
 		}
 		return false
 	}
-	if unsupported(schema) {
+	var requiresUnsupported func(map[string]any) bool
+	requiresUnsupported = func(schema map[string]any) bool {
+		if names, ok := schema["required"].([]any); ok {
+			for _, name := range names {
+				if name == "__proto__" {
+					return true
+				}
+			}
+		}
+		if properties, ok := schema["properties"].(map[string]any); ok {
+			for _, raw := range properties {
+				if child, ok := raw.(map[string]any); ok && requiresUnsupported(child) {
+					return true
+				}
+			}
+		}
+		for _, key := range []string{"items", "additionalProperties"} {
+			if child, ok := schema[key].(map[string]any); ok && requiresUnsupported(child) {
+				return true
+			}
+		}
+		return false
+	}
+	if unsupported(schema) || requiresUnsupported(schema) {
 		return fmt.Errorf("agent %s: Claude SDK conversation output cannot declare __proto__ properties", id)
 	}
 	return nil
