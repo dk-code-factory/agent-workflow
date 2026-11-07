@@ -258,6 +258,10 @@ untracked inputs). If history is missing it prints the exact fetch and rerun
 commands; it never skips pairing silently. For discovery and synchronization
 without launching browsers, run `make ui-flows-check BASE=origin/main`.
 `make ui-flow-checker-test` runs disposable Git fixture tests of the gate itself.
+Builds and type checks use TypeScript 7. The checker imports the AST API from
+Microsoft's `@typescript/typescript6` compatibility package because TypeScript 7
+does not expose the previous compiler API. The check and build scripts select
+TypeScript 7 explicitly so hoisted compatibility executables cannot override it.
 
 The [user flows](../docs/UI_USER_FLOWS.md) each link to their dedicated
 `test/browser/flows/uf-NN.spec.ts`. IDs stay stable when flows are added or

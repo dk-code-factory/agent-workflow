@@ -86,7 +86,7 @@ const evidence = { runtime: name, checks: [], browserRequests: 0 };
 try {
   for (const [output, source] of [[runtime, './cmd/agent-workflow-runtime'], [workflow, './cmd/agent-workflow'], [fixture, './conformance/network-runtime/fixture'], [join(dir, 'guardian'), './cmd/agent-workflow-guardian']]) run('go', ['build', '-o', output, source], { env: { ...process.env, CGO_ENABLED: '0' } });
   // Host CA bundle is fixture content, not an agent home or credential store.
-  writeFileSync(join(dir, 'Containerfile'), 'FROM scratch\nCOPY fixture /fixture\nCOPY guardian /usr/local/bin/agent-workflow-guardian\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nLABEL agent-workflow.guardian-protocol="1" agent-workflow.codex-cli="0.164.0"\nENTRYPOINT ["/fixture"]\n');
+  writeFileSync(join(dir, 'Containerfile'), 'FROM scratch\nCOPY fixture /fixture\nCOPY guardian /usr/local/bin/agent-workflow-guardian\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nLABEL agent-workflow.guardian-protocol="1" agent-workflow.codex-cli="0.167.0"\nENTRYPOINT ["/fixture"]\n');
   writeFileSync(join(dir, 'ca-certificates.crt'), readFileSync('/etc/ssl/certs/ca-certificates.crt'));
   image = run('sudo', ['-n', 'podman', 'build', '--network=none', '--pull=never', '-q', '-t', 'localhost/' + name, dir]);
   assert.match(image, /^[a-f0-9]{64}$/); image = 'sha256:' + image;

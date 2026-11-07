@@ -116,7 +116,7 @@ func TestCodexCLIForwardsOriginalArgumentsAndSandbox(t *testing.T) {
 	root := t.TempDir()
 	output := filepath.Join(root, "argv")
 	binary := filepath.Join(root, "provider")
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex 0.164.0\\n'; exit 0; fi\nprintf '%s\\0' \"$@\" > '" + strings.ReplaceAll(output, "'", "'\\''") + "'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fixture\"}}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0}}'\n"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex 0.167.0\\n'; exit 0; fi\nprintf '%s\\0' \"$@\" > '" + strings.ReplaceAll(output, "'", "'\\''") + "'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fixture\"}}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0}}'\n"
 	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
