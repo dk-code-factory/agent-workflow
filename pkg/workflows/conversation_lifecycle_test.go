@@ -78,7 +78,9 @@ jobs:
 	e, store := durableExecutor(t, source, runner)
 	e.Slots = make(chan struct{}, 1)
 	e.Store = &blockCompletionFault{SQLiteStore: store, failID: "joined"}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// This checks recovery, not elapsed time. Allow journal writes and child
+	// processes to finish under race instrumentation on slower CI runners.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run == nil || run.FailureClass != "storage" || runner.calls.Load() != 1 {
