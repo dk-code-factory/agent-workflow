@@ -3,6 +3,7 @@ package workflows
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -212,6 +213,16 @@ func TestValidateAgentStructuredOutputEnforcesMaximumsAndNumericMinimum(t *testi
 		{value: int64(3), want: 3},
 		{value: float64(4), want: 4},
 		{value: json.Number("5"), want: 5},
+		{value: json.Number("-20e-1"), want: -2},
+		{value: json.Number("0e100000000000000000000"), want: 0},
+		{value: json.Number(strconv.Itoa(int(^uint(0) >> 1))), want: int(^uint(0) >> 1)},
+		{value: json.Number(strconv.Itoa(-int(^uint(0)>>1) - 1)), want: -int(^uint(0)>>1) - 1},
+		{value: json.Number("9223372036854775808"), want: 0},
+		{value: json.Number("-9223372036854775809"), want: 0},
+		{value: json.Number("1e100000000000000000000"), want: 0},
+		{value: json.Number("1e-100000000000000000000"), want: 0},
+		{value: json.Number("2.5"), want: 0},
+		{value: json.Number("invalid"), want: 0},
 	} {
 		if got := schemaIntegerKeyword(map[string]any{"limit": test.value}, "limit"); got != test.want {
 			t.Fatalf("schema integer %T = %d, want %d", test.value, got, test.want)
@@ -237,6 +248,98 @@ func TestValidateAgentStructuredOutputNumericMinimumPreservesPrecision(t *testin
 				t.Errorf("minimum %v, output %s: valid=%v, want %v (%s)", minimum, tc.raw, result.Valid, tc.valid, result.Error)
 			}
 		}
+	}
+}
+
+func TestValidateAgentStructuredOutputIntegerBoundsUseNumericValue(t *testing.T) {
+	for _, bound := range []json.Number{"2.0", "2e0", "20e-1"} {
+		for _, tc := range []struct {
+			schema         map[string]any
+			valid, invalid string
+		}{
+			{map[string]any{"type": "string", "minLength": bound}, `"ok"`, `"x"`},
+			{map[string]any{"type": "string", "maxLength": bound}, `"ok"`, `"long"`},
+			{map[string]any{"type": "array", "maxItems": bound}, `[1,2]`, `[1,2,3]`},
+		} {
+			contract, err := ParseAgentOutputContract(map[string]any{"schema": tc.schema})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := ValidateAgentStructuredOutput(tc.valid, contract); !result.Valid {
+				t.Errorf("bound %s, schema %v: valid output rejected: %s", bound, tc.schema, result.Error)
+			}
+			if result := ValidateAgentStructuredOutput(tc.invalid, contract); result.Valid {
+				t.Errorf("bound %s, schema %v: invalid output accepted: %s", bound, tc.schema, tc.invalid)
+			}
+		}
+	}
+}
+
+func TestValidateAgentStructuredOutputEnumUsesJSONValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, member, output string
+		valid                bool
+	}{
+		{"decimal", `1`, `1.0`, true},
+		{"exponent", `100`, `1e2`, true},
+		{"negative zero", `0`, `-0.0`, true},
+		{"large integer", `9007199254740993`, `9007199254740993.0`, true},
+		{"distinct large integers", `9007199254740993`, `9007199254740992`, false},
+		{"huge exponent", `1e100000000000000000000`, `10e99999999999999999999`, true},
+		{"nested values", `{"values":[1,{"n":2}]}`, `{"values":[1.0,{"n":20e-1}]}`, true},
+		{"array order", `[1,2]`, `[2,1]`, false},
+		{"object keys", `{"a":1}`, `{"b":1}`, false},
+		{"missing null property", `{"a":null}`, `{"b":null}`, false},
+		{"numeric string", `1`, `"1"`, false},
+		{"boolean", `1`, `true`, false},
+		{"null", `null`, `null`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var member any
+			if err := decodeJSONWithNumbers([]byte(tc.member), &member); err != nil {
+				t.Fatal(err)
+			}
+			contract, err := ParseAgentOutputContract(map[string]any{"schema": map[string]any{"enum": []any{member}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := ValidateAgentStructuredOutput(tc.output, contract); result.Valid != tc.valid {
+				t.Errorf("enum %s, output %s: valid=%v, want %v (%s)", tc.member, tc.output, result.Valid, tc.valid, result.Error)
+			}
+		})
+	}
+}
+
+func TestValidateAgentStructuredOutputDirectEnumContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		member any
+		output string
+		valid  bool
+	}{
+		{"typed slice", []string{"ok"}, `["ok"]`, true},
+		{"typed map", map[string]string{"k": "v"}, `{"k":"v"}`, true},
+		{"nested typed values", map[string]any{"n": []int{1, 2}}, `{"n":[1.0,2e0]}`, true},
+		{"int32", int32(1), `1.0`, true},
+		{"uint64", uint64(9007199254740993), `9007199254740993.0`, true},
+		{"distinct uint64", uint64(9007199254740993), `9007199254740992`, false},
+		{"float32", float32(1.5), `15e-1`, true},
+		{"raw JSON", json.RawMessage(`{"n":1}`), `{"n":1.0}`, true},
+		{"nil map is null", map[string]any(nil), `null`, true},
+		{"nil map is not object", map[string]any(nil), `{}`, false},
+		{"nil slice is null", []any(nil), `null`, true},
+		{"nil slice is not array", []any(nil), `[]`, false},
+		{"empty map is not null", map[string]any{}, `null`, false},
+		{"empty slice is not null", []any{}, `null`, false},
+		{"empty map", map[string]any{}, `{}`, true},
+		{"empty slice", []any{}, `[]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contract := &AgentOutputContract{Format: "json", Schema: map[string]any{"enum": []any{tc.member}}}
+			if result := ValidateAgentStructuredOutput(tc.output, contract); result.Valid != tc.valid {
+				t.Errorf("enum member %#v, output %s: valid=%v, want %v (%s)", tc.member, tc.output, result.Valid, tc.valid, result.Error)
+			}
+		})
 	}
 }
 
