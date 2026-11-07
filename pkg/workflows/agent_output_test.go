@@ -219,6 +219,49 @@ func TestValidateAgentStructuredOutputEnforcesMaximumsAndNumericMinimum(t *testi
 	}
 }
 
+func TestValidateAgentStructuredOutputNumericMinimumPreservesPrecision(t *testing.T) {
+	for _, minimum := range []any{int64(9007199254740993), json.Number("9007199254740993")} {
+		contract := &AgentOutputContract{Format: "json", Schema: map[string]any{
+			"type": "number", "minimum": minimum,
+		}}
+		for _, tc := range []struct {
+			raw   string
+			valid bool
+		}{
+			{"9007199254740992", false},
+			{"9007199254740992.5", false},
+			{"9007199254740993", true},
+			{"9007199254740994", true},
+		} {
+			if result := ValidateAgentStructuredOutput(tc.raw, contract); result.Valid != tc.valid {
+				t.Errorf("minimum %v, output %s: valid=%v, want %v (%s)", minimum, tc.raw, result.Valid, tc.valid, result.Error)
+			}
+		}
+	}
+}
+
+func TestValidateAgentStructuredOutputIntegerUsesNumericValue(t *testing.T) {
+	contract := &AgentOutputContract{Format: "json", Schema: map[string]any{"type": "integer"}}
+	for _, tc := range []struct {
+		raw   string
+		valid bool
+	}{
+		{"1.0", true},
+		{"1e3", true},
+		{"100e-2", true},
+		{"9223372036854775808", true},
+		{"-9223372036854775809", true},
+		{"1.5", false},
+		{"1e-3", false},
+		{"9007199254740992.5", false},
+		{`"1"`, false},
+	} {
+		if result := ValidateAgentStructuredOutput(tc.raw, contract); result.Valid != tc.valid {
+			t.Errorf("output %s: valid=%v, want %v (%s)", tc.raw, result.Valid, tc.valid, result.Error)
+		}
+	}
+}
+
 func TestValidateAgentStructuredOutputChecksArrayItemSchema(t *testing.T) {
 	contract := &AgentOutputContract{
 		Format: "json",

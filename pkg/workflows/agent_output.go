@@ -541,7 +541,7 @@ func validateJSONSchemaValueWithPatterns(
 		}
 	}
 	if minimum, configured := schemaNumericKeyword(schema, "minimum"); configured {
-		if number, ok := asFloat(value); !ok || number < minimum {
+		if !compareValues(value, ">=", minimum) {
 			return fmt.Errorf("%s must be at least %v", path, minimum)
 		}
 	}
@@ -631,13 +631,14 @@ func schemaIntegerKeyword(schema map[string]any, keyword string) int {
 	return 0
 }
 
-func schemaNumericKeyword(schema map[string]any, keyword string) (float64, bool) {
+func schemaNumericKeyword(schema map[string]any, keyword string) (any, bool) {
 	value, exists := schema[keyword]
 	if !exists {
 		return 0, false
 	}
-	number, ok := asFloat(value)
-	return number, ok
+	_, ok := asFloat(value)
+	// Keep the original number so comparisons retain precision beyond float64.
+	return value, ok
 }
 
 func validateJSONSchemaAdditionalProperties(
@@ -719,17 +720,8 @@ func schemaTypeMatches(value any, expected string) bool {
 		_, ok := value.(string)
 		return ok
 	case "integer":
-		switch v := value.(type) {
-		case json.Number:
-			_, err := v.Int64()
-			return err == nil
-		case int, int64:
-			return true
-		case float64:
-			return v == float64(int64(v))
-		default:
-			return false
-		}
+		number, ok := asNumericRat(value)
+		return ok && number.IsInt()
 	case "number":
 		switch value.(type) {
 		case json.Number, int, int64, float64:
