@@ -310,6 +310,39 @@ func TestValidateAgentStructuredOutputEnumUsesJSONValues(t *testing.T) {
 	}
 }
 
+func TestValidateAgentStructuredOutputDirectEnumContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		member any
+		output string
+		valid  bool
+	}{
+		{"typed slice", []string{"ok"}, `["ok"]`, true},
+		{"typed map", map[string]string{"k": "v"}, `{"k":"v"}`, true},
+		{"nested typed values", map[string]any{"n": []int{1, 2}}, `{"n":[1.0,2e0]}`, true},
+		{"int32", int32(1), `1.0`, true},
+		{"uint64", uint64(9007199254740993), `9007199254740993.0`, true},
+		{"distinct uint64", uint64(9007199254740993), `9007199254740992`, false},
+		{"float32", float32(1.5), `15e-1`, true},
+		{"raw JSON", json.RawMessage(`{"n":1}`), `{"n":1.0}`, true},
+		{"nil map is null", map[string]any(nil), `null`, true},
+		{"nil map is not object", map[string]any(nil), `{}`, false},
+		{"nil slice is null", []any(nil), `null`, true},
+		{"nil slice is not array", []any(nil), `[]`, false},
+		{"empty map is not null", map[string]any{}, `null`, false},
+		{"empty slice is not null", []any{}, `null`, false},
+		{"empty map", map[string]any{}, `{}`, true},
+		{"empty slice", []any{}, `[]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contract := &AgentOutputContract{Format: "json", Schema: map[string]any{"enum": []any{tc.member}}}
+			if result := ValidateAgentStructuredOutput(tc.output, contract); result.Valid != tc.valid {
+				t.Errorf("enum member %#v, output %s: valid=%v, want %v (%s)", tc.member, tc.output, result.Valid, tc.valid, result.Error)
+			}
+		})
+	}
+}
+
 func TestValidateAgentStructuredOutputIntegerUsesNumericValue(t *testing.T) {
 	contract := &AgentOutputContract{Format: "json", Schema: map[string]any{"type": "integer"}}
 	for _, tc := range []struct {

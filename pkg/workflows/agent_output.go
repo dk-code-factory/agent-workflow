@@ -773,6 +773,21 @@ func schemaEnumContains(raw any, value any) bool {
 // JSON numbers compare by value, including inside enum objects and arrays.
 // Keep strings distinct and avoid expanding arbitrarily large exponents.
 func schemaValuesEqual(left, right any) bool {
+	// Direct Go contracts can contain typed collections and custom JSON values.
+	var normalized [2]any
+	for index, value := range []any{left, right} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		if err := decodeJSONWithNumbers(data, &normalized[index]); err != nil {
+			return false
+		}
+	}
+	return normalizedSchemaValuesEqual(normalized[0], normalized[1])
+}
+
+func normalizedSchemaValuesEqual(left, right any) bool {
 	switch left := left.(type) {
 	case json.Number, int, int64, float64:
 		switch right.(type) {
@@ -789,7 +804,7 @@ func schemaValuesEqual(left, right any) bool {
 		}
 		for key, value := range left {
 			other, exists := object[key]
-			if !exists || !schemaValuesEqual(value, other) {
+			if !exists || !normalizedSchemaValuesEqual(value, other) {
 				return false
 			}
 		}
@@ -800,7 +815,7 @@ func schemaValuesEqual(left, right any) bool {
 			return false
 		}
 		for index, value := range left {
-			if !schemaValuesEqual(value, array[index]) {
+			if !normalizedSchemaValuesEqual(value, array[index]) {
 				return false
 			}
 		}
