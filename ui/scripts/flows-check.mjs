@@ -141,7 +141,7 @@ export function analyze(current, previous) {
     findings.push(...group.map(f => ({ ...f, group: `Shared test dependency changed: ${files}; affects ${group.map(s => s.id).join(', ')}` })));
   }
   const allFiles = new Set([...current.files, ...(previous?.files ?? [])]);
-  const full = !previous || [...allFiles].some(file => !ignored.test(file) && /^(ui\/(src\/|playground\.|index\.html|package(?:-lock)?\.json|[^/]*config\.|scripts\/(flows-check|flow-reporter|flows-check\.test))|Makefile$|workflows\/|testdata\/ui-compat\/|\.github\/workflows\/test\.yml)/.test(file) && changed(file));
+  const full = !previous || [...allFiles].some(file => !ignored.test(file) && /^(ui\/(src\/|playground\.|index\.html|package(?:-lock)?\.json|[^/]*config\.|scripts\/(flows-check|flow-reporter|flows-check\.test))|Makefile$|workflows\/|testdata\/ui-compat\/|\.github\/workflows\/(?:test|pre-release)\.yml)/.test(file) && changed(file));
   return { findings, sections: parsed.sections, selected: [...parsed.sections.keys()].filter(id => full || affected.has(id)).sort(), full };
 }
 export function baseline(root, { base, ci = false, env = process.env } = {}) {

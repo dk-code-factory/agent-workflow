@@ -101,6 +101,17 @@ test('implementation, styles, examples, dependencies and browser configuration s
     f.put(file, 'changed'); assert.deepEqual(f.check().selected, ['UF-01', 'UF-02']); rmSync(path.join(f.root, file));
   }
 });
+test('pre-release browser workflow additions, edits and removals select every flow', t => {
+  const f = fixture(t); const file = '.github/workflows/pre-release.yml';
+  f.put(file, 'name: Pre-release\non: {workflow_dispatch: null}\n');
+  assert.deepEqual(f.check().findings, []); assert.deepEqual(f.check().selected, ['UF-01', 'UF-02']);
+  git(f.root, 'add', '.'); git(f.root, 'commit', '-qm', 'pre-release workflow');
+  const base = git(f.root, 'rev-parse', 'HEAD');
+  f.put(file, 'name: Pre-release\non: {workflow_call: null}\n');
+  assert.deepEqual(analyze(revision(f.root), revision(f.root, base)).selected, ['UF-01', 'UF-02']);
+  rmSync(path.join(f.root, file));
+  assert.deepEqual(analyze(revision(f.root), revision(f.root, base)).selected, ['UF-01', 'UF-02']);
+});
 test('generated artifacts do not affect selection or synchronization', t => {
   const f = fixture(t); f.put('ui/dist/output.js', 'generated'); f.put('ui/test-results/output.txt', 'report'); f.put('ui/playwright-report/index.html', 'report');
   assert.deepEqual(f.check().selected, []); assert.deepEqual(f.check().findings, []);

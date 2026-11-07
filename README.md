@@ -806,16 +806,26 @@ AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker|Co
 AGENT_WORKFLOW_CONTAINER_IMAGE=sha256:IMAGE_ID go test ./pkg/clirunner -run TestContainer
 ```
 
-Pull request CI runs native race tests and Docker/Podman conformance on Linux
-AMD64, plus workflow validation, isolated filesystem checks, and the complete UI
-browser suite. Merge queue (`merge_group: checks_requested`) CI additionally runs
-Linux ARM64 and both macOS architectures. Pushes to `main` and reusable release
-checks also run the full platform matrix. The required `Required` aggregate
-fails unless every job selected for that event succeeds.
+Pull requests, merge queues (`merge_group: checks_requested`), and pushes to
+`main` run four CI jobs: Native Linux AMD64, Workflow validation (actionlint),
+Workflow UI Chromium, and the `Required` aggregate. Native checks include race
+tests, vet, workflow validation, release-tooling tests, binary builds, bridge
+syntax, and the pinned-SDK fake gateway. Chromium runs flow synchronization,
+types, unit tests, package and packed-consumer builds, and the complete browser
+project. `Required` rejects failed, cancelled, or skipped prerequisites.
+
+The full [pre-release workflow](.github/workflows/pre-release.yml) runs manually
+and as a mandatory release gate on the tagged commit. It retains all four native
+platforms with archive build/smoke/verification, bounded filesystem exhaustion,
+genuine Docker and rootless Podman on both Linux architectures, and
+Chromium/Firefox/WebKit. Its distinct `Pre-release Required` aggregate requires
+every prerequisite to succeed before release archives, images, or publication
+can proceed. Full validation has no nightly or main-push trigger and creates no
+release candidates or tags. See [release operations](docs/RELEASE_PIPELINE.md).
 
 Enable **Require merge queue** for `main` when adopting this workflow, retaining
-**Required** as the required status check. The queue must validate the full matrix
-before merging; ordinary PR success covers only the Linux AMD64 feedback path.
+**Required** as the required status check. The queue runs the same Linux AMD64
+and Chromium checks as PRs and main pushes.
 
 Live tests and publication pilots are separate from deterministic tests and
 require explicit budgets and a disposable repository.

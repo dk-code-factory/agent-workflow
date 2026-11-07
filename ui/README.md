@@ -230,13 +230,16 @@ npm run dev --prefix ui
 
 The playground loads all four repository examples and retains each editor instance in memory while the page is open, including invalid YAML, history, selection, and pending inspector edits. Switching reattaches its mount and applies the current theme. **Reset example** confirms before recreating only the active editor with original source and empty history/inspector drafts; layout and theme remain. Only layout is stored in local storage; reload clears drafts. Export YAML downloads an example-named file, and the playground offers no host Save action. Browser tests exercise module embedding under React 19/StrictMode, plain mounts, read-only controls, custom renderer cleanup, keyboard dependencies, independent instances, themes, and container resizing, real canvas gestures, controlled hosts, host form embedding, and WCAG contrast/focus checks. Packed consumer fixtures build a React 18 application and a standalone HTML page, then check loading and basic editing in Chromium, Firefox, and WebKit. The React 18 fixture typechecks `reportDraft` against the packed declarations; direct source-browser UF-47 cases exercise buffered renderer lifecycle behavior. Shared `testdata/ui-compat` cases run through JavaScript checks and Go `Parse`/`Validate`. `Workflow UI` is included in CI's required aggregate job. All these checks are deterministic and use no live providers or GitHub publication.
 
-CI runs Chromium, Firefox, and WebKit in parallel jobs using the official
-Playwright image with browsers and system libraries preinstalled. This avoids
-installing browser dependencies from Ubuntu mirrors on every run. Keep the image
-version in `.github/workflows/test.yml` aligned with `@playwright/test` in
-`ui/package-lock.json` when updating Playwright. Every browser job runs the flow
-gate, unit and type checks, builds the package and consumer fixtures, and runs its
-complete browser project; the required aggregate waits for all three.
+PR, merge-queue, and main-push CI run the complete Chromium project. The manual
+and mandatory release [pre-release workflow](../.github/workflows/pre-release.yml)
+runs Chromium, Firefox, and WebKit in parallel. Both workflows use the official
+Playwright image with browsers and system libraries preinstalled. Keep its version
+in `.github/workflows/test.yml` and `.github/workflows/pre-release.yml` aligned
+with `@playwright/test` in `ui/package-lock.json` when updating Playwright. Every
+browser job runs the flow gate, unit and type checks, builds the package and
+consumer fixtures, and runs its complete browser project. `Required` waits for
+Chromium in regular CI; `Pre-release Required` waits for all three browsers and
+the full native/runtime suite before release builds and publication.
 
 ## Required flow gate
 
@@ -289,7 +292,7 @@ Browser selection is conservative:
 - UF/spec changes select those flows; shared helper or fixture changes select
   their affected flows.
 - UI source, styles, playground, examples, dependencies, and browser/build/gate
-  configuration select all flows.
+  configuration (including both CI and pre-release workflows) select all flows.
 - Unrelated changes still check all mappings but start no browser.
 
 The local run uses Chromium, two workers, no retries, and automatic waiting.
