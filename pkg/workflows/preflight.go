@@ -41,7 +41,7 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 	if e.CommandExecution.Mode == "container" {
 		for _, workflow := range all {
 			for _, job := range workflow.Jobs {
-				for _, step := range FlattenSteps(job.Steps) {
+				for _, step := range lifecycleSteps(job.Steps) {
 					if len(step.Argv) > 0 || step.Run != "" {
 						return e.preflightWithContainer(ctx, all)
 					}
@@ -69,7 +69,7 @@ func (e *Executor) preflightAgents(ctx context.Context, all map[string]*Workflow
 	set := map[string]bool{}
 	for _, w := range all {
 		for _, job := range w.Jobs {
-			for _, step := range FlattenSteps(job.Steps) {
+			for _, step := range lifecycleSteps(job.Steps) {
 				for _, role := range step.Conversation {
 					set[role] = true
 				}

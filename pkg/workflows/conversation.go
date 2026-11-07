@@ -136,7 +136,7 @@ func conversationJournalFor(store RunStore) conversationJournal {
 func (e *Executor) preflightConversations(all map[string]*Workflow) error {
 	for _, w := range all {
 		for _, job := range w.Jobs {
-			for _, step := range FlattenSteps(job.Steps) {
+			for _, step := range lifecycleSteps(job.Steps) {
 				if step.Conversation == nil {
 					continue
 				}

@@ -17,6 +17,9 @@ func classifyFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	if retained, ok := err.(*retainedLifecycleFailure); ok {
+		return retained.class
+	}
 	if errors.Is(err, errStepPersistence) {
 		return "storage"
 	}
@@ -32,6 +35,21 @@ func classifyFailure(err error) string {
 	if errors.Is(err, operational.ErrUnavailable) {
 		return "prerequisite"
 	}
+	// An aggregate's ordinary error must not hide an unsafe constituent failure.
+	var causes []error
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes = joined.Unwrap()
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		causes = []error{wrapped.Unwrap()}
+	}
+	classes := make(map[string]bool, len(causes))
+	for _, cause := range causes {
+		class := classifyFailure(cause)
+		if class != "canceled" && hardFailureClass(class) {
+			return class
+		}
+		classes[class] = true
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
 	}
@@ -46,19 +64,19 @@ func classifyFailure(err error) string {
 	}
 	text := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
+	case classes["authentication"], strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
 		return "authentication"
 	case strings.Contains(text, "database"), strings.Contains(text, "sqlite"), strings.Contains(text, "disk"), strings.Contains(text, "storage"):
 		return "storage"
 	case strings.Contains(text, "explicit --retry"), strings.Contains(text, "uncertain"), strings.Contains(text, "unexpected remote"), strings.Contains(text, "reconcil"):
 		return "needs_attention"
-	case strings.Contains(text, "conflict"):
+	case classes["integration"], strings.Contains(text, "conflict"):
 		return "integration"
-	case strings.Contains(text, "structured output"):
+	case classes["schema"], strings.Contains(text, "structured output"):
 		return "schema"
-	case strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
+	case classes["limit"], strings.Contains(text, "repeat exhausted"), strings.Contains(text, "limit"), strings.Contains(text, "budget"):
 		return "limit"
-	case strings.Contains(text, "command failed"):
+	case classes["command"], strings.Contains(text, "command failed"):
 		return "command"
 	}
 	return "execution"
@@ -112,8 +130,27 @@ func executionFailureStatus(ctx context.Context, err error) string {
 }
 
 func hardExecutionFailure(err error) bool {
-	switch classifyFailure(err) {
-	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled":
+	return unsafeFailureClass(err) != ""
+}
+
+// Admission considers cancellation in every branch without replacing the
+// diagnostic for an independent failure joined with that cancellation.
+func unsafeFailureClass(err error) string {
+	if retained, ok := err.(*retainedLifecycleFailure); ok && retained.unsafeClass != "" {
+		return retained.unsafeClass
+	}
+	if class := classifyFailure(err); hardFailureClass(class) {
+		return class
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	return ""
+}
+
+func hardFailureClass(class string) bool {
+	switch class {
+	case "action_integrity", "needs_attention", "prerequisite", "storage", "canceled", "iteration_blocked":
 		return true
 	}
 	return false

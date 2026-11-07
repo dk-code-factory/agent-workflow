@@ -109,6 +109,8 @@ after a general `--retry-uncertain` acknowledgement. Inspect the retained
 attempts and reconcile effects before starting a new workflow run. Recovery
 does not reset consumed budgets or extend the saved deadline. Cancellation
 stops active participant work through
-the existing execution rules. Participant failure propagates to the step;
-failure handlers from the separate YAML lifecycle-handler capability are not
-required to use conversations.
+the existing execution rules. Participant failure propagates to the step.
+Conversations may run beside agent and command steps that use lifecycle handlers,
+but cannot own `onError`, `onFailure`, `finally`, or `handlerTimeout`, or appear
+inside a handler list. Admission rejects these combinations before workflow
+effects; conversation receipts and handler receipts use separate recovery protocols.

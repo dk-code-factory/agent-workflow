@@ -133,6 +133,10 @@ type Step struct {
 	FinishBy         string         `json:"finishBy,omitempty" yaml:"finishBy,omitempty"`
 	MaxTurns         int            `json:"maxTurns,omitempty" yaml:"maxTurns,omitempty"`
 	MaxMessages      int            `json:"maxMessages,omitempty" yaml:"maxMessages,omitempty"`
+	OnError          []Step         `json:"onError,omitempty" yaml:"onError,omitempty"`
+	OnFailure        []Step         `json:"onFailure,omitempty" yaml:"onFailure,omitempty"`
+	Finally          []Step         `json:"finally,omitempty" yaml:"finally,omitempty"`
+	HandlerTimeout   string         `json:"handlerTimeout,omitempty" yaml:"handlerTimeout,omitempty"`
 	Parallel         []Step         `json:"parallel,omitempty" yaml:"parallel,omitempty"`
 	Sequence         []Step         `json:"sequence,omitempty" yaml:"sequence,omitempty"`
 	Agent            *string        `json:"agent,omitempty" yaml:"agent,omitempty"`

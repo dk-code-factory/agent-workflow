@@ -84,6 +84,43 @@ func validateResultReferences(w *Workflow) error {
 				return err
 			}
 		}
+		var handlers func([]Step, map[string]bool, string) error
+		handlers = func(steps []Step, inherited map[string]bool, path string) error {
+			local := copyStepScope(inherited)
+			for index, source := range steps {
+				sid := stepID(source, index)
+				step, err := resolveReferenceStep(w, source)
+				if err != nil {
+					return fmt.Errorf("%s.%s.with.output: %w", path, sid, err)
+				}
+				for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+					if err := walkResultReferences(value, field == "if", func(parts []string) error {
+						if len(parts) > 1 && parts[0] == "steps" {
+							if !local[parts[1]] {
+								return fmt.Errorf("%s.%s: step result %s unavailable before completion", path, field, parts[1])
+							}
+							return nil
+						}
+						if len(parts) > 0 && (parts[0] == "needs" || parts[0] == "jobs") {
+							return check("${{ "+strings.Join(parts, ".")+" }}", path+"."+field, id, nil, false)
+						}
+						return nil
+					}); err != nil {
+						return err
+					}
+				}
+				for _, entry := range []struct {
+					name  string
+					steps []Step
+				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+					if err := handlers(entry.steps, local, path+"."+sid+"."+entry.name); err != nil {
+						return err
+					}
+				}
+				local[sid] = true
+			}
+			return nil
+		}
 		var inspect func([]Step, map[string]bool) error
 		inspect = func(steps []Step, available map[string]bool) error {
 			for _, source := range steps {
@@ -106,6 +143,14 @@ func validateResultReferences(w *Workflow) error {
 				}
 				for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory, "prompt": conversationPrompt(step)} {
 					if err := check(value, fmt.Sprintf("%s.steps.%s.%s", prefix, sid, field), id, available, field == "if"); err != nil {
+						return err
+					}
+				}
+				for _, entry := range []struct {
+					name  string
+					steps []Step
+				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+					if err := handlers(entry.steps, available, prefix+".steps."+sid+"."+entry.name); err != nil {
 						return err
 					}
 				}
@@ -150,6 +195,26 @@ func validateResultReferences(w *Workflow) error {
 		}
 	}
 	return nil
+}
+
+func resolveReferenceStep(w *Workflow, source Step) (Step, error) {
+	step, err := normalizeAgentStep(source)
+	if err != nil {
+		return step, err
+	}
+	if strings.HasPrefix(step.Uses, "agent/") && step.With["output"] != nil {
+		output, err := resolveNamedOutput(w, step.With["output"])
+		if err != nil {
+			return step, err
+		}
+		with := make(map[string]any, len(step.With))
+		for key, value := range step.With {
+			with[key] = value
+		}
+		with["output"] = output
+		step.With = with
+	}
+	return step, nil
 }
 
 func newResultReference(parts []string) bool {

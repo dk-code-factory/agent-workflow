@@ -22,6 +22,17 @@ func Redact(text string, secrets map[string]string) string {
 	return text
 }
 func redactStep(step StepExecution, secrets map[string]string) StepExecution {
+	if step.Lifecycle != nil {
+		lifecycle := *step.Lifecycle
+		lifecycle.OriginalError = Redact(lifecycle.OriginalError, secrets)
+		lifecycle.Handlers = map[string][]StepExecution{}
+		for kind, results := range step.Lifecycle.Handlers {
+			for _, child := range results {
+				lifecycle.Handlers[kind] = append(lifecycle.Handlers[kind], redactStep(child, secrets))
+			}
+		}
+		step.Lifecycle = &lifecycle
+	}
 	step.Error = Redact(step.Error, secrets)
 	step.Outputs, _ = redactValue(step.Outputs, secrets).(map[string]any)
 	return step
@@ -195,6 +206,7 @@ func redactAttempt(a Attempt, secrets map[string]string) Attempt {
 		}
 		a.Conversation = &copy
 	}
+	a.Result = redactStep(a.Result, secrets)
 	a.TaskOutputs, _ = redactValue(a.TaskOutputs, secrets).(map[string]any)
 	repairs := make([]map[string]any, len(a.RepairOutputs))
 	for i, out := range a.RepairOutputs {

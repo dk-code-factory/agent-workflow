@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
 
 - **Starting point:** I add or select an agent or conversation step.
 - **My flow:** For a conversation I select **Conversation** under **Step type**,
@@ -341,19 +341,44 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. A fallback prompt that traverses outputs beneath a scalar error field shows its complete invalid path in a diagnostic; correcting the reference clears it. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
+  For an agent or command step, I open **Failure handlers and finalization**,
+  set **Handler timeout**, and author **Fallback steps (YAML)**, **Failure
+  reporting steps (YAML)**, or **Finalization steps (YAML)** as step lists.
 - **What I see:** The YAML updates and the graph shows the corresponding
   condition or error-handling indicator. The UI does not evaluate the condition
   or predict its execution result.
+  `onError` can replace a failed task result, `onFailure` reports a remaining
+  failure, and `finally` runs after success or safe failure. Cancellation and
+  unsafe failures skip handlers. These hooks are step-only and support agents
+  and commands. Handler prompts can reference redacted `failed.id`,
+  `failed.uses`, `failed.prompt`, `error.message`, and `error.class`; source
+  completion offers these fields inside a handler. These fields are scalar;
+  accessing an output beneath one produces a diagnostic that clears when I
+  restore the field reference. Lists accept nested handlers;
+  the browser diagnoses invalid child steps, timeouts above five minutes, more
+  than eight nested levels, and more than 100 handler steps per job. Agent and
+  command leaves inside parallel or sequence blocks support the same handlers;
+  structural blocks cannot own handlers or appear in handler lists. A handler
+  sees its leaf's incoming results and preceding handler siblings, excluding
+  concurrent branch siblings. Duplicating a block updates inherited producer
+  references and named schemas while preserving local handler shadowing.
+  Generated producer IDs avoid existing handler IDs throughout the copied block,
+  including nested handlers, so copied references keep their original producer.
+  Renaming a preceding outer step updates its references in named handler output
+  schemas while preserving references to a handler sibling with the same ID.
+  A new ID that would redirect a reference to a preceding handler sibling is
+  rejected; I can choose another ID without changing the stored workflow.
+  Deleting that producer includes those schema uses in the confirmation.
 
 ### UF-23 — Insert a reference into an expression
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-23.spec.ts)
 
-- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; workflow search opens the consumer prompt in the large dependency graph before checking its bounded picker, and typing a YAML path still finds a later producer's field beyond that initial list.
+- **Coverage:** Expression insertion replaces selected text and restores focus and a collapsed cursor immediately after the inserted reference, with animation frames paused, including replacement by the same expression; the next typed character stays before the preserved suffix. YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; workflow search opens the consumer prompt in the large dependency graph before checking its bounded picker, and typing a YAML path still finds a later producer's field beyond that initial list.
 
 - **Starting point:** I am editing a field that supports expressions.
 - **My flow:** I use field suggestions, choose **Insert expression…** in a

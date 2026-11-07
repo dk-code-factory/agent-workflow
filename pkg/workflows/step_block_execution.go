@@ -59,6 +59,9 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	if step.Conversation != nil {
 		return e.executeConversationStep(ctx, step, ec, req, slots)
 	}
+	if hasLifecycle(step) {
+		return e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)
+	}
 	if step.Uses == "input/wait" {
 		return e.executeInputWait(ctx, step, ec)
 	}

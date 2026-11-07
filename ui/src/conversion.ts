@@ -12,6 +12,9 @@ export function stepConversion(step: Step, kind: string) {
   const conversation = kind === 'conversation';
   for (const key of ['conversation', 'start', 'finishBy', 'maxTurns', 'maxMessages']) if (!conversation && Object.hasOwn(step, key)) remove.push([key]);
   const block = kind === 'parallel' || kind === 'sequence';
+  if (!command && !kind.startsWith('agent/')) for (const key of ['onError', 'onFailure', 'finally', 'handlerTimeout']) {
+    if (Object.hasOwn(step, key)) remove.push([key]);
+  }
   for (const key of ['parallel', 'sequence']) if (key !== kind && Object.hasOwn(step, key)) remove.push([key]);
   if (conversation) {
     for (const key of ['uses', 'agent', 'argv', 'run', 'shell', 'working-directory', 'context']) if (Object.hasOwn(step, key)) remove.push([key]);

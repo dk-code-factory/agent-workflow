@@ -20,6 +20,52 @@ jobs:
 `;
 
 describe('YAML conversations', () => {
+  it.each([
+    'conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, onError: [{argv: [echo]}]',
+    'conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, finally: []',
+    'conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, handlerTimeout: 1s',
+    'argv: [echo], finally: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work}]',
+  ])('rejects conversation/lifecycle combinations: %s', declaration => {
+    const result = parseWorkflow(`jobs: {solve: {steps: [{${declaration}}]}}`);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'handler-action', severity: 'error', message: 'Conversations cannot own or appear inside lifecycle handlers' }));
+  });
+
+  it('retains conversation schema consumers and handler references during renames', () => {
+    const doc = new WorkflowDocument({ source: `schemas:
+  Decision: {type: object, properties: {answer: {type: string, enum: ['\${{ steps.seed.text }}']}}}
+jobs:
+  solve:
+    steps:
+      - {id: seed, agent: builder, prompt: Prepare}
+      - id: solution
+        conversation: [builder, reviewer]
+        finishBy: reviewer
+        prompt: '\${{ steps.seed.text }}'
+        with: {output: {schema: Decision}}
+      - id: report
+        agent: reviewer
+        prompt: Report
+        finally:
+          - agent: builder
+            prompt: '\${{ steps.solution.answer }}'
+            with: {output: {schema: Decision}}
+` });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.renameStep('solve', 0, 'prepared');
+    doc.renameStep('solve', 1, 'reviewed');
+    const workflow = doc.getSnapshot().workflow!;
+    const conversation = workflow.jobs.solve.steps![1];
+    const finalizer = workflow.jobs.solve.steps![2].finally![0];
+    expect(conversation.prompt).toBe('${{ steps.prepared.text }}');
+    expect(finalizer.prompt).toBe('${{ steps.reviewed.answer }}');
+    for (const consumer of [conversation, finalizer]) {
+      const name = (consumer.with!.output as any).schema;
+      expect((workflow.schemas![name] as any).properties.answer.enum).toEqual(['${{ steps.prepared.text }}']);
+    }
+    expect(expressionSuggestions(workflow, 'solve', 2, ['jobs', 'solve', 'steps', 2, 'finally', 0, 'prompt'])).toContain('steps.reviewed.answer');
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+
   it('admits conversations with default bounds and exposes their named completion fields', () => {
     const result = parseWorkflow(source);
     expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);

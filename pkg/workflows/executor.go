@@ -124,26 +124,14 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if err := Validate(w); err != nil {
 			return fmt.Errorf("%s: %w", ref, err)
 		}
-		// Expand local names before snapshotting. Resume uses admitted definitions.
+		// Expand local names before snapshotting, including handler contracts.
 		for id, job := range w.Jobs {
-			job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) {
-				if !strings.HasPrefix(step.Uses, "agent/") && step.Conversation == nil {
-					return step, nil
-				}
-				output, err := resolveNamedOutput(w, step.With["output"])
-				if err != nil {
-					return Step{}, err
-				}
-				if output != nil {
-					step.With["output"] = output
-				}
-				return step, nil
-			})
-			if err != nil {
+			if err := expandLifecycleOutputs(w, job.Steps); err != nil {
 				return err
 			}
 			w.Jobs[id] = job
 		}
+
 		if len(all) >= 128 {
 			return fmt.Errorf("workflow closure exceeds 128 definitions")
 		}
@@ -169,7 +157,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 	if catalog, ok := e.Agents.(interface{ HasAgent(string) bool }); ok {
 		for ref, w := range all {
 			for _, j := range w.Jobs {
-				for _, s := range FlattenSteps(j.Steps) {
+				for _, s := range lifecycleSteps(j.Steps) {
 					for _, role := range s.Conversation {
 						if !catalog.HasAgent(role) {
 							return nil, fmt.Errorf("%s references unconfigured conversation agent %q", ref, role)

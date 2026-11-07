@@ -9,8 +9,16 @@ test('expression insertion replaces selection and keeps typing at the insertion 
   await prompt.focus(); await prompt.press('Home');
   for (let index = 0; index < 7; index++) await prompt.press('ArrowRight');
   for (let index = 0; index < 7; index++) await prompt.press('Shift+ArrowRight');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   await editor.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('inputs.task');
   await expect(prompt).toBeFocused();
+  const insertionEnd = 'Before ${{ inputs.task }}'.length;
+  expect(await prompt.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([insertionEnd, insertionEnd]);
+  for (let index = 0; index < '${{ inputs.task }}'.length; index++) await prompt.press('Shift+ArrowLeft');
+  await editor.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('inputs.task');
+  await expect(prompt).toBeFocused();
+  expect(await prompt.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([insertionEnd, insertionEnd]);
   await prompt.press('!'); await prompt.press('Tab');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.prompt)).toBe('Before ${{ inputs.task }}! after');
 });

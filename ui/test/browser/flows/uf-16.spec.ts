@@ -43,6 +43,20 @@ test('reject imported fractional conversation budgets and repair them as integer
   }
 });
 
+test('reject conversation-owned lifecycle hooks and repair the declaration in YAML', async ({ page }) => {
+  const source = 'jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, finally: [{argv: [echo, done]}]}]}}';
+  const ui = await open(page, source);
+  await expect(ui.locator('.aw-diagnostics')).toContainText('Conversations cannot own or appear inside lifecycle handlers');
+  await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace(', finally: [{argv: [echo, done]}]', ''));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Visual', exact: true }).click();
+  await ui.getByRole('button', { name: 'Inspect job solve', exact: true }).click();
+  await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
+  await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('conversation');
+  await expect(ui.getByText('Failure handlers and finalization', { exact: true })).toHaveCount(0);
+});
+
 test('preserve local named output schemas while editing and exporting an agent contract', async ({ page }) => {
   const source = `schemas:\n  Review: # shared output\n    type: object\n    properties: {approved: {type: boolean}}\njobs:\n  build:\n    steps:\n      - id: review\n        uses: agent/claude\n        with:\n          prompt: Review\n          output: {format: json, schema: Review, repair-attempts: 0}\n`;
   const ui = await open(page, source);
