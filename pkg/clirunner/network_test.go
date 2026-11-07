@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,6 +73,12 @@ func TestGlobalNetworkSelectionCannotBeOverriddenByLocalRole(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg, err := LoadConfig(path)
+		if runtime.GOOS != "linux" {
+			if err == nil || !strings.Contains(err.Error(), "network-runtime requires Linux/rootful Podman") {
+				t.Fatalf("network runtime accepted on %s: %v", runtime.GOOS, err)
+			}
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

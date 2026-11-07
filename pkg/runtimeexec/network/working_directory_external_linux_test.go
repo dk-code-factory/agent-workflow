@@ -67,7 +67,8 @@ func TestWrapPreservesNativeDirectoryAndEffectiveEnvironment(t *testing.T) {
 	child.WaitDelay = 2 * time.Second
 	// The inherited PWD is deliberately unrelated to the caller's real cwd.
 	// Empty Dir must retain it; nonempty Dir uses exec.Cmd's native adjustment.
-	child.Env = []string{"PATH=/usr/bin:/bin", "AW_DIRECTORY_CALLER=1", "AW_DIRECTORY_SERVICE=" + service, "PWD=/original-inherited-pwd", "FAKE_PROVIDER_CREDENTIAL=inherited-credential", "DOCKER_HOST=unix:///stale-host", "AGENT_WORKFLOW_NETWORK_TERMINAL=1"}
+	// Keep the isolated caller's temporary files inside this test's fixture.
+	child.Env = []string{"PATH=/usr/bin:/bin", "TMPDIR=" + root, "AW_DIRECTORY_CALLER=1", "AW_DIRECTORY_SERVICE=" + service, "PWD=/original-inherited-pwd", "FAKE_PROVIDER_CREDENTIAL=inherited-credential", "DOCKER_HOST=unix:///stale-host", "AGENT_WORKFLOW_NETWORK_TERMINAL=1"}
 	if out, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("isolated caller: %s %v", out, err)
 	}
