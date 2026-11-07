@@ -541,7 +541,9 @@ func validateJSONSchemaValueWithPatterns(
 		}
 	}
 	if minimum, configured := schemaNumericKeyword(schema, "minimum"); configured {
-		if !compareValues(value, ">=", minimum) {
+		number, numberOK := parseSchemaDecimal(value)
+		bound, boundOK := parseSchemaDecimal(minimum)
+		if !numberOK || !boundOK || number.compare(bound) < 0 {
 			return fmt.Errorf("%s must be at least %v", path, minimum)
 		}
 	}
@@ -720,8 +722,11 @@ func schemaTypeMatches(value any, expected string) bool {
 		_, ok := value.(string)
 		return ok
 	case "integer":
-		number, ok := asNumericRat(value)
-		return ok && number.IsInt()
+		if _, isString := value.(string); isString {
+			return false
+		}
+		number, ok := parseSchemaDecimal(value)
+		return ok && number.isInteger()
 	case "number":
 		switch value.(type) {
 		case json.Number, int, int64, float64:

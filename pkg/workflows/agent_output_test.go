@@ -251,13 +251,48 @@ func TestValidateAgentStructuredOutputIntegerUsesNumericValue(t *testing.T) {
 		{"100e-2", true},
 		{"9223372036854775808", true},
 		{"-9223372036854775809", true},
+		{"1e1000000", true},
+		{"1e100000000000000000000", true},
+		{"0e-100000000000000000000", true},
+		{"-0.000", true},
 		{"1.5", false},
 		{"1e-3", false},
+		{"1e-100000000000000000000", false},
 		{"9007199254740992.5", false},
 		{`"1"`, false},
 	} {
 		if result := ValidateAgentStructuredOutput(tc.raw, contract); result.Valid != tc.valid {
 			t.Errorf("output %s: valid=%v, want %v (%s)", tc.raw, result.Valid, tc.valid, result.Error)
+		}
+	}
+}
+
+func TestValidateAgentStructuredOutputMinimumDecimalOrders(t *testing.T) {
+	for _, tc := range []struct {
+		minimum, raw string
+		valid        bool
+	}{
+		{"0", "1e1000000", true},
+		{"0", "-1e1000000", false},
+		{"0", "1e-1000000", true},
+		{"0", "-1e-1000000", false},
+		{"1e-1000000", "1e-999999", true},
+		{"1e-1000000", "1e-1000001", false},
+		{"1.2", "1.20", true},
+		{"1.2", "1.2001", true},
+		{"1.2001", "1.2", false},
+		{"-1.2", "-1.2001", false},
+		{"-1.2001", "-1.2", true},
+		{"0.00123", "123e-5", true},
+		{"0.00123", "122e-5", false},
+		{"-1", "-0.0", true},
+		{"0", "0e100000000000000000000", true},
+	} {
+		contract := &AgentOutputContract{Format: "json", Schema: map[string]any{
+			"type": "number", "minimum": json.Number(tc.minimum),
+		}}
+		if result := ValidateAgentStructuredOutput(tc.raw, contract); result.Valid != tc.valid {
+			t.Errorf("minimum %s, output %s: valid=%v, want %v (%s)", tc.minimum, tc.raw, result.Valid, tc.valid, result.Error)
 		}
 	}
 }
