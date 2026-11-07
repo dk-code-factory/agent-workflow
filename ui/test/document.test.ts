@@ -4,6 +4,94 @@ import { parseWorkflow } from '../src/validation';
 import { references } from '../src/expressions';
 const source = `# preserved header\nname: Example # inline\njobs:\n  build:\n    outputs:\n      result: \${{ steps.step_1.outputs.text }}\n    steps:\n      # prompt comment\n      - uses: agent/claude\n        with:\n          prompt: |\n            Hello\n            world \${{ inputs.task }}\n      - argv: [echo, done]\n  test:\n    needs: build\n    steps:\n      - argv: [echo, '\${{ needs.build.outputs.result }}']\n`;
 describe('document edits', () => {
+  it('preserves named schemas and references through edits, history and reparsing', () => {
+    const original = `# shared contract\nschemas:\n  Review: # keep schema name\n    type: object\n    properties: {approved: {type: boolean}}\njobs:\n  build:\n    steps:\n      - uses: agent/claude\n        with: {prompt: Review, output: {schema: Review, repair-attempts: 0}}\n`;
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'prompt'], 'Review carefully');
+    const edited = doc.getSnapshot();
+    expect(edited.workflow!.schemas).toEqual({ Review: { type: 'object', properties: { approved: { type: 'boolean' } } } });
+    expect(edited.workflow!.jobs.build.steps![0].with!.output).toEqual({ schema: 'Review', 'repair-attempts': 0 });
+    expect(edited.source).toContain('# keep schema name');
+    expect(parseWorkflow(edited.source).workflow).toEqual(edited.workflow);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'output', 'schema'], 'Missing');
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'schema-reference', path: ['jobs', 'build', 'steps', 0, 'with', 'output', 'schema'] }));
+  });
+  it.each([
+    ['Review: null', ['schemas', 'Review'], 'Expected a schema mapping'],
+    ['Review: string', ['schemas', 'Review'], 'Expected a schema mapping'],
+    ['Review: {$ref: other.json}', ['schemas', 'Review', '$ref'], 'Unsupported schema keyword'],
+    ['Review: {type: array, items: {$ref: other.json}}', ['schemas', 'Review', 'items', '$ref'], 'Unsupported schema keyword'],
+    ['Review: {type: object, properties: {answer: {anyOf: []}}}', ['schemas', 'Review', 'properties', 'answer', 'anyOf'], 'Unsupported schema keyword'],
+  ])('reports named-schema declarations at their original field: %s', (declaration, path, message) => {
+    const text = `schemas: {${declaration}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: Review}}]}}`;
+    const doc = new WorkflowDocument({ source: text });
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'schema', path, message: expect.stringContaining(message) }));
+    doc.setField(['name'], 'Still a draft');
+    expect(doc.getSnapshot().workflow!.schemas!.Review).toEqual(parseWorkflow(text).workflow!.schemas!.Review);
+  });
+  it('rewrites named schema expression values while preserving property names and enum object keys', () => {
+    const doc = new WorkflowDocument({ source: `schemas:\n  Review:\n    type: object\n    description: '\${{ inputs.task }}'\n    properties: {$ref: {enum: [{$ref: literal}]}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: '\${{ inputs.task }}', output: {schema: Review}}}]}}` });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    doc.setField(['on', 'workflow_call', 'inputs'], { task: { type: 'string' } });
+    doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'request');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.description).toBe('${{ inputs.request }}');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.properties).toEqual({ $ref: { enum: [{ $ref: 'literal' }] } });
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.prompt).toBe('${{ inputs.request }}');
+  });
+  it('tracks callable references in named schema values through rename, history and deletion', () => {
+    const original = `on: {workflow_call: {inputs: {task: {type: string}}}}\nschemas:\n  Review: {type: string, enum: ['\${{ inputs.task }}']}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}]}}`;
+    const doc = new WorkflowDocument({ source: original });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+    doc.renameEntry(['on', 'workflow_call', 'inputs', 'task'], 'request');
+    expect(doc.getSnapshot().workflow!.schemas!.Review.enum).toEqual(['${{ inputs.request }}']);
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo();
+    expect(doc.entryDeletionImpact(['on', 'workflow_call', 'inputs', 'request'])).toContainEqual(['schemas', 'Review', 'enum', 0]);
+    expect(() => doc.deleteEntry(['on', 'workflow_call', 'inputs', 'request'])).toThrow('references');
+    doc.deleteEntry(['on', 'workflow_call', 'inputs', 'request'], true);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown inputs reference "request"' }));
+  });
+  it('checks named step and dependency references in each consuming job context', () => {
+    const doc = new WorkflowDocument({ source: `schemas:\n  Review: {type: string, enum: ['\${{ steps.local.outputs.text }}', '\${{ needs.build.outputs.result }}']}\njobs:\n  build: {outputs: {result: done}, steps: [{argv: [echo, done]}]}\n  review:\n    needs: build\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}\n  second:\n    needs: build\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {agent: claude, prompt: Review, with: {output: {schema: Review}}}` });
+    expect(doc.getSnapshot().diagnostics.filter(d => d.code.startsWith('expression-'))).toEqual([]);
+    doc.setField(['jobs', 'second', 'needs'], []);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-dependency', path: ['schemas', 'Review', 'enum', 1], message: expect.stringContaining('"second"') }));
+    doc.setField(['jobs', 'second', 'steps', 0, 'id'], 'other');
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown steps reference "local"' }));
+  });
+  it.each([false, true])('renames local named-schema references with shared consumers: %s', shared => {
+    const original = `schemas:\n  Review: # preserve declaration comment\n    type: string\n    enum: ['\${{ steps.local.outputs.text }}']\n  Review_review: {type: boolean}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review, repair: false}}}\n      - {agent: claude, prompt: Again, with: {output: {schema: Review}}}\n${shared ? '  second:\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {agent: claude, prompt: Review, with: {output: {schema: Review}}}\n' : ''}`;
+    const doc = new WorkflowDocument({ source: original });
+    doc.renameStep('review', 0, 'renamed');
+    const edited = doc.getSnapshot();
+    const name = shared ? 'Review_review_2' : 'Review';
+    expect(edited.workflow!.schemas![name].enum).toEqual(['${{ steps.renamed.outputs.text }}']);
+    expect(edited.workflow!.jobs.review.steps!.slice(1).map(step => (step.with!.output as any).schema)).toEqual([name, name]);
+    expect((edited.workflow!.jobs.review.steps![1].with!.output as any).repair).toBe(false);
+    expect(edited.source).toContain('# preserve declaration comment');
+    expect(parseWorkflow(edited.source).workflow).toEqual(edited.workflow);
+    expect(edited.diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
+    if (shared) {
+      expect(edited.workflow!.schemas!.Review.enum).toEqual(['${{ steps.local.outputs.text }}']);
+      expect((edited.workflow!.jobs.second.steps![1].with!.output as any).schema).toBe('Review');
+    }
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+    doc.redo(); expect(doc.getSnapshot().source).toBe(edited.source);
+  });
+  it('includes consumed named schemas in step deletion impact and requires confirmation', () => {
+    const doc = new WorkflowDocument({ source: `schemas: {Review: {enum: ['\${{ steps.local.outputs.text }}']}, Unused: {enum: ['\${{ steps.local.outputs.text }}']}}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {agent: claude, prompt: Review, with: {output: {schema: Review}}}\n  other: {steps: [{id: local, argv: [echo, other]}]}` });
+    expect(doc.deletionImpact('review', 0)).toEqual([['schemas', 'Review', 'enum', 0]]);
+    expect(doc.deletionImpact('other', 0)).toEqual([]);
+    const original = doc.getSnapshot().source;
+    expect(() => doc.deleteStep('review', 0)).toThrow('references');
+    expect(doc.getSnapshot().source).toBe(original);
+    doc.deleteStep('review', 0, true);
+    expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown steps reference "local"' }));
+    doc.undo(); expect(doc.getSnapshot().source).toBe(original);
+  });
   it('keeps agent parameters, YAML comments and block prompts across provider changes', () => {
     const doc = new WorkflowDocument({ source });
     doc.setStepKind('build', 0, 'agent/codex');

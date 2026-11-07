@@ -1,15 +1,18 @@
 export type Path = (string | number)[];
 export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
-  id?: string; name?: string; uses?: string; argv?: string[]; run?: string; shell?: string;
+  id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
+  onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
+  parallel?: Step[]; sequence?: Step[];
+  conversation?: string[]; start?: string; finishBy?: string; maxTurns?: number; maxMessages?: number;
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;
   'for-each'?: { items: unknown[] | string; key: string } | null;
   repeat?: { 'max-attempts': number; until: string } | null; if?: string;
 }
-export interface Workflow extends Mapping { name?: string; on?: Mapping; jobs: Record<string, Job> }
+export interface Workflow extends Mapping { name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
 export interface Diagnostic {
   severity: 'error' | 'warning' | 'info'; code: string; message: string; path: Path;
   location?: { line: number; column: number; offset: number; endOffset: number };
@@ -57,7 +60,8 @@ export interface WorkflowCatalogEntry extends CatalogEntry {
 export interface JobResultRequest {
   target: Path;
   producer: string;
-  source: { kind: 'output'; output: string } | { kind: 'step'; step: number; output: string; name: string };
+  source: { kind: 'output'; output: string } | { kind: 'step'; step: number | Path; output: string; name: string }
+    | { kind: 'result'; step: number | Path; field: string };
   /** Replace this text selection, or append when omitted. */
   selection?: { start: number; end: number };
 }

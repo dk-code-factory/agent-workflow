@@ -67,3 +67,29 @@ test('author a durable input request, correct validation errors and edit advance
   expect(state.workflow.jobs.decide.steps[1].with.prompt).toBe('${{ steps.question.outputs.answer }}');
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
+
+test('paste concise agent YAML, diagnose competing declarations and recover the original form', async ({ page }) => {
+  const ui = await open(page);
+  await ui.getByRole('button', { name: 'Split', exact: true }).click();
+  const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
+  const source = 'jobs: {review: {steps: [{id: ask, agent: claude, prompt: Review, with: {model: sonnet}}]}}';
+  await yaml.fill(source);
+  await expect(ui.getByRole('button', { name: 'ask agent/claude', exact: true })).toBeVisible();
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await yaml.fill(source.replace('agent: claude,', 'agent: claude, uses: agent/claude,'));
+  await expect(ui.getByRole('button', { name: /agent cannot be combined with uses/ })).toBeVisible();
+  await yaml.fill(source.replace('model: sonnet', 'prompt: Competing, model: sonnet'));
+  await expect(ui.getByRole('button', { name: /prompt cannot be combined with with.prompt/ })).toBeVisible();
+  await yaml.fill(source.replace('prompt: Review', 'prompt: 42'));
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'shape' && d.path.at(-1) === 'prompt')).toBe(true);
+  await yaml.fill(source.replace('prompt: Review', 'prompt: 2026-11-06'));
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'shape' && d.path.at(-1) === 'prompt')).toBe(true);
+  await yaml.fill(source.replace('prompt: Review', 'prompt: "2026-11-06"'));
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].prompt).toBe('2026-11-06');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await yaml.fill(source);
+  await ui.getByRole('button', { name: 'ask agent/claude', exact: true }).click();
+  await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review');
+  expect((await snapshot(page)).workflow.jobs.review.steps[0]).toEqual({ id: 'ask', agent: 'claude', prompt: 'Review', with: { model: 'sonnet' } });
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+});
