@@ -292,7 +292,8 @@ class WorkerPackagingTests(unittest.TestCase):
                     excluded = not rule.startswith('!')
             return excluded
         with tempfile.TemporaryDirectory(prefix='worker-guardian-context-') as directory:
-            context = Path(directory) / 'src'
+            # macOS temporary roots can include symlinks; compare real paths.
+            context = Path(directory).resolve() / 'src'
             context.mkdir()
             stage = None
             copies = 0
