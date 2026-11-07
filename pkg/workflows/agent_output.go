@@ -627,8 +627,11 @@ func schemaIntegerKeyword(schema map[string]any, keyword string) int {
 	case float64:
 		return int(value)
 	case json.Number:
-		parsed, _ := value.Int64()
-		return int(parsed)
+		if number, ok := parseSchemaDecimal(value); ok {
+			if parsed, ok := number.boundedInt(); ok {
+				return parsed
+			}
+		}
 	}
 	return 0
 }
@@ -745,17 +748,16 @@ func schemaTypeMatches(value any, expected string) bool {
 }
 
 func schemaEnumContains(raw any, value any) bool {
-	valueJSON := canonicalJSON(value)
 	switch items := raw.(type) {
 	case []any:
 		for _, item := range items {
-			if canonicalJSON(item) == valueJSON {
+			if schemaValuesEqual(item, value) {
 				return true
 			}
 		}
 	case []string:
 		for _, item := range items {
-			if canonicalJSON(item) == valueJSON {
+			if schemaValuesEqual(item, value) {
 				return true
 			}
 		}
@@ -766,6 +768,46 @@ func schemaEnumContains(raw any, value any) bool {
 		return true
 	}
 	return false
+}
+
+// JSON numbers compare by value, including inside enum objects and arrays.
+// Keep strings distinct and avoid expanding arbitrarily large exponents.
+func schemaValuesEqual(left, right any) bool {
+	switch left := left.(type) {
+	case json.Number, int, int64, float64:
+		switch right.(type) {
+		case json.Number, int, int64, float64:
+			l, lok := parseSchemaDecimal(left)
+			r, rok := parseSchemaDecimal(right)
+			return lok && rok && l.compare(r) == 0
+		}
+		return false
+	case map[string]any:
+		object, ok := right.(map[string]any)
+		if !ok || len(left) != len(object) {
+			return false
+		}
+		for key, value := range left {
+			other, exists := object[key]
+			if !exists || !schemaValuesEqual(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		array, ok := right.([]any)
+		if !ok || len(left) != len(array) {
+			return false
+		}
+		for index, value := range left {
+			if !schemaValuesEqual(value, array[index]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(left, right)
+	}
 }
 
 func schemaRequired(schema map[string]any) []string {

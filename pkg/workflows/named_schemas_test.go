@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -30,6 +31,25 @@ jobs:
           prompt: Review again
           output: {schema: Review}
 `
+
+func TestNamedSchemasAcceptEquivalentIntegerBounds(t *testing.T) {
+	for _, keyword := range []string{"minLength", "maxLength", "maxItems"} {
+		for _, bound := range []json.Number{"2.0", "2e0", "20e-1"} {
+			w, err := Parse([]byte(namedReviewWorkflow))
+			if err != nil {
+				t.Fatal(err)
+			}
+			typ := "string"
+			if keyword == "maxItems" {
+				typ = "array"
+			}
+			w.Schemas["Review"] = map[string]any{"type": typ, keyword: bound}
+			if err := Validate(w); err != nil {
+				t.Errorf("%s: %s rejected: %v", keyword, bound, err)
+			}
+		}
+	}
+}
 
 func TestNamedSchemasReuseAndInlineEquivalence(t *testing.T) {
 	w, err := Parse([]byte(namedReviewWorkflow))

@@ -70,6 +70,23 @@ func (number schemaDecimal) isInteger() bool {
 	return number.sign == 0 || number.order.Cmp(big.NewInt(int64(len(number.digits)))) >= 0
 }
 
+func (number schemaDecimal) boundedInt() (int, bool) {
+	if number.sign == 0 {
+		return 0, true
+	}
+	maxDigits := len(strconv.Itoa(int(^uint(0) >> 1)))
+	if !number.isInteger() || number.order.Cmp(big.NewInt(int64(maxDigits))) > 0 {
+		return 0, false
+	}
+	// Check the order before expanding zeroes so huge exponents stay bounded.
+	text := number.digits + strings.Repeat("0", int(number.order.Int64())-len(number.digits))
+	if number.sign < 0 {
+		text = "-" + text
+	}
+	value, err := strconv.Atoi(text)
+	return value, err == nil
+}
+
 func (number schemaDecimal) compare(other schemaDecimal) int {
 	if number.sign < other.sign {
 		return -1
