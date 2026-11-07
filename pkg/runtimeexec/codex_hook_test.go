@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -211,6 +212,12 @@ func TestCodexHookInternalReexecAndRestrictedContainerEnvironment(t *testing.T) 
 	cmd = exec.Command("codex", "--profile", "native")
 	cmd.Env = network.Environment([]string{"OPENAI_API_KEY=fixture"}, ref)
 	args, err := BuildContainer(cmd, Policy{Mode: "container", Image: "fixture", NetworkRuntime: ref.Name, Network: &ref}, ContainerOptions{Workspace: t.TempDir(), State: t.TempDir()}, containerapi.Owner{Name: "fixture"}, t.TempDir())
+	if runtime.GOOS != "linux" {
+		if err == nil || !strings.Contains(err.Error(), "network-runtime requires Linux/rootful Podman") {
+			t.Fatalf("network container accepted on %s: %v", runtime.GOOS, err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

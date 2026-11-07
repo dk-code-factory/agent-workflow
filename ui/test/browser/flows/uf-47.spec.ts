@@ -797,14 +797,21 @@ test('guided result wiring preserves a pending raw sibling buffer', async ({ pag
 for (const narrow of [false, true]) {
   test(`diagnostic navigation protects reported raw buffers at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page }) => {
     const ui = await rawInspector(page, false, false);
-    if (narrow) await ui.evaluate(element => { element.style.width = '620px'; });
+    if (narrow) {
+      await ui.evaluate(element => { element.style.width = '620px'; });
+      await expect(ui.getByRole('button', { name: 'Visual', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(ui.getByRole('navigation', { name: 'Panels' }).getByRole('button', { name: 'inspector', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    }
     await page.evaluate(() => (window as any).first.update({ validate: async () => [
       { code: 'command-policy', severity: 'error', source: 'host', path: ['jobs', 'test', 'steps', 0, 'argv', 0], message: 'Review command executable' },
     ] }));
     const diagnostic = ui.locator('.aw-diagnostics').getByRole('button', { name: /Review command executable/ });
     await expect(diagnostic).toBeVisible();
     const raw = ui.getByLabel('Raw prompt', { exact: true });
+    await raw.click();
+    await expect(raw).toBeFocused();
     await raw.fill('Buffered during diagnostic navigation');
+    await expect.poll(async () => (await snapshot(page)).hasLocalChanges).toBe(true);
     const before = await snapshot(page);
     const cleanups = await page.evaluate(() => (window as any).raw.cleanups);
     await diagnostic.click();
