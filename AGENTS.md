@@ -6,6 +6,12 @@ GitHub publication conformance scenarios unless the user explicitly requests
 those scenarios in the current session. Historical budgets in release evidence
 do not authorize new live calls.
 
+After changing Go dependencies, run `make go-deps` and commit both `go.mod` and
+`go.sum`. This runs tidy followed by `go mod download all`; tidy alone removes
+checksums needed by the release dependency inventory. `make go-locks-check`
+verifies the complete locks without modifying the checkout and runs in
+`make check` and native CI before tests or packaging.
+
 Do not automatically refresh provider login, create repositories, publish pull
 requests, merge, or delete remote resources. Use disposable fixtures for storage
 exhaustion and runtime-failure tests; never exhaust the shared temporary or state

@@ -39,6 +39,8 @@ jobs:
         with:
           node-version: '26.13.0'
       - run: test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}'
+      - name: Check complete Go dependency locks before tests and packaging
+        run: make go-locks-check
       - run: make test check build
       - run: npm ci --prefix bridge/claude --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
