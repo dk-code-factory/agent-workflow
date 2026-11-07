@@ -18,6 +18,8 @@ var (
 )
 
 type expressionContext struct {
+	Failed          map[string]any
+	Error           map[string]any
 	Item            any
 	Ordered         bool
 	Attempt         *Attempt
@@ -240,6 +242,10 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 	}
 	var cur any
 	switch parts[0] {
+	case "failed":
+		cur = ctx.Failed
+	case "error":
+		cur = ctx.Error
 	case "item":
 		cur = ctx.Item
 	case "iteration":

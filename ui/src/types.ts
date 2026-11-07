@@ -3,6 +3,7 @@ export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
+  onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
   parallel?: Step[]; sequence?: Step[];
 }
 export interface Job extends Mapping {

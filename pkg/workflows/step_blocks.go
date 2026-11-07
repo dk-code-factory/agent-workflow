@@ -54,6 +54,14 @@ func mapSteps(steps []Step, prefix string, f func(Step) (Step, error)) ([]Step, 
 				return nil, err
 			}
 		}
+		for _, list := range []*[]Step{&step.OnError, &step.OnFailure, &step.Finally} {
+			if *list != nil {
+				*list, err = mapSteps(*list, "", f)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 		out[i] = step
 	}
 	return out, nil
@@ -103,7 +111,7 @@ func validateStepBlock(step Step) error {
 	if len(step.Parallel) == 0 && len(step.Sequence) == 0 {
 		return fmt.Errorf("block requires a nonempty step sequence")
 	}
-	if step.Agent != nil || step.Prompt != nil || step.Uses != "" || len(step.With) != 0 || len(step.Argv) != 0 || step.Run != "" || step.Shell != "" || step.WorkingDirectory != "" || step.Timeout != "" || step.Context != (RunContext{}) || step.ContinueOnError {
+	if step.Agent != nil || step.Prompt != nil || step.Uses != "" || len(step.With) != 0 || len(step.Argv) != 0 || step.Run != "" || step.Shell != "" || step.WorkingDirectory != "" || step.Timeout != "" || step.Context != (RunContext{}) || step.ContinueOnError || hasLifecycle(step) || step.HandlerTimeout != "" {
 		return fmt.Errorf("blocks allow only id, name, if, and parallel or sequence")
 	}
 	return nil

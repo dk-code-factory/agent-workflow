@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { controllerParameters, dependencies, effectiveStepID, stepAction } from './validation';
 import { blockKind } from './step-tree';
 import { parseDocument, stringify } from 'yaml';
@@ -61,6 +61,13 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
   const errorID = useId();
   const registry = useContext(InspectorDraftContext);
   const cursor = useRef<{ start: number; end: number } | undefined>(undefined);
+  const [insertedCursor, setInsertedCursor] = useState<{ value: string; position: number }>();
+  useLayoutEffect(() => {
+    const element = control.current;
+    if (!insertedCursor || !(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || element.value !== insertedCursor.value) return;
+    element.focus();
+    element.setSelectionRange(insertedCursor.position, insertedCursor.position);
+  }, [insertedCursor]);
   const badNumber = () => control.current instanceof HTMLInputElement && control.current.validity.badInput;
   const pending = () => current.current !== applied.current || badNumber();
   const updateDraft = (next: string) => { current.current = next; setDraft(next); registry?.changed(); };
@@ -112,9 +119,8 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
       const expression = '${{ ' + event.target.value + ' }}';
       const range = cursor.current ?? { start: draft.length, end: draft.length };
       const next = draft.slice(0, range.start) + expression + draft.slice(range.end);
+      setInsertedCursor({ value: next, position: range.start + expression.length });
       updateDraft(next); apply();
-      const position = range.start + expression.length;
-      requestAnimationFrame(() => { control.current?.focus(); if (control.current instanceof HTMLInputElement || control.current instanceof HTMLTextAreaElement) control.current.setSelectionRange(position, position); });
     }}><option value="" disabled>Insert expression…</option>{suggestionValues.map(value => <option key={value} value={value}>{value}</option>)}</select>}
     {result && <button type="button" disabled={readOnly} aria-label={`Use job result in ${label}`} onClick={() => {
       const rejected = registry?.apply();
@@ -349,6 +355,14 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
         <Field path={[...path, 'id']} identifier label="Step ID" value={effectiveStepID(step, selection.step!)} readOnly={disabled} onApply={value => applyEdit(() => store.renameStep(selection.job!, selection.step!, value))} />
         <div className="aw-button-row"><button type="button" disabled={disabled} onClick={() => attempt(() => store.duplicateStep(selection.job!, selection.step!))}>Duplicate step</button><button type="button" disabled={disabled} onClick={() => requestDelete(selection.job!, selection.step)}>Delete step</button><button type="button" disabled={disabled || selection.step === 0} onClick={() => attempt(() => { store.moveStep(selection.job!, selection.step!, selection.step! - 1); select({ ...selection, step: selection.step! - 1 }); })}>Move up</button><button type="button" disabled={disabled || selection.step === job!.steps!.length - 1} onClick={() => attempt(() => { store.moveStep(selection.job!, selection.step!, selection.step! + 1); select({ ...selection, step: selection.step! + 1 }); })}>Move down</button></div>
         {common}
+        {(commandKind || uses?.startsWith('agent/')) && <details><summary>Failure handlers and finalization</summary>
+          <p className="aw-hint">Handlers are agent or command step lists. onError supplies a replacement result; onFailure reports a remaining failure; finally runs after success or safe failure. Handler prompts can use failed.id, failed.uses, failed.prompt, error.message, and error.class. Cancellation and unsafe failures skip handlers.</p>
+          {field('Handler timeout', 'handlerTimeout')}
+          <p className="aw-hint">Applying a handler list replaces that entire list and its comments. Include every child step you want to keep.</p>
+          <StructuredField store={store} path={[...path, 'onError']} label="Fallback steps (YAML)" />
+          <StructuredField store={store} path={[...path, 'onFailure']} label="Failure reporting steps (YAML)" />
+          <StructuredField store={store} path={[...path, 'finally']} label="Finalization steps (YAML)" />
+        </details>}
         <label className="aw-field" data-aw-path={!uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={block ?? commandKind ?? uses ?? 'agent/claude'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', 'parallel', 'sequence', ...(store.getOptions().agents ?? [{ id: 'claude' }, { id: 'codex' }]).map(a => `agent/${a.id}`), ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(uses ? [uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : kind === 'parallel' ? 'Parallel block' : kind === 'sequence' ? 'Sequence block' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
         {block && <><p className="aw-hint">Edit nested steps as YAML here or in the source. Parallel branches share the incoming result snapshot; a sequence can use its own preceding steps. All named results become available after the join. Block failure propagates.</p>{advanced(block, block === 'parallel' ? 'Parallel branches (YAML)' : 'Sequence steps (YAML)')}</>}
         {commandKind === 'argv' && <CommandArguments store={store} path={[...path, 'argv']} suggestionsID={suggestionsID} attempt={attempt} />}

@@ -10,6 +10,9 @@ export function stepConversion(step: Step, kind: string) {
   const remove: Path[] = [];
   const set: { path: Path; value: unknown }[] = [];
   const block = kind === 'parallel' || kind === 'sequence';
+  if (!command && !kind.startsWith('agent/')) for (const key of ['onError', 'onFailure', 'finally', 'handlerTimeout']) {
+    if (Object.hasOwn(step, key)) remove.push([key]);
+  }
   for (const key of ['parallel', 'sequence']) if (key !== kind && Object.hasOwn(step, key)) remove.push([key]);
   if (block) {
     for (const key of ['uses', 'agent', 'prompt', 'with', 'argv', 'run', 'shell', 'timeout', 'working-directory', 'context', 'continue-on-error']) if (Object.hasOwn(step, key)) remove.push([key]);

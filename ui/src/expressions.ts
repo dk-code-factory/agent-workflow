@@ -1,6 +1,7 @@
-import type { Path } from './types';
+import type { Path, Step, Workflow } from './types';
+import { containingStep, stepEntries } from './step-tree';
 export interface Reference {
-  scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets'; id: string;
+  scope: 'jobs' | 'needs' | 'steps' | 'inputs' | 'secrets' | 'failed' | 'error'; id: string;
   step?: string; output?: string; tail?: string; offset: number;
 }
 const expressionSpace = /^\p{White_Space}$/u;
@@ -76,7 +77,7 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
         pending.push({ body: expression.slice(4), offset: offset + 4, scanAnd: false, scanComparison: false });
         continue;
       }
-      const match = /^(jobs|needs|steps|inputs|secrets)\.([A-Za-z_][A-Za-z0-9_-]*)(\.[\s\S]*)?$/.exec(expression);
+      const match = /^(jobs|needs|steps|inputs|secrets|failed|error)\.([A-Za-z_][A-Za-z0-9_-]*)(\.[\s\S]*)?$/.exec(expression);
       if (!match) { result.push(expression); continue; }
       const [, scope, id, suffix = ''] = match;
       const parts = suffix.split('.').slice(1);
@@ -113,17 +114,42 @@ export function references(text: string, bareExpression = false) {
   return result;
 }
 export function pathJob(path: Path): string | undefined { return path[0] === 'jobs' ? String(path[1]) : undefined; }
-function stepFieldOffset(path: Path): number | undefined {
+// Locate the innermost step without confusing nested parameter keys with hooks.
+export function stepPathLength(path: Path): number | undefined {
   if (path[0] !== 'jobs' || path[2] !== 'steps' || typeof path[3] !== 'number') return;
-  let offset = 4;
-  while ((path[offset] === 'parallel' || path[offset] === 'sequence') && typeof path[offset + 1] === 'number') offset += 2;
-  return offset;
+  let length = 4;
+  while (['onError', 'onFailure', 'finally', 'parallel', 'sequence'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
+  return length;
+}
+export function inHandlerPath(path: Path): boolean {
+  const length = stepPathLength(path) ?? 0;
+  for (let at = 4; at < length; at += 2) if (['onError', 'onFailure', 'finally'].includes(String(path[at]))) return true;
+  return false;
+}
+export function completedSteps(workflow: Workflow, path: Path): Map<string, { step: Step; path: Path }> {
+  const result = new Map<string, { step: Step; path: Path }>();
+  const length = stepPathLength(path);
+  if (length === undefined) return result;
+  const entries = stepEntries(workflow.jobs[String(path[1])]?.steps);
+  const owner = containingStep(entries, path.slice(2));
+  if (!owner) return result;
+  for (const entry of entries) if (owner.available.has(entry.id)) result.set(entry.id, { step: entry.step, path: ['jobs', path[1], ...entry.path] });
+  let sequence: Step[] = [];
+  let current = owner.step;
+  for (let at = owner.path.length + 2; at < length; at += 2) {
+    sequence = current[path[at] as 'onError' | 'onFailure' | 'finally'] ?? [];
+    const index = Number(path[at + 1]);
+    sequence.slice(0, index).forEach((step, i) => result.set(String(step.id || `step_${i + 1}`), { step, path: [...path.slice(0, at + 1), i] }));
+    current = sequence[index] ?? {};
+  }
+  return result;
 }
 export function isExpressionPath(path: Path): boolean {
+  const step = stepPathLength(path);
   return path[0] === 'jobs' && (path.length === 3 && path[2] === 'if'
     || path.length === 4 && path[2] === 'for-each' && path[3] === 'key'
     || path.length === 4 && path[2] === 'repeat' && path[3] === 'until'
-    || stepFieldOffset(path) === path.length - 1 && path.at(-1) === 'if');
+    || step !== undefined && path.length === step + 1 && path[step] === 'if');
 }
 // Keep literal metadata and callable defaults intact. These are the value
 // fields rendered by executor.go and command.go; with mappings are recursive,
@@ -137,9 +163,9 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path.length === 4 && path[2] === 'for-each' && path[3] === 'items') return true;
   if ((path[2] === 'with' || path[2] === 'secrets') && path.length >= 4) return true;
   if (path[2] === 'outputs' && path.length === 4) return true;
-  const offset = stepFieldOffset(path);
-  if (offset === undefined) return false;
-  return (path[offset] === 'with' && path.length >= offset + 2)
-    || (path[offset] === 'argv' && path.length === offset + 2 && typeof path[offset + 1] === 'number')
-    || (path.length === offset + 1 && ['run', 'working-directory', 'prompt'].includes(String(path[offset])));
+  const step = stepPathLength(path);
+  if (step === undefined) return false;
+  return (path[step] === 'with' && path.length >= step + 2)
+    || (path[step] === 'argv' && path.length === step + 2 && typeof path[step + 1] === 'number')
+    || (path.length === step + 1 && (path[step] === 'run' || path[step] === 'working-directory' || path[step] === 'prompt'));
 }
