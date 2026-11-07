@@ -541,7 +541,9 @@ func validateJSONSchemaValueWithPatterns(
 		}
 	}
 	if minimum, configured := schemaNumericKeyword(schema, "minimum"); configured {
-		if number, ok := asFloat(value); !ok || number < minimum {
+		number, numberOK := parseSchemaDecimal(value)
+		bound, boundOK := parseSchemaDecimal(minimum)
+		if !numberOK || !boundOK || number.compare(bound) < 0 {
 			return fmt.Errorf("%s must be at least %v", path, minimum)
 		}
 	}
@@ -625,19 +627,23 @@ func schemaIntegerKeyword(schema map[string]any, keyword string) int {
 	case float64:
 		return int(value)
 	case json.Number:
-		parsed, _ := value.Int64()
-		return int(parsed)
+		if number, ok := parseSchemaDecimal(value); ok {
+			if parsed, ok := number.boundedInt(); ok {
+				return parsed
+			}
+		}
 	}
 	return 0
 }
 
-func schemaNumericKeyword(schema map[string]any, keyword string) (float64, bool) {
+func schemaNumericKeyword(schema map[string]any, keyword string) (any, bool) {
 	value, exists := schema[keyword]
 	if !exists {
 		return 0, false
 	}
-	number, ok := asFloat(value)
-	return number, ok
+	_, ok := asFloat(value)
+	// Keep the original number so comparisons retain precision beyond float64.
+	return value, ok
 }
 
 func validateJSONSchemaAdditionalProperties(
@@ -719,17 +725,11 @@ func schemaTypeMatches(value any, expected string) bool {
 		_, ok := value.(string)
 		return ok
 	case "integer":
-		switch v := value.(type) {
-		case json.Number:
-			_, err := v.Int64()
-			return err == nil
-		case int, int64:
-			return true
-		case float64:
-			return v == float64(int64(v))
-		default:
+		if _, isString := value.(string); isString {
 			return false
 		}
+		number, ok := parseSchemaDecimal(value)
+		return ok && number.isInteger()
 	case "number":
 		switch value.(type) {
 		case json.Number, int, int64, float64:
@@ -748,17 +748,16 @@ func schemaTypeMatches(value any, expected string) bool {
 }
 
 func schemaEnumContains(raw any, value any) bool {
-	valueJSON := canonicalJSON(value)
 	switch items := raw.(type) {
 	case []any:
 		for _, item := range items {
-			if canonicalJSON(item) == valueJSON {
+			if schemaValuesEqual(item, value) {
 				return true
 			}
 		}
 	case []string:
 		for _, item := range items {
-			if canonicalJSON(item) == valueJSON {
+			if schemaValuesEqual(item, value) {
 				return true
 			}
 		}
@@ -769,6 +768,61 @@ func schemaEnumContains(raw any, value any) bool {
 		return true
 	}
 	return false
+}
+
+// JSON numbers compare by value, including inside enum objects and arrays.
+// Keep strings distinct and avoid expanding arbitrarily large exponents.
+func schemaValuesEqual(left, right any) bool {
+	// Direct Go contracts can contain typed collections and custom JSON values.
+	var normalized [2]any
+	for index, value := range []any{left, right} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		if err := decodeJSONWithNumbers(data, &normalized[index]); err != nil {
+			return false
+		}
+	}
+	return normalizedSchemaValuesEqual(normalized[0], normalized[1])
+}
+
+func normalizedSchemaValuesEqual(left, right any) bool {
+	switch left := left.(type) {
+	case json.Number, int, int64, float64:
+		switch right.(type) {
+		case json.Number, int, int64, float64:
+			l, lok := parseSchemaDecimal(left)
+			r, rok := parseSchemaDecimal(right)
+			return lok && rok && l.compare(r) == 0
+		}
+		return false
+	case map[string]any:
+		object, ok := right.(map[string]any)
+		if !ok || len(left) != len(object) {
+			return false
+		}
+		for key, value := range left {
+			other, exists := object[key]
+			if !exists || !normalizedSchemaValuesEqual(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		array, ok := right.([]any)
+		if !ok || len(left) != len(array) {
+			return false
+		}
+		for index, value := range left {
+			if !normalizedSchemaValuesEqual(value, array[index]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(left, right)
+	}
 }
 
 func schemaRequired(schema map[string]any) []string {
