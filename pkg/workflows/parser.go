@@ -96,6 +96,11 @@ func checkAgentShorthand(n *yaml.Node) error {
 				return fmt.Errorf("conversation roles must be strings")
 			}
 		}
+		for _, key := range []string{"onError", "onFailure", "finally", "handlerTimeout"} {
+			if fields[key] != nil {
+				return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
+			}
+		}
 		for _, key := range []string{"agent", "uses", "argv", "run", "shell", "working-directory", "context", "parallel", "sequence"} {
 			if fields[key] != nil {
 				return fmt.Errorf("conversation cannot combine with %s", key)
