@@ -30,6 +30,9 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 		return fmt.Errorf("handler nesting exceeds 8")
 	}
 	for _, step := range steps {
+		if step.Conversation != nil && (depth > 0 || step.OnError != nil || step.OnFailure != nil || step.Finally != nil || step.HandlerTimeout != "") {
+			return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
+		}
 		if isStepBlock(step) {
 			if depth > 0 || hasLifecycle(step) || step.HandlerTimeout != "" {
 				return fmt.Errorf("structural blocks cannot own or appear inside lifecycle handlers")
@@ -385,7 +388,7 @@ func validateLifecycleReplacement(step Step, outputs map[string]any, ec expressi
 
 func expandLifecycleOutputs(w *Workflow, steps []Step) error {
 	for i, step := range steps {
-		if strings.HasPrefix(step.Uses, "agent/") {
+		if strings.HasPrefix(step.Uses, "agent/") || step.Conversation != nil {
 			output, err := resolveNamedOutput(w, step.With["output"])
 			if err != nil {
 				return err

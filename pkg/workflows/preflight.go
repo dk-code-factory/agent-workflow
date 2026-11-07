@@ -9,6 +9,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if err := e.preflightConversations(all); err != nil {
+		return err
+	}
 	if hasInputWait(all) && externalInputJournal(e.Store) == nil {
 		return fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
 	}
@@ -67,6 +70,9 @@ func (e *Executor) preflightAgents(ctx context.Context, all map[string]*Workflow
 	for _, w := range all {
 		for _, job := range w.Jobs {
 			for _, step := range lifecycleSteps(job.Steps) {
+				for _, role := range step.Conversation {
+					set[role] = true
+				}
 				if strings.HasPrefix(step.Uses, "agent/") {
 					set[strings.TrimPrefix(step.Uses, "agent/")] = true
 				}

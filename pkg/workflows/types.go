@@ -128,6 +128,11 @@ type Job struct {
 }
 
 type Step struct {
+	Conversation     []string       `json:"conversation,omitempty" yaml:"conversation,omitempty"`
+	Start            string         `json:"start,omitempty" yaml:"start,omitempty"`
+	FinishBy         string         `json:"finishBy,omitempty" yaml:"finishBy,omitempty"`
+	MaxTurns         int            `json:"maxTurns,omitempty" yaml:"maxTurns,omitempty"`
+	MaxMessages      int            `json:"maxMessages,omitempty" yaml:"maxMessages,omitempty"`
 	OnError          []Step         `json:"onError,omitempty" yaml:"onError,omitempty"`
 	OnFailure        []Step         `json:"onFailure,omitempty" yaml:"onFailure,omitempty"`
 	Finally          []Step         `json:"finally,omitempty" yaml:"finally,omitempty"`

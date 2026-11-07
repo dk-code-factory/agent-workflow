@@ -56,6 +56,9 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	if isStepBlock(step) {
 		return e.executeStepBlock(ctx, step, path, ec, req, slots)
 	}
+	if step.Conversation != nil {
+		return e.executeConversationStep(ctx, step, ec, req, slots)
+	}
 	if hasLifecycle(step) {
 		return e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)
 	}

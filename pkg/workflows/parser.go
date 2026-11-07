@@ -49,6 +49,9 @@ func Parse(data []byte) (*Workflow, error) {
 // normalizeAgentStep lowers the authoring shorthand to the existing execution
 // contract before role admission, expression evaluation, and durable snapshots.
 func normalizeAgentStep(step Step) (Step, error) {
+	if step.Conversation != nil {
+		return step, nil
+	}
 	if step.Agent == nil {
 		if step.Prompt != nil {
 			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")
@@ -84,6 +87,34 @@ func checkAgentShorthand(n *yaml.Node) error {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		fields[n.Content[i].Value] = n.Content[i+1]
 	}
+	if roles := fields["conversation"]; roles != nil {
+		if roles.Kind != yaml.SequenceNode || len(roles.Content) < 2 {
+			return fmt.Errorf("conversation requires at least two participant roles")
+		}
+		for _, role := range roles.Content {
+			if role.Kind != yaml.ScalarNode || role.Tag != "!!str" {
+				return fmt.Errorf("conversation roles must be strings")
+			}
+		}
+		for _, key := range []string{"onError", "onFailure", "finally", "handlerTimeout"} {
+			if fields[key] != nil {
+				return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
+			}
+		}
+		for _, key := range []string{"agent", "uses", "argv", "run", "shell", "working-directory", "context", "parallel", "sequence"} {
+			if fields[key] != nil {
+				return fmt.Errorf("conversation cannot combine with %s", key)
+			}
+		}
+	}
+	for _, key := range []string{"maxTurns", "maxMessages"} {
+		if value := fields[key]; value != nil {
+			var count int
+			if value.Tag != "!!int" || value.Decode(&count) != nil || count < 1 {
+				return fmt.Errorf("%s must be a positive integer", key)
+			}
+		}
+	}
 	for _, key := range []string{"parallel", "sequence"} {
 		if block := fields[key]; block != nil {
 			if block.Kind != yaml.SequenceNode || len(block.Content) == 0 {
@@ -96,7 +127,7 @@ func checkAgentShorthand(n *yaml.Node) error {
 			}
 		}
 	}
-	for _, key := range []string{"agent", "prompt"} {
+	for _, key := range []string{"agent", "prompt", "start", "finishBy"} {
 		if value := fields[key]; value != nil && (value.Kind != yaml.ScalarNode || value.Tag != "!!str") {
 			return fmt.Errorf("%s must be a string", key)
 		}
@@ -105,7 +136,7 @@ func checkAgentShorthand(n *yaml.Node) error {
 		return fmt.Errorf("agent cannot combine with uses")
 	}
 	if fields["prompt"] != nil {
-		if fields["agent"] == nil {
+		if fields["agent"] == nil && fields["conversation"] == nil {
 			return fmt.Errorf("prompt requires agent; use with.prompt with uses")
 		}
 		if with := fields["with"]; with != nil && with.Kind == yaml.MappingNode {

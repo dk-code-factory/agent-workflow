@@ -158,6 +158,11 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		for ref, w := range all {
 			for _, j := range w.Jobs {
 				for _, s := range lifecycleSteps(j.Steps) {
+					for _, role := range s.Conversation {
+						if !catalog.HasAgent(role) {
+							return nil, fmt.Errorf("%s references unconfigured conversation agent %q", ref, role)
+						}
+					}
 					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(strings.TrimPrefix(s.Uses, "agent/")) {
 						return nil, fmt.Errorf("%s references unconfigured agent %q", ref, s.Uses)
 					}

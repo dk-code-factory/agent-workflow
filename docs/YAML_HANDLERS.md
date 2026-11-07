@@ -5,6 +5,9 @@ step lists. These fields are supported at step scope only; workflow and job
 hooks are rejected. Handler children can themselves declare handlers. Registered
 application actions, controller actions, and `input/wait` cannot own or appear
 inside handlers: their reconciliation and suspension protocols remain separate.
+Conversation steps also cannot own or appear inside handlers; their participant
+session and completion receipts use a separate recovery protocol. Conversations
+can run as ordinary neighboring steps or structural-block leaves.
 Agent and command leaves inside `parallel` or `sequence` blocks may own handlers.
 Structural blocks cannot own handlers or appear inside a handler list. A handler
 inherits its leaf's incoming results, excluding concurrent sibling branches;

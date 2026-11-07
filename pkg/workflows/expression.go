@@ -18,6 +18,7 @@ var (
 )
 
 type expressionContext struct {
+	Literal         bool
 	Failed          map[string]any
 	Error           map[string]any
 	Item            any
@@ -81,6 +82,9 @@ func renderMap(values map[string]any, ctx expressionContext) (map[string]any, er
 }
 
 func renderString(input string, ctx expressionContext) (any, error) {
+	if ctx.Literal {
+		return input, nil
+	}
 	matches := expressionPattern.FindAllStringSubmatch(input, -1)
 	if len(matches) == 0 {
 		return input, nil

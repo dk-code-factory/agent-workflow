@@ -5,6 +5,7 @@ export interface Step extends Mapping {
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
   parallel?: Step[]; sequence?: Step[];
+  conversation?: string[]; start?: string; finishBy?: string; maxTurns?: number; maxMessages?: number;
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;

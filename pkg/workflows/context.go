@@ -71,6 +71,8 @@ type JobExecution struct {
 }
 
 type AgentRequest struct {
+	// SessionOwnerID retains controller-owned provider state across conversation turns.
+	SessionOwnerID string
 	ObserveUsage   func(UsageUpdate) error
 	Tools          *InvocationTools
 	Generation     int64

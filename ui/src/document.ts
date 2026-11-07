@@ -1,6 +1,6 @@
 import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
-import { dependencies, effectiveStepID, stepAction, identifier, parseWorkflow, runnerTimestamp } from './validation';
+import { dependencies, effectiveStepID, stepAction, hasAgentResult, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
 import { blockKind, producerStep, stepEntries } from './step-tree';
 import { stepConversion } from './conversion';
@@ -337,7 +337,7 @@ export class WorkflowDocument {
     const walk = (steps: Step[], job: string, path: Path) => steps.forEach((step, index) => {
       const location = [...path, index];
       const output = step.with?.output;
-      if (stepAction(step)?.startsWith('agent/') && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name) result.push({ job, path: location });
+      if (hasAgentResult(step) && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name) result.push({ job, path: location });
       for (const kind of ['onError', 'onFailure', 'finally', 'parallel', 'sequence'] as const) walk(step[kind] ?? [], job, [...location, kind]);
     });
     for (const [job, value] of Object.entries(this.snapshot.workflow!.jobs)) walk(value.steps ?? [], job, ['jobs', job, 'steps']);
@@ -562,6 +562,7 @@ export class WorkflowDocument {
     if (w) for (const [id, job] of Object.entries(w.jobs)) {
       if (job.uses && this.options.workflows && !this.options.workflows.some(item => item.id.replace(/^\.\//, '') === job.uses!.replace(/^\.\//, ''))) diagnostics.push({ code: 'workflow-catalog', message: `Workflow ${job.uses} is unavailable in the host catalog`, path: ['jobs', id, 'uses'], source: 'host', severity: 'warning' });
       stepEntries(job.steps).forEach(({ step, path }) => {
+        for (const [index, role] of (step.conversation ?? []).entries()) if (this.options.agents && !this.options.agents.some(agent => agent.id === role)) diagnostics.push({ code: 'agent-catalog', message: `Agent ${role} is unavailable in the host catalog`, path: ['jobs', id, ...path, 'conversation', index], source: 'host', severity: 'warning' });
         if (stepAction(step)?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === stepAction(step)!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
       });
     }

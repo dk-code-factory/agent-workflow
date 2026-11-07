@@ -10,11 +10,11 @@ import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
 import type { Path, Step, Workflow } from './types';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath } from './expressions';
-import { dependencies, identifier, mapping, stepAction } from './validation';
+import { dependencies, identifier, mapping, hasAgentResult } from './validation';
 import { containingStep, stepEntries } from './step-tree';
 export const expressionSuggestionLimit = 200;
 export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
-  if (limit <= 0 || !stepAction(step)?.startsWith('agent/')) return [];
+  if (limit <= 0 || !hasAgentResult(step)) return [];
   const result = 'text'.startsWith(prefix) ? ['text'] : [];
   const contract = step.with?.output;
   const rawSchema = mapping(contract) ? contract.schema : undefined;
@@ -41,7 +41,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
   const addStep = (step: Step, base: string) => {
     const start = base + '.';
-    if (stepAction(step)?.startsWith('agent/') && (start.startsWith(prefix) || prefix.startsWith(start))) {
+    if (hasAgentResult(step) && (start.startsWith(prefix) || prefix.startsWith(start))) {
       const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
       const contract = step.with?.output;
       const schema = mapping(contract) ? contract.schema : undefined;

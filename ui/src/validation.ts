@@ -16,6 +16,7 @@ export const controllerParameters: Record<string, string[]> = {
 };
 export const dependencies = (job: Job): string[] => (Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []).map(s => s.trim()).filter(Boolean);
 export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(step, 'agent') ? `agent/${step.agent}` : step.uses as string | undefined;
+export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'conversation') || !!stepAction(step)?.startsWith('agent/');
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -56,12 +57,16 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
-const stepShape: { [key: string]: Shape } = { id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
-  argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string' };
+const stepShape: { [key: string]: Shape } = {
+  id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
+  conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
+  argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
+};
+
 export const handlerKinds = ['onError', 'onFailure', 'finally'] as const;
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
@@ -153,7 +158,7 @@ export function parseWorkflow(source: string): Parsed {
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
       if (shape === 'any') return;
-      if (value == null && shape !== 'strict-string') {
+      if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
         // remain absent; other mappings become editable empty collections.
         const pointer = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
@@ -210,8 +215,13 @@ export function parseWorkflow(source: string): Parsed {
           }
         } else {
           const node = doc!.getIn(path, true);
-          const decoded = runnerInteger(value, isScalar(node) ? node.source : undefined);
-          valid = decoded !== undefined;
+          // YAML core leaves Go's binary integer spelling as a plain string.
+          const integerValue = shape === 'strict-integer' && typeof value === 'string'
+            && isScalar(node) && node.type === 'PLAIN' && !node.tag ? 0 : value;
+          const decoded = runnerInteger(integerValue, isScalar(node) ? node.source : undefined);
+          valid = decoded !== undefined && (shape !== 'strict-integer' || (isScalar(node)
+            && (!node.tag || node.tag === 'tag:yaml.org,2002:int')
+            && /^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(node.source?.replaceAll('_', '') ?? '')));
           if (valid) {
             assign(path, decoded);
             // Canonicalize the parsed integer before future visual edits, so
@@ -223,7 +233,7 @@ export function parseWorkflow(source: string): Parsed {
           }
         }
       } else if (Array.isArray(shape)) {
-        valid = Array.isArray(value);
+        valid = Array.isArray(value) && (path.at(-1) !== 'conversation' || value.every(item => item != null));
         if (valid) {
           // yaml.v3 omits null elements from typed slices, including steps,
           // schedules and argv. Keep the YAML tree aligned with semantic step
@@ -338,6 +348,27 @@ function validateWorkflow(w: Workflow, add: Add) {
         for (const key of Object.keys(step)) if (!['id', 'name', 'if', kind].includes(key)) add('block', `Block cannot contain ${key}`, [...sp, key]);
         return;
       }
+      const conversation = Object.hasOwn(step, 'conversation');
+      if (conversation) {
+        if (depth > 0 || [...handlerKinds, 'handlerTimeout'].some(key => Object.hasOwn(step, key))) add('handler-action', 'Conversations cannot own or appear inside lifecycle handlers', sp);
+        const participants = step.conversation ?? [];
+        if (participants.length < 2 || participants.length > 16 || participants.some(role => !identifier.test(role)) || new Set(participants).size !== participants.length) add('conversation', 'conversation requires 2–16 distinct literal role identifiers', [...sp, 'conversation']);
+        if (step.start && !participants.includes(step.start)) add('conversation', 'start must name a declared participant', [...sp, 'start']);
+        if (!participants.includes(step.finishBy ?? '')) add('conversation', 'finishBy must name a declared participant', [...sp, 'finishBy']);
+        for (const [key, limit] of [['maxTurns', 100], ['maxMessages', 256]] as const) if (step[key] !== undefined && (!Number.isInteger(step[key]) || step[key]! < 1 || step[key]! > limit)) add('conversation', `${key} must be an integer from 1 to ${limit}`, [...sp, key]);
+        if (typeof step.prompt !== 'string' || !step.prompt.trim()) add('conversation', 'Conversation requires a nonempty prompt', [...sp, 'prompt']);
+        if (step.timeout && !validDuration(String(step.timeout), 86400000000000n)) add('timeout', 'Expected a positive Go duration of at most 24h', [...sp, 'timeout']);
+        for (const key of ['uses', 'agent', 'argv', 'run', 'shell', 'working-directory', 'context']) if (Object.hasOwn(step, key)) add('conversation', `Conversation cannot contain ${key}`, [...sp, key]);
+        for (const key of Object.keys(step.with ?? {})) if (!['output', 'model', 'workspace'].includes(key)) add('conversation', `Unsupported conversation parameter "${key}"`, [...sp, 'with', key]);
+        const output = step.with?.output;
+        const completionSchema = mapping(output) && typeof output.schema === 'string' ? w.schemas?.[output.schema] : mapping(output) ? output.schema : undefined;
+        if (mapping(completionSchema) && completionSchema.type !== undefined && completionSchema.type !== 'object') add('conversation-output', 'Conversation completion schema must have type object', [...sp, 'with', 'output', 'schema']);
+        if (output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
+        if (mapping(output) && typeof output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, output.schema)) add('schema-reference', `Unknown workflow-local schema "${output.schema}"`, [...sp, 'with', 'output', 'schema']);
+        add('host-conversation', 'Resumable sessions and managed messaging require host adapter admission', [...sp, 'conversation'], undefined, 'host', 'info');
+        return;
+      }
+      for (const key of ['start', 'finishBy', 'maxTurns', 'maxMessages']) if (Object.hasOwn(step, key)) add('conversation', `${key} requires conversation`, [...sp, key]);
       const shorthand = Object.hasOwn(step, 'agent');
       const prompt = Object.hasOwn(step, 'prompt');
       const uses = stepAction(step);
@@ -459,7 +490,7 @@ function validateWorkflow(w: Workflow, add: Add) {
   const inspectNamedOutputs = (steps: Step[], jobID: string, path: Path) => steps.forEach((step, index) => {
     const location = [...path, index];
     const output = step.with?.output;
-    if (stepAction(step)?.startsWith('agent/') && mapping(output) && typeof output.schema === 'string') {
+    if (hasAgentResult(step) && mapping(output) && typeof output.schema === 'string') {
       const declaration = w.schemas?.[output.schema];
       if (mapping(declaration)) inspect(declaration, ['schemas', output.schema], jobID, location);
     }
@@ -479,5 +510,5 @@ function validDuration(value: string, maximum = 9223372036854775807n) {
     total += BigInt(integer) * units[match[2]] + (digits ? BigInt(digits) * units[match[2]] / (10n ** BigInt(digits.length)) : 0n);
     if (total > maximum) return false;
   }
-  return total > 0n;
+  return total > 0n && total <= maximum;
 }

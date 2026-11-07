@@ -8,6 +8,33 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+func TestProviderStatePartitionsConversationSessions(t *testing.T) {
+	root := t.TempDir()
+	request := workflows.SessionRequest{AgentRequest: workflows.AgentRequest{RunID: "11111111111111111111111111111111", InvocationID: "first-turn", SessionOwnerID: "conversation-one-builder", AgentID: "builder"}}
+	first, err := providerStateDir(root, "claude", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.InvocationID = "second-turn"
+	resumed, err := providerStateDir(root, "claude", request)
+	if err != nil || first != resumed {
+		t.Fatal("conversation lost provider session state", first, resumed, err)
+	}
+	for _, owner := range []string{"conversation-one-reviewer", "conversation-two-builder"} {
+		request.SessionOwnerID = owner
+		other, err := providerStateDir(root, "claude", request)
+		if err != nil || first == other {
+			t.Fatal("participant state shared", owner, other, err)
+		}
+	}
+	request.SessionOwnerID = "conversation-one-builder"
+	request.RunID = "22222222222222222222222222222222"
+	other, err := providerStateDir(root, "claude", request)
+	if err != nil || first == other {
+		t.Fatal("origin state shared", other, err)
+	}
+}
+
 func TestProviderStatePartitionsOriginsAndWorkerSessions(t *testing.T) {
 	root := t.TempDir()
 	request := workflows.SessionRequest{AgentRequest: workflows.AgentRequest{RunID: "11111111111111111111111111111111", InvocationID: "first-turn", ParentWorkerID: "stable-worker", AgentID: "role"}}

@@ -9,11 +9,22 @@ export function stepConversion(step: Step, kind: string) {
   const command = kind === 'argv' || kind === 'shell';
   const remove: Path[] = [];
   const set: { path: Path; value: unknown }[] = [];
+  const conversation = kind === 'conversation';
+  for (const key of ['conversation', 'start', 'finishBy', 'maxTurns', 'maxMessages']) if (!conversation && Object.hasOwn(step, key)) remove.push([key]);
   const block = kind === 'parallel' || kind === 'sequence';
   if (!command && !kind.startsWith('agent/')) for (const key of ['onError', 'onFailure', 'finally', 'handlerTimeout']) {
     if (Object.hasOwn(step, key)) remove.push([key]);
   }
   for (const key of ['parallel', 'sequence']) if (key !== kind && Object.hasOwn(step, key)) remove.push([key]);
+  if (conversation) {
+    for (const key of ['uses', 'agent', 'argv', 'run', 'shell', 'working-directory', 'context']) if (Object.hasOwn(step, key)) remove.push([key]);
+    if (!step.conversation) {
+      set.push({ path: ['conversation'], value: ['builder', 'reviewer'] }, { path: ['finishBy'], value: 'reviewer' });
+      if (step.prompt === undefined) set.push({ path: ['prompt'], value: String(step.with?.prompt ?? 'Complete the task together.') });
+      for (const key of Object.keys(step.with ?? {})) if (!['model', 'workspace', 'output'].includes(key)) remove.push(['with', key]);
+    }
+    return { remove, set };
+  }
   if (block) {
     for (const key of ['uses', 'agent', 'prompt', 'with', 'argv', 'run', 'shell', 'timeout', 'working-directory', 'context', 'continue-on-error']) if (Object.hasOwn(step, key)) remove.push([key]);
     if (!Object.hasOwn(step, kind)) set.push({ path: [kind], value: [{ argv: ['echo', 'Hello'] }] });
@@ -44,7 +55,15 @@ export function stepConversion(step: Step, kind: string) {
         if (!before.includes(key) || !after.includes(key)) remove.push(['with', key]);
       }
     }
-    if (kind.startsWith('agent/') && step.prompt === undefined && (step.with?.prompt === undefined || remove.some(path => path[0] === 'with' && path[1] === 'prompt'))) set.push({ path: shorthand ? ['prompt'] : ['with', 'prompt'], value: '' });
+    if (step.conversation && kind.startsWith('agent/')) {
+      set.push({ path: ['agent'], value: kind.slice(6) });
+      const usesIndex = set.findIndex(entry => entry.path[0] === 'uses');
+      if (usesIndex >= 0) set.splice(usesIndex, 1);
+      const promptIndex = remove.findIndex(path => path[0] === 'prompt');
+      if (promptIndex >= 0) remove.splice(promptIndex, 1);
+      for (let index = remove.length - 1; index >= 0; index--) if (remove[index][0] === 'with' && ['model', 'workspace', 'output'].includes(String(remove[index][1]))) remove.splice(index, 1);
+    }
+    if (kind.startsWith('agent/') && !step.conversation && step.prompt === undefined && (step.with?.prompt === undefined || remove.some(path => path[0] === 'with' && path[1] === 'prompt'))) set.push({ path: shorthand ? ['prompt'] : ['with', 'prompt'], value: '' });
   }
   return { remove, set };
 }

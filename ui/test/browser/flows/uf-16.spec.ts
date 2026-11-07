@@ -1,6 +1,62 @@
 import { expect, test } from '@playwright/test';
 import { downloadText, field, open, snapshot } from './harness';
 
+test('configure a bounded conversation and repair finisher membership', async ({ page }) => {
+  const source = 'schemas: {Decision: {type: object, properties: {approved: {type: boolean}}}}\njobs: {solve: {steps: [{id: solution, conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, with: {output: {format: json, schema: Decision}}}]}}';
+  const ui = await open(page, source);
+  await ui.getByRole('button', { name: 'Inspect job solve', exact: true }).click();
+  await ui.getByRole('button', { name: '1. solution', exact: true }).click();
+  await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('conversation');
+  await field(page, 'Participants (YAML)', '[builder, reviewer, editor]');
+  await field(page, 'Starter', 'builder');
+  await field(page, 'Finisher', 'outside');
+  await expect(ui.locator('.aw-diagnostics')).toContainText('finishBy must name a declared participant');
+  await field(page, 'Finisher', 'editor');
+  await field(page, 'Maximum turns', '12');
+  await field(page, 'Maximum messages', '24');
+  await field(page, 'Timeout', '3m');
+  await field(page, 'Prompt', 'Review and finish with a decision.');
+  await expect(ui.locator('.aw-diagnostics')).not.toContainText('finishBy must name a declared participant');
+  const step = (await snapshot(page)).workflow.jobs.solve.steps[0];
+  expect(step).toMatchObject({ conversation: ['builder', 'reviewer', 'editor'], start: 'builder', finishBy: 'editor', maxTurns: 12, maxMessages: 24, timeout: '3m', prompt: 'Review and finish with a decision.', with: { output: { schema: 'Decision' } } });
+  expect(await downloadText(page)).toContain('schema: Decision');
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('conversation'); await dialog.dismiss(); });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).workflow.jobs.solve.steps[0]).toEqual(step);
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('finishBy'); await dialog.accept(); });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).workflow.jobs.solve.steps[0]).toEqual({ id: 'solution', timeout: '3m', argv: ['echo', 'Hello'] });
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.solve.steps[0]).toEqual(step);
+});
+
+test('reject imported fractional conversation budgets and repair them as integers', async ({ page }) => {
+  for (const budget of ['maxTurns', 'maxMessages']) {
+    const source = `jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, ${budget}: 1.9}]}}`;
+    const ui = await open(page, source);
+    await expect(ui.locator('.aw-diagnostics')).toContainText(budget);
+    expect((await snapshot(page)).diagnostics).toContainEqual(expect.objectContaining({ severity: 'error', path: ['jobs', 'solve', 'steps', 0, budget] }));
+    await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+    await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace('1.9', '2'));
+    await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+    expect((await snapshot(page)).workflow.jobs.solve.steps[0][budget]).toBe(2);
+  }
+});
+
+test('reject conversation-owned lifecycle hooks and repair the declaration in YAML', async ({ page }) => {
+  const source = 'jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, finally: [{argv: [echo, done]}]}]}}';
+  const ui = await open(page, source);
+  await expect(ui.locator('.aw-diagnostics')).toContainText('Conversations cannot own or appear inside lifecycle handlers');
+  await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace(', finally: [{argv: [echo, done]}]', ''));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Visual', exact: true }).click();
+  await ui.getByRole('button', { name: 'Inspect job solve', exact: true }).click();
+  await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
+  await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('conversation');
+  await expect(ui.getByText('Failure handlers and finalization', { exact: true })).toHaveCount(0);
+});
+
 test('preserve local named output schemas while editing and exporting an agent contract', async ({ page }) => {
   const source = `schemas:\n  Review: # shared output\n    type: object\n    properties: {approved: {type: boolean}}\njobs:\n  build:\n    steps:\n      - id: review\n        uses: agent/claude\n        with:\n          prompt: Review\n          output: {format: json, schema: Review, repair-attempts: 0}\n`;
   const ui = await open(page, source);
