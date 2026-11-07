@@ -17,14 +17,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # PR feedback uses Linux AMD64; queue/main/release checks cover every platform.
-        include: >-
-          ${{ fromJSON(github.event_name == 'pull_request' &&
-          '[{"runner":"ubuntu-24.04","platform":"linux/amd64"}]' ||
-          '[{"runner":"ubuntu-24.04","platform":"linux/amd64"},
-          {"runner":"ubuntu-24.04-arm","platform":"linux/arm64"},
-          {"runner":"macos-15-intel","platform":"darwin/amd64"},
-          {"runner":"macos-15","platform":"darwin/arm64"}]') }}
+        # Check every supported native platform before changes reach main.
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+          - runner: macos-15-intel
+            platform: darwin/amd64
+          - runner: macos-15
+            platform: darwin/arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
