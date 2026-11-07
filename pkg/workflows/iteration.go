@@ -577,7 +577,13 @@ func (e *Executor) beginIterationStep(ctx context.Context, j Journal, step Step,
 	source["argv"] = argv
 	rendered, err := renderMap(source, ec)
 	if err != nil {
-		return Attempt{}, false, err
+		if !hasLifecycle(step) {
+			return Attempt{}, false, err
+		}
+		// A rendering failure has no task effect, but its handlers still need
+		// fingerprinted admission. Keep failed expressions distinct from values
+		// and bind the source plus every independently renderable argument.
+		rendered = map[string]any{"unrendered_source": source, "argument_results": iterationArgumentResults(source, ec)}
 	}
 	fingerprint := actionHash(rendered)
 	input := iterationJournal(e.Store)
@@ -585,6 +591,29 @@ func (e *Executor) beginIterationStep(ctx context.Context, j Journal, step Step,
 		return Attempt{}, false, fmt.Errorf("ordered iteration requires durable IterationJournal")
 	}
 	return input.BeginInput(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, retry, fingerprint, strings.HasPrefix(step.Uses, "agent/"), nativeString(ec.Metadata, "iteration_logical_run_id"))
+}
+
+func iterationArgumentResults(value any, ec expressionContext) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = iterationArgumentResults(item, ec)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = iterationArgumentResults(item, ec)
+		}
+		return out
+	default:
+		rendered, err := renderValue(value, ec)
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+		return map[string]any{"value": rendered}
+	}
 }
 
 func jobsValue(jobs map[string]JobExecution) map[string]any {

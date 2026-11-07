@@ -8,17 +8,85 @@ import { classHighlighter } from '@lezer/highlight';
 import { yaml } from '@codemirror/lang-yaml';
 import { search, searchKeymap } from '@codemirror/search';
 import type { WorkflowDocument } from './document';
-import type { Workflow } from './types';
-import { hasExpressionReferences, isExpressionPath } from './expressions';
-import { dependencies, effectiveStepID } from './validation';
-export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number): string[] {
+import type { Path, Step, Workflow } from './types';
+import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath } from './expressions';
+import { dependencies, identifier, mapping, hasAgentResult } from './validation';
+import { containingStep, stepEntries } from './step-tree';
+export const expressionSuggestionLimit = 200;
+export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
+  if (limit <= 0 || !hasAgentResult(step)) return [];
+  const result = 'text'.startsWith(prefix) ? ['text'] : [];
+  const contract = step.with?.output;
+  const rawSchema = mapping(contract) ? contract.schema : undefined;
+  const schema = typeof rawSchema === 'string' ? schemas[rawSchema] : rawSchema;
+  const visit = (value: unknown, parent = '') => {
+    if (result.length >= limit || !mapping(value) || !mapping(value.properties)) return;
+    for (const key in value.properties) {
+      if (!Object.hasOwn(value.properties, key) || !identifier.test(key) || !parent && ['text', 'outputs', 'status', 'error'].includes(key)) continue;
+      const path = parent ? `${parent}.${key}` : key;
+      if (path.startsWith(prefix)) result.push(path);
+      if (result.length >= limit) return;
+      if (path.startsWith(prefix) || prefix.startsWith(path + '.')) visit(value.properties[key], path);
+      if (result.length >= limit) return;
+    }
+  };
+  visit(schema);
+  return result;
+}
+export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path, prefix = ''): string[] {
   if (!workflow) return [];
   const callable = workflow.on?.workflow_call as { inputs?: Record<string, unknown> } | undefined;
-  const result = Object.keys(callable?.inputs ?? {}).map(id => `inputs.${id}`);
+  const result: string[] = [];
+  const schemaPaths = new Map<unknown, Map<string, string[]>>();
+  const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
+  const addStep = (step: Step, base: string) => {
+    const start = base + '.';
+    if (hasAgentResult(step) && (start.startsWith(prefix) || prefix.startsWith(start))) {
+      const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
+      const contract = step.with?.output;
+      const schema = mapping(contract) ? contract.schema : undefined;
+      let byPrefix = schemaPaths.get(schema);
+      if (!byPrefix) schemaPaths.set(schema, byPrefix = new Map());
+      let fields = byPrefix.get(fieldPrefix);
+      if (!fields) {
+        fields = stepResultPaths(step, workflow.schemas, fieldPrefix);
+        byPrefix.set(fieldPrefix, fields);
+      }
+      for (const field of fields) {
+        if (add(start + field)) return true;
+      }
+    }
+    return false;
+  };
+  for (const id of Object.keys(callable?.inputs ?? {})) if (add(`inputs.${id}`)) return result;
   const job = jobID ? workflow.jobs[jobID] : undefined;
-  for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) for (const output of Object.keys(workflow.jobs[dep]?.outputs ?? {})) result.push(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`);
-  if (job?.['for-each']) result.push('item', 'iteration.key', 'iteration.number');
-  job?.steps?.slice(0, stepIndex ?? job.steps.length).forEach((s, i) => ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit'].forEach(output => result.push(`steps.${effectiveStepID(s, i)}.outputs.${output}`)));
+  const handler = path !== undefined && inHandlerPath(path);
+  if (handler) for (const value of ['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
+  for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
+    const producer = workflow.jobs[dep];
+    for (const output of Object.keys(producer?.outputs ?? {})) if (add(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`)) return result;
+    if (!producer?.uses && !producer?.['for-each']) {
+      for (const { step, id } of stepEntries(producer?.steps)) if (addStep(step, `${job ? 'needs' : 'jobs'}.${dep}.steps.${id}`)) return result;
+    }
+  }
+  if (job?.['for-each']) for (const value of ['item', 'iteration.key', 'iteration.number']) if (add(value)) return result;
+  const conciseLocal = stepIndex !== undefined || path?.[2] === 'outputs' || path?.[2] === 'repeat' && path[3] === 'until';
+  if (handler) {
+    for (const [id, { step }] of completedSteps(workflow, path!)) {
+      const base = `steps.${id}`;
+      if (addStep(step, base)) return result;
+      for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+    }
+    return result;
+  }
+  const entries = stepEntries(job?.steps);
+  const consumer = containingStep(entries, path?.slice(2) ?? (stepIndex === undefined ? [] : ['steps', stepIndex]));
+  for (const { step, id } of entries) {
+    if (consumer && !consumer.available.has(id)) continue;
+    const base = `steps.${id}`;
+    if ((conciseLocal || consumer) && addStep(step, base)) return result;
+    for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+  }
   return result;
 }
 export function SourceEditor({ store, jobID, stepIndex, navigationKey, target }: { store: WorkflowDocument; jobID?: string; stepIndex?: number; navigationKey?: number; target?: { from: number; to: number; revision: number } }) {
@@ -36,7 +104,7 @@ export function SourceEditor({ store, jobID, stepIndex, navigationKey, target }:
       const linePrefix = context.state.sliceDoc(context.state.doc.lineAt(context.pos).from, context.pos);
       const insideExpression = linePrefix.lastIndexOf('${{') > linePrefix.lastIndexOf('}}');
       if (!context.explicit && !insideExpression && !isExpressionPath(path)) return null;
-      const suggestions = expressionSuggestions(store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow, jobID, stepIndex);
+      const suggestions = expressionSuggestions(store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow, jobID, stepIndex, path, word.text);
       return { from: word.from, options: suggestions.map(label => ({ label, type: 'variable', apply: insideExpression || isExpressionPath(path) ? label : '${{ ' + label + ' }}' })) };
     };
     let syncing = false;

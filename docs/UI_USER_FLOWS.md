@@ -228,7 +228,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-15.spec.ts)
 
-- **Coverage:** Templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call.
+- **Coverage:** Command and conversation templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call. Conversation templates supply declared participants, a finisher, and bounded call/message/time settings.
 
 - **Starting point:** I have selected a job with sequential steps.
 - **My flow:** I choose a step template from **Add to workflow**, using
@@ -241,15 +241,20 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported null command fields preserve agent inspection.
+- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
 
-- **Starting point:** I add or select an agent step.
-- **My flow:** I choose the agent under **Step type**, or edit **Action target**
+- **Starting point:** I add or select an agent or conversation step.
+- **My flow:** For a conversation I select **Conversation** under **Step type**,
+  edit **Participants (YAML)**, **Starter**, **Finisher**, and bounded call, message,
+  and timeout settings. For an agent I choose it under **Step type**, or edit **Action target**
   → write the **Prompt** → optionally set **Message**, **Model**, **Workspace**,
   and a **Structured output contract (YAML)**.
+- **Named contracts:** Declare a workflow-level `schemas` map in YAML, then set
+  `schema: Review` inside the structured output contract to reuse its local
+  `Review` declaration. Definitions and references remain in exported YAML.
 - **What I see:** The step definition and graph label update. If the host
   supplies an agent catalog, an unavailable agent produces a warning. Output
-  contracts may still require host validation before execution.
+  contracts may still require host validation before execution. Imported concise `agent: ROLE` and top-level `prompt` steps retain that spelling when I edit their agent controls.
 
 ### UF-17 — Configure a direct command
 
@@ -316,7 +321,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters.
+- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
 
 - **Starting point:** A step already has command or action settings.
 - **My flow:** I select a different **Step type** → review any confirmation
@@ -336,19 +341,44 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators.
+- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. A fallback prompt that traverses outputs beneath a scalar error field shows its complete invalid path in a diagnostic; correcting the reference clears it. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
+  For an agent or command step, I open **Failure handlers and finalization**,
+  set **Handler timeout**, and author **Fallback steps (YAML)**, **Failure
+  reporting steps (YAML)**, or **Finalization steps (YAML)** as step lists.
 - **What I see:** The YAML updates and the graph shows the corresponding
   condition or error-handling indicator. The UI does not evaluate the condition
   or predict its execution result.
+  `onError` can replace a failed task result, `onFailure` reports a remaining
+  failure, and `finally` runs after success or safe failure. Cancellation and
+  unsafe failures skip handlers. These hooks are step-only and support agents
+  and commands. Handler prompts can reference redacted `failed.id`,
+  `failed.uses`, `failed.prompt`, `error.message`, and `error.class`; source
+  completion offers these fields inside a handler. These fields are scalar;
+  accessing an output beneath one produces a diagnostic that clears when I
+  restore the field reference. Lists accept nested handlers;
+  the browser diagnoses invalid child steps, timeouts above five minutes, more
+  than eight nested levels, and more than 100 handler steps per job. Agent and
+  command leaves inside parallel or sequence blocks support the same handlers;
+  structural blocks cannot own handlers or appear in handler lists. A handler
+  sees its leaf's incoming results and preceding handler siblings, excluding
+  concurrent branch siblings. Duplicating a block updates inherited producer
+  references and named schemas while preserving local handler shadowing.
+  Generated producer IDs avoid existing handler IDs throughout the copied block,
+  including nested handlers, so copied references keep their original producer.
+  Renaming a preceding outer step updates its references in named handler output
+  schemas while preserving references to a handler sibling with the same ID.
+  A new ID that would redirect a reference to a preceding handler sibling is
+  rejected; I can choose another ID without changing the stored workflow.
+  Deleting that producer includes those schema uses in the confirmation.
 
 ### UF-23 — Insert a reference into an expression
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-23.spec.ts)
 
-- **Coverage:** Expression insertion replaces selected text and preserves the cursor; YAML completion offers preceding steps and property hints exclude literal fields.
+- **Coverage:** Expression insertion replaces selected text and restores focus and a collapsed cursor immediately after the inserted reference, with animation frames paused, including replacement by the same expression; the next typed character stays before the preserved suffix. YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; workflow search opens the consumer prompt in the large dependency graph before checking its bounded picker, and typing a YAML path still finds a later producer's field beyond that initial list.
 
 - **Starting point:** I am editing a field that supports expressions.
 - **My flow:** I use field suggestions, choose **Insert expression…** in a
@@ -356,7 +386,11 @@ fields. Escape discards an uncommitted field edit.
   cursor position → select an input or output reference → continue typing.
 - **What I see:** The expression is inserted at my cursor or replaces my text
   selection. Suggestions depend on context, including preceding steps and
-  dependency outputs; literal metadata fields do not offer expressions.
+  dependency outputs, and named dependency step results. Concise paths such as
+  `steps.analyze.approved` and `needs.review.steps.analyze.approved` use known
+  structured schema fields; `text` offers the completed text result. Literal
+  metadata fields do not offer expressions. Lists show up to 200 suggestions;
+  typing a more specific YAML path narrows completion to matching references.
 
 ## Revising and removing content
 
@@ -364,13 +398,15 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-24.spec.ts)
 
-- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite references and deletion exposes affected paths.
+- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update concise local and cross-job references, including named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo. Deleting a producer lists local and dependent consuming paths and leaves an unknown-step diagnostic after confirmation. YAML next-line whitespace around a legacy output reference preserves rename tracking, deletion impact and exact source restoration through Undo.
 
 - **Starting point:** I select a job, step, callable interface entry, or job output.
 - **My flow:** I edit **Job ID**, **Step ID**, or the entry's **Identifier** →
   apply the edit → review affected expressions and diagnostics.
 - **What I see:** Recognized references update together with the identifier;
-  job dependencies also follow job renames. Invalid or conflicting identifiers
+  job dependencies also follow job renames. Step renames update named results
+  in dependent jobs as well as local expressions; deleting a referenced step
+  exposes those consumers for review. Invalid or conflicting identifiers
   show an error so I can correct them. Computed or bracket-style expression
   references need manual review.
 
@@ -403,7 +439,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-27.spec.ts)
 
-- **Coverage:** Deletion exposes structural impacts; Cancel preserves source and a host replacement invalidates a pending confirmation.
+- **Coverage:** Deletion exposes structural impacts and consumed named-schema paths for local step references; Cancel preserves source and a host replacement invalidates a pending confirmation. Confirmed producer deletion reports the remaining named-contract reference, and Undo restores its source.
 
 - **Starting point:** I select the item and its delete control.
 - **My flow:** I read the confirmation and affected document paths → choose
@@ -432,7 +468,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor.
+- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -440,7 +476,7 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** Usable source updates the visual representation. Comments
   and unfamiliar fields remain available in the source; visual edits may
   normalize formatting. Pasting source replaces text I select, rather than
-  opening a file-import dialog. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
+  opening a file-import dialog. I can paste concise `agent: ROLE` steps with a top-level multiline `prompt` and optional `with` settings; competing `uses` or `with.prompt` declarations produce field diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
 
 ### UF-30 — Search and replace in YAML
 
@@ -558,21 +594,32 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-38.spec.ts)
 
-- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes.
+- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes. Local parallel blocks import without admission errors, expose branch YAML editing and the correct block type, and omit unsupported block-level continuation. Nested sequence references survive editing; duplication allocates unique descendant IDs and rewrites internal references. Named contracts consumed inside a copied block receive their own declaration when they reference copied descendants, while original consumers retain the original contract; Undo and Redo restore the complete duplication transaction. Cancelling conversion preserves the block. Joined nested results appear in a following prompt's expression picker, and Undo restores each source transaction. Adding a parallel block from the palette supplies two independently identified command branches.
 
 - **Starting point:** I want two independent reviews and a final summary.
 - **My flow:** I add jobs named `review_a`, `review_b`, and `summarize` → add
   the review steps → select `summarize` and check both review jobs under
   **Dependencies** → use **Auto layout** to inspect the structure.
+  For local composition inside one job, I choose **Parallel block** in the
+  palette, select the block, and edit **Parallel branches (YAML)**. Each branch
+  is a step or a `sequence` block; nested steps are edited through this YAML
+  field or the source. I add a following agent step and insert a joined result
+  such as `${{ steps.second.text }}` using **Insert expression…**.
 - **What I see:** Both review jobs lead into the summary job, with no dependency
   between the reviews. The definition allows the reviews to run independently
   before the summary, subject to the runner's execution capacity.
+  Local parallel branches inherit the same incoming results, while a sequence
+  can use its own preceding steps. Following steps can use all named results
+  after a successful join. IDs are unique within the job. Duplicating a block
+  gives its descendants new IDs and updates references within the copy;
+  changing its type asks before discarding its branches. Block failures
+  propagate, and blocks do not offer **Continue on error**.
 
 ### UF-39 — Pass a result from one job to another
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-39.spec.ts)
 
-- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed.
+- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed. Named step result wiring offers nested fields from a named output schema, previews and inserts that path into an agent shorthand prompt, adds the dependency, leaves producer outputs undeclared, restores focus, and reverses the complete transaction with one Undo. A large named schema shows at most 200 result-field suggestions; typing a later field narrows that list, and the resulting wiring still previews, applies and reverses with one Undo.
 
 - **Starting point:** My `review` job contains an agent step with ID `analyze`,
   and a `summarize` job needs its result.
@@ -581,11 +628,19 @@ fields. Escape discards an uncommitted field edit.
   output → name a new output `report` if needed → **Preview result wiring** →
   review the declaration, dependency, and expression → **Apply job result**.
   I can also declare outputs and dependencies separately and use the expression picker.
+  Alternatively I choose **Named step result**, select `analyze`, and enter
+  `text` or a structured field path such as `details.reason`; this mode needs
+  no job output name. Result-field suggestions show up to 200 matching paths;
+  typing a field prefix narrows the list, including fields beyond its initial entries.
 - **What I see:** Confirmation updates the output, dependency, and field together,
   inserting `${{ needs.review.outputs.report }}` at my text selection. Existing
   matching outputs are reused; conflicting names and dependency cycles are rejected.
   Cancel changes nothing and one Undo restores the complete transaction. If the
   document changes after preview, I preview again before applying.
+  Named step result mode inserts `${{ needs.review.steps.analyze.details.reason }}`
+  and adds the dependency without declaring an output alias. Reusable and
+  per-item jobs keep their declared output interfaces. Fields colliding with
+  `text`, `outputs`, `status`, or `error` use `outputs.structured.<field>`.
   The dependent job's expression suggestions include the declared `report`
   output. I am defining how results will be passed; actual values appear when
   the workflow runs outside this UI.

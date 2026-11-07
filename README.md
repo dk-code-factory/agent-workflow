@@ -354,6 +354,74 @@ work. YAML parsing rejects duplicate keys, aliases, unknown fields, and cycles.
 The small expression grammar supports paths, literals, comparisons, `not`, and
 `and`; it does not add general scripting, parentheses, OR, or expression functions.
 
+Agent and command steps can declare `onError` fallback, `onFailure` reporting,
+and bounded `finally` cleanup lists. See [YAML step failure handlers](docs/YAML_HANDLERS.md)
+for output replacement, expression scope, cancellation, and durable recovery.
+YAML jobs also support nested `parallel` and `sequence` step blocks for local
+fan-out/fan-in. Branches read a snapshot of completed incoming results; following
+steps can consume named branch results after a successful join. Leaf operations
+share the host execution capacity, and durable resume retains completed work.
+See [YAML control flow](docs/YAML_CONTROL_FLOW.md) for syntax, result scope,
+cancellation, and recovery semantics.
+
+YAML `conversation` steps let declared roles exchange messages in persistent
+sessions, with one designated finisher and shared turn, message, and time limits.
+The result uses the existing structured-output contracts and named step paths.
+See [YAML conversations](docs/YAML_CONVERSATIONS.md) for syntax, adapter
+requirements, permissions, and durable recovery.
+
+### Named step results
+
+Successfully completed agent results have concise paths:
+
+```yaml
+jobs:
+  review:
+    steps:
+      - id: decision
+        agent: reviewer
+        prompt: Review the change.
+        with:
+          output:
+            format: json
+            schema:
+              type: object
+              properties: {approved: {type: boolean}}
+              required: [approved]
+      - agent: reporter
+        prompt: 'Approved: ${{ steps.decision.approved }}'
+  publish:
+    needs: [review]
+    steps:
+      - agent: reporter
+        prompt: 'Review: ${{ needs.review.steps.decision.text }}'
+```
+
+`steps.<id>.<field>` reads a field from the validated structured object, including
+nested paths. `steps.<id>.text` reads the original text result. The `outputs`,
+`status`, and `error` names retain their legacy meanings, and `text` is reserved
+for the text result. Read a colliding structured field explicitly through
+`steps.<id>.outputs.structured.<field>`. Existing mappings and expressions keep
+their meaning; a whole `steps.<id>` value retains its original metadata shape.
+Structured arrays and scalars remain available through `outputs.structured`.
+
+Within a job only preceding completed steps are available; job outputs and
+`repeat.until` can use all completed steps in that attempt. A declared direct
+dependency exposes `needs.<job>.steps.<id>.<field>` without a job output alias.
+Only callable workflow output expressions can use the workflow-wide form
+`jobs.<job>.steps.<id>.<field>`. Unknown producers, forward references, and
+references outside these scopes are rejected before execution. New data aliases
+fail explicitly for skipped or failed steps, absent result fields, or a missing
+text/structured result; legacy `outputs`, `status`, and `error` access keeps its
+existing behavior. Cross-job `steps` paths also allow these explicit metadata
+fields and report missing fields as errors.
+
+Repeated step jobs expose the final attempt's retained steps to dependents.
+Reusable workflow internals remain private, including ordered `for-each` jobs;
+consume their declared workflow outputs or ordered item outputs instead.
+Aliases derive from the existing retained results, so resume uses admitted
+definitions and checkpointed values, with the same redaction and replay rules.
+
 ### Commands and bounded iterations
 
 ```yaml
@@ -447,6 +515,47 @@ completion recovers a lost parent/item checkpoint without repeating its work.
 Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
 Legacy JSON stores cannot execute iteration workflows.
 
+### Concise YAML agent steps
+
+Inside a job, `agent: ROLE` and top-level `prompt` offer an alternative to
+`uses: agent/ROLE` and `with.prompt`:
+
+```yaml
+jobs:
+  review:
+    steps:
+      - id: review
+        agent: reviewer
+        prompt: |
+          Review the change for correctness and missing tests.
+          Task: ${{ inputs.task }}
+        with:
+          model: sonnet
+          output:
+            format: json
+            schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
+```
+
+Declare the `reviewer` role in `agents.yml` as usual. The role name is a literal
+identifier; both `agent` and `prompt` must be YAML strings. Quote date-like
+prompts such as `prompt: "2026-11-06"` so YAML treats them as strings. The other
+supported task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
+An `agent` step may instead use the existing `with.prompt` or `with.message`
+form when top-level `prompt` is absent. Top-level `prompt` requires `agent` or
+`conversation`.
+Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
+even when their values match. Nonempty command fields cannot combine with an
+agent call; empty or null command fields remain inactive in either authoring form.
+
+The shorthand resolves to the existing agent operation before admission. Role
+permissions, `${{ ... }}` interpolation, literal input data, structured-output
+validation and repair, step/job outputs, and durable recovery follow the same
+rules. For example, the result remains available at
+`${{ steps.review.outputs.structured.approved }}`. Jobs, dependencies, reusable
+workflow calls, and legacy `uses` steps retain their existing syntax. Admitted
+runs retain their resolved definition even when the source YAML changes later.
+The YAML editor preserves and edits either authoring form.
+
 Structured output uses native schemas on session backends and strict-object
 contracts on current CLI backends, followed by engine validation.
 `output.repair-attempts: 0` disables repair. The older
@@ -460,6 +569,54 @@ Attempt records retain `task_attempt_id`, original outputs, and repair history.
 Reported `cost_usd` is included when the provider supplies it; native Codex
 subscription usage has no dollar figure. Deduplicate cached task usage by
 `task_attempt_id` when aggregating resumed attempt records.
+
+YAML workflows can reuse a workflow-local output schema:
+
+```yaml
+schemas:
+  Review:
+    type: object
+    required: [approved]
+    additionalProperties: false
+    properties:
+      approved: {type: boolean}
+jobs:
+  review:
+    steps:
+      - uses: agent/reviewer
+        with:
+          prompt: Review the change.
+          output: {format: json, schema: Review, repair-attempts: 0}
+      - uses: agent/reviewer
+        with:
+          prompt: Review the tests.
+          output: {schema: Review}
+```
+
+`output.schema` accepts a literal schema name or the existing inline mapping.
+Named contracts use the same output validation and repair controls as equivalent
+inline contracts; `format: json` is optional when `schema` is present. Names use
+the job-ID identifier syntax. Every declaration is validated, even when unused,
+and unknown names fail before any workflow effects. Reusable workflow files
+have independent schema maps: they neither import nor override caller schemas.
+Admission expands names into the durable definition snapshot, so resume uses
+the admitted contract even after source files change.
+
+Named declarations accept the output validator's supported subset: a single
+`type` (`object`, `array`, `string`, `integer`, `number`, `boolean`, or `null`),
+`properties`, `required`, `additionalProperties` (boolean or schema), `items`,
+`enum`, RE2 `pattern`, `minLength`, `maxLength`, `maxItems`, and `minimum`, plus
+`title`, `description`, and `$comment`. Object, array, and length constraints
+require the corresponding explicit `type`; `minimum` requires `number` or
+`integer`. Length/item bounds are positive integers (`minLength` also accepts
+zero); `maxLength` follows the existing validator's UTF-8 byte limit. Required
+names must be nonempty, unique strings without surrounding whitespace. Schema
+references such as `$ref`, composition, boolean schemas, union types, and other
+keywords are rejected with a field path. Existing inline schema admission
+retains its historical behavior. After expansion, schema strings interpolate
+through the same step expressions as inline schemas. The YAML editor preserves
+declarations and references during visual edits and export; complete constraint
+admission remains a host check.
 
 ### Development and publication
 
@@ -644,7 +801,7 @@ make build
 agent-workflow bridge setup --directory bridge/claude
 node --check bridge/claude/bridge.mjs
 # Actual pinned SDK against a local fake API; no upstream model calls:
-AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run TestSDKBridgeAgainstFakeGateway
+AGENT_WORKFLOW_SDK_TEST=1 go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker|Conversation)AgainstFakeGateway'
 # Optional Linux container conformance using an already available pinned image:
 AGENT_WORKFLOW_CONTAINER_IMAGE=sha256:IMAGE_ID go test ./pkg/clirunner -run TestContainer
 ```

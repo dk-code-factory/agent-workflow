@@ -239,17 +239,17 @@ func (e *Executor) configureActions(all map[string]*Workflow) error {
 	e.actionContracts = map[string]ActionContract{}
 	for ref, w := range all {
 		for job, j := range w.Jobs {
-			for i, s := range j.Steps {
+			for _, s := range FlattenSteps(j.Steps) {
 				if !isApplicationAction(s.Uses) {
 					continue
 				}
 				name := strings.TrimPrefix(s.Uses, "action/")
 				a := e.applicationActions[name]
 				if a == nil {
-					return fmt.Errorf("%s job %s step %s: missing registered Go action %q (%s)", ref, job, stepID(s, i), name, RegisteredGoActionsV1)
+					return fmt.Errorf("%s job %s step %s: missing registered Go action %q (%s)", ref, job, s.ID, name, RegisteredGoActionsV1)
 				}
 				if actionJournal(e.Store) == nil {
-					return fmt.Errorf("%s job %s step %s: registered actions require durable ActionJournal", ref, job, stepID(s, i))
+					return fmt.Errorf("%s job %s step %s: registered actions require durable ActionJournal", ref, job, s.ID)
 				}
 				e.actionContracts[name] = a.contract
 			}

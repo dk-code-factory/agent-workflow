@@ -1,0 +1,21 @@
+[
+  {"value": "2026-11-06", "timestamp": true},
+  {"value": "2024-2-29", "timestamp": true},
+  {"value": "0000-1-1", "timestamp": true},
+  {"value": "2026-1-2T3:4:5Z", "timestamp": true},
+  {"value": "2026-1-2t3:4:5.123456789123-03:30", "timestamp": true},
+  {"value": "2026-1-2T3:4:5,123+24:60", "timestamp": true},
+  {"value": "2026-1-2  3:4:5.123", "timestamp": true},
+  {"value": "2026-2-29", "timestamp": false},
+  {"value": "1900-2-29", "timestamp": false},
+  {"value": "2026-13-1", "timestamp": false},
+  {"value": "2026-1-0", "timestamp": false},
+  {"value": "2026-1-2T3:4:5", "timestamp": false},
+  {"value": "2026-1-2T24:4:5Z", "timestamp": false},
+  {"value": "2026-1-2T3:60:5Z", "timestamp": false},
+  {"value": "2026-1-2T3:4:60Z", "timestamp": false},
+  {"value": "2026-1-2T3:4:5+25:00", "timestamp": false},
+  {"value": "2026-1-2T3:4:5+03:61", "timestamp": false},
+  {"value": "2026-1-2 3:4:5Z", "timestamp": false},
+  {"value": "2026-1-2T3:4:5z", "timestamp": false}
+]

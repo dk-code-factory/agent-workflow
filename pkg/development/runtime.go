@@ -79,8 +79,8 @@ func (r *Runtime) Admission(ctx context.Context, all map[string]*workflows.Workf
 	needed := false
 	for _, w := range all {
 		for _, j := range w.Jobs {
-			for _, s := range j.Steps {
-				needed = needed || workflows.IsControllerAction(s.Uses)
+			for _, step := range workflows.FlattenSteps(j.Steps) {
+				needed = needed || workflows.IsControllerAction(step.Uses)
 			}
 		}
 	}
