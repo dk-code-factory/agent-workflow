@@ -37,6 +37,66 @@ func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error)
 		return workflows.ProviderCapabilities{}, fmt.Errorf("unsupported provider %s", a.Provider)
 	}
 }
+
+// ValidateConversationOutput rejects contracts the provider cannot transport.
+func (r *Runner) ValidateConversationOutput(id string, schema map[string]any) error {
+	agent, ok := r.Config.Agents[id]
+	if !ok {
+		return fmt.Errorf("unknown agent %s", id)
+	}
+	if agent.Provider != "claude-sdk" {
+		return nil
+	}
+	var unsupported func(any) bool
+	unsupported = func(value any) bool {
+		switch value := value.(type) {
+		case map[string]any:
+			for key, child := range value {
+				if key == "__proto__" {
+					return true
+				}
+				if unsupported(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range value {
+				if unsupported(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var requiresUnsupported func(map[string]any) bool
+	requiresUnsupported = func(schema map[string]any) bool {
+		if names, ok := schema["required"].([]any); ok {
+			for _, name := range names {
+				if name == "__proto__" {
+					return true
+				}
+			}
+		}
+		if properties, ok := schema["properties"].(map[string]any); ok {
+			for _, raw := range properties {
+				if child, ok := raw.(map[string]any); ok && requiresUnsupported(child) {
+					return true
+				}
+			}
+		}
+		for _, key := range []string{"items", "additionalProperties"} {
+			if child, ok := schema[key].(map[string]any); ok && requiresUnsupported(child) {
+				return true
+			}
+		}
+		return false
+	}
+	if unsupported(schema) || requiresUnsupported(schema) {
+		return fmt.Errorf("agent %s: Claude SDK conversation output cannot declare __proto__ properties", id)
+	}
+	return nil
+}
+
 func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
 	agent, ok := r.Config.Agents[req.AgentID]
 	if !ok {
@@ -112,7 +172,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Tools != nil && req.Tools.Binding != nil && !req.RepairOnly {
 		catalog := []map[string]any{}
 		for _, d := range req.Tools.Binding.Catalog() {
-			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d)})
+			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d), "controller_validation": d.ControllerValidation})
 		}
 		input["broker_tools"] = catalog
 	}

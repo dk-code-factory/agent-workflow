@@ -84,9 +84,12 @@ try {
     const qualified = 'mcp__broker__' + name;
     if (typeof name !== 'string' || !/^broker_[a-f0-9]{24}$/.test(name) || brokerNames.has(qualified)) throw new Error('invalid broker catalog identity');
     brokerNames.add(qualified);
-    const schema = z.fromJSONSchema(definition.input_schema);
+    // Keep the SDK-exposed object fields for controller validation. The SDK
+    // normalizes model input before this boundary; this is not wire fidelity.
+    const schema = definition.controller_validation ? z.looseObject({}) : z.fromJSONSchema(definition.input_schema);
     if (!(schema instanceof z.ZodObject)) throw new Error('broker input schema must be an object');
-    return tool(name, definition.description, schema.shape, async args => {
+    const description = definition.controller_validation ? definition.description + '\nController argument contract: ' + JSON.stringify(definition.input_schema) : definition.description;
+    return tool(name, description, definition.controller_validation ? schema : schema.shape, async args => {
       // The upstream model tool-use ID is recorded by PreToolUse. A callback
       // never manufactures a new identity when the provider repeats a call.
       const identities = toolIDs.get(qualified + '\0' + canonical(args));

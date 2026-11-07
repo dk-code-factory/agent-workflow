@@ -35,7 +35,119 @@ func Parse(data []byte) (*Workflow, error) {
 	if err := node.Decode(&w); err != nil {
 		return nil, err
 	}
+	for id, job := range w.Jobs {
+		var err error
+		job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) { return normalizeAgentStep(step) })
+		if err != nil {
+			return nil, fmt.Errorf("job %s %w", id, err)
+		}
+		w.Jobs[id] = job
+	}
 	return &w, nil
+}
+
+// normalizeAgentStep lowers the authoring shorthand to the existing execution
+// contract before role admission, expression evaluation, and durable snapshots.
+func normalizeAgentStep(step Step) (Step, error) {
+	if step.Conversation != nil {
+		return step, nil
+	}
+	if step.Agent == nil {
+		if step.Prompt != nil {
+			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")
+		}
+		return step, nil
+	}
+	if !idPattern.MatchString(*step.Agent) {
+		return Step{}, fmt.Errorf("agent requires a valid role name")
+	}
+	if step.Uses != "" {
+		return Step{}, fmt.Errorf("agent cannot combine with uses")
+	}
+	if step.Prompt != nil {
+		if _, exists := step.With["prompt"]; exists {
+			return Step{}, fmt.Errorf("prompt cannot combine with with.prompt")
+		}
+		parameters := make(map[string]any, len(step.With)+1)
+		for key, value := range step.With {
+			parameters[key] = value
+		}
+		parameters["prompt"] = *step.Prompt
+		step.With = parameters
+	}
+	step.Uses = "agent/" + *step.Agent
+	step.Agent, step.Prompt = nil, nil
+	return step, nil
+}
+
+// YAML field presence matters for competing authoring forms, even when an
+// explicitly supplied legacy field is empty or null.
+func checkAgentShorthand(n *yaml.Node) error {
+	fields := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		fields[n.Content[i].Value] = n.Content[i+1]
+	}
+	if roles := fields["conversation"]; roles != nil {
+		if roles.Kind != yaml.SequenceNode || len(roles.Content) < 2 {
+			return fmt.Errorf("conversation requires at least two participant roles")
+		}
+		for _, role := range roles.Content {
+			if role.Kind != yaml.ScalarNode || role.Tag != "!!str" {
+				return fmt.Errorf("conversation roles must be strings")
+			}
+		}
+		for _, key := range []string{"onError", "onFailure", "finally", "handlerTimeout"} {
+			if fields[key] != nil {
+				return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
+			}
+		}
+		for _, key := range []string{"agent", "uses", "argv", "run", "shell", "working-directory", "context", "parallel", "sequence"} {
+			if fields[key] != nil {
+				return fmt.Errorf("conversation cannot combine with %s", key)
+			}
+		}
+	}
+	for _, key := range []string{"maxTurns", "maxMessages"} {
+		if value := fields[key]; value != nil {
+			var count int
+			if value.Tag != "!!int" || value.Decode(&count) != nil || count < 1 {
+				return fmt.Errorf("%s must be a positive integer", key)
+			}
+		}
+	}
+	for _, key := range []string{"parallel", "sequence"} {
+		if block := fields[key]; block != nil {
+			if block.Kind != yaml.SequenceNode || len(block.Content) == 0 {
+				return fmt.Errorf("%s requires a nonempty step sequence", key)
+			}
+			for field := range fields {
+				if field != key && field != "id" && field != "name" && field != "if" {
+					return fmt.Errorf("%s block cannot combine with %s", key, field)
+				}
+			}
+		}
+	}
+	for _, key := range []string{"agent", "prompt", "start", "finishBy"} {
+		if value := fields[key]; value != nil && (value.Kind != yaml.ScalarNode || value.Tag != "!!str") {
+			return fmt.Errorf("%s must be a string", key)
+		}
+	}
+	if fields["agent"] != nil && fields["uses"] != nil {
+		return fmt.Errorf("agent cannot combine with uses")
+	}
+	if fields["prompt"] != nil {
+		if fields["agent"] == nil && fields["conversation"] == nil {
+			return fmt.Errorf("prompt requires agent; use with.prompt with uses")
+		}
+		if with := fields["with"]; with != nil && with.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(with.Content); i += 2 {
+				if with.Content[i].Value == "prompt" {
+					return fmt.Errorf("prompt cannot combine with with.prompt")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
@@ -62,6 +174,11 @@ func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
 		}
 	}
 	if n.Kind == yaml.MappingNode {
+		if t == reflect.TypeOf(Step{}) {
+			if err := checkAgentShorthand(n); err != nil {
+				return fmt.Errorf("step at line %d: %w", n.Line, err)
+			}
+		}
 		seen := map[string]bool{}
 		for i := 0; i < len(n.Content); i += 2 {
 			key := n.Content[i]

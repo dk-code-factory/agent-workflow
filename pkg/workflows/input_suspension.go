@@ -90,8 +90,8 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 		steps := map[string]map[string]Step{}
 		for jobID, definition := range workflow.Jobs {
 			steps[jobID] = map[string]Step{}
-			for index, step := range definition.Steps {
-				steps[jobID][stepID(step, index)] = step
+			for _, step := range FlattenSteps(definition.Steps) {
+				steps[jobID][step.ID] = step
 			}
 		}
 		// A process may stop after the gate transaction and before publishing
@@ -259,6 +259,9 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 						continue
 					}
 					definition, declared := steps[jobID][sid]
+					if declared && isStepBlock(definition) && (step.Status == RunStatusSucceeded || step.Status == RunStatusWaiting || step.Status == RunStatusCanceled && step.FailureClass == "canceled") {
+						continue // Structural observations have no independent effects; descendants are checked separately.
+					}
 					input := declared && definition.Uses == "input/wait"
 					if !declared {
 						return false, nil

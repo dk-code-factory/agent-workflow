@@ -74,6 +74,31 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
+Concise YAML agent steps use `agent: ROLE` and a top-level string `prompt`, with optional `with` settings such as `model`, `message`, `workspace`, and `output`. Imported concise steps use the normal agent inspector and graph labels; prompt and role edits preserve the concise spelling. Changing between agents retains prompts and options. Converting to a command or controller action confirms discarded fields and removes incompatible shorthand. The browser rejects competing `agent`/`uses` or `prompt`/`with.prompt` declarations; top-level `prompt` requires `agent` or `conversation`. Prompt expressions participate in reference diagnostics, renames, and result wiring; the agent role remains a literal identifier.
+
+Choose **Conversation** to author a bounded conversation among 2–16 declared
+roles. **Participants (YAML)** lists role IDs; **Starter** defaults to the first,
+and **Finisher** must name a participant. Set **Prompt**, **Maximum turns**,
+**Maximum messages**, and **Timeout**; omitted bounds default to 8 calls,
+32 messages, and 2 minutes. Model, workspace, and structured output settings use
+the existing `with` mapping. The browser checks memberships and declared bounds;
+the host admits registered roles and adapters supporting resumable sessions and
+managed messaging. Conversation results participate in prompt suggestions,
+named output schemas, renames, duplication, and result wiring. Conversion confirms
+discarded conversation settings, and Undo restores them.
+
+YAML jobs can contain nested `parallel` and `sequence` blocks. Add them through
+the palette and edit their children through **Parallel branches (YAML)** or
+**Sequence steps (YAML)**, or directly in the source; nested leaves do not have
+individual visual inspectors. Block inspectors support names, IDs and conditions.
+Blocks require nonempty child lists and cannot mix leaf action fields or
+`continue-on-error`. Results and IDs are job-scoped: parallel branches share
+the incoming result snapshot, sequences see their own preceding children, and
+all descendants become available after the join. Diagnostics and suggestions
+observe those boundaries. The job-result picker includes nested producer leaves.
+Reordering preserves anonymous descendant IDs; duplication assigns new IDs and
+rewrites references inside the copy. Type conversion confirms discarded branches.
+
 Durable `input/wait` steps use **Action target** and **Advanced parameters** to
 edit required string `prompt` and `evidence-id` fields and an optional JSON
 `payload`. YAML and visual edits preserve payloads and answer expressions. The

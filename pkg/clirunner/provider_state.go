@@ -21,7 +21,10 @@ func stateComponent(value string) string {
 }
 func providerStateDir(root, provider string, req workflows.SessionRequest) (string, error) {
 	origin := req.RunID
-	owner := req.ParentWorkerID
+	owner := req.SessionOwnerID
+	if owner == "" {
+		owner = req.ParentWorkerID
+	}
 	if origin == "" {
 		origin = "unowned"
 		owner = req.AgentID

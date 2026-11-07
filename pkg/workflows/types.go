@@ -8,10 +8,11 @@ import (
 )
 
 type Workflow struct {
-	Name  string           `json:"name,omitempty"  yaml:"name,omitempty"`
-	On    WorkflowTriggers `json:"on,omitempty"    yaml:"on,omitempty"`
-	Gates map[string]any   `json:"gates,omitempty" yaml:"gates,omitempty"`
-	Jobs  map[string]Job   `json:"jobs"            yaml:"jobs"`
+	Schemas map[string]map[string]any `json:"schemas,omitempty" yaml:"schemas,omitempty"`
+	Name    string                    `json:"name,omitempty"  yaml:"name,omitempty"`
+	On      WorkflowTriggers          `json:"on,omitempty"    yaml:"on,omitempty"`
+	Gates   map[string]any            `json:"gates,omitempty" yaml:"gates,omitempty"`
+	Jobs    map[string]Job            `json:"jobs"            yaml:"jobs"`
 }
 
 type WorkflowTriggers struct {
@@ -127,6 +128,19 @@ type Job struct {
 }
 
 type Step struct {
+	Conversation     []string       `json:"conversation,omitempty" yaml:"conversation,omitempty"`
+	Start            string         `json:"start,omitempty" yaml:"start,omitempty"`
+	FinishBy         string         `json:"finishBy,omitempty" yaml:"finishBy,omitempty"`
+	MaxTurns         int            `json:"maxTurns,omitempty" yaml:"maxTurns,omitempty"`
+	MaxMessages      int            `json:"maxMessages,omitempty" yaml:"maxMessages,omitempty"`
+	OnError          []Step         `json:"onError,omitempty" yaml:"onError,omitempty"`
+	OnFailure        []Step         `json:"onFailure,omitempty" yaml:"onFailure,omitempty"`
+	Finally          []Step         `json:"finally,omitempty" yaml:"finally,omitempty"`
+	HandlerTimeout   string         `json:"handlerTimeout,omitempty" yaml:"handlerTimeout,omitempty"`
+	Parallel         []Step         `json:"parallel,omitempty" yaml:"parallel,omitempty"`
+	Sequence         []Step         `json:"sequence,omitempty" yaml:"sequence,omitempty"`
+	Agent            *string        `json:"agent,omitempty" yaml:"agent,omitempty"`
+	Prompt           *string        `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	Argv             []string       `json:"argv,omitempty" yaml:"argv,omitempty"`
 	Run              string         `json:"run,omitempty" yaml:"run,omitempty"`
 	Shell            string         `json:"shell,omitempty" yaml:"shell,omitempty"`
@@ -171,6 +185,10 @@ func (w *Workflow) UnmarshalYAML(value *yaml.Node) error {
 		case "on", "true":
 			if err := val.Decode(&w.On); err != nil {
 				return err
+			}
+		case "schemas":
+			if err := val.Decode(&w.Schemas); err != nil {
+				return fmt.Errorf("schemas: %w", err)
 			}
 		case "gates":
 			if err := val.Decode(&w.Gates); err != nil {
