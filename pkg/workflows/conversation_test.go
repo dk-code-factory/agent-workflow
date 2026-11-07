@@ -164,6 +164,44 @@ func TestYAMLConversationInvalidOutputIsTerminalWithoutRepair(t *testing.T) {
 	}
 }
 
+func TestYAMLConversationRejectedArgumentsCannotBeRepaired(t *testing.T) {
+	for _, arguments := range []string{`{"answer":`, `[]`, `null`, `{"answer":42,"padding":"` + strings.Repeat("x", 1<<20) + `"}`} {
+		name := "malformed"
+		if len(arguments) > 1<<20 {
+			name = "oversized"
+		} else if json.Valid([]byte(arguments)) {
+			name = arguments
+		}
+		t.Run(name, func(t *testing.T) {
+			runner := newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+				result := conversationEvent(req, emit)
+				if req.AgentID == "builder" {
+					return result, conversationCall(ctx, req, "next", "send", `{"to":"reviewer","message":"review"}`)
+				}
+				if err := conversationCall(ctx, req, "invalid", "finish", arguments); err == nil {
+					return result, errors.New("invalid completion accepted")
+				}
+				if err := conversationCall(ctx, req, "repair", "finish", `{"answer":"approved"}`); err == nil {
+					return result, errors.New("invalid completion repaired into success")
+				}
+				return result, nil
+			})
+			e, store := durableExecutor(t, conversationYAML, runner)
+			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			if err == nil || !strings.Contains(err.Error(), "invalid structured output") || run.Status != RunStatusFailed || runner.calls.Load() != 2 {
+				t.Fatalf("rejected completion: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
+			}
+			attempts, err := store.Attempts(context.Background(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attempts[0].Conversation.Failure == "" || attempts[0].Conversation.Finished {
+				t.Fatalf("terminal failure not retained: %+v", attempts[0].Conversation)
+			}
+		})
+	}
+}
+
 func TestYAMLConversationBudgetsAndStall(t *testing.T) {
 	for _, tc := range []struct {
 		name, fields, want string

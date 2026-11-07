@@ -37,6 +37,7 @@ describe('YAML conversations', () => {
     ['conversation: [builder, reviewer], finishBy: reviewer, start: outsider, prompt: Work', 'start'],
     ['conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, maxTurns: 101', 'maxTurns'],
     ['conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, maxMessages: 257', 'maxMessages'],
+    ...['1.9', '1.0', '1e1', '09', '!!float 2', 'null', '"2"'].flatMap(value => ['maxTurns', 'maxMessages'].map(field => [`conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, ${field}: ${value}`, field])),
     ['conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, timeout: 25h', 'timeout'],
     ['conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, uses: agent/builder', 'uses'],
     ['conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, with: {message: hidden}', 'message'],
@@ -44,6 +45,12 @@ describe('YAML conversations', () => {
     ['agent: builder, prompt: Work, maxTurns: 4', 'maxTurns'],
   ])('diagnoses invalid conversation fields: %s', (step, field) => {
     expect(parseWorkflow(`jobs: {solve: {steps: [{${step}}]}}`).diagnostics).toContainEqual(expect.objectContaining({ severity: 'error', path: ['jobs', 'solve', 'steps', 0, ...(field === 'message' ? ['with'] : []), field] }));
+  });
+
+  it.each(['2', '02', '0x2', '0o2', '0b10', '!!int 2'])('retains runner integer budget meaning for %s', value => {
+    const result = parseWorkflow(`jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, maxTurns: ${value}, maxMessages: ${value}}]}}`);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(result.workflow!.jobs.solve.steps![0]).toMatchObject({ maxTurns: 2, maxMessages: 2 });
   });
 
   it('keeps prompts and compatible contracts when converting through conversations', () => {

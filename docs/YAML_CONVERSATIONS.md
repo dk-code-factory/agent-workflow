@@ -74,12 +74,24 @@ its arguments. The controller derives
 the sender identity from the active turn and restricts recipients to declared
 peers. A participant cannot impersonate another role or finish on behalf of
 the designated finisher. Completion must satisfy the declared output contract;
-invalid completion is terminal and does not start an output-repair call.
+invalid completion observed by the controller is terminal and does not start an
+output-repair call, including malformed or oversized arguments.
 
 Participants use resumable `SessionRunner` adapters with managed-tool policy
 support. Admission rejects unsupported capabilities before workflow effects.
 The built-in Claude SDK adapter supports these capabilities; CLI compatibility
 adapters and the current Codex adapter do not satisfy this admission contract.
+Validation applies to the arguments exposed by the adapter. The pinned Claude
+SDK normalizes model input before invoking managed tools: it removes
+`__proto__` properties, converts arrays and scalar strings to object properties,
+and converts null to an empty object. The controller validates that exposed
+object, so it cannot diagnose information already removed by the SDK. Explicit
+completion contracts declaring literal `__proto__` properties are rejected
+before workflow effects. Contracts are checked again after expression rendering,
+before any participant runs; preceding steps may already have executed when a
+rendered contract is rejected. This restriction also applies to nested properties
+and required-property declarations. Use ordinary object arguments for completion;
+the adapter does not promise fidelity to the model's original JSON.
 The controller uses the existing invocation, role, capacity, usage, cancellation,
 and redaction boundaries. A conversation grants no additional filesystem,
 native tool, credential, publishing, or participant-spawn permissions.

@@ -3,6 +3,7 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,17 +16,109 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+type conversationContractRunner struct {
+	*Runner
+	calls int
+}
+
+func (r *conversationContractRunner) Preflight(context.Context, []string) error { return nil }
+func (r *conversationContractRunner) RunTurn(context.Context, workflows.SessionRequest, func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	r.calls++
+	return workflows.SessionResult{}, fmt.Errorf("unexpected participant call")
+}
+
+func TestSDKConversationRenderedContractAdmissionBeforeParticipants(t *testing.T) {
+	for _, tc := range []struct{ name, preceding, expression string }{
+		{"input", "", "inputs.property"},
+		{"preceding-result", "      - {id: collect, argv: [printf, __proto__]}\n", "steps.collect.outputs.stdout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			if err := os.Mkdir(filepath.Join(workspace, "workflows"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			source := "on: {workflow_call: {inputs: {property: {type: string}}}}\njobs:\n  solve:\n    steps:\n" + tc.preceding + "      - conversation: [builder, reviewer]\n        finishBy: builder\n        prompt: Work\n        with:\n          output:\n            schema: {type: object, required: ['${{ " + tc.expression + " }}']}\n"
+			if err := os.WriteFile(filepath.Join(workspace, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := workflows.OpenSQLite(filepath.Join(workspace, "state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			t.Setenv("SDK_RENDERED_CONTRACT_KEY", "fake-only")
+			agent := Agent{Provider: "claude-sdk", Bridge: bridge, Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_RENDERED_CONTRACT_KEY"}}
+			runner := &conversationContractRunner{Runner: &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}}
+			ready := false
+			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: runner, Store: store, Ready: func(context.Context) error { ready = true; return nil }}
+			run, err := executor.Run(context.Background(), workflows.RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"property": "__proto__"}})
+			if err == nil || !strings.Contains(err.Error(), "cannot declare __proto__") || !ready || runner.calls != 0 || run.Status != workflows.RunStatusFailed {
+				t.Fatalf("rendered contract not rejected before participants: calls=%d ready=%v run=%+v err=%v", runner.calls, ready, run, err)
+			}
+			if tc.preceding != "" && run.Jobs["solve"].Steps["collect"].Status != workflows.RunStatusSucceeded {
+				t.Fatal("preceding result was not produced")
+			}
+		})
+	}
+}
+
+func TestSDKConversationContractAdmissionBeforeEffects(t *testing.T) {
+	for _, schema := range []string{
+		"{type: object, properties: {__proto__: {type: boolean}}}",
+		"{type: object, required: [__proto__]}",
+		"{type: object, properties: {nested: {type: object, properties: {__proto__: {type: string}}}}}",
+		"{type: object, enum: [{__proto__: true}]}",
+	} {
+		t.Run(schema, func(t *testing.T) {
+			bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			if err := os.Mkdir(filepath.Join(workspace, "workflows"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			source := "schemas: {Completion: " + schema + "}\njobs: {solve: {steps: [{argv: [echo, effect]}, {conversation: [builder, reviewer], finishBy: builder, prompt: task, with: {output: {schema: Completion}}}]}}"
+			if err := os.WriteFile(filepath.Join(workspace, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := workflows.OpenSQLite(filepath.Join(workspace, "state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			agent := Agent{Provider: "claude-sdk", Bridge: bridge}
+			runner := &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}
+			ready := false
+			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: runner, Store: store, Ready: func(context.Context) error { ready = true; return nil }}
+			_, err = executor.Run(context.Background(), workflows.RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || !strings.Contains(err.Error(), "cannot declare __proto__") || ready {
+				t.Fatalf("unsupported contract was not rejected before effects: ready=%v err=%v", ready, err)
+			}
+		})
+	}
+}
+
 func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("requires locked SDK dependencies; local fake API only")
 	}
 	for _, tc := range []struct {
 		name, schema string
-		first        map[string]any
+		first        any
 		invalid      bool
 	}{
 		{"invalid-type", "{type: object, properties: {answer: {type: string}}, required: [answer]}", map[string]any{"answer": 42}, true},
 		{"invalid-extra-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "extra": true}, true},
+		{"normalized-prototype-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "__proto__": true}, false},
+		{"normalized-array", "{}", []any{}, false},
+		{"normalized-scalar", "{}", "invalid", false},
+		{"normalized-null", "{}", nil, false},
+		{"invalid-size", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": 42, "padding": strings.Repeat("x", 1<<20)}, true},
 		{"annotation-only", "{description: Completion}", map[string]any{"answer": "approved"}, false},
 		{"object-enum", "{type: object, enum: [{answer: approved}]}", map[string]any{"answer": "approved"}, false},
 		{"unconstrained-json", "{}", map[string]any{"answer": "approved", "nested": map[string]any{"retained": true}}, false},
@@ -105,7 +198,16 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 				t.Fatalf("completion contract failed: run=%+v requests=%d err=%v", run, requests.Load(), err)
 			}
 			got, _ := json.Marshal(run.Jobs["solve"].Steps["solution"].Outputs["structured"])
-			want, _ := json.Marshal(tc.first)
+			expected := tc.first
+			switch tc.name {
+			case "normalized-prototype-property":
+				expected = map[string]any{"answer": "approved"}
+			case "normalized-array", "normalized-null":
+				expected = map[string]any{}
+			case "normalized-scalar":
+				expected = map[string]any{"0": "i", "1": "n", "2": "v", "3": "a", "4": "l", "5": "i", "6": "d"}
+			}
+			want, _ := json.Marshal(expected)
 			if string(got) != string(want) {
 				t.Fatalf("SDK changed completion arguments: got=%s want=%s", got, want)
 			}

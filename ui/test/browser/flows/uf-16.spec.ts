@@ -30,6 +30,18 @@ test('configure a bounded conversation and repair finisher membership', async ({
   expect((await snapshot(page)).workflow.jobs.solve.steps[0]).toEqual(step);
 });
 
+test('reject imported fractional conversation budgets and repair them as integers', async ({ page }) => {
+  for (const budget of ['maxTurns', 'maxMessages']) {
+    const source = `jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, ${budget}: 1.9}]}}`;
+    const ui = await open(page, source);
+    await expect(ui.locator('.aw-diagnostics')).toContainText(budget);
+    expect((await snapshot(page)).diagnostics).toContainEqual(expect.objectContaining({ severity: 'error', path: ['jobs', 'solve', 'steps', 0, budget] }));
+    await page.evaluate(source => (window as any).first.update({ source }), source.replace('1.9', '2'));
+    await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+    expect((await snapshot(page)).workflow.jobs.solve.steps[0][budget]).toBe(2);
+  }
+});
+
 test('preserve local named output schemas while editing and exporting an agent contract', async ({ page }) => {
   const source = `schemas:\n  Review: # shared output\n    type: object\n    properties: {approved: {type: boolean}}\njobs:\n  build:\n    steps:\n      - id: review\n        uses: agent/claude\n        with:\n          prompt: Review\n          output: {format: json, schema: Review, repair-attempts: 0}\n`;
   const ui = await open(page, source);

@@ -84,8 +84,8 @@ try {
     const qualified = 'mcp__broker__' + name;
     if (typeof name !== 'string' || !/^broker_[a-f0-9]{24}$/.test(name) || brokerNames.has(qualified)) throw new Error('invalid broker catalog identity');
     brokerNames.add(qualified);
-    // Conversation validation must observe invalid attempts and every original
-    // argument. SDK validation would reject or strip them before the controller.
+    // Keep the SDK-exposed object fields for controller validation. The SDK
+    // normalizes model input before this boundary; this is not wire fidelity.
     const schema = definition.controller_validation ? z.looseObject({}) : z.fromJSONSchema(definition.input_schema);
     if (!(schema instanceof z.ZodObject)) throw new Error('broker input schema must be an object');
     const description = definition.controller_validation ? definition.description + '\nController argument contract: ' + JSON.stringify(definition.input_schema) : definition.description;

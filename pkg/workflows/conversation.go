@@ -156,6 +156,23 @@ func (e *Executor) preflightConversations(all map[string]*Workflow) error {
 						return fmt.Errorf("agent %s requires resumable sessions and managed tool policy", role)
 					}
 				}
+				if checker, ok := e.Agents.(interface {
+					ValidateConversationOutput(string, map[string]any) error
+				}); ok {
+					output, err := resolveNamedOutput(w, step.With["output"])
+					if err != nil {
+						return err
+					}
+					contract, err := ParseAgentOutputContract(output)
+					if err != nil {
+						return err
+					}
+					if contract != nil {
+						if err := checker.ValidateConversationOutput(step.FinishBy, contract.Schema); err != nil {
+							return err
+						}
+					}
+				}
 			}
 		}
 	}
@@ -238,6 +255,13 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 	}
 	if err := contract.Validate(); err != nil {
 		return result, err
+	}
+	if checker, ok := e.Agents.(interface {
+		ValidateConversationOutput(string, map[string]any) error
+	}); ok {
+		if err := checker.ValidateConversationOutput(step.FinishBy, contract.Schema); err != nil {
+			return result, err
+		}
 	}
 	originalSchema, _ := json.Marshal(contract.Schema)
 	safeSchema, _ := json.Marshal(redactValue(contract.Schema, e.redactions(ec.Secrets)))
@@ -508,12 +532,19 @@ func (b *conversationTools) Call(ctx context.Context, req ToolRequest) (json.Raw
 	if req.CallID == "" {
 		return nil, fmt.Errorf("message tool call ID is required")
 	}
+	ownsTurn := c.state.Active != nil && c.state.Active.To == b.role && b.turn == c.attempt.StepID+"/conversation/"+fmt.Sprint(c.state.Turns)
+	rejectArguments := func(err error) error {
+		if req.Tool == "finish" && b.role == c.state.FinishBy && ownsTurn && c.state.Sessions[b.role] != "" && !c.state.Finished {
+			return c.fail(ctx, fmt.Errorf("invalid structured output: %w", err), false)
+		}
+		return err
+	}
 	if len(req.Arguments) > 1<<20 {
-		return nil, fmt.Errorf("conversation tool arguments exceed 1 MiB")
+		return nil, rejectArguments(fmt.Errorf("conversation tool arguments exceed 1 MiB"))
 	}
 	var value any
 	if err := decodeJSONWithNumbers(req.Arguments, &value); err != nil {
-		return nil, err
+		return nil, rejectArguments(err)
 	}
 	sum := sha256.Sum256(append([]byte(req.Tool+"\x00"), req.Arguments...))
 	fingerprint := hex.EncodeToString(sum[:])
@@ -524,7 +555,7 @@ func (b *conversationTools) Call(ctx context.Context, req ToolRequest) (json.Raw
 		}
 		return slices.Clone(old.Reply), nil
 	}
-	if c.state.Active == nil || c.state.Active.To != b.role || b.turn != c.attempt.StepID+"/conversation/"+fmt.Sprint(c.state.Turns) {
+	if !ownsTurn {
 		return nil, fmt.Errorf("participant does not own the active turn")
 	}
 	if c.state.Sessions[b.role] == "" {

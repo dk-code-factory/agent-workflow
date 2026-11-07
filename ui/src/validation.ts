@@ -57,13 +57,13 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
-  conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'integer', maxMessages: 'integer',
+  conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string',
 };
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
@@ -155,7 +155,7 @@ export function parseWorkflow(source: string): Parsed {
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
       if (shape === 'any') return;
-      if (value == null && shape !== 'strict-string') {
+      if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
         // remain absent; other mappings become editable empty collections.
         const pointer = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
@@ -212,8 +212,13 @@ export function parseWorkflow(source: string): Parsed {
           }
         } else {
           const node = doc!.getIn(path, true);
-          const decoded = runnerInteger(value, isScalar(node) ? node.source : undefined);
-          valid = decoded !== undefined;
+          // YAML core leaves Go's binary integer spelling as a plain string.
+          const integerValue = shape === 'strict-integer' && typeof value === 'string'
+            && isScalar(node) && node.type === 'PLAIN' && !node.tag ? 0 : value;
+          const decoded = runnerInteger(integerValue, isScalar(node) ? node.source : undefined);
+          valid = decoded !== undefined && (shape !== 'strict-integer' || (isScalar(node)
+            && (!node.tag || node.tag === 'tag:yaml.org,2002:int')
+            && /^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(node.source?.replaceAll('_', '') ?? '')));
           if (valid) {
             assign(path, decoded);
             // Canonicalize the parsed integer before future visual edits, so

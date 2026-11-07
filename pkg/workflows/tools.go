@@ -20,7 +20,7 @@ type ToolDefinition struct {
 	Description string          `json:"description" yaml:"description"`
 	InputSchema json.RawMessage `json:"input_schema" yaml:"-"`
 	Fingerprint string          `json:"fingerprint" yaml:"-"`
-	// ControllerValidation retains original arguments for controller-owned tools.
+	// ControllerValidation defers validation of adapter-exposed objects to the controller.
 	ControllerValidation bool `json:"controller_validation,omitempty" yaml:"-"`
 }
 
