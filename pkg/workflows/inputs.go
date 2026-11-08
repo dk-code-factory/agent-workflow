@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -46,7 +47,11 @@ func resolveInputs(call *WorkflowCall, supplied map[string]any, secrets map[stri
 		case "boolean":
 			_, valid = value.(bool)
 		case "number":
-			_, valid = asNumericFloat(value)
+			if number, ok := value.(json.Number); ok {
+				_, valid = asNumericDecimal(number)
+			} else {
+				_, valid = asNumericFloat(value)
+			}
 		case "object":
 			_, valid = value.(map[string]any)
 		case "array":

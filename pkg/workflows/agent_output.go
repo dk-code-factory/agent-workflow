@@ -751,13 +751,13 @@ func schemaEnumContains(raw any, value any) bool {
 	switch items := raw.(type) {
 	case []any:
 		for _, item := range items {
-			if schemaValuesEqual(item, value) {
+			if JSONValuesEqual(item, value) {
 				return true
 			}
 		}
 	case []string:
 		for _, item := range items {
-			if schemaValuesEqual(item, value) {
+			if JSONValuesEqual(item, value) {
 				return true
 			}
 		}
@@ -770,9 +770,9 @@ func schemaEnumContains(raw any, value any) bool {
 	return false
 }
 
-// JSON numbers compare by value, including inside enum objects and arrays.
+// JSONValuesEqual compares JSON values, including numbers inside objects and arrays.
 // Keep strings distinct and avoid expanding arbitrarily large exponents.
-func schemaValuesEqual(left, right any) bool {
+func JSONValuesEqual(left, right any) bool {
 	// Direct Go contracts can contain typed collections and custom JSON values.
 	var normalized [2]any
 	for index, value := range []any{left, right} {
