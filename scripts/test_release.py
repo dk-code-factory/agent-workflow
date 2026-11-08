@@ -430,18 +430,11 @@ class GateRejectionTests(unittest.TestCase):
             with self.subTest(tag=tag, version=version), self.assertRaises(gate.GateError):
                 gate.validate_version(tag, {'version': '0.2.0'}, 'const Version = "' + version + '"')
 
-    def test_remote_checks_settings_and_existing_publication(self):
-        settings = module('repository-settings')
-        protection = copy.deepcopy(settings.BRANCH)
-        for key in ['enforce_admins', 'required_conversation_resolution', 'allow_force_pushes', 'allow_deletions']:
-            protection[key] = {'enabled': protection[key]}
+    def test_remote_checks_use_only_release_and_ci_reads(self):
+        # Administrative endpoints are deliberately absent: protection and
+        # immutable-release configuration belong to one-time repository setup.
         response = {
             'repos/example/repo': {'full_name': 'example/repo', 'private': False, 'default_branch': 'main'},
-            'repos/example/repo/immutable-releases': {'enabled': True},
-            'repos/example/repo/branches/main/protection': protection,
-            'repos/example/repo/rulesets?per_page=100': [{'id': 1}, {'id': 2}],
-            'repos/example/repo/rulesets/1': settings.RULES[0],
-            'repos/example/repo/rulesets/2': settings.RULES[1],
             'repos/example/repo/actions/workflows/test.yml/runs?head_sha=abc&event=push&per_page=100': {
                 'workflow_runs': [{'head_branch': 'main', 'status': 'completed', 'conclusion': 'success'}]},
         }
@@ -454,12 +447,25 @@ class GateRejectionTests(unittest.TestCase):
                 with self.subTest(conclusion=conclusion), self.assertRaises(gate.GateError):
                     gate.validate_remote(policy, 'abc')
             response[key]['workflow_runs'][0]['conclusion'] = 'success'
-            response['repos/example/repo/immutable-releases']['enabled'] = False
+            for change in [{'head_branch': 'candidate'}, {'status': 'in_progress'}]:
+                saved = response[key]['workflow_runs'][0]
+                response[key]['workflow_runs'] = [dict(saved, **change)]
+                with self.subTest(change=change), self.assertRaises(gate.GateError):
+                    gate.validate_remote(policy, 'abc')
+                response[key]['workflow_runs'] = [saved]
+            response[key]['workflow_runs'] = []
             with self.assertRaises(gate.GateError):
                 gate.validate_remote(policy, 'abc')
-        with patch.object(gate, 'existing_release', return_value={'draft': False}):
+        for release in [{'draft': False}, {'draft': True, 'target_commitish': 'another-commit'}]:
+            with patch.object(gate, 'existing_release', return_value=release):
+                with self.subTest(release=release), self.assertRaises(gate.GateError):
+                    gate.validate_remote(policy, 'abc')
+
+    def test_remote_release_read_errors_remain_failures(self):
+        result = subprocess.CompletedProcess([], 1, stdout='', stderr='HTTP 403: denied')
+        with patch.object(gate.subprocess, 'run', return_value=result):
             with self.assertRaises(gate.GateError):
-                gate.validate_remote(policy, 'abc')
+                gate.existing_release('example/repo', 'v0.2.0')
 
     def test_missing_runtime_certification(self):
         fixture = EvidenceTests()

@@ -4,6 +4,7 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -16,10 +17,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
-      - name: Require trusted tag, exact signed evidence, protected main CI and immutable settings
+      - name: Require trusted tag, exact signed evidence and current main CI
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: python3 scripts/validate-release.py "$TAG"
   checks:
@@ -105,13 +105,13 @@ jobs:
     needs: [archives, images]
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
       packages: write
       id-token: write
       attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
