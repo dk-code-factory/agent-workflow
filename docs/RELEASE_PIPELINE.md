@@ -14,7 +14,8 @@ repository without an initial README and push this history as `main`. Configure
 `origin` to `git@github.com:dk-code-factory/agent-workflow.git`. Do not rewrite
 existing commits. Initial bootstrap precedes enforcing PR-only main updates.
 
-Review the proposed settings with `python3 scripts/repository-settings.py`.
+Repository protections and release immutability are one-time setup. Review the
+proposed settings with `python3 scripts/repository-settings.py`.
 An administrator can explicitly apply them to the existing public repository
 with `python3 scripts/repository-settings.py --apply`. This enables immutable
 releases, requires PRs with zero mandatory approvals, resolved conversations and
@@ -23,12 +24,13 @@ Two version-tag rulesets restrict creation to repository administrators and
 prohibit tag updates/deletion with no bypass. Avoid introducing a bypass while
 repairing a blocked release.
 
-Configure the Actions secret `RELEASE_POLICY_TOKEN` with **read-only**
-Administration, Actions and Contents access to this repository. GitHub's ordinary
-workflow token cannot inspect every administrative setting. The secret is used
-only by tag release jobs. PR CI has read-only permissions and no provider or
-publication credentials. Release jobs use the ephemeral Actions token for GHCR,
-release assets and OIDC attestations; no GPG private key is uploaded.
+Release jobs use the ephemeral Actions token to verify repository identity,
+existing release state and successful main CI for the exact release commit.
+They do not recheck administrative settings on every release or require a
+separate policy token. GitHub continues enforcing the configured protections
+and release immutability. PR CI has read-only permissions and no provider or
+publication credentials. Release jobs also use the ephemeral Actions token for
+GHCR, release assets and OIDC attestations; no GPG private key is uploaded.
 
 PRs, merge queues, and main pushes use the four-job `test.yml`: Linux AMD64
 native checks, actionlint, the complete Chromium UI project, and `Required`.
