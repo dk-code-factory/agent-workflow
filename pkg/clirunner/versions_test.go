@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +53,22 @@ func TestVersionProbeIsPrivateCredentialFreeAndRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "probe-marker")); !os.IsNotExist(err) {
 		t.Fatal("version probe wrote into caller workspace", err)
+	}
+}
+
+func TestVersionProbeIgnoresStartupWarningsWithoutAcceptingAnotherVersion(t *testing.T) {
+	for _, version := range []string{CodexProtocolVersion, "0.160.0"} {
+		command := filepath.Join(t.TempDir(), "codex")
+		body := "#!/bin/sh\nprintf '%s\\n' '" + strings.Repeat("startup warning ", 80) + "' >&2\nprintf 'codex-cli " + version + "\\n'\n"
+		if err := os.WriteFile(command, []byte(body), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyCodexCLI(context.Background(), command); (err == nil) != (version == CodexProtocolVersion) {
+			t.Fatalf("version %s with stderr warning: %v", version, err)
+		}
+		runner := Runner{}
+		if got := runner.providerVersion(context.Background(), Agent{Provider: "codex-cli", Command: command}); got != "codex-cli "+version {
+			t.Fatalf("version metadata contaminated by stderr: %q", got)
+		}
 	}
 }
