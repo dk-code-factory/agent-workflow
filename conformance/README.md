@@ -34,6 +34,13 @@ passing requires one effect and `needs_attention`. Container tests require an
 already available digest-pinned compatible image; none is pulled implicitly.
 Unsupported upstream policy remains a failed gate, never a backend substitution.
 
+Claude SDK roles can use `authentication.mode: native` with the operator's own
+`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`; `credential-env` can select a
+different token variable. An API endpoint is required only for `mode: gateway`.
+SDK native authentication keeps managed settings/discovery isolation. Reports
+record the selected mode; the historical `claude-gateway-structured` scenario ID
+also exercises structured output through native authentication.
+
 Evidence records build/commit, OS/architecture, provider versions, runtime/image,
 configuration fingerprint, checked assertions, usage completeness/reported cost,
 and private artifact references. SQLite state and raw provider transcripts stay

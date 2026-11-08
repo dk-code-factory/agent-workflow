@@ -149,6 +149,49 @@ func TestDoctorUnselectedConfiguredVersionAndCachedAuth(t *testing.T) {
 	}
 }
 
+func TestDoctorNativeSDKChecksTokenWithoutCLIAuthenticationOrGateway(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DOCTOR_SUBSCRIPTION", "subscription-secret")
+	provider := doctorFixtureCommand(t, root, "fake-node", `
+case "$*" in
+--version) echo 'fixture-node';;
+*) exit 43;;
+esac
+`)
+	doctorFixtureCommand(t, root, "git", `echo fixture-head`)
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	bridge := filepath.Join(root, "bridge.mjs")
+	if err := os.WriteFile(bridge, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json")
+	if err := os.MkdirAll(filepath.Dir(metadata), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadata, []byte(`{"version":"`+clirunner.ClaudeSDKVersion+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := clirunner.Config{Agents: map[string]clirunner.Agent{"sdk": {Provider: "claude-sdk", Command: provider, Bridge: bridge, Authentication: clirunner.Authentication{Mode: "native", CredentialEnv: "DOCTOR_SUBSCRIPTION"}}}}
+	var out bytes.Buffer
+	if err := doctor(context.Background(), root, cfg, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "subscription-secret") {
+		t.Fatal("doctor leaked token")
+	}
+	var report struct {
+		Backends map[string]struct {
+			NativeToken string `json:"native_token_authentication"`
+		} `json:"backends"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Backends["sdk"].NativeToken != "available; model acceptance unverified" {
+		t.Fatal("doctor did not distinguish token availability from live acceptance")
+	}
+}
+
 func TestDoctorUnselectedContainerDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	doctorFixtureCommand(t, root, "docker", `

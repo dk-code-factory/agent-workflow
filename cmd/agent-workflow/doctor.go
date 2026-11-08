@@ -189,6 +189,8 @@ func doctor(ctx context.Context, root string, cfg clirunner.Config, out io.Write
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				failures = errors.Join(failures, fmt.Errorf("agent %s gateway models endpoint returned HTTP %d", id, resp.StatusCode))
 			}
+		} else if a.Provider == "claude-sdk" && a.Authentication.Mode == "native" {
+			item["native_token_authentication"] = "available; model acceptance unverified"
 		} else if a.Execution.Mode != "container" && (a.Provider == "claude" || a.Provider == "claude-cli") {
 			status, err := doctorCommand(ctx, root, policy, command, "auth", "status", "--json")
 			var auth struct {

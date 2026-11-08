@@ -109,11 +109,9 @@ func TestReleasePolicyMatchesProviderCapabilities(t *testing.T) {
 		// policy test selects container mode without invoking any runtime.
 		if record.Provider == "claude-sdk" {
 			agent.Execution = clirunner.Execution{Mode: "container", Image: "fixture"}
-			if record.Authentication != "gateway" {
-				t.Fatal("SDK certification requires the gateway route")
-			}
-		} else if record.Authentication != "native" {
-			t.Fatal("native certification must identify its authentication route")
+		}
+		if record.Authentication != "native" {
+			t.Fatal("initial certification must use the selected native authentication route")
 		}
 		runner := clirunner.Runner{Config: clirunner.Config{Agents: map[string]clirunner.Agent{"test": agent}}}
 		capabilities, err := runner.Capabilities("test")

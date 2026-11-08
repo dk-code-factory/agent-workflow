@@ -70,8 +70,8 @@ those checks do not establish a production support claim.
 
 `release/policy.json` is the enforceable support matrix. Its 17 mandatory records
 cover Linux amd64 native Claude/Codex CLI smoke; resume/interruption through
-Claude SDK gateway and native Codex app-server session transports; Claude SDK
-gateway structured output, managed discovery, nested workers, uncertain MCP
+native Claude SDK and Codex app-server session transports; Claude SDK
+structured output, managed discovery, nested workers, uncertain MCP
 and mixed CLI/MCP development; Linux amd64 on Docker/Podman with
 container execution/owner loss; and disposable GitHub publication recovery.
 Two additional signed `runtime_recovery` records (Linux amd64 × runtimes)
@@ -79,6 +79,11 @@ require `owner_loss`, `runtime_unavailable`, `runtime_restart`, `cleanup_recover
 and `stale_execution_ownership` assertions, candidate/fingerprint, runtime version
 and exact image digest. These are reviewed records from disposable runtime failure
 fixtures; the manual provider harness does not generate them automatically.
+The initial Claude SDK route uses the operator's own subscription token, with
+`authentication.mode: native`. Gateway/API-key authentication remains available
+in the implementation and requires its own evidence before a support claim.
+The structured-output scenario retains its historical `claude-gateway-structured`
+ID; the report and policy explicitly identify the selected authentication route.
 Compatibility CLI adapters do not support resumable sessions. Every combination
 absent from this matrix remains uncertified, including alternate authentication
 routes. Evidence records the selected provider and authentication mode directly

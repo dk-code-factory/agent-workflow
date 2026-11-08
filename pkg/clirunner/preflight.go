@@ -62,9 +62,16 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 			if err := verifySDKBridge(a); err != nil {
 				return fmt.Errorf("agent %s: %w", id, err)
 			}
-			u, err := url.Parse(a.Authentication.Endpoint)
-			if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
-				return fmt.Errorf("agent %s: invalid credential gateway endpoint", id)
+		}
+		if a.Provider == "claude-sdk" {
+			if _, err := claudeSDKEnvironment(a.Authentication); err != nil {
+				return fmt.Errorf("agent %s: %w", id, err)
+			}
+			if a.Authentication.Mode == "gateway" {
+				u, err := url.Parse(a.Authentication.Endpoint)
+				if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+					return fmt.Errorf("agent %s: invalid credential gateway endpoint", id)
+				}
 			}
 		}
 		if a.Provider == "codex-app-server" && a.Authentication.Mode == "native" {
@@ -72,12 +79,12 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 				return fmt.Errorf("agent %s: %w", id, err)
 			}
 		}
-		if a.Authentication.Mode == "gateway" || a.Authentication.Mode == "api-key" {
+		if a.Provider != "claude-sdk" && (a.Authentication.Mode == "gateway" || a.Authentication.Mode == "api-key") {
 			if value, ok := os.LookupEnv(a.Authentication.CredentialEnv); !ok || value == "" {
 				return fmt.Errorf("agent %s credential reference is unavailable", id)
 			}
 		}
-		if a.Execution.Mode == "container" && a.Authentication.Mode == "native" {
+		if a.Execution.Mode == "container" && a.Provider == "codex-app-server" && a.Authentication.Mode == "native" {
 			if a.Authentication.CredentialFile == "" {
 				return fmt.Errorf("agent %s native container authentication requires credential-file", id)
 			}

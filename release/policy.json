@@ -41,56 +41,56 @@
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "session-resume",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "session-interruption",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "claude-gateway-structured",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "managed-discovery-canaries",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "nested-workers-capacity-one",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "external-mcp-uncertain-response",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "mixed-development-cli",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "mixed-development-mcp",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
@@ -98,7 +98,7 @@
       "provider": "claude-sdk",
       "runtime": "docker",
       "scenario": "container-execution",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
@@ -106,7 +106,7 @@
       "provider": "claude-sdk",
       "runtime": "docker",
       "scenario": "container-owner-loss",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
@@ -114,7 +114,7 @@
       "provider": "claude-sdk",
       "runtime": "podman",
       "scenario": "container-execution",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
@@ -122,14 +122,14 @@
       "provider": "claude-sdk",
       "runtime": "podman",
       "scenario": "container-owner-loss",
-      "authentication": "gateway"
+      "authentication": "native"
     },
     {
       "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "scenario": "disposable-github-publication",
-      "authentication": "gateway"
+      "authentication": "native"
     }
   ],
   "unsupported": [
@@ -138,7 +138,8 @@
   "deferred": [
     "Linux arm64 native-provider and Docker/Podman live certification",
     "macOS amd64/arm64 native-provider live certification",
-    "macOS VM/container certification"
+    "macOS VM/container certification",
+    "Claude SDK gateway/API-key route live certification"
   ],
   "required_runtime_recovery": [
     {
