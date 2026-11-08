@@ -4,6 +4,11 @@ The stable signed-tag release pipeline and its current blockers are documented i
 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
 publication instructions below; historical evidence is not current certification.
 
+The initial production scope is Linux amd64 only. Linux arm64 and macOS live
+certification are deferred in `release/policy.json`; their deterministic checks
+remain required. Broader historical acceptance items below do not expand that
+production scope or make deferred capabilities release gates.
+
 Audited against the eight-phase production-readiness plan on 2026-10-16.
 This is an implementation candidate, not a production certification. The
 working tree is not a released commit. The evidence below distinguishes local

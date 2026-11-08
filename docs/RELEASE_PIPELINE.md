@@ -62,13 +62,19 @@ proposals; merging an update never creates a version tag.
 
 ## Support and evidence
 
-`release/policy.json` is the enforceable support matrix. Its 57 mandatory records
-cover native Claude/Codex CLI smoke on four platforms; resume/interruption through
+Initial production support is limited to **Linux amd64**, subject to passing all
+remaining certification gates. Linux arm64 and macOS amd64/arm64 live-provider
+certification are deferred. Their deterministic CI, archive builds and Linux
+arm64 worker image checks remain required by the full pre-release workflow;
+those checks do not establish a production support claim.
+
+`release/policy.json` is the enforceable support matrix. Its 17 mandatory records
+cover Linux amd64 native Claude/Codex CLI smoke; resume/interruption through
 Claude SDK gateway and native Codex app-server session transports; Claude SDK
 gateway structured output, managed discovery, nested workers, uncertain MCP
-and mixed CLI/MCP development; both Linux architectures on Docker/Podman with
+and mixed CLI/MCP development; Linux amd64 on Docker/Podman with
 container execution/owner loss; and disposable GitHub publication recovery.
-Four additional signed `runtime_recovery` records (Linux architectures × runtimes)
+Two additional signed `runtime_recovery` records (Linux amd64 × runtimes)
 require `owner_loss`, `runtime_unavailable`, `runtime_restart`, `cleanup_recovery`
 and `stale_execution_ownership` assertions, candidate/fingerprint, runtime version
 and exact image digest. These are reviewed records from disposable runtime failure

@@ -4,6 +4,10 @@ The stable signed-tag release pipeline and its current blockers are documented i
 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
 publication instructions below; historical evidence is not current certification.
 
+The initial production scope is Linux amd64 only, subject to the current release
+gates. Linux arm64 and macOS live-provider certification are deferred; historical
+platform observations below do not expand the scope in `release/policy.json`.
+
 This is an implementation candidate. The production-readiness declaration in the
 requested plan is gated on the remaining items below; implemented API surfaces
 are not a substitute for conformance evidence.

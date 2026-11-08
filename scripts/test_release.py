@@ -231,6 +231,12 @@ class EvidenceTests(unittest.TestCase):
 
     def test_policy_does_not_claim_deferred_or_unsupported_capabilities(self):
         policy = json.loads((gate.ROOT / 'release/policy.json').read_text())
+        self.assertEqual(len(policy['required_evidence']), 17)
+        self.assertEqual({(row['os'], row['arch']) for row in policy['required_evidence']},
+                         {('linux', 'amd64')})
+        self.assertEqual(policy['required_runtime_recovery'], [
+            {'os': 'linux', 'arch': 'amd64', 'runtime': 'docker'},
+            {'os': 'linux', 'arch': 'amd64', 'runtime': 'podman'}])
         for row in policy['required_evidence']:
             scenario = json.loads((gate.ROOT / 'conformance/scenarios' / (row['scenario'] + '.json')).read_text())
             self.assertFalse(row['os'] == 'darwin' and row.get('runtime'))

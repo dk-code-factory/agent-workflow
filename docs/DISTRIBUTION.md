@@ -4,6 +4,10 @@ The stable signed-tag release pipeline and its current blockers are documented i
 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
 publication instructions below; historical evidence is not current certification.
 
+Initial production certification targets Linux amd64 only. Linux arm64 and macOS
+artifacts and deterministic checks remain available; live certification for those
+platforms is deferred by `release/policy.json`.
+
 `make dist` builds Linux/macOS amd64/arm64 archives locally, then smoke-tests the
 native extracted archive from a disposable directory with fake providers only.
 Archives contain the binary, guardian, examples, documentation, licenses,
