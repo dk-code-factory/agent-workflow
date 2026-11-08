@@ -24,12 +24,15 @@ iid = out / ("worker-linux-" + args.arch + ".iid")
 epoch = git("show", "-s", "--format=%ct", "HEAD")
 builder = ["docker", "buildx", "build", "--output", "type=docker,rewrite-timestamp=true", "--provenance=false"] if args.runtime == "docker" else ["podman", "build", "--timestamp", epoch]
 command = builder + ["--platform", "linux/" + args.arch,
-    "--build-arg", "SOURCE_DATE_EPOCH=" + epoch,
     "--build-arg", "BUILDPLATFORM=linux/" + host_arch,
     "--build-arg", "TARGETARCH=" + args.arch,
     "--build-arg", "GO_IMAGE=" + pins["go_image"],
     "--build-arg", "NODE_IMAGE=" + pins["node_image"],
     "--iidfile", str(iid), "-f", "images/worker.Dockerfile", "."]
+if args.runtime == "docker":
+    command[3:3] = ["--build-arg", "SOURCE_DATE_EPOCH=" + epoch]
+# Podman treats SOURCE_DATE_EPOCH as --source-date-epoch and rejects it with
+# --timestamp. Its explicit --timestamp already normalizes image and layer times.
 with tempfile.TemporaryDirectory(prefix="workflow-public-registry-") as directory:
     # Public bases do not require or modify the caller's native registry login.
     # A stale private auth entry must not silently change this build's inputs.

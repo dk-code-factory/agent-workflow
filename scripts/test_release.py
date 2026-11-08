@@ -7,9 +7,11 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -280,6 +282,53 @@ class IdentityTests(unittest.TestCase):
             run('gpgconf', '--kill', 'gpg-agent')
 
 class WorkerPackagingTests(unittest.TestCase):
+    def test_runtime_timestamp_controls_build_and_save_images(self):
+        root = Path(__file__).resolve().parents[1]
+        pins = json.loads((root / 'images/pins.json').read_text())
+        image = 'sha256:' + '1' * 64
+        labels = {'agent-workflow.guardian-protocol': pins['guardian_protocol'],
+                  'agent-workflow.bridge-protocol': pins['bridge_protocol'],
+                  'agent-workflow.claude-sdk': pins['claude_sdk'],
+                  'agent-workflow.codex-cli': pins['codex_cli']}
+        for runtime in ['podman', 'docker']:
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                builds = []
+                def run(command, **kwargs):
+                    self.assertEqual(command[0], runtime)
+                    if command[1] in ['build', 'buildx']:
+                        builds.append(command)
+                        source_epoch = any(arg.startswith('SOURCE_DATE_EPOCH=') for arg in command)
+                        # Podman/Buildah derives --source-date-epoch from the
+                        # build arg and refuses it alongside --timestamp.
+                        if runtime == 'podman' and source_epoch and '--timestamp' in command:
+                            raise subprocess.CalledProcessError(125, command, stderr='ambiguous timestamps')
+                        if runtime == 'podman':
+                            self.assertEqual(command[command.index('--timestamp') + 1], '1234567890')
+                        else:
+                            self.assertIn('SOURCE_DATE_EPOCH=1234567890', command)
+                            self.assertIn('type=docker,rewrite-timestamp=true', command)
+                        Path(command[command.index('--iidfile') + 1]).write_text(image)
+                    elif command[1] == 'save':
+                        self.assertEqual(command[-1], image)
+                        Path(command[command.index('--output') + 1]).write_bytes(b'fixture archive')
+                    else:
+                        self.fail('unexpected runtime command: ' + repr(command))
+                    return subprocess.CompletedProcess(command, 0)
+                def output(command, **kwargs):
+                    if command[0] == 'git':
+                        self.assertEqual(command[1:], ['show', '-s', '--format=%ct', 'HEAD'])
+                        return '1234567890\n'
+                    self.assertEqual(command, [runtime, 'image', 'inspect', image])
+                    return json.dumps([{'Config': {'Labels': labels, 'User': '65532:65532'}}])
+                argv = ['build-worker-image.py', '--runtime', runtime, '--arch', 'amd64', '--output', directory]
+                with patch.object(sys, 'argv', argv), patch('subprocess.run', side_effect=run), \
+                     patch('subprocess.check_output', side_effect=output), patch('sys.stdout', new=io.StringIO()):
+                    runpy.run_path(str(root / 'scripts/build-worker-image.py'), run_name='__main__')
+                self.assertEqual(len(builds), 1)
+                report = json.loads((Path(directory) / 'worker-linux-amd64.json').read_text())
+                self.assertEqual(report['image'], image)
+                self.assertEqual(report['archive_sha256'], hashlib.sha256(b'fixture archive').hexdigest())
+
     def test_guardian_builds_from_dockerfile_copy_context(self):
         root = Path(__file__).resolve().parents[1]
         rules = [line.strip() for line in (root / '.dockerignore').read_text().splitlines()
