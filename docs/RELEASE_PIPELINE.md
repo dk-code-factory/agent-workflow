@@ -84,8 +84,8 @@ VM/container certification is deferred and has no required row or support claim.
 Real scenarios remain outside ordinary CI. They require fresh named-scenario
 authorization, working credentials and, for publication, an explicitly supplied
 disposable target whose branches/PRs are preserved. Historical pilot reports and
-budgets cannot satisfy these gates. `publication_repositories` deliberately starts
-empty: an authorized disposable target must be designated in policy **before**
+budgets cannot satisfy these gates. `publication_repositories` pins the authorized
+disposable targets: a target must be designated in policy **before**
 freezing the candidate. Nothing refreshes provider login automatically.
 
 Build and run the manual conformance binary from the exact clean candidate.

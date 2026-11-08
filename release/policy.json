@@ -4,7 +4,9 @@
   "signers": [
     "DC4DED587433F319EEE1EB745BD1EAD257F21B89"
   ],
-  "publication_repositories": [],
+  "publication_repositories": [
+    "dk-bluegrain/agent-workflow-conformance-20261108"
+  ],
   "required_evidence": [
     {
       "os": "linux",
