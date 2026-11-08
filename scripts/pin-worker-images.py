@@ -7,8 +7,9 @@ import urllib.parse
 import urllib.request
 
 root = Path(__file__).resolve().parents[1]
-pins = {"go_toolchain": "go1.27.3", "claude_sdk": "0.3.319", "codex_cli": "0.167.0", "guardian_protocol": "1", "bridge_protocol": "2"}
-for key, repository, tag in [("go_image", "library/golang", "1.27.3-bookworm"), ("node_image", "library/node", "26.13.0-bookworm")]:
+pins = json.loads((root / "images" / "pins.json").read_text())
+for key, repository in [("go_image", "library/golang"), ("node_image", "library/node")]:
+    tag = pins[key + "_source_tag"]
     query = urllib.parse.urlencode({"service": "registry.docker.io", "scope": "repository:" + repository + ":pull"})
     token = json.load(urllib.request.urlopen("https://auth.docker.io/token?" + query))["token"]
     request = urllib.request.Request("https://registry-1.docker.io/v2/" + repository + "/manifests/" + tag,
