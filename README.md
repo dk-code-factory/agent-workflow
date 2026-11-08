@@ -11,6 +11,9 @@ with durable provenance, checkpoint validation, and receipt-based mutation recov
 [release evidence and outstanding gates](docs/RELEASE.md). The deterministic CLI
 and MCP publication pilots pass. Codex app-server has passed a native-auth live
 probe; live Claude authentication and the gateway gate remain unverified.
+Initial production certification targets Linux amd64 only. Linux arm64 and macOS
+remain available for deterministic build/test validation, with live certification
+deferred; see the [enforceable support matrix](docs/RELEASE_PIPELINE.md#support-and-evidence).
 
 ## Build and run
 

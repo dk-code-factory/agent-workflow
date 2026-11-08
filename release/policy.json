@@ -4,7 +4,9 @@
   "signers": [
     "DC4DED587433F319EEE1EB745BD1EAD257F21B89"
   ],
-  "publication_repositories": [],
+  "publication_repositories": [
+    "dk-bluegrain/agent-workflow-conformance-20261108"
+  ],
   "required_evidence": [
     {
       "os": "linux",
@@ -92,258 +94,6 @@
     },
     {
       "os": "linux",
-      "arch": "arm64",
-      "provider": "codex-cli",
-      "scenario": "native-codex-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "codex-app-server",
-      "scenario": "session-resume",
-      "authentication": "native"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "codex-app-server",
-      "scenario": "session-interruption",
-      "authentication": "native"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-cli",
-      "scenario": "native-claude-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "session-resume",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "session-interruption",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "claude-gateway-structured",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "managed-discovery-canaries",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "nested-workers-capacity-one",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "external-mcp-uncertain-response",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-cli",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-mcp",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "codex-cli",
-      "scenario": "native-codex-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "codex-app-server",
-      "scenario": "session-resume",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "codex-app-server",
-      "scenario": "session-interruption",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-cli",
-      "scenario": "native-claude-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "session-resume",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "session-interruption",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "claude-gateway-structured",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "managed-discovery-canaries",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "nested-workers-capacity-one",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "external-mcp-uncertain-response",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-cli",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "amd64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-mcp",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "codex-cli",
-      "scenario": "native-codex-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "codex-app-server",
-      "scenario": "session-resume",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "codex-app-server",
-      "scenario": "session-interruption",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-cli",
-      "scenario": "native-claude-smoke",
-      "authentication": "native"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "session-resume",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "session-interruption",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "claude-gateway-structured",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "managed-discovery-canaries",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "nested-workers-capacity-one",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "external-mcp-uncertain-response",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-cli",
-      "authentication": "gateway"
-    },
-    {
-      "os": "darwin",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "scenario": "mixed-development-mcp",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
       "arch": "amd64",
       "provider": "claude-sdk",
       "runtime": "docker",
@@ -369,38 +119,6 @@
     {
       "os": "linux",
       "arch": "amd64",
-      "provider": "claude-sdk",
-      "runtime": "podman",
-      "scenario": "container-owner-loss",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "runtime": "docker",
-      "scenario": "container-execution",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "runtime": "docker",
-      "scenario": "container-owner-loss",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "provider": "claude-sdk",
-      "runtime": "podman",
-      "scenario": "container-execution",
-      "authentication": "gateway"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
       "provider": "claude-sdk",
       "runtime": "podman",
       "scenario": "container-owner-loss",
@@ -418,6 +136,8 @@
     "codex managed policy and dynamic managed tools"
   ],
   "deferred": [
+    "Linux arm64 native-provider and Docker/Podman live certification",
+    "macOS amd64/arm64 native-provider live certification",
     "macOS VM/container certification"
   ],
   "required_runtime_recovery": [
@@ -429,16 +149,6 @@
     {
       "os": "linux",
       "arch": "amd64",
-      "runtime": "podman"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
-      "runtime": "docker"
-    },
-    {
-      "os": "linux",
-      "arch": "arm64",
       "runtime": "podman"
     }
   ]

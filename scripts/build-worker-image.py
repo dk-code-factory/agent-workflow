@@ -28,6 +28,8 @@ command = builder + ["--platform", "linux/" + args.arch,
     "--build-arg", "TARGETARCH=" + args.arch,
     "--build-arg", "GO_IMAGE=" + pins["go_image"],
     "--build-arg", "NODE_IMAGE=" + pins["node_image"],
+    "--build-arg", "NPM_VERSION=" + pins["npm_cli"],
+    "--build-arg", "NPM_INTEGRITY=" + pins["npm_cli_integrity"],
     "--iidfile", str(iid), "-f", "images/worker.Dockerfile", "."]
 if args.runtime == "docker":
     command[3:3] = ["--build-arg", "SOURCE_DATE_EPOCH=" + epoch]
@@ -47,7 +49,7 @@ image = iid.read_text().strip()
 if not image.startswith("sha256:") or len(image) != 71:
     raise SystemExit("runtime did not produce a digest-addressed image")
 metadata = json.loads(subprocess.check_output([args.runtime, "image", "inspect", image], text=True))[0]
-expected = {"agent-workflow.guardian-protocol": pins["guardian_protocol"], "agent-workflow.bridge-protocol": pins["bridge_protocol"], "agent-workflow.claude-sdk": pins["claude_sdk"], "agent-workflow.codex-cli": pins["codex_cli"]}
+expected = {"agent-workflow.guardian-protocol": pins["guardian_protocol"], "agent-workflow.bridge-protocol": pins["bridge_protocol"], "agent-workflow.claude-sdk": pins["claude_sdk"], "agent-workflow.codex-cli": pins["codex_cli"], "agent-workflow.npm-cli": pins["npm_cli"]}
 for key, value in expected.items():
     if metadata["Config"]["Labels"].get(key) != value:
         raise SystemExit("worker image protocol label mismatch")

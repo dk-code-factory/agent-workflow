@@ -231,6 +231,12 @@ class EvidenceTests(unittest.TestCase):
 
     def test_policy_does_not_claim_deferred_or_unsupported_capabilities(self):
         policy = json.loads((gate.ROOT / 'release/policy.json').read_text())
+        self.assertEqual(len(policy['required_evidence']), 17)
+        self.assertEqual({(row['os'], row['arch']) for row in policy['required_evidence']},
+                         {('linux', 'amd64')})
+        self.assertEqual(policy['required_runtime_recovery'], [
+            {'os': 'linux', 'arch': 'amd64', 'runtime': 'docker'},
+            {'os': 'linux', 'arch': 'amd64', 'runtime': 'podman'}])
         for row in policy['required_evidence']:
             scenario = json.loads((gate.ROOT / 'conformance/scenarios' / (row['scenario'] + '.json')).read_text())
             self.assertFalse(row['os'] == 'darwin' and row.get('runtime'))
@@ -282,6 +288,21 @@ class IdentityTests(unittest.TestCase):
             run('gpgconf', '--kill', 'gpg-agent')
 
 class WorkerPackagingTests(unittest.TestCase):
+    def test_npm_archive_integrity_rejects_modified_and_unpinned_inputs(self):
+        import base64
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'npm.tgz'
+            original = b'fixture npm archive'
+            archive.write_bytes(original)
+            integrity = 'sha512-' + base64.b64encode(hashlib.sha512(original).digest()).decode()
+            command = ['node', str(root / 'images/verify-npm-tarball.mjs'), str(archive)]
+            self.assertEqual(subprocess.run(command + [integrity], capture_output=True).returncode, 0)
+            archive.write_bytes(original + b'modified')
+            self.assertNotEqual(subprocess.run(command + [integrity], capture_output=True).returncode, 0)
+            for invalid in ['', 'sha512-', 'sha256-' + integrity.split('-', 1)[1]]:
+                self.assertNotEqual(subprocess.run(command + [invalid], capture_output=True).returncode, 0)
+
     def test_runtime_timestamp_controls_build_and_save_images(self):
         root = Path(__file__).resolve().parents[1]
         pins = json.loads((root / 'images/pins.json').read_text())
@@ -289,7 +310,8 @@ class WorkerPackagingTests(unittest.TestCase):
         labels = {'agent-workflow.guardian-protocol': pins['guardian_protocol'],
                   'agent-workflow.bridge-protocol': pins['bridge_protocol'],
                   'agent-workflow.claude-sdk': pins['claude_sdk'],
-                  'agent-workflow.codex-cli': pins['codex_cli']}
+                  'agent-workflow.codex-cli': pins['codex_cli'],
+                  'agent-workflow.npm-cli': pins['npm_cli']}
         for runtime in ['podman', 'docker']:
             with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
                 builds = []
@@ -297,6 +319,8 @@ class WorkerPackagingTests(unittest.TestCase):
                     self.assertEqual(command[0], runtime)
                     if command[1] in ['build', 'buildx']:
                         builds.append(command)
+                        self.assertIn('NPM_VERSION=' + pins['npm_cli'], command)
+                        self.assertIn('NPM_INTEGRITY=' + pins['npm_cli_integrity'], command)
                         source_epoch = any(arg.startswith('SOURCE_DATE_EPOCH=') for arg in command)
                         # Podman/Buildah derives --source-date-epoch from the
                         # build arg and refuses it alongside --timestamp.

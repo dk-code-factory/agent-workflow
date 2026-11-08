@@ -21,6 +21,8 @@
 !bridge/claude/package.json
 !bridge/claude/package-lock.json
 !images/
+!images/alpine-runtime-packages.txt
+!images/verify-npm-tarball.mjs
 !images/codex/
 !images/codex/package.json
 !images/codex/package-lock.json
