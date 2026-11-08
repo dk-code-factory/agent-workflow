@@ -212,7 +212,12 @@ AgentRunner remains the workflow compatibility interface. SessionRunner adds
 capability reporting, resumable turn IDs, streamed normalized events, and
 terminal provider status. CLI compatibility adapters report no resumable session
 support. Claude SDK uses a pinned Node bridge with explicit role instructions,
-tools, gateway auth, and suppressed native discovery. Codex app-server speaks
+tools, explicit native-token or gateway API-key authentication, and suppressed
+native discovery. Native SDK authentication selects a subscription token through
+`credential-env` (default `CLAUDE_CODE_OAUTH_TOKEN`) while retaining engine-owned
+home/configuration state. It never inherits host API keys/endpoints or copies
+native settings and login caches. Container tokens are passed by environment
+name, with no credential values in runtime arguments. Codex app-server speaks
 bounded newline-framed JSON-RPC and rejects unconfigured interactive requests.
 Its managed-discovery policy is not certified, so live worker admission fails
 closed for that backend.

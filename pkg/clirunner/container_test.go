@@ -56,6 +56,30 @@ func TestContainerMountsAndCredentialAllowlist(t *testing.T) {
 		t.Fatal("container has no lifetime cleanup")
 	}
 }
+
+func TestContainerNativeSDKTokenIsForwardedByName(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "podman"), []byte("#!/bin/sh\nexit 99\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	root := t.TempDir()
+	cmd := exec.Command("node", filepath.Join(root, "bridge.mjs"))
+	cmd.Env = []string{"CLAUDE_CODE_OAUTH_TOKEN=fixture-subscription", "GH_TOKEN=controller-only", "SSH_AUTH_SOCK=/host/socket"}
+	agent := Agent{Execution: Execution{Mode: "container", Image: "fixture", Runtime: "podman"}, Authentication: Authentication{Mode: "native", CredentialEnv: "MY_SUBSCRIPTION"}}
+	if _, err := containerCommand(cmd, agent, root, t.TempDir(), true); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "--env CLAUDE_CODE_OAUTH_TOKEN") || !strings.Contains(args, "--env CLAUDE_CONFIG_DIR=/state") {
+		t.Fatal("native subscription or private SDK state is missing from container configuration")
+	}
+	for _, forbidden := range []string{"fixture-subscription", "--env GH_TOKEN", "--env SSH_AUTH_SOCK", "--env ANTHROPIC_API_KEY", "--env ANTHROPIC_BASE_URL"} {
+		if strings.Contains(args, forbidden) {
+			t.Fatal("container arguments expose a token value or unselected authority")
+		}
+	}
+}
 func TestContainerExecutionAndCleanup(t *testing.T) {
 	image := os.Getenv("AGENT_WORKFLOW_CONTAINER_IMAGE")
 	if image == "" {

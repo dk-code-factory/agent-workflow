@@ -269,8 +269,8 @@ func (c Config) Validate() error {
 			if agent.Bridge == "" && agent.Execution.Mode != "container" {
 				return fmt.Errorf("agent %s: claude-sdk requires pinned bridge path", id)
 			}
-			if agent.Authentication.Mode != "gateway" || agent.Authentication.Endpoint == "" || agent.Authentication.CredentialEnv == "" {
-				return fmt.Errorf("agent %s: claude-sdk requires explicit gateway endpoint and credential-env", id)
+			if _, err := claudeSDKCredentialReference(agent.Authentication); err != nil {
+				return fmt.Errorf("agent %s: %w", id, err)
 			}
 		default:
 			return fmt.Errorf("agent %s: unknown provider %q", id, agent.Provider)

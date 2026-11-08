@@ -301,7 +301,6 @@ func (r *Runner) providerVersion(ctx context.Context, a Agent) string {
 	defer removeProbe()
 	var output boundedBuffer
 	cmd.Stdout = &output
-	cmd.Stderr = &output
 	var cleanup func()
 	if a.Execution.NetworkRuntime != "" {
 		cleanup, err = runtimeexec.SupervisePolicy(versionCtx, cmd, a.Execution.policy())

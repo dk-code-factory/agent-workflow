@@ -180,7 +180,7 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 			return nil, err
 		}
 	}
-	allowed := map[string]bool{"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true}
+	allowed := map[string]bool{"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "CLAUDE_CODE_OAUTH_TOKEN": true, "OPENAI_API_KEY": true}
 	if options.CredentialEnv != "" {
 		allowed[options.CredentialEnv] = true
 	}
@@ -327,7 +327,7 @@ func runtimeEnvironment(provider []string, credentialEnv string) []string {
 	// HOME/CODEX_HOME and other provider state must not select another host
 	// runtime context or rootless storage namespace. Only explicit credential
 	// values are added for the runtime's --env NAME forwarding mechanism.
-	allowed := map[string]bool{"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true}
+	allowed := map[string]bool{"ANTHROPIC_BASE_URL": true, "ANTHROPIC_API_KEY": true, "CLAUDE_CODE_OAUTH_TOKEN": true, "OPENAI_API_KEY": true}
 	if credentialEnv != "" {
 		allowed[credentialEnv] = true
 	}

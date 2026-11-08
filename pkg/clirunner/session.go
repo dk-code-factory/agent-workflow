@@ -153,9 +153,9 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Workspace != "" {
 		workspace = req.Workspace
 	}
-	credential, ok := os.LookupEnv(agent.Authentication.CredentialEnv)
-	if !ok || credential == "" {
-		return workflows.SessionResult{}, fmt.Errorf("gateway credential reference is unavailable")
+	providerEnv, err := claudeSDKEnvironment(agent.Authentication)
+	if err != nil {
+		return workflows.SessionResult{}, err
 	}
 	model := agent.Model
 	if req.Model != "" {
@@ -188,14 +188,13 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	}
 	defer stdin.Close()
 	writer := &bridgeWriter{writer: stdin}
-	// Gateway auth is explicit. The SDK receives an engine-owned config directory;
+	// Authentication is explicit. The SDK receives an engine-owned config directory;
 	// host user/project settings and native role/skill/plugin discovery are disabled.
 	state, err := providerStateDir(r.Workspace, "claude", req)
 	if err != nil {
 		return workflows.SessionResult{}, err
 	}
-	cmd.Env = providerEnvironment(agent.Authentication.CredentialEnv)
-	cmd.Env = append(cmd.Env, "ANTHROPIC_BASE_URL="+agent.Authentication.Endpoint, "ANTHROPIC_API_KEY="+credential, "CLAUDE_CONFIG_DIR="+state, "HOME="+filepath.Join(state, "home"), "MAX_STRUCTURED_OUTPUT_RETRIES=0", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
+	cmd.Env = append(providerEnv, "CLAUDE_CONFIG_DIR="+state, "HOME="+filepath.Join(state, "home"), "MAX_STRUCTURED_OUTPUT_RETRIES=0", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
 	var stderr boundedBuffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()

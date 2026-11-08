@@ -8,9 +8,8 @@ Embedding Go applications can also [register typed application actions](docs/REG
 with durable provenance, checkpoint validation, and receipt-based mutation recovery.
 
 **Release status: implementation candidate, not yet production certified.** See
-[release evidence and outstanding gates](docs/RELEASE.md). The deterministic CLI
-and MCP publication pilots pass. Codex app-server has passed a native-auth live
-probe; live Claude authentication and the gateway gate remain unverified.
+[release evidence and outstanding gates](docs/RELEASE.md). Live evidence is
+recorded separately for each provider and authentication route.
 Initial production certification targets Linux amd64 only. Linux arm64 and macOS
 remain available for deterministic build/test validation, with live certification
 deferred; see the [enforceable support matrix](docs/RELEASE_PIPELINE.md#support-and-evidence).
@@ -76,7 +75,7 @@ Supported providers:
 | --- | --- | --- |
 | `claude-cli` / `claude` | Installed Claude's native login | No; fresh process per call |
 | `codex-cli` / `codex` | Installed Codex's native login | No; fresh process per call |
-| `claude-sdk` | Explicit gateway URL and credential environment reference | Yes |
+| `claude-sdk` | Native subscription-token reference, or gateway URL/API-key reference | Yes |
 | `codex-app-server` | Explicit `native` or `api-key` credential reference | Session transport implemented; managed worker policy is not yet certified |
 
 The native CLI adapters are trusted-host compatibility adapters. They retain
@@ -102,10 +101,22 @@ agents:
       turn-timeout: 10m
       max-output-bytes: 1048576
     authentication:
-      mode: gateway
-      endpoint: https://gateway.example.invalid
-      credential-env: WORKFLOW_CLAUDE_KEY
+      mode: native
+      credential-env: CLAUDE_CODE_OAUTH_TOKEN
 ```
+
+For an agent you run under your own Claude subscription, export the token from
+`claude setup-token` as `CLAUDE_CODE_OAUTH_TOKEN`. Native SDK authentication uses
+that environment reference by default; `credential-env` can select another token
+variable. It preserves the engine-owned home/configuration directory and managed
+tool policy. It does not import your native settings, skills, plugins or login
+cache. See [Anthropic's SDK token guidance](https://code.claude.com/docs/en/agent-sdk/session-storage#dual-write-architecture).
+
+API-key authentication remains available with `mode: gateway`, an explicit
+`endpoint` and `credential-env`. The endpoint can be Anthropic directly
+(`https://api.anthropic.com`); a separate proxy service is optional. Credentials
+are environment references, never inline YAML values. Native SDK authentication
+rejects endpoint and credential-file settings to keep the selected route explicit.
 
 Instruction files resolve relative to the configuration file and their contents
 are pinned in the admitted snapshot. SDK roles disable filesystem settings,

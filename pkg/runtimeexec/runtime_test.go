@@ -32,16 +32,23 @@ func TestStrictMacOSCleanupRequiresContainers(t *testing.T) {
 
 func TestProviderHomeCannotChangeRuntimeIdentity(t *testing.T) {
 	original := os.Getenv("HOME")
-	env := runtimeEnvironment([]string{"HOME=/provider-private", "CODEX_HOME=/provider-codex", "ANTHROPIC_API_KEY=explicit-fixture", "EXTERNAL_MCP_TOKEN=must-not-forward"}, "")
-	var home string
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "ambient-subscription")
+	env := runtimeEnvironment([]string{"HOME=/provider-private", "CODEX_HOME=/provider-codex", "ANTHROPIC_API_KEY=explicit-fixture", "CLAUDE_CODE_OAUTH_TOKEN=selected-subscription", "EXTERNAL_MCP_TOKEN=must-not-forward"}, "")
+	var home, subscription string
 	for _, assignment := range env {
 		key, value, _ := strings.Cut(assignment, "=")
 		if key == "HOME" {
 			home = value
 		}
+		if key == "CLAUDE_CODE_OAUTH_TOKEN" {
+			subscription = value
+		}
 	}
 	if home != original {
 		t.Fatal("provider HOME changed host runtime store", home)
+	}
+	if subscription != "selected-subscription" {
+		t.Fatal("runtime did not receive the explicitly selected SDK subscription token")
 	}
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "/provider-codex") || strings.Contains(joined, "must-not-forward") || !strings.Contains(joined, "explicit-fixture") {

@@ -46,7 +46,6 @@ func verifyCodexCLI(ctx context.Context, command string, policies ...runtimeexec
 	defer removeProbe()
 	var output boundedBuffer
 	cmd.Stdout = &output
-	cmd.Stderr = &output
 	var cleanup func()
 	if len(policies) > 0 && policies[0].NetworkRuntime != "" {
 		cleanup, err = runtimeexec.SupervisePolicy(ctx, cmd, policies[0])
