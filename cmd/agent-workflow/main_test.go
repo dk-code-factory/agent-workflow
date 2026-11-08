@@ -3,10 +3,35 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestParseStartPreservesJSONInputs(t *testing.T) {
+	for _, raw := range []string{
+		`9007199254740993`, `1e400`, `1.234567890123456789`,
+		`{"nested":[9007199254740993,1e400]}`, `true`, `null`, `"text"`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			req, err := parseStart("workflows/main.yml", values{"value=" + raw}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(req.Inputs["value"])
+			if err != nil || string(encoded) != raw {
+				t.Fatalf("input changed: got %s, want %s (error %v)", encoded, raw, err)
+			}
+		})
+	}
+	for _, raw := range []string{"plain text", "123 trailing", "123 456", ""} {
+		req, err := parseStart("workflows/main.yml", values{"value=" + raw}, nil)
+		if err != nil || req.Inputs["value"] != raw {
+			t.Fatalf("non-JSON input %q changed: %+v, %v", raw, req, err)
+		}
+	}
+}
 
 func TestValidateCommandChecksWorkflowAndAgentBindings(t *testing.T) {
 	root := t.TempDir()

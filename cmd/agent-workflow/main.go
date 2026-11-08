@@ -573,7 +573,10 @@ func parseStart(ref string, inputs, secrets values) (controller.StartRequest, er
 			return req, fmt.Errorf("input must be NAME=VALUE")
 		}
 		var x any
-		if err := json.Unmarshal([]byte(v), &x); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(v))
+		decoder.UseNumber()
+		var extra any
+		if err := decoder.Decode(&x); err != nil || decoder.Decode(&extra) != io.EOF {
 			x = v
 		}
 		req.Inputs[k] = x

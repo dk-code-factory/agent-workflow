@@ -282,3 +282,38 @@ func TestAdmissionRequestIDDeduplication(t *testing.T) {
 		t.Fatal("duplicate execution")
 	}
 }
+
+func TestAdmissionPreservesJSONInputNumbers(t *testing.T) {
+	for _, raw := range []string{
+		`9007199254740993`, `1e400`, `1.234567890123456789`,
+		`{"nested":[9007199254740993,1e400]}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			agent := &fakeAgent{started: make(chan struct{}, 1), release: make(chan struct{})}
+			s, client, _, _ := fixture(t, agent)
+			defer close(agent.release)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			input := StartRequest{RequestID: "precise-input", Ref: "workflows/main.yml", Inputs: map[string]any{"value": json.RawMessage(raw)}}
+			var run, retry workflows.Run
+			if err := client.Call(ctx, "POST", "/runs", input, &run); err != nil {
+				t.Fatal(err)
+			}
+			_, snapshot, err := s.Store.Load(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(snapshot.Inputs["value"])
+			if err != nil || string(encoded) != raw {
+				t.Fatalf("persisted input changed: got %s, want %s (error %v)", encoded, raw, err)
+			}
+			if err := client.Call(ctx, "POST", "/runs", input, &retry); err != nil || retry.ID != run.ID {
+				t.Fatalf("identical retry did not return original run: %+v, %v", retry, err)
+			}
+			input.Inputs["value"] = json.Number("9007199254740992")
+			if err := client.Call(ctx, "POST", "/runs", input, nil); err == nil {
+				t.Fatal("different numeric input accepted for the same request ID")
+			}
+		})
+	}
+}

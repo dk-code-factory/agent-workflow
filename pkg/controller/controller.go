@@ -340,6 +340,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		case "POST":
 			var req StartRequest
 			d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+			d.UseNumber()
 			d.DisallowUnknownFields()
 			if err := d.Decode(&req); err != nil {
 				fail(400, err)
