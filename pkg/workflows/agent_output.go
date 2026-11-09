@@ -85,9 +85,9 @@ func ParseAgentOutputContract(raw any) (*AgentOutputContract, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid agent output schema: %w", err)
 		}
-		repairAttempts := nativeInt(v, "repair_attempts", 0)
+		repairAttempts := outputRepairCount(v, "repair_attempts", 0)
 		if repairAttempts == 0 {
-			repairAttempts = nativeInt(v, "repairAttempts", 0)
+			repairAttempts = outputRepairCount(v, "repairAttempts", 0)
 		}
 		if repairAttempts < 0 {
 			repairAttempts = 0
@@ -96,7 +96,7 @@ func ParseAgentOutputContract(raw any) (*AgentOutputContract, error) {
 			repairAttempts = 1
 		}
 		if _, ok := v["repair-attempts"]; ok {
-			repairAttempts = nativeInt(v, "repair-attempts", -1)
+			repairAttempts = outputRepairCount(v, "repair-attempts", -1)
 			if repairAttempts < 0 || repairAttempts > 3 {
 				return nil, fmt.Errorf("repair-attempts must be between 0 and 3")
 			}
@@ -110,6 +110,18 @@ func ParseAgentOutputContract(raw any) (*AgentOutputContract, error) {
 	default:
 		return nil, fmt.Errorf("agent output must be a string or map")
 	}
+}
+
+func outputRepairCount(options map[string]any, key string, fallback int) int {
+	if value, ok := options[key].(json.Number); ok {
+		if number, ok := parseSchemaDecimal(value); ok {
+			if count, ok := number.boundedInt(); ok {
+				return count
+			}
+		}
+		return fallback
+	}
+	return nativeInt(options, key, fallback)
 }
 
 func (c *AgentOutputContract) Enabled() bool {
@@ -751,13 +763,13 @@ func schemaEnumContains(raw any, value any) bool {
 	switch items := raw.(type) {
 	case []any:
 		for _, item := range items {
-			if schemaValuesEqual(item, value) {
+			if JSONValuesEqual(item, value) {
 				return true
 			}
 		}
 	case []string:
 		for _, item := range items {
-			if schemaValuesEqual(item, value) {
+			if JSONValuesEqual(item, value) {
 				return true
 			}
 		}
@@ -770,9 +782,9 @@ func schemaEnumContains(raw any, value any) bool {
 	return false
 }
 
-// JSON numbers compare by value, including inside enum objects and arrays.
+// JSONValuesEqual compares JSON values, including numbers inside objects and arrays.
 // Keep strings distinct and avoid expanding arbitrarily large exponents.
-func schemaValuesEqual(left, right any) bool {
+func JSONValuesEqual(left, right any) bool {
 	// Direct Go contracts can contain typed collections and custom JSON values.
 	var normalized [2]any
 	for index, value := range []any{left, right} {

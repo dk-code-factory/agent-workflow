@@ -3,8 +3,6 @@ package workflows
 import (
 	"encoding/json"
 	"fmt"
-	"math"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -232,9 +230,7 @@ func splitExpressionLogicalAND(expression string) ([]string, bool) {
 func evalComparisonOperand(expr string, ctx expressionContext) (any, error) {
 	expr = strings.TrimSpace(expr)
 	if decimalNumberPattern.MatchString(expr) {
-		if _, ok := new(big.Rat).SetString(expr); ok {
-			return json.Number(expr), nil
-		}
+		return json.Number(expr), nil
 	}
 	return evalExpression(expr, ctx)
 }
@@ -383,9 +379,9 @@ func stringMapAny(values map[string]string) map[string]any {
 }
 
 func compareValues(left any, op string, right any) bool {
-	if leftNumber, leftIsNumber := asNumericRat(left); leftIsNumber {
-		if rightNumber, rightIsNumber := asNumericRat(right); rightIsNumber {
-			comparison := leftNumber.Cmp(rightNumber)
+	if leftNumber, leftIsNumber := asNumericDecimal(left); leftIsNumber {
+		if rightNumber, rightIsNumber := asNumericDecimal(right); rightIsNumber {
+			comparison := leftNumber.compare(rightNumber)
 			switch op {
 			case "==":
 				return comparison == 0
@@ -430,25 +426,13 @@ func compareValues(left any, op string, right any) bool {
 	return false
 }
 
-func asNumericRat(value any) (*big.Rat, bool) {
-	var text string
-	switch v := value.(type) {
-	case int:
-		text = strconv.Itoa(v)
-	case int64:
-		text = strconv.FormatInt(v, 10)
-	case float64:
-		if math.IsInf(v, 0) || math.IsNaN(v) {
-			return nil, false
-		}
-		text = strconv.FormatFloat(v, 'g', -1, 64)
-	case json.Number:
-		text = v.String()
+func asNumericDecimal(value any) (schemaDecimal, bool) {
+	switch value.(type) {
+	case int, int64, float64, json.Number:
+		return parseSchemaDecimal(value)
 	default:
-		return nil, false
+		return schemaDecimal{}, false
 	}
-	number, ok := new(big.Rat).SetString(text)
-	return number, ok
 }
 
 func asNumericFloat(value any) (float64, bool) {
@@ -495,8 +479,8 @@ func truthy(value any) bool {
 	case float64:
 		return v != 0
 	case json.Number:
-		number, ok := asNumericRat(v)
-		return ok && number.Sign() != 0
+		number, ok := asNumericDecimal(v)
+		return ok && number.sign != 0
 	default:
 		return true
 	}

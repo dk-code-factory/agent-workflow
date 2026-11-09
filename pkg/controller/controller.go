@@ -340,6 +340,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		case "POST":
 			var req StartRequest
 			d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+			d.UseNumber()
 			d.DisallowUnknownFields()
 			if err := d.Decode(&req); err != nil {
 				fail(400, err)
@@ -356,11 +357,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				existing, snap, lookupErr := s.Store.AdmissionRequest(r.Context(), req.RequestID)
 				if lookupErr == nil {
 					ref, _ := workflows.CanonicalLocalRef(req.Ref)
-					a, _ := json.Marshal(req.Inputs)
-					b, _ := json.Marshal(snap.Inputs)
 					c, _ := json.Marshal(req.SecretRefs)
 					d, _ := json.Marshal(snap.SecretRefs)
-					if existing.WorkflowRef != ref || string(a) != string(b) || string(c) != string(d) {
+					if existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) {
 						fail(409, fmt.Errorf("request_id reused with different content"))
 						return
 					}

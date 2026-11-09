@@ -282,3 +282,159 @@ func TestAdmissionRequestIDDeduplication(t *testing.T) {
 		t.Fatal("duplicate execution")
 	}
 }
+
+func TestAdmissionPreservesJSONInputNumbers(t *testing.T) {
+	for _, raw := range []string{
+		`9007199254740993`, `1e400`, `1.234567890123456789`,
+		`{"nested":[9007199254740993,1e400]}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			agent := &fakeAgent{started: make(chan struct{}, 1), release: make(chan struct{})}
+			s, client, _, _ := fixture(t, agent)
+			defer close(agent.release)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			input := StartRequest{RequestID: "precise-input", Ref: "workflows/main.yml", Inputs: map[string]any{"value": json.RawMessage(raw)}}
+			var run, retry workflows.Run
+			if err := client.Call(ctx, "POST", "/runs", input, &run); err != nil {
+				t.Fatal(err)
+			}
+			_, snapshot, err := s.Store.Load(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(snapshot.Inputs["value"])
+			if err != nil || string(encoded) != raw {
+				t.Fatalf("persisted input changed: got %s, want %s (error %v)", encoded, raw, err)
+			}
+			if err := client.Call(ctx, "POST", "/runs", input, &retry); err != nil || retry.ID != run.ID {
+				t.Fatalf("identical retry did not return original run: %+v, %v", retry, err)
+			}
+			input.Inputs["value"] = json.Number("9007199254740992")
+			if err := client.Call(ctx, "POST", "/runs", input, nil); err == nil {
+				t.Fatal("different numeric input accepted for the same request ID")
+			}
+		})
+	}
+}
+
+func TestAdmissionRetriesLegacyNumericSnapshot(t *testing.T) {
+	for _, raw := range []string{`1.0`, `1e2`, `{"nested":[1.0,1e2]}`} {
+		t.Run(raw, func(t *testing.T) {
+			agent := &fakeAgent{started: make(chan struct{}, 1), release: make(chan struct{})}
+			s, client, _, _ := fixture(t, agent)
+			defer close(agent.release)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var legacy any
+			if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+				t.Fatal(err)
+			}
+			original := &workflows.Run{ID: "0123456789abcdef0123456789abcdef", WorkflowRef: "workflows/main.yml", Status: workflows.RunStatusSucceeded}
+			snapshot := workflows.Snapshot{Version: 1, RequestID: "legacy-request", Inputs: map[string]any{"value": legacy}}
+			if err := s.Store.Admit(ctx, original, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			input := StartRequest{RequestID: snapshot.RequestID, Ref: original.WorkflowRef, Inputs: map[string]any{"value": json.RawMessage(raw)}}
+			var retry workflows.Run
+			if err := client.Call(ctx, "POST", "/runs", input, &retry); err != nil || retry.ID != original.ID {
+				t.Fatalf("legacy retry did not return original run: %+v, %v", retry, err)
+			}
+			input.Inputs["value"] = json.Number("9007199254740993")
+			if err := client.Call(ctx, "POST", "/runs", input, nil); err == nil {
+				t.Fatal("changed input accepted for legacy request ID")
+			}
+			if agent.calls.Load() != 0 {
+				t.Fatal("legacy retry executed again")
+			}
+		})
+	}
+}
+
+func TestAdmissionExecutesDeclaredNumericInputs(t *testing.T) {
+	for _, test := range []struct {
+		raw     string
+		skipped bool
+	}{
+		{`9007199254740993`, false},
+		{`1.234567890123456789`, false},
+		{`1e400`, false},
+		{`1e1000001`, false},
+		{`-1e-100000000000000000000`, false},
+		{`0e100000000000000000000`, true},
+		{`-0.000e-1000001`, true},
+	} {
+		t.Run(test.raw, func(t *testing.T) {
+			release := make(chan struct{})
+			close(release)
+			agent := &fakeAgent{started: make(chan struct{}, 1), release: release}
+			s, client, _, _ := fixture(t, agent)
+			source := "on:\n  workflow_call:\n    inputs:\n      value: {type: number}\njobs:\n  x:\n    if: inputs.value\n    steps: [{uses: agent/a, with: {prompt: hello}}]\n"
+			if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			input := StartRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"value": json.RawMessage(test.raw)}}
+			var run workflows.Run
+			if err := client.Call(ctx, "POST", "/runs", input, &run); err != nil {
+				t.Fatal(err)
+			}
+			run = awaitStatus(t, client, run.ID, workflows.RunStatusSucceeded)
+			wantStatus, wantCalls := workflows.RunStatusSucceeded, int32(1)
+			if test.skipped {
+				wantStatus, wantCalls = workflows.RunStatusSkipped, 0
+			}
+			if run.Jobs["x"].Status != wantStatus || agent.calls.Load() != wantCalls {
+				t.Fatalf("numeric condition: job=%s calls=%d, want %s/%d", run.Jobs["x"].Status, agent.calls.Load(), wantStatus, wantCalls)
+			}
+			_, snapshot, err := s.Store.Load(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(snapshot.Inputs["value"])
+			if err != nil || string(encoded) != test.raw {
+				t.Fatalf("declared input changed: got %s, want %s (error %v)", encoded, test.raw, err)
+			}
+		})
+	}
+}
+
+type secondRepairAgent struct{ calls atomic.Int32 }
+
+func (a *secondRepairAgent) RunAgent(_ context.Context, _ workflows.AgentRequest) (map[string]any, error) {
+	if a.calls.Add(1) < 3 {
+		return map[string]any{"text": "invalid JSON"}, nil
+	}
+	return map[string]any{"text": "{}"}, nil
+}
+
+func TestAdmissionPreservesNumericOutputRepairBudget(t *testing.T) {
+	for _, key := range []string{"repair_attempts", "repairAttempts"} {
+		for _, raw := range []string{"2.0", "2e0"} {
+			t.Run(key+"/"+raw, func(t *testing.T) {
+				agent := &secondRepairAgent{}
+				s, client, _, _ := fixture(t, agent)
+				source := "on:\n  workflow_call:\n    inputs:\n      attempts: {type: number}\njobs:\n  x:\n    steps:\n      - uses: agent/a\n        with:\n          prompt: hello\n          output:\n            format: json\n            " + key + ": '${{ inputs.attempts }}'\n"
+				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				input := StartRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"attempts": json.Number(raw)}}
+				var run workflows.Run
+				if err := client.Call(ctx, "POST", "/runs", input, &run); err != nil {
+					t.Fatal(err)
+				}
+				run = awaitStatus(t, client, run.ID, workflows.RunStatusSucceeded)
+				if calls := agent.calls.Load(); calls != 3 {
+					t.Fatalf("agent calls=%d, want task plus two repairs", calls)
+				}
+				_, snapshot, err := s.Store.Load(ctx, run.ID)
+				if err != nil || snapshot.Inputs["attempts"] != json.Number(raw) {
+					t.Fatalf("repair input changed: %+v, error=%v", snapshot.Inputs, err)
+				}
+			})
+		}
+	}
+}
