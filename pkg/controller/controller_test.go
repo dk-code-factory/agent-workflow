@@ -399,3 +399,42 @@ func TestAdmissionExecutesDeclaredNumericInputs(t *testing.T) {
 		})
 	}
 }
+
+type secondRepairAgent struct{ calls atomic.Int32 }
+
+func (a *secondRepairAgent) RunAgent(_ context.Context, _ workflows.AgentRequest) (map[string]any, error) {
+	if a.calls.Add(1) < 3 {
+		return map[string]any{"text": "invalid JSON"}, nil
+	}
+	return map[string]any{"text": "{}"}, nil
+}
+
+func TestAdmissionPreservesNumericOutputRepairBudget(t *testing.T) {
+	for _, key := range []string{"repair_attempts", "repairAttempts"} {
+		for _, raw := range []string{"2.0", "2e0"} {
+			t.Run(key+"/"+raw, func(t *testing.T) {
+				agent := &secondRepairAgent{}
+				s, client, _, _ := fixture(t, agent)
+				source := "on:\n  workflow_call:\n    inputs:\n      attempts: {type: number}\njobs:\n  x:\n    steps:\n      - uses: agent/a\n        with:\n          prompt: hello\n          output:\n            format: json\n            " + key + ": '${{ inputs.attempts }}'\n"
+				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				input := StartRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"attempts": json.Number(raw)}}
+				var run workflows.Run
+				if err := client.Call(ctx, "POST", "/runs", input, &run); err != nil {
+					t.Fatal(err)
+				}
+				run = awaitStatus(t, client, run.ID, workflows.RunStatusSucceeded)
+				if calls := agent.calls.Load(); calls != 3 {
+					t.Fatalf("agent calls=%d, want task plus two repairs", calls)
+				}
+				_, snapshot, err := s.Store.Load(ctx, run.ID)
+				if err != nil || snapshot.Inputs["attempts"] != json.Number(raw) {
+					t.Fatalf("repair input changed: %+v, error=%v", snapshot.Inputs, err)
+				}
+			})
+		}
+	}
+}
