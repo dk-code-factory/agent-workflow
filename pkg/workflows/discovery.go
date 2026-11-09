@@ -14,12 +14,17 @@ type Definition struct {
 }
 
 func (e *Executor) Discover() ([]Definition, error) {
-	dir := e.DefinitionsDir
-	if dir == "" {
-		dir = filepath.Join(e.WorkspaceDir, "workflows")
+	dir, err := cleanDefinitionsDir(e.DefinitionsDir)
+	if err != nil {
+		return nil, err
 	}
+	workspace := strings.TrimSpace(e.WorkspaceDir)
+	if workspace == "" {
+		workspace = "."
+	}
+	dir = filepath.Join(workspace, dir)
 	out := []Definition{}
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
