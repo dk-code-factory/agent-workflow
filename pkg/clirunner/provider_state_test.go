@@ -1,12 +1,49 @@
 package clirunner
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
+
+func TestNativeTurnRetainsProviderStateFilesystemFailure(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		t.Run(provider, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, ".agent-workflow"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			obstruction := filepath.Join(root, ".agent-workflow", "providers")
+			if err := os.WriteFile(obstruction, []byte("obstructed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FIXTURE_CLAUDE_STATE_TOKEN", "fixture-only")
+			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"a": {
+				Provider: provider, Command: filepath.Join(root, "must-not-start"),
+				Authentication: Authentication{Mode: "native", CredentialEnv: "FIXTURE_CLAUDE_STATE_TOKEN"},
+			}}}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{
+				AgentID: "a", RunID: "run", InvocationID: "turn", ParentWorkerID: "worker",
+			}}, nil)
+			var storageErr *runtimeexec.StorageError
+			var pathErr *os.PathError
+			if !errors.As(err, &storageErr) || !errors.As(err, &pathErr) || pathErr.Op != "mkdir" {
+				t.Fatal("provider state failure lost its storage or filesystem identity", err)
+			}
+			if storageErr.Error() != pathErr.Error() {
+				t.Fatal("provider state storage marker changed its diagnostic", err)
+			}
+		})
+	}
+}
 
 func TestProviderStatePartitionsConversationSessions(t *testing.T) {
 	root := t.TempDir()
@@ -101,6 +138,73 @@ func TestNativeCodexReferencePreservesProviderOwnedAuthentication(t *testing.T) 
 	}
 	if bytes, err := os.ReadFile(authFile); err != nil || string(bytes) != string(updated) {
 		t.Fatal("engine cleanup removed provider-owned authentication", err)
+	}
+}
+
+func TestNativeCodexReferenceRetainsStateFilesystemFailure(t *testing.T) {
+	for _, operation := range []string{"lstat", "symlink"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			authFile := filepath.Join(root, "auth.json")
+			raw := []byte(`{"OPENAI_API_KEY":"fixture-key"}`)
+			if err := os.WriteFile(authFile, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(root, "state")
+			if operation == "lstat" {
+				if err := os.WriteFile(state, []byte("obstructed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := referenceNativeCodexAuth(state, Agent{Authentication: Authentication{Mode: "native", CredentialFile: authFile}})
+			var storageErr *runtimeexec.StorageError
+			if !errors.As(err, &storageErr) {
+				t.Fatal("authentication reference lost its state filesystem identity", err)
+			}
+			var cause error
+			if operation == "lstat" {
+				var pathErr *os.PathError
+				if !errors.As(err, &pathErr) || pathErr.Op != operation {
+					t.Fatal("state lookup lost its filesystem cause", err)
+				}
+				cause = pathErr
+			} else {
+				var linkErr *os.LinkError
+				if !errors.As(err, &linkErr) || linkErr.Op != operation {
+					t.Fatal("state reference lost its filesystem cause", err)
+				}
+				cause = linkErr
+			}
+			if storageErr.Error() != cause.Error() || workflows.FailureClass(err) != workflows.FailureClass(cause) {
+				t.Fatal("state reference storage marker changed its diagnostic", err)
+			}
+			if current, err := os.ReadFile(authFile); err != nil || string(current) != string(raw) {
+				t.Fatal("state preparation changed provider-owned authentication", err)
+			}
+		})
+	}
+}
+
+func TestNativeCodexReferenceRetainsDisappearingSourceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte(`{"OPENAI_API_KEY":"fixture-key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Authentication: Authentication{Mode: "native", CredentialFile: path}}
+	if _, err := nativeCodexCredentials(agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveNativeCodexAuthSource(agent)
+	var storageErr *runtimeexec.StorageError
+	var pathErr *os.PathError
+	if !errors.As(err, &storageErr) || !errors.As(err, &pathErr) || pathErr.Op != "lstat" || !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("disappearing authentication source lost its filesystem admission identity", err)
+	}
+	if storageErr.Error() != pathErr.Error() || workflows.FailureClass(err) != workflows.FailureClass(pathErr) {
+		t.Fatal("authentication source marker changed the diagnostic", err)
 	}
 }
 

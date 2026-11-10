@@ -62,14 +62,28 @@ func (m *WorkerManager) StopRun(ctx context.Context, run string) error {
 	}
 	// Closed workers retain their message outcome, including cleanup uncertainty.
 	var uncertain int
-	queryErr := m.Store.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id JOIN runs r ON r.id=w.run_id WHERE w.run_id=? AND COALESCE(json_extract(CAST(m.record AS TEXT),'$.execution_generation'),1)=r.generation AND (m.status IN ('running','failed') OR json_extract(CAST(m.record AS TEXT),'$.failure_class')='needs_attention')`, run).Scan(&uncertain)
+	queryErr := m.Store.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id JOIN runs r ON r.id=w.run_id
+WHERE w.run_id=? AND COALESCE(json_extract(CAST(m.record AS TEXT),'$.execution_generation'),1)=r.generation
+AND (m.status='running' OR json_extract(CAST(m.record AS TEXT),'$.failure_class')='needs_attention'
+OR (m.status='failed' AND NOT COALESCE(
+json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.execution_generation')=r.generation
+AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.message_id')=m.id
+AND length(CAST(json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id') AS BLOB))>0,0)))`, run).Scan(&uncertain)
 	if queryErr != nil {
 		return errors.Join(err, process.ErrCleanup, queryErr)
 	}
 	if uncertain != 0 {
 		return errors.Join(err, process.ErrCleanup, fmt.Errorf("worker cleanup remains uncertain"))
 	}
-	queryErr = m.Store.db.QueryRowContext(ctx, `SELECT count(*) FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.run_id=? AND COALESCE(json_extract(CAST(w.record AS TEXT),'$.failure_generation'),1)=r.generation AND COALESCE(json_extract(CAST(w.record AS TEXT),'$.failure_class'),'') NOT IN ('','canceled')`, run).Scan(&uncertain)
+	queryErr = m.Store.db.QueryRowContext(ctx, `SELECT count(*) FROM workers w JOIN runs r ON r.id=w.run_id
+WHERE w.run_id=? AND COALESCE(json_extract(CAST(w.record AS TEXT),'$.failure_generation'),1)=r.generation
+AND COALESCE(json_extract(CAST(w.record AS TEXT),'$.failure_class'),'') NOT IN ('','canceled')
+AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.worker_id=w.id AND m.status='failed'
+AND m.id=json_extract(CAST(w.record AS TEXT),'$.failure_acknowledgement.message_id')
+AND json_extract(CAST(w.record AS TEXT),'$.failure_acknowledgement.execution_generation')=r.generation
+AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.execution_generation')=r.generation
+AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.message_id')=m.id
+AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id')=json_extract(CAST(w.record AS TEXT),'$.failure_acknowledgement.request_id'))`, run).Scan(&uncertain)
 	if queryErr != nil {
 		return errors.Join(err, process.ErrCleanup, queryErr)
 	}
