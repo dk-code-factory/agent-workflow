@@ -15,6 +15,7 @@ import (
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"modernc.org/sqlite"
 )
 
 type failedNativeSession struct {
@@ -239,6 +240,128 @@ func TestFailureAcknowledgementRetainsConsumedToolAdmissionFailures(t *testing.T
 			}
 			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
 				t.Fatal("consumed tool storage error lost finalization barrier", err)
+			}
+		})
+	}
+}
+
+func TestFailureAcknowledgementRetainsConsumedEngineStorageFailures(t *testing.T) {
+	for _, phase := range []string{"spawn_record", "spawn_event", "send_record", "send_event", "close_record", "redacted_record", "ordinary"} {
+		t.Run(phase, func(t *testing.T) {
+			diagnostic := "checkpoint rejected"
+			expectedDiagnostic := "constraint failed: checkpoint rejected (1811)"
+			secrets := map[string]string{"test": "PRIVATE_ENGINE_CHECKPOINT"}
+			if phase == "redacted_record" {
+				diagnostic += " " + secrets["test"]
+				expectedDiagnostic = "constraint failed: checkpoint rejected [REDACTED] (1811)"
+			}
+			observed := make(chan error, 1)
+			session := &failedNativeSession{failure: ErrProviderFailure, beforeResult: func(req SessionRequest) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				args := json.RawMessage(`{"role":"reviewer","turns":1}`)
+				if phase == "ordinary" {
+					args = json.RawMessage(`{"role":"reviewer","turns":1000000}`)
+				}
+				result, err := req.Tools.Binding.Call(ctx, ToolRequest{CallID: "spawn", Server: "engine", Tool: "worker_spawn", Arguments: args})
+				if strings.HasPrefix(phase, "send_") || phase == "close_record" {
+					if err != nil {
+						observed <- fmt.Errorf("child setup failed: %w", err)
+						return
+					}
+					var child struct {
+						Worker Worker `json:"worker"`
+					}
+					if err := json.Unmarshal(result, &child); err != nil {
+						observed <- err
+						return
+					}
+					args, _ = json.Marshal(map[string]any{"worker_id": child.Worker.ID, "prompt": "child assignment"})
+					tool := "worker_send"
+					if phase == "close_record" {
+						tool = "worker_close"
+						args, _ = json.Marshal(map[string]any{"worker_id": child.Worker.ID})
+					}
+					_, err = req.Tools.Binding.Call(ctx, ToolRequest{CallID: "child-operation", Server: "engine", Tool: tool, Arguments: args})
+				}
+				observed <- err
+			}}
+			m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+				broker := &Broker{Store: m.Store, Workers: m}
+				m.BindTools = func(ctx context.Context, in ToolInvocation) (ToolBinding, error) {
+					in.Catalog = EngineTools()
+					in.Secrets = secrets
+					for _, definition := range in.Catalog {
+						in.Grants = append(in.Grants, ToolGrant{Server: definition.Server, Tool: definition.Name})
+					}
+					return broker.Bind(ctx, in)
+				}
+				if phase == "ordinary" {
+					return
+				}
+				operation, table, condition := "INSERT", "workers", "1"
+				switch phase {
+				case "spawn_event":
+					table, condition = "events", "NEW.type='worker.spawned'"
+				case "send_record":
+					table = "messages"
+				case "send_event":
+					table, condition = "events", "NEW.type='worker.message_enqueued'"
+				case "close_record":
+					operation, condition = "UPDATE", "NEW.status='closed'"
+				}
+				if _, err := m.Store.db.Exec("CREATE TRIGGER reject_engine_checkpoint BEFORE " + operation + " ON " + table + " WHEN " + condition + " BEGIN SELECT RAISE(ABORT,'" + diagnostic + "'); END"); err != nil {
+					t.Fatal(err)
+				}
+			})
+			ctx := failureTestContext(t)
+			var callbackErr error
+			select {
+			case callbackErr = <-observed:
+				if callbackErr == nil {
+					t.Fatal("engine operation unexpectedly succeeded")
+				}
+			case <-ctx.Done():
+				t.Fatal("engine callback did not complete", ctx.Err())
+			}
+			if phase == "ordinary" {
+				if msg.UnsafeFailureClass != "" {
+					t.Fatal("ordinary engine policy rejection acquired an unsafe barrier", msg)
+				}
+				if _, err := m.AcknowledgeFailure(ctx, req); err != nil {
+					t.Fatal("ordinary consumed engine failure was not acknowledgeable", err)
+				}
+				if err := m.StopRun(ctx, req.RunID); err != nil {
+					t.Fatal("acknowledged ordinary engine failure retained finalization barrier", err)
+				}
+				return
+			}
+			if callbackErr.Error() != expectedDiagnostic {
+				t.Fatal("engine checkpoint diagnostic changed or production branch was not reached", callbackErr)
+			}
+			var sqliteErr *sqlite.Error
+			if !errors.As(callbackErr, &sqliteErr) || sqliteErr.Code() != 1811 {
+				t.Fatal("engine callback lost its typed storage cause", callbackErr)
+			}
+			calls, err := m.Store.ToolCalls(ctx, req.RunID, true)
+			if err != nil || len(calls) != 1 || calls[0].Status != "failed" || calls[0].Error != callbackErr.Error() {
+				t.Fatal("engine failure record lost its redacted diagnostic", calls, err)
+			}
+			if _, err := m.Store.db.Exec("DROP TRIGGER reject_engine_checkpoint"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("consumed engine storage failure was acknowledged")
+			}
+			if msg.FailureClass != "storage" || msg.UnsafeFailureClass != "storage" {
+				t.Fatal("consumed engine storage failure lost its diagnostic or admission identity", msg)
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed engine failure evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("consumed engine storage failure lost finalization barrier", err)
 			}
 		})
 	}

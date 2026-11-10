@@ -446,7 +446,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 		if req.Server != "engine" {
 			return nil, errors.Join(ErrUncertainTool, errors.New(record.Error))
 		}
-		return nil, errors.New(record.Error)
+		return nil, redactedError{cause: err, text: record.Error}
 	}
 	return record.Result, nil
 }

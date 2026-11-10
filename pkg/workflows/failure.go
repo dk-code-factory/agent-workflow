@@ -7,6 +7,8 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"strings"
+
+	"modernc.org/sqlite"
 )
 
 var errStepPersistence = errors.New("step journal storage persistence failed")
@@ -34,6 +36,10 @@ func classifyFailure(err error) string {
 	}
 	if errors.Is(err, operational.ErrUnavailable) {
 		return "prerequisite"
+	}
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		return "storage"
 	}
 	// An aggregate's ordinary error must not hide an unsafe constituent failure.
 	var causes []error
@@ -64,7 +70,7 @@ func classifyFailure(err error) string {
 	}
 	text := strings.ToLower(err.Error())
 	switch {
-	case classes["authentication"], strings.Contains(text, "401"), strings.Contains(text, "authentication"), strings.Contains(text, "credential"), strings.Contains(text, "oauth"):
+	case classes["authentication"], authenticationDiagnostic(text):
 		return "authentication"
 	case strings.Contains(text, "database"), strings.Contains(text, "sqlite"), strings.Contains(text, "disk"), strings.Contains(text, "storage"):
 		return "storage"
@@ -80,6 +86,10 @@ func classifyFailure(err error) string {
 		return "command"
 	}
 	return "execution"
+}
+
+func authenticationDiagnostic(text string) bool {
+	return strings.Contains(text, "401") || strings.Contains(text, "authentication") || strings.Contains(text, "credential") || strings.Contains(text, "oauth")
 }
 
 // cancellationOnly distinguishes an interrupted operation from independent
