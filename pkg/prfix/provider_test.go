@@ -46,6 +46,8 @@ if isinstance(value,dict) and '__sequence' in value:
  if len(sequence)>1:
   sequence.pop(0)
   with open(os.environ['PRFIX_FAKE_API'],'w') as data: json.dump(responses,data)
+if isinstance(value,dict) and '__exit' in value:
+ sys.stdout.write(value.get('__body',''));sys.stderr.write(value.get('__stderr',''));sys.exit(value['__exit'])
 if isinstance(value,str): sys.stdout.write(value)
 else: json.dump(value,sys.stdout)
 if isinstance(value,str) and value.startswith("HTTP/") and value.split()[1]!="200": sys.exit(1)

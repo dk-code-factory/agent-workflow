@@ -15,7 +15,7 @@ import (
 )
 
 const Version = "5.2.0"
-const Implementation = "prfix-v5-dk-workflows-5.2.0"
+const Implementation = "prfix-v6-dk-workflows-5.2.0"
 
 type Identity struct {
 	URL        string `json:"url"`
@@ -247,6 +247,7 @@ type ReplyResponse struct {
 	Acceptance *Authorization `json:"acceptance,omitempty"`
 }
 type Report struct {
+	ReplyDisposition         *ReplyDisposition         `json:"reply_disposition,omitempty"`
 	ReviewRequestDisposition *ReviewRequestDisposition `json:"review_request_disposition,omitempty"`
 	PolicyPrompt             string                    `json:"policy_prompt,omitempty"`
 	ReplyObligations         []ReplyObligation         `json:"reply_obligations,omitempty"`

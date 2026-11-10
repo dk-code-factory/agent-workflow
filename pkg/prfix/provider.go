@@ -100,6 +100,7 @@ func (c CIObservation) Success() bool {
 }
 
 type Intent struct {
+	CreatedAt      string            `json:"created_at,omitempty"`
 	Replaces       *ReplyReplacement `json:"replaces,omitempty"`
 	CreatedHead    string            `json:"created_head,omitempty"`
 	ActorID        int64             `json:"actor_id,omitempty"`
@@ -120,7 +121,7 @@ type Intent struct {
 	AudienceClaim  string            `json:"audience_claim,omitempty"`
 }
 
-func (i Intent) Fingerprint() string { i.AudienceClaim = ""; return digest(i) }
+func (i Intent) Fingerprint() string { i.AudienceClaim, i.CreatedAt = "", ""; return digest(i) }
 
 type Receipt struct {
 	ID       string         `json:"id"`
@@ -458,8 +459,7 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 	default:
 		return Receipt{}, fmt.Errorf("unsupported GitHub operation %q", i.Kind)
 	}
-	if e := g.api(ctx, id, method, path, payload, &raw); e != nil {
-		// Endpoints returning 204 have an empty body; api handles those below.
+	if e := g.dispatchAPI(ctx, i, method, path, payload, &raw); e != nil {
 		return Receipt{}, e
 	}
 	responsePath := g.dispatchResponsePath(i)
@@ -477,6 +477,9 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 	}
 	outcome, receipt, e := g.Reconcile(ctx, i)
 	if e != nil {
+		if err := g.recordObservationFailure(i); err != nil {
+			return Receipt{}, fmt.Errorf("retain publication observation failure: %w", err)
+		}
 		return Receipt{}, fmt.Errorf("publication response retained at %s; observation failed: %w", responsePath, e)
 	}
 	if outcome != "completed" {
@@ -494,6 +497,9 @@ func (g *GitHub) Reconcile(ctx context.Context, i Intent) (string, Receipt, erro
 	var result any = ev.Metadata
 	switch i.Kind {
 	case "edit_pr":
+		if i.ActorID <= 0 || ev.ViewerID != i.ActorID {
+			return "unknown", Receipt{}, fmt.Errorf("publication actor differs from original intent")
+		}
 		found = true
 		for _, key := range []string{"title", "body"} {
 			if v, ok := i.Payload[key]; ok {
@@ -611,6 +617,9 @@ func (g *GitHub) Reconcile(ctx context.Context, i Intent) (string, Receipt, erro
 		}
 		// A missing PR cannot prove that a creation was never dispatched.
 	case "request_review":
+		if i.ActorID <= 0 || ev.ViewerID != i.ActorID {
+			return "unknown", Receipt{}, fmt.Errorf("publication actor differs from original intent")
+		}
 		var requested struct {
 			Users []struct {
 				Login string `json:"login"`

@@ -1,4 +1,4 @@
-name: PR fix verified reply replacement preparation v1
+name: PR fix verified reply reassessment v1
 on:
   workflow_call:
     inputs:
@@ -19,3 +19,11 @@ jobs:
       occurrence: reply_recovery
       cycle: reply-recovery
       payload: ${{ inputs.intent.id }}
+  disposition:
+    needs: reassess
+    steps:
+      - uses: action/prfix_reply_dispose
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+          claim: ${{ needs.reassess.outputs.claim }}

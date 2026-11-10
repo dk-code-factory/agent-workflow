@@ -726,6 +726,9 @@ func (r *Runtime) close(ctx context.Context, p Plan, ac workflows.ActionContext)
 }
 
 func mergeReport(base, next Report) Report {
+	if next.ReplyDisposition == nil {
+		next.ReplyDisposition = base.ReplyDisposition
+	}
 	if next.ReviewRequestDisposition == nil {
 		next.ReviewRequestDisposition = base.ReviewRequestDisposition
 	}

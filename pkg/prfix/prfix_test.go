@@ -60,7 +60,7 @@ func (f *fakeProvider) Execute(_ context.Context, i Intent) (Receipt, error) {
 		f.receipts = map[string]Receipt{}
 	}
 	if f.discussionWrites && (i.Kind == "reply" || i.Kind == "reply_inline") {
-		comment := map[string]any{"id": float64(100 + f.writes), "body": stringValue(i.Payload, "body"), "user": map[string]any{"login": f.ev.Viewer}}
+		comment := map[string]any{"id": float64(100 + f.writes), "body": stringValue(i.Payload, "body"), "user": map[string]any{"login": f.ev.Viewer, "id": i.ActorID}}
 		if i.Kind == "reply" {
 			f.ev.Comments = append(f.ev.Comments, comment)
 		} else {

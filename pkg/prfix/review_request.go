@@ -16,11 +16,14 @@ import (
 // Inspection establishes current context, never whether the historical POST
 // reached GitHub. Timeline events and reviews cannot prove delivery identity.
 type ReviewRequestObservation struct {
-	Intent    Intent            `json:"intent"`
-	PR        PREvidence        `json:"pr"`
-	Requested map[string]any    `json:"requested"`
-	Timeline  []map[string]any  `json:"timeline"`
-	Dispatch  *DispatchResponse `json:"dispatch,omitempty"`
+	Intent               Intent               `json:"intent"`
+	PR                   PREvidence           `json:"pr"`
+	Requested            map[string]any       `json:"requested"`
+	Timeline             []map[string]any     `json:"timeline"`
+	Dispatch             *DispatchResponse    `json:"dispatch,omitempty"`
+	Execution            *DispatchExecution   `json:"execution"`
+	HistoricalFailure    *DispatchDiagnostic  `json:"historical_failure"`
+	ReconciliationErrors []DispatchDiagnostic `json:"reconciliation_errors"`
 }
 
 func (o *ReviewRequestObservation) UnmarshalJSON(b []byte) error {
@@ -115,6 +118,7 @@ func (g *GitHub) InspectReviewRequest(ctx context.Context, i Intent) (ReviewRequ
 		} else if !errors.Is(readErr, os.ErrNotExist) {
 			return o, readErr
 		}
+		o.Execution, o.HistoricalFailure, o.ReconciliationErrors, err = g.readDispatchDiagnostics(i)
 	}
 	return o, err
 }

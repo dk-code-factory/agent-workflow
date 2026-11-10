@@ -109,7 +109,7 @@ func (r *Runtime) plan(in ActionInput) (Plan, error) {
 	return p, nil
 }
 func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
-	names := []string{"review_admit", "cycle", "claim", "worker_spawn", "worker_send", "worker_wait", "finish", "status", "commit", "intents", "publish", "ci", "reserve", "completion", "receipt", "candidates", "ci_classify", "close", "worker_recover", "worker_adopt", "worker_acknowledge", "turn_state", "check_prepare", "review_request_inspect", "review_request_dispose", "reply_inspect"}
+	names := []string{"review_admit", "cycle", "claim", "worker_spawn", "worker_send", "worker_wait", "finish", "status", "commit", "intents", "publish", "ci", "reserve", "completion", "receipt", "candidates", "ci_classify", "close", "worker_recover", "worker_adopt", "worker_acknowledge", "turn_state", "check_prepare", "review_request_inspect", "review_request_dispose", "reply_inspect", "reply_dispose"}
 	for _, name := range names {
 		name := name
 		effect := workflows.ActionExternalMutation
@@ -362,7 +362,7 @@ func (r *Runtime) handle(ctx context.Context, name string, ac workflows.ActionCo
 	case "intents":
 		return r.intents(ctx, p, in.Kind)
 	case "publish":
-		return r.publish(ctx, p, in)
+		return r.publish(context.WithValue(ctx, dispatchContextKey{}, ac), p, in)
 	case "ci_classify":
 		return r.classifyCI(ctx, p, in)
 	case "ci":
@@ -403,6 +403,8 @@ func (r *Runtime) handle(ctx context.Context, name string, ac workflows.ActionCo
 		return r.completeEffect(ctx, l, i, receipt)
 	case "reply_inspect":
 		return r.replyInspect(ctx, p, in)
+	case "reply_dispose":
+		return r.replyDispose(ctx, p, ac, in)
 	case "review_request_inspect":
 		return r.reviewRequestInspect(ctx, p, in)
 	case "review_request_dispose":

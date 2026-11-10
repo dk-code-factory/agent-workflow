@@ -511,7 +511,7 @@ func expand(p *Plan, role string) error {
 		assignment := ""
 		switch id {
 		case "reply_recovery":
-			assignment = "Reassess the exact inspected historical reply against current code and discussion. Prepare a separately authorized linked replacement only when still required. Return an operation with replaces containing the exact original run/id, inspection path/fingerprint, concrete replacement_required reason and sources. Preserve the historical receipt; never replay it or publish."
+			assignment = "Reassess the exact inspected historical reply against current code and discussion. When the answer obligation is settled without another post, return reply_disposition with decision no_replacement, concrete reason, inspection path/fingerprint and sources. Otherwise prepare a separately authorized linked replacement only when still required, with replaces containing the exact original run/id, inspection path/fingerprint, concrete replacement_required reason and sources. Preserve the historical receipt; never replay it, publish or resolve a thread."
 		case "audience":
 			assignment = "Review this exact actual publication payload for audience suitability and authority. Public text must contain no private workflow reports, diagnostics, handles, or receipts. Return explicit evidence for the payload hash."
 		case "completion":

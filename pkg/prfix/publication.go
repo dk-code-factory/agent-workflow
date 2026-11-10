@@ -42,6 +42,7 @@ func (l *Ledger) PrepareIntent(ctx context.Context, p Plan, intent Intent, sourc
 	}
 	intent.Run = p.LogicalRun
 	intent.PR = p.Identity
+	intent.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	permission, ok := p.Authorizations[intent.Kind]
 	if !ok && intent.Kind != "merge" {
 		permission, ok = p.Authorizations["iterate"]
@@ -603,12 +604,20 @@ func (r *Runtime) publishLocked(ctx context.Context, p Plan, in ActionInput) (Ac
 	if state == "dispatched" || state == "unknown" {
 		outcome, receipt, e := r.reconcileIntent(ctx, i)
 		if e != nil {
+			if provider, ok := r.provider().(*GitHub); ok {
+				if err := provider.recordObservationFailure(i); err != nil {
+					return out, err
+				}
+			}
 			return out, e
 		}
 		if outcome == "completed" {
 			return r.completeEffect(ctx, l, i, receipt)
 		}
 		return out, fmt.Errorf("uncertain %s requires read-only reconciliation", i.Kind)
+	}
+	if state != "prepared" {
+		return out, fmt.Errorf("publication state %s cannot dispatch", state)
 	}
 	if e = r.publicationGate(ctx, p, i, in.Claim); e != nil {
 		return out, e
@@ -737,10 +746,28 @@ func (r *Runtime) reconcileCompletedIntent(ctx context.Context, l *Ledger, i Int
 	if err := readJSON(path, &saved); err != nil {
 		return "unknown", saved, err
 	}
-	state, observed, err := r.reconcileIntent(ctx, i)
-	if err == nil && state == "completed" && contains([]string{"reply", "reply_inline"}, i.Kind) && githubID(observed.Result, "id") != githubID(saved.Result, "id") {
+	if contains([]string{"reply", "reply_inline"}, i.Kind) {
+		if settled, err := r.verifyReplyDisposition(ctx, l, i); settled || err != nil {
+			if err != nil {
+				return "unknown", saved, err
+			}
+			return "completed", saved, nil
+		}
+		ev, err := r.provider().Capture(ctx, i.PR)
+		if err != nil {
+			return "unknown", saved, err
+		}
+		if saved.ID != i.ID || saved.Kind != i.Kind || saved.PR != i.PR.URL || saved.Head != i.Head || !numeric(githubID(saved.Result, "id")) {
+			return "unknown", saved, fmt.Errorf("exact historical reply receipt required")
+		}
+		for _, comment := range matchingReplies(ev, i) {
+			if githubID(comment, "id") == githubID(saved.Result, "id") {
+				return "completed", saved, nil
+			}
+		}
 		return "unknown", saved, fmt.Errorf("current reply does not match its historical receipt")
 	}
+	state, _, err := r.reconcileIntent(ctx, i)
 	return state, saved, err
 }
 func (r *Runtime) validateCleanup(ctx context.Context, p Plan, initial, live Snapshot, c *Cleanup) error {
@@ -1039,6 +1066,18 @@ func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.Actio
 	}
 	if name == "review_request_inspect" || name == "reply_inspect" {
 		return "no_effect", out, nil
+	}
+	if name == "reply_dispose" {
+		l, err := r.ledger()
+		if err != nil {
+			return "unknown", out, err
+		}
+		defer l.Close()
+		i, err := l.Intent(ctx, p.LogicalRun, in.Intent)
+		if err != nil {
+			return "unknown", out, err
+		}
+		return r.reconcileReplyDisposition(ctx, l, i, ac, in)
 	}
 	if name == "review_request_dispose" {
 		l, err := r.ledger()
