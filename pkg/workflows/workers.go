@@ -21,42 +21,44 @@ type WorkerAccess struct {
 }
 
 type Worker struct {
-	MaxWorkers        int           `json:"max_workers"`
-	CreatorInvocation string        `json:"creator_invocation,omitempty"`
-	ToolGrants        []ToolGrant   `json:"mcp_grants"`
-	FailureGeneration int64         `json:"failure_generation,omitempty"`
-	FailureClass      string        `json:"failure_class,omitempty"`
-	Access            WorkerAccess  `json:"access"`
-	MaxQueued         int           `json:"max_queued"`
-	MaxDepth          int           `json:"max_depth"`
-	TurnDuration      time.Duration `json:"turn_duration"`
-	MaxOutput         int           `json:"max_output"`
-	ID                string        `json:"id"`
-	RunID             string        `json:"run_id"`
-	ParentID          string        `json:"parent_id,omitempty"`
-	Role              string        `json:"role"`
-	Status            string        `json:"status"`
-	SessionID         string        `json:"session_id,omitempty"`
-	Tools             []string      `json:"tools"`
-	Remaining         int           `json:"remaining_turns"`
-	Depth             int           `json:"depth"`
-	Error             string        `json:"error,omitempty"`
+	FailureAcknowledgement *WorkerFailureAcknowledgement `json:"failure_acknowledgement,omitempty"`
+	MaxWorkers             int                           `json:"max_workers"`
+	CreatorInvocation      string                        `json:"creator_invocation,omitempty"`
+	ToolGrants             []ToolGrant                   `json:"mcp_grants"`
+	FailureGeneration      int64                         `json:"failure_generation,omitempty"`
+	FailureClass           string                        `json:"failure_class,omitempty"`
+	Access                 WorkerAccess                  `json:"access"`
+	MaxQueued              int                           `json:"max_queued"`
+	MaxDepth               int                           `json:"max_depth"`
+	TurnDuration           time.Duration                 `json:"turn_duration"`
+	MaxOutput              int                           `json:"max_output"`
+	ID                     string                        `json:"id"`
+	RunID                  string                        `json:"run_id"`
+	ParentID               string                        `json:"parent_id,omitempty"`
+	Role                   string                        `json:"role"`
+	Status                 string                        `json:"status"`
+	SessionID              string                        `json:"session_id,omitempty"`
+	Tools                  []string                      `json:"tools"`
+	Remaining              int                           `json:"remaining_turns"`
+	Depth                  int                           `json:"depth"`
+	Error                  string                        `json:"error,omitempty"`
 }
 type WorkerMessage struct {
-	Generation   int64         `json:"execution_generation,omitempty"`
-	FailureClass string        `json:"failure_class,omitempty"`
-	QueueTimeMS  int64         `json:"queue_time_ms,omitempty"`
-	ID           string        `json:"id"`
-	WorkerID     string        `json:"worker_id"`
-	RequestID    string        `json:"request_id"`
-	Sequence     int           `json:"sequence"`
-	Status       string        `json:"status"`
-	Prompt       string        `json:"prompt"`
-	Result       SessionResult `json:"result,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	EnqueuedAt   time.Time     `json:"enqueued_at"`
-	StartedAt    time.Time     `json:"started_at,omitempty"`
-	FinishedAt   time.Time     `json:"finished_at,omitempty"`
+	FailureAcknowledgement *WorkerFailureAcknowledgement `json:"failure_acknowledgement,omitempty"`
+	Generation             int64                         `json:"execution_generation,omitempty"`
+	FailureClass           string                        `json:"failure_class,omitempty"`
+	QueueTimeMS            int64                         `json:"queue_time_ms,omitempty"`
+	ID                     string                        `json:"id"`
+	WorkerID               string                        `json:"worker_id"`
+	RequestID              string                        `json:"request_id"`
+	Sequence               int                           `json:"sequence"`
+	Status                 string                        `json:"status"`
+	Prompt                 string                        `json:"prompt"`
+	Result                 SessionResult                 `json:"result,omitempty"`
+	Error                  string                        `json:"error,omitempty"`
+	EnqueuedAt             time.Time                     `json:"enqueued_at"`
+	StartedAt              time.Time                     `json:"started_at,omitempty"`
+	FinishedAt             time.Time                     `json:"finished_at,omitempty"`
 }
 type WorkerSpec struct {
 	Owner             string          `json:"-"`
@@ -688,6 +690,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	msg.Generation = origin.Generation
+	w.FailureAcknowledgement = nil
 	runner, _, secrets, err := m.Factory(ctx, w.RunID, w.Role, w.Tools)
 	if err == nil && w.Access.Workspace != "" {
 		runner, err = scopeWorker(runner, w.Role, w.Access.Workspace)
@@ -717,6 +720,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	if w.Remaining <= 0 {
 		_ = tx.Rollback()
 		w.Status = RunStatusNeedsAttention
+		w.FailureAcknowledgement = nil
 		w.Error = "worker turn budget exhausted"
 		_ = m.saveWorker(context.WithoutCancel(ctx), w)
 		return
@@ -882,6 +886,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	current.SessionID = w.SessionID
 	current.Error = w.Error
 	current.FailureClass = msg.FailureClass
+	current.FailureAcknowledgement = nil
 	current.FailureGeneration = msg.Generation
 	if current.Status != "closed" {
 		current.Status = "idle"
