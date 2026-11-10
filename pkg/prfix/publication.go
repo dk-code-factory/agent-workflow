@@ -575,9 +575,7 @@ func (r *Runtime) publishLocked(ctx context.Context, p Plan, in ActionInput) (Ac
 		if outcome == "completed" {
 			return r.completeEffect(ctx, l, i, receipt)
 		}
-		if outcome != "no_effect" {
-			return out, fmt.Errorf("uncertain %s requires read-only reconciliation", i.Kind)
-		}
+		return out, fmt.Errorf("uncertain %s requires read-only reconciliation", i.Kind)
 	}
 	if e = r.publicationGate(ctx, p, i, in.Claim); e != nil {
 		return out, e
@@ -922,6 +920,10 @@ func (r *Runtime) commit(ctx context.Context, p Plan, in ActionInput) (ActionOut
 
 // Read-only probes recover effects for which an engine checkpoint was lost.
 func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.ActionContext, in ActionInput) (string, ActionOutput, error) {
+	r = r.observer(ctx)
+	if err := ctx.Err(); err != nil {
+		return "unknown", output(), err
+	}
 	out := output()
 	p, e := r.plan(in)
 	if e != nil {
@@ -960,6 +962,9 @@ func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.Actio
 			out.Receipt = &receipt
 			out.Settled = true
 			return "completed", out, nil
+		}
+		if status == "dispatched" || status == "unknown" {
+			return "unknown", out, e
 		}
 		return state, out, e
 	}

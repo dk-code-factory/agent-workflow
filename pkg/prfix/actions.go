@@ -23,6 +23,7 @@ type Runtime struct {
 	Now                  func() time.Time
 	PollInterval         time.Duration
 	publicationContended func()
+	observationContext   context.Context
 }
 type ActionInput struct {
 	Worker     string   `json:"worker,omitempty"`
@@ -72,7 +73,18 @@ func (r *Runtime) provider() Provider {
 	}
 	return &GitHub{Root: r.Root}
 }
-func (r *Runtime) ledger() (*Ledger, error) { return OpenLedger(r.Root) }
+func (r *Runtime) ledger() (*Ledger, error) {
+	if r.observationContext != nil {
+		return openLedgerReadOnly(r.observationContext, r.Root)
+	}
+	return OpenLedger(r.Root)
+}
+
+func (r *Runtime) observer(ctx context.Context) *Runtime {
+	observer := *r
+	observer.observationContext = ctx
+	return &observer
+}
 func (r *Runtime) plan(in ActionInput) (Plan, error) {
 	root := filepath.Join(r.Root, ".agent-workflow", "pr-fix", "artifacts")
 	abs, e := filepath.Abs(in.Plan)
@@ -106,6 +118,9 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 		}
 		spec := workflows.ActionSpec[ActionInput, ActionOutput]{Implementation: Implementation + "/" + name, Effect: effect}
 		spec.Bindings = func(ctx context.Context, ac workflows.ActionContext, in ActionInput) (json.RawMessage, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			p, e := r.plan(in)
 			if e != nil {
 				return nil, e
@@ -127,6 +142,10 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 			return workflows.ActionResult[ActionOutput]{Output: out, Evidence: jsonBytes(map[string]string{"artifact": path}), Receipt: jsonBytes(map[string]string{"artifact": path})}, e
 		}
 		spec.ValidateCheckpoint = func(ctx context.Context, ac workflows.ActionContext, cp workflows.ActionCheckpoint[ActionInput, ActionOutput]) error {
+			r := r.observer(ctx)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			var proof struct {
 				Artifact     string `json:"artifact"`
 				ResultDigest string `json:"result_digest"`
@@ -177,6 +196,9 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 			return nil
 		}
 		spec.Reconcile = func(ctx context.Context, ac workflows.ActionContext, cp workflows.ActionCheckpoint[ActionInput, ActionOutput]) (workflows.ActionReconciliation[ActionOutput], error) {
+			if err := ctx.Err(); err != nil {
+				return workflows.ActionReconciliation[ActionOutput]{Outcome: "unknown"}, err
+			}
 			path := r.actionPath(name, ac, cp.Input)
 			var out ActionOutput
 			if e := readJSON(path, &out); e == nil {

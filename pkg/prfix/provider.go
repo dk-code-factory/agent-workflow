@@ -349,6 +349,16 @@ func (g *GitHub) ObserveCI(ctx context.Context, id Identity, head string) (CIObs
 }
 func stringValue(m map[string]any, key string) string { v, _ := m[key].(string); return v }
 func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
+	if i.Kind == "request_review" {
+		state, receipt, err := g.Reconcile(ctx, i)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if state == "completed" {
+			receipt.Evidence = append(receipt.Evidence, "requested set already satisfied; no write")
+			return receipt, nil
+		}
+	}
 	var raw map[string]any
 	id := i.PR
 	method, path := "POST", ""

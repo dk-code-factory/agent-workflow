@@ -33,6 +33,10 @@ if args[:2]==['run','view']:
  sys.stdout.write(''.join(job['name']+'\t'+failed[0]['name']+'\t'+line+'\n' for line in logs.splitlines()))
  sys.exit(0)
 path=next((x for x in args if x.startswith('repos/') or x=='graphql' or x=='user'),None)
+if os.environ.get('PRFIX_FAKE_REQUESTS'):
+ with open(os.environ['PRFIX_FAKE_REQUESTS'],'a') as calls:
+  method=args[args.index('--method')+1] if '--method' in args else 'GET'
+  calls.write(method+' '+str(path)+'\n')
 if path not in responses:
  print('Unconfigured fake GitHub request: '+str(path),file=sys.stderr);sys.exit(2)
 value=responses[path]

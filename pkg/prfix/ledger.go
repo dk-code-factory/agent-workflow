@@ -74,6 +74,49 @@ func OpenLedger(root string) (*Ledger, error) {
 }
 func (l *Ledger) Close() error { return l.db.Close() }
 
+// Recovery observes an existing ledger without initializing schema or repairing
+// permissions. A missing ledger cannot establish the outcome of an old action.
+func openLedgerReadOnly(ctx context.Context, root string) (*Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(root, ".agent-workflow", "pr-fix", "ledger.sqlite")
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	for probe := filepath.Dir(abs); ; probe = filepath.Dir(probe) {
+		st, err := os.Lstat(probe)
+		if err != nil {
+			return nil, err
+		}
+		if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+			return nil, fmt.Errorf("application directory must be a real directory: %s", probe)
+		}
+		if filepath.Dir(probe) == probe {
+			break
+		}
+	}
+	st, err := os.Lstat(abs)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("ledger must be a regular file")
+	}
+	dsn := (&url.URL{Scheme: "file", Path: abs}).String() + "?mode=ro&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Ledger{db, root}, nil
+}
+
 type sqlRW interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
