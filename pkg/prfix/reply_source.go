@@ -63,14 +63,15 @@ func verifyFeedbackSource(i Intent, ev PREvidence) error {
 			}
 			comments, _ := thread["comments"].(map[string]any)
 			nodes, _ := comments["nodes"].([]any)
-			parent, feedback := false, false
+			// The complete REST inventory above binds the feedback to its root.
+			// Capture's first GraphQL comment binds that root to this thread.
+			parent := false
 			for _, raw := range nodes {
 				node, _ := raw.(map[string]any)
 				id := githubID(node, "databaseId")
 				parent = parent || id == stringValue(i.Payload, "comment_id")
-				feedback = feedback || id == source.ID
 			}
-			if parent && feedback {
+			if parent {
 				matches++
 			}
 		}

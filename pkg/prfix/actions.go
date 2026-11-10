@@ -193,7 +193,7 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 			if digest(saved) != digest(cp.Result.Output) {
 				return fmt.Errorf("action checkpoint evidence differs")
 			}
-			if name == "completion" && saved.Ready {
+			if name == "completion" && (saved.Complete || saved.Ready) {
 				p, err := r.plan(cp.Input)
 				if err != nil {
 					return err

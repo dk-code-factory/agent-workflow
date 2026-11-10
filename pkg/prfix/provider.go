@@ -390,7 +390,8 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 		if err != nil {
 			return Receipt{}, err
 		}
-		if ev.Metadata.Head.SHA != i.Head || i.Lease != "" && ev.Metadata.Head.SHA != i.Lease || i.Target != "" && ev.Metadata.Base.SHA != i.Target || i.Branch != "" && ev.Metadata.Head.Ref != i.Branch || i.HeadRepository != "" && ev.Metadata.Head.Repo.FullName != i.HeadRepository {
+		headRepository := strings.ToLower(i.PR.Host + "/" + ev.Metadata.Head.Repo.FullName)
+		if ev.Metadata.Head.SHA != i.Head || i.Lease != "" && ev.Metadata.Head.SHA != i.Lease || i.Target != "" && ev.Metadata.Base.SHA != i.Target || i.Branch != "" && ev.Metadata.Head.Ref != i.Branch || i.HeadRepository != "" && headRepository != i.HeadRepository {
 			return Receipt{}, fmt.Errorf("publication head/target/branch changed before dispatch")
 		}
 		state, receipt, err := g.reconcileObservation(ctx, i, ev)

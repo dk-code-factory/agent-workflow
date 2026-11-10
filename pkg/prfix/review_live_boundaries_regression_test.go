@@ -244,7 +244,7 @@ func TestInlineRecoveryVerifiesLaterFeedbackAndOriginalThread(t *testing.T) {
 	rootComment := map[string]any{"id": 9, "html_url": req.PR + "#discussion_r9", "body": "Original thread root"}
 	feedback := map[string]any{"id": 10, "html_url": req.PR + "#discussion_r10", "body": "A later question", "in_reply_to_id": 9}
 	base.ev.Inline = []map[string]any{rootComment, feedback}
-	base.ev.Threads = []map[string]any{{"id": "original-thread", "comments": map[string]any{"nodes": []any{map[string]any{"databaseId": 9}, map[string]any{"databaseId": 10}}}}}
+	base.ev.Threads = []map[string]any{{"id": "original-thread", "comments": map[string]any{"nodes": []any{map[string]any{"databaseId": 9}}}}}
 	i := Intent{ID: "historical", Kind: "reply_inline", Source: &FeedbackSource{"inline_comment", "10", req.PR + "#discussion_r10", "original-thread"}, PR: id, ActorID: 7, Head: base.ev.Metadata.Head.SHA, Payload: map[string]any{"comment_id": "9", "body": "The historical answer"}, Sources: []string{req.PR + "#discussion_r10"}}
 	receipt := Receipt{ID: i.ID, Kind: i.Kind, PR: req.PR, Head: i.Head, Result: map[string]any{"id": 101}}
 	runtime := &Runtime{Root: root, Provider: &replyRecoveryProvider{base}}
