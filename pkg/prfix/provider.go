@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -545,6 +546,15 @@ func (g *GitHub) reconcileObservation(ctx context.Context, i Intent, ev PREviden
 		}
 		baseline := stringList(before)
 		satisfied := stringValue(i.Before, "satisfied_comment_id")
+		var response DispatchResponse
+		if err := readJSON(g.dispatchResponsePath(i), &response); err == nil {
+			if response.Intent.Fingerprint() != i.Fingerprint() || !numeric(githubID(response.Response, "id")) {
+				return "unknown", Receipt{}, fmt.Errorf("acknowledged reply identity unavailable or changed")
+			}
+			satisfied = githubID(response.Response, "id")
+		} else if !os.IsNotExist(err) {
+			return "unknown", Receipt{}, err
+		}
 		matches := []map[string]any{}
 		for _, c := range matchingReplies(ev, i) {
 			if satisfied != "" && githubID(c, "id") == satisfied || satisfied == "" && !contains(baseline, githubID(c, "id")) {

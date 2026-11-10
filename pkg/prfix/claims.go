@@ -425,6 +425,13 @@ func parseReport(m workflows.WorkerMessage) (Report, error) {
 	if d.Decode(&extra) != io.EOF {
 		return report, fmt.Errorf("one original JSON report required")
 	}
+	ids := map[string]bool{}
+	for _, finding := range report.Findings {
+		if ids[finding.ID] {
+			return report, fmt.Errorf("duplicate finding ID %q in original report", finding.ID)
+		}
+		ids[finding.ID] = true
+	}
 	return report, nil
 }
 func checklistPrompt(assignment []byte, o Occurrence, round int) string {
