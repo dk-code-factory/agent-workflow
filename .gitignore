@@ -11,3 +11,6 @@ __pycache__/
 /ui/playwright-report/
 /ui/.verification-tmp/
 /ui/public/packed/
+
+# Prepared PR-fix plans contain private assignments and configuration.
+/workflows/.pr-fix/

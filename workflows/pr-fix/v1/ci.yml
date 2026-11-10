@@ -1,0 +1,41 @@
+name: PR fix exact-head CI and bounded repair v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      cycle: {type: string, required: true}
+      occurrence: {type: string, required: true}
+jobs:
+  observe:
+    outputs:
+      repair: ${{ steps.observe.outputs.repair }}
+      deferred: ${{ steps.observe.outputs.deferred }}
+    steps:
+      - id: observe
+        uses: action/prfix_ci
+        with: {plan: '${{ inputs.plan }}', cycle: '${{ inputs.cycle }}', occurrence: '${{ inputs.occurrence }}'}
+  classify:
+    needs: observe
+    if: ${{ not needs.observe.outputs.deferred }}
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with: {plan: '${{ inputs.plan }}', occurrence: '${{ inputs.occurrence }}', cycle: '${{ inputs.cycle }}'}
+  classify_result:
+    needs: [observe, classify]
+    if: ${{ not needs.observe.outputs.deferred }}
+    outputs:
+      repair: ${{ steps.classify.outputs.repair }}
+    steps:
+      - id: classify
+        uses: action/prfix_ci_classify
+        with: {plan: '${{ inputs.plan }}', claim: '${{ needs.classify.outputs.claim }}'}
+  repair_budget:
+    needs: [observe, classify_result]
+    if: ${{ needs.classify_result.outputs.repair }}
+    steps:
+      - uses: action/prfix_reserve
+        with: {plan: '${{ inputs.plan }}', kind: ci_repair, cycle: '${{ inputs.cycle }}', occurrence: '${{ inputs.occurrence }}'}
+  repair:
+    needs: [classify_result, repair_budget]
+    if: ${{ needs.classify_result.outputs.repair }}
+    uses: workflows/pr-fix/v1/ci-repair.yml
+    with: {plan: '${{ inputs.plan }}', occurrence: ci_repair, cycle: '${{ inputs.cycle }}'}

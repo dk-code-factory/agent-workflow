@@ -1,0 +1,24 @@
+name: PR fix live selected-plan completion v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      cycle: {type: string, required: true}
+    outputs:
+      complete: {value: '${{ jobs.live.outputs.complete }}'}
+      ready: {value: '${{ jobs.live.outputs.ready }}'}
+      report: {value: '${{ jobs.live.outputs.report }}'}
+jobs:
+  managed:
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with: {plan: '${{ inputs.plan }}', occurrence: completion, cycle: '${{ inputs.cycle }}'}
+  live:
+    needs: managed
+    outputs:
+      complete: ${{ steps.live.outputs.complete }}
+      ready: ${{ steps.live.outputs.ready }}
+      report: ${{ steps.live.outputs.report }}
+    steps:
+      - id: live
+        uses: action/prfix_completion
+        with: {plan: '${{ inputs.plan }}', claim: '${{ needs.managed.outputs.claim }}', cycle: '${{ inputs.cycle }}'}

@@ -1,0 +1,29 @@
+name: PR fix verified reply reassessment v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      intent: {type: object, required: true}
+jobs:
+  inspect:
+    steps:
+      - uses: action/prfix_reply_inspect
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+  reassess:
+    needs: inspect
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with:
+      plan: ${{ inputs.plan }}
+      occurrence: reply_recovery
+      cycle: reply-recovery
+      payload: ${{ inputs.intent.id }}
+  disposition:
+    needs: reassess
+    steps:
+      - uses: action/prfix_reply_dispose
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+          claim: ${{ needs.reassess.outputs.claim }}

@@ -1,0 +1,19 @@
+name: PR fix bounded CI repair v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      occurrence: {type: string, required: true}
+      cycle: {type: string, required: true}
+      payload: {type: string, default: ''}
+    outputs:
+      settled: {value: '${{ jobs.leaf.outputs.settled }}'}
+      claim: {value: '${{ jobs.leaf.outputs.claim }}'}
+jobs:
+  leaf:
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with:
+      plan: ${{ inputs.plan }}
+      occurrence: ${{ inputs.occurrence }}
+      cycle: ${{ inputs.cycle }}
+      payload: ${{ inputs.payload }}

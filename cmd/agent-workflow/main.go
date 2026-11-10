@@ -679,6 +679,9 @@ func initialize(root string, out io.Writer) error {
 	}
 	created, preserved := 0, 0
 	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
 		data, err := workflowassets.Examples.ReadFile("workflows/" + entry.Name())
 		if err != nil {
 			return err
