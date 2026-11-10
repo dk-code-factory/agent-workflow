@@ -151,6 +151,35 @@ func (r *Runtime) reports(ctx context.Context, p Plan) ([]retainedReport, error)
 func (r *Runtime) coverage(ctx context.Context, p Plan, s Snapshot) (bool, []string, error) {
 	return r.coverageExcluding(ctx, p, s, "")
 }
+
+func (r *Runtime) selectedOccurrences(ctx context.Context, p Plan) (map[string]bool, map[string]bool, string, error) {
+	l, err := r.ledger()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer l.Close()
+	cycle := ""
+	err = l.db.QueryRowContext(ctx, "SELECT operation FROM reservations WHERE run=? AND kind='review' ORDER BY rowid DESC LIMIT 1", p.LogicalRun).Scan(&cycle)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, "", err
+	}
+	selected, hooks := map[string]bool{}, map[string]bool{}
+	for _, phase := range []string{"tasks", "finalizers", "before_cycle", "after_cycle"} {
+		for _, group := range p.Groups[phase] {
+			for _, id := range group {
+				if phase == "before_cycle" || phase == "after_cycle" {
+					hooks[id] = true
+					if cycle == "" {
+						continue
+					}
+				}
+				selected[id] = true
+			}
+		}
+	}
+	return selected, hooks, cycle, nil
+}
+
 func (r *Runtime) coverageExcluding(ctx context.Context, p Plan, s Snapshot, ignoreEffect string) (bool, []string, error) {
 	reports, e := r.reports(ctx, p)
 	if e != nil {
@@ -189,30 +218,9 @@ func (r *Runtime) coverageExcluding(ctx context.Context, p Plan, s Snapshot, ign
 			}
 		}
 	}
-	hookCycle := ""
-	l, err := r.ledger()
+	selected, hooks, hookCycle, err := r.selectedOccurrences(ctx, p)
 	if err != nil {
 		return false, nil, err
-	}
-	err = l.db.QueryRowContext(ctx, "SELECT operation FROM reservations WHERE run=? AND kind='review' ORDER BY rowid DESC LIMIT 1", p.LogicalRun).Scan(&hookCycle)
-	l.Close()
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, nil, err
-	}
-	hooks := map[string]bool{}
-	selected := map[string]bool{}
-	for _, phase := range []string{"tasks", "finalizers", "before_cycle", "after_cycle"} {
-		for _, g := range p.Groups[phase] {
-			for _, id := range g {
-				if phase == "before_cycle" || phase == "after_cycle" {
-					hooks[id] = true
-					if hookCycle == "" {
-						continue
-					}
-				}
-				selected[id] = true
-			}
-		}
 	}
 	for _, o := range p.Occurrences {
 		if !selected[o.ID] || !o.Required {
@@ -285,7 +293,7 @@ func (r *Runtime) coverageExcluding(ctx context.Context, p Plan, s Snapshot, ign
 	}
 	blockers = append(blockers, replyBlockers...)
 
-	l, e = r.ledger()
+	l, e := r.ledger()
 	if e != nil {
 		return false, nil, e
 	}
@@ -561,10 +569,14 @@ func (r *Runtime) completion(ctx context.Context, p Plan, in ActionInput) (Actio
 	}
 	// The live gate does not secretly select CI when it was omitted. It only
 	// accepts retained controller-observed exact-head evidence for selected CI.
+	selected, _, _, e := r.selectedOccurrences(ctx, p)
+	if e != nil {
+		return out, e
+	}
 	ciNeedsRefresh := false
 	ciSelected := false
 	for _, o := range p.Occurrences {
-		ciSelected = ciSelected || o.Kind == "ci"
+		ciSelected = ciSelected || selected[o.ID] && o.Kind == "ci"
 	}
 	if ciSelected {
 		path, e := r.latestCI(ctx, p, s.Head)

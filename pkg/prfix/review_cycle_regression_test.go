@@ -316,7 +316,7 @@ func TestAlreadyRequestedReviewersSendNoWrite(t *testing.T) {
 	t.Setenv("PRFIX_FAKE_REQUESTS", log)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	intent := Intent{ID: "request", Kind: "request_review", PR: id, Head: provider.ev.Metadata.Head.SHA, Payload: map[string]any{"reviewers": []any{"reviewer"}, "team_reviewers": []any{"maintainers"}}}
+	intent := Intent{ID: "request", Kind: "request_review", PR: id, ActorID: provider.ev.ViewerID, Head: provider.ev.Metadata.Head.SHA, Payload: map[string]any{"reviewers": []any{"reviewer"}, "team_reviewers": []any{"maintainers"}}}
 	receipt, err := (&GitHub{Root: root}).Execute(ctx, intent)
 	if err != nil || receipt.ID != intent.ID || !contains(receipt.Evidence, "requested set already satisfied; no write") {
 		t.Fatal("already-satisfied request was not reconciled", receipt, err)

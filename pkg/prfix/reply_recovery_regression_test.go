@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -51,8 +52,8 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 	provider := &replyRecoveryProvider{base}
 	replacementAuth := Authorization{"replacement-user-request", "Replace the missing answer on this PR with the same verified answer.", "chat:replacement"}
 	req.Authorizations = map[string]Authorization{"iterate": {"initial-user-request", "Fix and publish this PR.", "chat:initial"}}
-	req.Options["tasks"] = []any{"dk-workflows:dk-pr-description"}
-	req.Options["finalizers"] = []any{"dk-workflows:dk-pr-publish"}
+	req.Options["tasks"] = []any{"dk-workflows:dk-pr-feedback-read"}
+	req.Options["finalizers"] = []any{"dk-workflows:dk-pr-feedback-reply", "dk-workflows:dk-pr-publish"}
 	prepared, err := Prepare(context.Background(), root, provider, req)
 	if err != nil {
 		t.Fatal(err)
@@ -82,15 +83,23 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 			}
 		}
 	}, reportHook: func(o Occurrence, s Snapshot, report *Report) {
-		if o.Kind != "description" && o.ID != "reply_recovery" {
+		if o.Kind == "inspection" {
+			report.ReplyObligations = []ReplyObligation{{ID: "feedback", Text: "Please explain this change.", Required: true, Reason: "Concrete question.", Sources: []string{s.Evidence}}}
+		}
+		if o.ID != "reply_recovery" {
 			return
 		}
-		i := Intent{ID: "original", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}
-		if o.ID == "reply_recovery" {
-			i.ID = "replacement"
-			i.Replaces = &ReplyReplacement{Run: observed.Observation.Intent.Run, ID: observed.Observation.Intent.ID, Inspection: observed.Path, Observation: observed.Fingerprint, Decision: "replacement_required", Reason: "Current code and complete discussion still require the answer; the verified historical comment is unavailable.", Sources: append(append([]string{}, observed.Observation.Intent.Sources...), observed.Path), Authorization: replacementAuth}
-		}
+		i := Intent{ID: "replacement", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}
+		i.Replaces = &ReplyReplacement{Run: observed.Observation.Intent.Run, ID: observed.Observation.Intent.ID, Inspection: observed.Path, Observation: observed.Fingerprint, Decision: "replacement_required", Reason: "Current code and complete discussion still require the answer; the verified historical comment is unavailable.", Sources: append(append([]string{}, observed.Observation.Intent.Sources...), observed.Path), Authorization: replacementAuth}
 		report.Operations = []Intent{i}
+	}, reportReplies: func(o Occurrence, s Snapshot, obligations []retainedObligation, report *Report) {
+		if o.ID == "reply_recovery" || o.Kind != "reply" {
+			return
+		}
+		for _, item := range obligations {
+			report.Responses = append(report.Responses, ReplyResponse{ID: item.Obligation.ID, Outcome: "reply", Reason: "Verified answer.", Sources: []string{item.Original}, Operation: "original"})
+		}
+		report.Operations = []Intent{{ID: "original", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}}
 	}}
 	ex, _, runtime := executeFixture(t, root, provider, prepared, session)
 	p, err := ReadPlan(prepared.Plan)
@@ -126,6 +135,13 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 	if base.writes != 1 {
 		t.Fatal("preparation published", base.writes)
 	}
+	original, receipt, err := completedReply(ctx, l, p.LogicalRun, "original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, _, err := runtime.reconcileCompletedIntent(ctx, l, original); err == nil || state != "unknown" {
+		t.Fatal("unpublished replacement settled the original", state, err)
+	}
 	other := replacement
 	other.ID = "evade-disposition"
 	if err = l.PrepareIntent(ctx, p, other, "fixture"); err == nil {
@@ -155,6 +171,69 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 	}
 	if len(base.ev.Comments) != 1 || stringValue(base.ev.Comments[0], "body") != "The exact supported answer." {
 		t.Fatal("replacement not visible", base.ev.Comments)
+	}
+	state, saved, err := runtime.reconcileCompletedIntent(ctx, l, original)
+	if err != nil || state != "completed" || digest(saved) != digest(receipt) {
+		t.Fatal("visible linked replacement did not settle original with its historical receipt", state, saved, err)
+	}
+	reports, err := runtime.reports(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := runtime.live(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockers, err := runtime.replyCoverage(ctx, p, snapshot, reports)
+	if err != nil || len(blockers) != 0 {
+		t.Fatal("linked replacement did not settle required original answer", blockers, err)
+	}
+	t.Run("invalid historical receipt", func(t *testing.T) {
+		raw, err := os.ReadFile(originalReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.WriteFile(originalReceipt, raw, 0600); err != nil {
+				t.Error(err)
+			}
+		}()
+		changed := receipt
+		changed.ID = "another-operation"
+		if err := os.WriteFile(originalReceipt, jsonBytes(changed), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if state, _, err := runtime.reconcileCompletedIntent(ctx, l, original); err == nil || state != "unknown" {
+			t.Fatal("linked replacement accepted an invalid historical receipt", state, err)
+		}
+	})
+	visible := base.ev.Comments[0]
+	for _, change := range []string{"missing", "edited", "wrong actor", "wrong viewer"} {
+		t.Run(change, func(t *testing.T) {
+			base.mu.Lock()
+			comment := jsonObject(visible)
+			base.ev.Comments = []map[string]any{comment}
+			switch change {
+			case "missing":
+				base.ev.Comments = []map[string]any{}
+			case "edited":
+				comment["body"] = "A changed answer."
+			case "wrong actor":
+				comment["user"] = map[string]any{"id": 8, "login": "other"}
+			case "wrong viewer":
+				base.ev.ViewerID = 8
+			}
+			base.mu.Unlock()
+			defer func() {
+				base.mu.Lock()
+				base.ev.Comments = []map[string]any{visible}
+				base.ev.ViewerID = original.ActorID
+				base.mu.Unlock()
+			}()
+			if state, _, err := runtime.reconcileCompletedIntent(ctx, l, original); err == nil || state != "unknown" {
+				t.Fatal("unverified linked replacement settled original", state, err)
+			}
+		})
 	}
 	// A stale disposition cannot authorize another write after new discussion.
 	base.mu.Lock()

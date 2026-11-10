@@ -15,7 +15,7 @@ import (
 )
 
 const Version = "5.2.0"
-const Implementation = "prfix-v6-dk-workflows-5.2.0"
+const Implementation = "prfix-v7-dk-workflows-5.2.0"
 
 type Identity struct {
 	URL        string `json:"url"`

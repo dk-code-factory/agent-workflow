@@ -250,6 +250,67 @@ func linkReplyReplacement(ctx context.Context, tx sqlRW, i Intent) error {
 	return err
 }
 
+func (r *Runtime) verifyLinkedReplyReplacement(ctx context.Context, l *Ledger, original Intent) (bool, error) {
+	rows, err := l.db.QueryContext(ctx, "SELECT e.run,e.id,e.state,r.observation FROM reply_replacements r JOIN effects e ON e.run=r.replacement_run AND e.id=r.replacement_id WHERE r.original_run=? AND r.original_id=? AND e.state<>'superseded'", original.Run, original.ID)
+	if err != nil {
+		return false, err
+	}
+	type link struct{ run, id, state, observation string }
+	links := []link{}
+	for rows.Next() {
+		var linked link
+		if err = rows.Scan(&linked.run, &linked.id, &linked.state, &linked.observation); err != nil {
+			break
+		}
+		links = append(links, linked)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil || len(links) == 0 {
+		return false, err
+	}
+	if len(links) != 1 || links[0].state != "completed" {
+		return false, fmt.Errorf("linked replacement requires reconciliation")
+	}
+	if _, _, err := completedReply(ctx, l, original.Run, original.ID); err != nil {
+		return false, err
+	}
+	linked := links[0]
+	replacement, receipt, err := completedReply(ctx, l, linked.run, linked.id)
+	if err != nil {
+		return false, err
+	}
+	d := replacement.Replaces
+	if d == nil || d.Run != original.Run || d.ID != original.ID || d.Observation != linked.observation || d.Decision != "replacement_required" || replacement.PR != original.PR || replacement.Kind != original.Kind || replacement.ActorID != original.ActorID || stringValue(replacement.Payload, "comment_id") != stringValue(original.Payload, "comment_id") {
+		return false, fmt.Errorf("exact historical reply replacement link required")
+	}
+	current, err := r.inspectReply(ctx, replacement, receipt)
+	if err != nil {
+		return false, err
+	}
+	if current.Status != "visible" {
+		return false, fmt.Errorf("linked replacement answer is not currently visible")
+	}
+	return true, nil
+}
+
+func (r *Runtime) verifyReplySettlement(ctx context.Context, l *Ledger, original Intent) (bool, error) {
+	settled, dispositionErr := r.verifyReplyDisposition(ctx, l, original)
+	if settled {
+		return true, nil
+	}
+	settled, replacementErr := r.verifyLinkedReplyReplacement(ctx, l, original)
+	if settled {
+		return true, nil
+	}
+	if dispositionErr != nil {
+		return false, dispositionErr
+	}
+	return false, replacementErr
+}
+
 func (r *Runtime) verifyReplyReplacement(ctx context.Context, p Plan, i Intent) error {
 	i.Run = p.LogicalRun
 	i.PR = p.Identity

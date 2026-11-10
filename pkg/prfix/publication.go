@@ -747,7 +747,7 @@ func (r *Runtime) reconcileCompletedIntent(ctx context.Context, l *Ledger, i Int
 		return "unknown", saved, err
 	}
 	if contains([]string{"reply", "reply_inline"}, i.Kind) {
-		if settled, err := r.verifyReplyDisposition(ctx, l, i); settled || err != nil {
+		if settled, err := r.verifyReplySettlement(ctx, l, i); settled || err != nil {
 			if err != nil {
 				return "unknown", saved, err
 			}

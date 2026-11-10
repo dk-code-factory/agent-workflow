@@ -52,7 +52,7 @@ func prepareReplyAlias(ctx context.Context, tx sqlRW, i Intent) (bool, error) {
 		if err = json.Unmarshal([]byte(raw), &old); err != nil {
 			break
 		}
-		if replyIdentity(old) == replyIdentity(i) {
+		if state != "superseded" && replyIdentity(old) == replyIdentity(i) {
 			if old.Run != i.Run && (state != "completed" || i.ActorID <= 0) {
 				err = fmt.Errorf("identical reply belongs to retained run %s operation %s; reconcile it first", old.Run, old.ID)
 				break

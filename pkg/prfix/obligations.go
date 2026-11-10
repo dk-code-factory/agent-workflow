@@ -124,7 +124,7 @@ func (r *Runtime) replyCoverage(ctx context.Context, p Plan, s Snapshot, reports
 		if e = readJSON(path, &receipt); e != nil {
 			return nil, e
 		}
-		if settled, err := r.verifyReplyDisposition(ctx, l, intent); settled || err != nil {
+		if settled, err := r.verifyReplySettlement(ctx, l, intent); settled || err != nil {
 			if err != nil {
 				blockers = append(blockers, "feedback "+obligation.ID+": "+err.Error())
 			}
