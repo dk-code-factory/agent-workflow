@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +161,62 @@ func TestFailureAcknowledgementRejectsInvocationJournalFailures(t *testing.T) {
 				t.Fatal("invocation checkpoint failure lost its finalization barrier", err)
 			}
 		})
+	}
+}
+
+func TestFailureAcknowledgementRejectsInvocationFilesystemFailures(t *testing.T) {
+	for _, outputLimit := range []int{0, 1} {
+		t.Run(fmt.Sprint(outputLimit), func(t *testing.T) {
+			session := &invocationFailureSession{failedNativeSession: failedNativeSession{maxOutput: outputLimit}}
+			m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+				if err := os.WriteFile(filepath.Join(m.Store.Dir, "invocations"), []byte("obstructed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			ctx := failureTestContext(t)
+			var count int
+			if err := m.Store.db.QueryRowContext(ctx, "SELECT count(*) FROM invocations WHERE run_id=?", req.RunID).Scan(&count); err != nil || count != 0 {
+				t.Fatal("filesystem failure unexpectedly reached invocation admission", count, err)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("invocation filesystem failure was acknowledged")
+			}
+			if msg.UnsafeFailureClass != "storage" {
+				t.Fatal("invocation filesystem failure lost its storage identity", msg)
+			}
+			if outputLimit == 1 {
+				if msg.FailureClass != "limit" {
+					t.Fatal("output validation did not replace the diagnostic", msg)
+				}
+			} else if msg.FailureClass != "execution" || !strings.HasPrefix(msg.Error, "mkdir ") {
+				t.Fatal("filesystem failure diagnostic changed", msg)
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed filesystem failure evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("invocation filesystem failure lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
+func TestFailureAcknowledgementAllowsOrdinaryInputPathFailures(t *testing.T) {
+	_, inputErr := os.ReadFile(filepath.Join(t.TempDir(), "missing-input"))
+	if inputErr == nil {
+		t.Fatal("missing input unexpectedly exists")
+	}
+	m, req, msg := failureFixtureWithSession(t, &failedNativeSession{failure: inputErr})
+	ctx := failureTestContext(t)
+	if msg.UnsafeFailureClass != "" {
+		t.Fatal("ordinary input failure became runtime state storage failure", msg)
+	}
+	if _, err := m.AcknowledgeFailure(ctx, req); err != nil {
+		t.Fatal("ordinary input failure was not acknowledgeable", err)
+	}
+	if err := m.StopRun(ctx, req.RunID); err != nil {
+		t.Fatal("acknowledged input failure retained its finalization barrier", err)
 	}
 }
 

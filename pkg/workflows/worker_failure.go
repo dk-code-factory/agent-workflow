@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -165,6 +166,10 @@ func unsafeWorkerFailureClass(err error) string {
 	}
 	if class := unsafeFailureClass(err); class != "" {
 		return class
+	}
+	var storageErr *runtimeexec.StorageError
+	if errors.As(err, &storageErr) {
+		return "storage"
 	}
 	text := strings.ToLower(err.Error())
 	if strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
