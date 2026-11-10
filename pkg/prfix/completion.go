@@ -164,12 +164,24 @@ func (r *Runtime) selectedOccurrences(ctx context.Context, p Plan) (map[string]b
 		return nil, nil, "", err
 	}
 	selected, hooks := map[string]bool{}, map[string]bool{}
+	reviewers := map[string]bool{}
+	for _, o := range p.Occurrences {
+		reviewers[o.ID] = o.Review
+	}
+	hasReview := false
+	for _, phase := range []string{"tasks", "finalizers"} {
+		for _, group := range p.Groups[phase] {
+			for _, id := range group {
+				hasReview = hasReview || reviewers[id]
+			}
+		}
+	}
 	for _, phase := range []string{"tasks", "finalizers", "before_cycle", "after_cycle"} {
 		for _, group := range p.Groups[phase] {
 			for _, id := range group {
 				if phase == "before_cycle" || phase == "after_cycle" {
 					hooks[id] = true
-					if cycle == "" {
+					if !hasReview || cycle == "" {
 						continue
 					}
 				}
@@ -459,9 +471,13 @@ func (r *Runtime) reviewCurrent(ctx context.Context, p Plan, s Snapshot) (bool, 
 	for _, rr := range reports {
 		latest[rr.Occurrence.ID] = rr
 	}
+	selected, hooks, cycle, e := r.selectedOccurrences(ctx, p)
+	if e != nil {
+		return false, nil, e
+	}
 	missing := []string{}
 	for _, o := range p.Occurrences {
-		if !o.Review || !o.Required {
+		if !selected[o.ID] || !o.Review || !o.Required {
 			continue
 		}
 		rr, ok := latest[o.ID]
@@ -473,7 +489,7 @@ func (r *Runtime) reviewCurrent(ctx context.Context, p Plan, s Snapshot) (bool, 
 		if e = readJSON(rr.Claim.Snapshot, &original); e != nil {
 			return false, nil, e
 		}
-		if occurrenceFingerprint(original, o) != occurrenceFingerprint(s, o) {
+		if occurrenceFingerprint(original, o) != occurrenceFingerprint(s, o) || hooks[o.ID] && rr.Claim.Cycle != cycle {
 			missing = append(missing, o.ID)
 		}
 	}
