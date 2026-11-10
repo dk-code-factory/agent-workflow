@@ -1,0 +1,19 @@
+name: PR fix independent finding verification v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      cycle: {type: string, required: true}
+jobs:
+  candidates:
+    outputs:
+      invoke: ${{ steps.candidates.outputs.invoke }}
+    steps:
+      - id: candidates
+        uses: action/prfix_candidates
+        with: {plan: '${{ inputs.plan }}'}
+  verify:
+    needs: candidates
+    if: ${{ needs.candidates.outputs.invoke }}
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with: {plan: '${{ inputs.plan }}', cycle: '${{ inputs.cycle }}', occurrence: finding_verification}

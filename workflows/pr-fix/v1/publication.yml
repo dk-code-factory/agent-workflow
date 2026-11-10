@@ -1,0 +1,43 @@
+name: PR fix one guarded publication v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      cycle: {type: string, required: true}
+      intent: {type: object, required: true}
+jobs:
+  inspect:
+    steps:
+      - uses: action/prfix_review_request_inspect
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+  audience:
+    needs: inspect
+    uses: workflows/pr-fix/v1/occurrence.yml
+    with:
+      plan: ${{ inputs.plan }}
+      occurrence: audience
+      cycle: ${{ inputs.cycle }}
+      payload: ${{ inputs.intent.id }}
+  dispatch:
+    needs: audience
+    steps:
+      - uses: action/prfix_review_request_dispose
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+          claim: ${{ needs.audience.outputs.claim }}
+      - id: publish
+        uses: action/prfix_publish
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+          claim: ${{ needs.audience.outputs.claim }}
+      - id: receipt
+        if: ${{ not steps.publish.outputs.deferred }}
+        uses: action/prfix_receipt
+        with:
+          plan: ${{ inputs.plan }}
+          intent: ${{ inputs.intent.id }}
+          receipt: ${{ steps.publish.outputs.receipt }}

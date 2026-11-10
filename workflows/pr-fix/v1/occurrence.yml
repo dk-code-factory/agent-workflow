@@ -1,0 +1,21 @@
+name: PR fix bounded occurrence v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      occurrence: {type: string, required: true}
+      cycle: {type: string, required: true}
+      payload: {type: string, default: ''}
+    outputs:
+      settled: {value: '${{ jobs.attempt.outputs.settled }}'}
+      claim: {value: '${{ jobs.attempt.outputs.claim }}'}
+jobs:
+  attempt:
+    uses: workflows/pr-fix/v1/attempt.yml
+    repeat: {max-attempts: 2, until: '${{ iteration.outputs.settled }}'}
+    with:
+      plan: ${{ inputs.plan }}
+      occurrence: ${{ inputs.occurrence }}
+      cycle: ${{ inputs.cycle }}
+      payload: ${{ inputs.payload }}
+      attempt: ${{ iteration.number }}
