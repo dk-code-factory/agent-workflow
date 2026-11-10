@@ -110,3 +110,90 @@ func TestPRFixPreparedRunInheritsConfigurationAndHonorsOverride(t *testing.T) {
 		})
 	}
 }
+
+func TestPRFixPreparedConfigurationMatchesControllerAdmission(t *testing.T) {
+	for _, grants := range []bool{false, true} {
+		name := "empty catalog"
+		if grants {
+			name = "granted catalog"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ref := "workflows/prepared.yml"
+			if err := os.WriteFile(filepath.Join(root, ref), []byte("jobs: {gate: {steps: [{uses: input/wait, with: {prompt: fixture, evidence-id: roles-proof}}]}}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			config := filepath.Join(root, "agents.yml")
+			text := "agents:\n  fixture:\n    provider: claude-cli\n    command: \"false\"\n"
+			if grants {
+				text = "agents:\n  fixture:\n    provider: claude-sdk\n    bridge: unused-fixture.mjs\n    authentication: {mode: native, credential-env: AW_PRFIX_FIXTURE_TOKEN}\n    mcp-grants: [{server: engine, tool: worker_status}]\n"
+			}
+			if err := os.WriteFile(config, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			preparedConfig, err := loadPRFixConfig(ctx, root, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preparedRoles, err := json.Marshal(preparedConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			controllerConfig, err := clirunner.LoadConfig(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			executor := &workflows.Executor{WorkspaceDir: root, Store: store, MaxParallel: 4, Agents: &clirunner.Runner{Config: controllerConfig, Workspace: root}}
+			run, err := executor.Prepare(ctx, workflows.RunRequest{Ref: ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, admitted, err := store.Load(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(admitted.Roles, preparedRoles) {
+				t.Fatal("prepared roles differ from production controller admission")
+			}
+		})
+	}
+}
+
+func TestPRFixJSONRejectsOversizedAndTrailingDocuments(t *testing.T) {
+	const limit = 4 << 20
+	for _, tc := range []struct {
+		name, input, wantError string
+	}{
+		{"single document", `{}`, ""},
+		{"exact limit", `{}` + strings.Repeat(" ", limit-2), ""},
+		{"two documents", `{} {}`, "one JSON document"},
+		{"second document beyond limit", `{}` + strings.Repeat(" ", limit-2) + `{}`, "exceeds 4 MiB"},
+		{"whitespace beyond limit", `{}` + strings.Repeat(" ", limit-1), "exceeds 4 MiB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "input.json")
+			if err := os.WriteFile(path, []byte(tc.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			err := readPRFixJSON(path, &out)
+			if tc.wantError == "" {
+				if err != nil || out == nil || len(out) != 0 {
+					t.Fatal("valid document rejected", out, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("expected %q, got %v", tc.wantError, err)
+			}
+		})
+	}
+}

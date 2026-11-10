@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -127,7 +128,7 @@ func prFixCommand(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !filepath.IsAbs(configAbs) {
 		configAbs = filepath.Join(root, configAbs)
 	}
-	cfg, e := clirunner.LoadConfig(configAbs)
+	cfg, e := loadPRFixConfig(ctx, root, configAbs)
 	if e != nil {
 		return e
 	}
@@ -319,13 +320,34 @@ func prFixCommand(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 	}
 }
+func loadPRFixConfig(ctx context.Context, root, path string) (clirunner.Config, error) {
+	cfg, err := clirunner.LoadConfig(path)
+	if err != nil {
+		return cfg, err
+	}
+	roles, err := (&clirunner.Runner{Config: cfg, Workspace: root}).AdmittedRoles(ctx)
+	if err != nil {
+		return cfg, err
+	}
+	err = json.Unmarshal(roles, &cfg)
+	return cfg, err
+}
+
 func readPRFixJSON(path string, out any) error {
 	f, e := os.Open(path)
 	if e != nil {
 		return e
 	}
 	defer f.Close()
-	d := json.NewDecoder(io.LimitReader(f, 4<<20))
+	const limit = 4 << 20
+	data, e := io.ReadAll(io.LimitReader(f, limit+1))
+	if e != nil {
+		return e
+	}
+	if len(data) > limit {
+		return fmt.Errorf("JSON input exceeds 4 MiB")
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if e = d.Decode(out); e != nil {
 		return e
