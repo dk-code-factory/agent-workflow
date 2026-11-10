@@ -13,7 +13,7 @@ func TestGitHubIntegerIDsSurviveCreationAndStoredEvidence(t *testing.T) {
 	const parent = "3123456789"
 	const created = "9007199254740993"
 	body := "The exact correction is verified."
-	old := map[string]any{"id": json.Number("4123456789"), "in_reply_to_id": json.Number(parent), "body": body, "user": map[string]any{"login": "author", "id": actor}}
+	old := map[string]any{"id": json.Number("4123456789"), "in_reply_to_id": json.Number(parent), "body": "The previous answer.", "user": map[string]any{"login": "author", "id": actor}}
 	fresh := map[string]any{"id": json.Number(created), "in_reply_to_id": json.Number(parent), "body": body, "user": map[string]any{"login": "author", "id": actor}}
 	responses := map[string]any{
 		"repos/owner/repo/pulls/1/comments/" + parent + "/replies": fresh,
@@ -21,7 +21,7 @@ func TestGitHubIntegerIDsSurviveCreationAndStoredEvidence(t *testing.T) {
 		"user":                                                     map[string]any{"login": "author", "id": actor},
 		"repos/owner/repo/issues/1/comments?per_page=100":          []any{[]any{}},
 		"repos/owner/repo/pulls/1/reviews?per_page=100":            []any{[]any{}},
-		"repos/owner/repo/pulls/1/comments?per_page=100":           []any{[]any{old, fresh}},
+		"repos/owner/repo/pulls/1/comments?per_page=100":           map[string]any{"__sequence": []any{[]any{[]any{old}}, []any{[]any{old, fresh}}}},
 		"graphql": map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{"totalCount": 0, "nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}}},
 	}
 	fakeGH(t, root, responses)

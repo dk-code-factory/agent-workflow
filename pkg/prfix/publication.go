@@ -177,7 +177,7 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 	if e != nil {
 		return e
 	}
-	rows, e := l.db.QueryContext(ctx, "SELECT run,id,json_extract(intent,'$.kind') FROM effects WHERE json_extract(intent,'$.pr.url')=? AND state IN ('dispatched','unknown')", i.PR.URL)
+	rows, e := l.db.QueryContext(ctx, "SELECT run,id,json_extract(intent,'$.kind') FROM effects WHERE json_extract(intent,'$.pr.url')=? AND (state IN ('dispatched','unknown') OR (?='request_review' AND state='disposed' AND json_extract(intent,'$.kind')='request_review'))", i.PR.URL, i.Kind)
 	if e != nil {
 		l.Close()
 		return e
@@ -253,6 +253,15 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 	}
 	if s.Head != i.Lease || s.Target != i.Target || s.HeadBranch != i.Branch || s.HeadRepository != i.HeadRepository {
 		return fmt.Errorf("live PR head/target/branch lease changed")
+	}
+	if i.ActorID > 0 || i.Kind == "reply" || i.Kind == "reply_inline" {
+		ev, err := readPREvidence(s.Evidence)
+		if err != nil {
+			return err
+		}
+		if i.ActorID <= 0 || ev.ViewerID != i.ActorID {
+			return fmt.Errorf("authenticated publication actor changed after preparation")
+		}
 	}
 	if i.Kind == "push" || i.Kind == "rewrite" {
 		if s.LocalHead != i.Head {
@@ -531,6 +540,27 @@ func verifyThreadAnswer(ev PREvidence, i, reply Intent, receipt Receipt) error {
 }
 
 func numeric(s string) bool { n, e := strconv.ParseUint(s, 10, 64); return e == nil && n > 0 }
+
+func verifyOwnedParent(root, path string, deleted bool) error {
+	root = filepath.Clean(root)
+	for dir := filepath.Dir(filepath.Join(root, path)); ; dir = filepath.Dir(dir) {
+		st, err := os.Lstat(dir)
+		if err != nil {
+			if !deleted || !os.IsNotExist(err) || dir == root {
+				return err
+			}
+		} else if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("owned change ancestor is not a real directory")
+		}
+		if dir == root {
+			return nil
+		}
+		if filepath.Dir(dir) == dir {
+			return fmt.Errorf("owned change escaped repository")
+		}
+	}
+}
+
 func (r *Runtime) publish(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
 	unlock, err := r.lockPublication(ctx)
 	if err != nil {
@@ -837,8 +867,7 @@ func (r *Runtime) commit(ctx context.Context, p Plan, in ActionInput) (ActionOut
 		if path == "" || filepath.IsAbs(path) || filepath.ToSlash(filepath.Clean(path)) != path || strings.HasPrefix(path, "../") || path == ".." || path == "." || strings.HasPrefix(path, ".git/") || path == ".git" || strings.HasPrefix(path, ".agent-workflow/") || strings.HasPrefix(path, "workflows/.pr-fix/") || seen[path] {
 			return out, fmt.Errorf("invalid or repeated owned change path %q", path)
 		}
-		parentDir, e := filepath.EvalSymlinks(filepath.Dir(filepath.Join(r.Root, path)))
-		if e != nil || parentDir != filepath.Dir(filepath.Join(r.Root, path)) {
+		if e := verifyOwnedParent(r.Root, path, change.After == "deleted"); e != nil {
 			return out, fmt.Errorf("owned change parent must exist without symlink aliases: %s", path)
 		}
 		if len(o.Adapter.Writes) > 0 {

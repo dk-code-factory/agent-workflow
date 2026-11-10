@@ -342,17 +342,50 @@ func TestUncertainReviewRequestNoResendRecoveryAndLostCheckpoint(t *testing.T) {
 	if err != nil || state != "no_effect" {
 		t.Fatal("another action reused a disposition receipt", state, err)
 	}
-	base.mu.Lock()
-	base.ev.Comments = append(base.ev.Comments, map[string]any{"id": 12, "body": "Please request another review."})
-	base.mu.Unlock()
 	intent, err := l.Intent(ctx, p.LogicalRun, "request-once")
 	if err != nil {
 		t.Fatal(err)
 	}
+	newRequest := intent
+	newRequest.ID = "request-under-another-id"
+	if err := l.PrepareIntent(ctx, p, newRequest, "fixture:new-id"); err != nil {
+		t.Fatal(err)
+	}
+	newRequest, err = l.Intent(ctx, p.LogicalRun, newRequest.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.publicationGate(ctx, p, newRequest, disposition.Claim); err == nil || !strings.Contains(err.Error(), "pending request_review") {
+		t.Fatal("disposed unknown delivery allowed a fresh request ID", err)
+	}
+	answer := Intent{ID: "independent-answer", Kind: "reply", ActorID: 7, Head: intent.Head, Lease: intent.Lease, Target: intent.Target, Branch: intent.Branch, HeadRepository: intent.HeadRepository, Sources: []string{p.Snapshot.Evidence}, Payload: map[string]any{"body": "The independently authorized answer."}}
+	if err := l.PrepareIntent(ctx, p, answer, "fixture:answer"); err != nil {
+		t.Fatal(err)
+	}
+	answer, err = l.Intent(ctx, p.LogicalRun, answer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.mu.Lock()
+	base.discussionWrites, base.lose = true, false
+	base.mu.Unlock()
+	answerReceipt, err := provider.Execute(ctx, answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.completeEffect(ctx, l, answer, answerReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.verifyReviewRequestDisposition(ctx, l, intent); err != nil {
+		t.Fatal("independent verified answer invalidated request disposition", err)
+	}
+	base.mu.Lock()
+	base.ev.Comments = append(base.ev.Comments, map[string]any{"id": 12, "body": "Please request another review."})
+	base.mu.Unlock()
 	if err = runtime.verifyReviewRequestDisposition(ctx, l, intent); err == nil {
 		t.Fatal("stale disposition accepted")
 	}
-	if base.writes != 1 {
+	if base.writes != 2 {
 		t.Fatal("stale inspection wrote")
 	}
 }

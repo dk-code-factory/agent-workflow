@@ -15,7 +15,7 @@ import (
 )
 
 const Version = "5.2.0"
-const Implementation = "prfix-v4-dk-workflows-5.2.0"
+const Implementation = "prfix-v5-dk-workflows-5.2.0"
 
 type Identity struct {
 	URL        string `json:"url"`
@@ -139,6 +139,7 @@ type Snapshot struct {
 	Decisions                 string            `json:"decisions"`
 	Instructions              string            `json:"instructions"`
 	Settings                  string            `json:"settings"`
+	TaskSettings              string            `json:"task_settings,omitempty"`
 	Resources                 string            `json:"resources"`
 	Paths                     []string          `json:"paths"`
 	Evidence                  string            `json:"evidence"`
@@ -350,6 +351,9 @@ type Plan struct {
 }
 
 func occurrenceFingerprint(s Snapshot, o Occurrence) string {
+	if s.TaskSettings != "" {
+		s.Settings = s.TaskSettings
+	}
 	prefs := ""
 	if o.Review || o.Kind == "verification" {
 		prefs = s.ReviewPreferences

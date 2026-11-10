@@ -67,7 +67,12 @@ func (r *Runtime) ownDiscussionDelta(ctx context.Context, p Plan, before string,
 	if e != nil {
 		return false, e
 	}
-	rows, e = l.db.QueryContext(ctx, "SELECT intent,receipt FROM effects WHERE run=? AND state='completed' ORDER BY rowid", p.LogicalRun)
+	return ownPublicationDelta(ctx, l, p.LogicalRun, old.PR, now.PR, known)
+}
+
+func ownPublicationDelta(ctx context.Context, l *Ledger, run string, prior, current PREvidence, known []string) (bool, error) {
+	old, now := struct{ PR PREvidence }{prior}, struct{ PR PREvidence }{current}
+	rows, e := l.db.QueryContext(ctx, "SELECT intent,receipt FROM effects WHERE run=? AND state='completed' ORDER BY rowid", run)
 	if e != nil {
 		return false, e
 	}
@@ -130,6 +135,21 @@ func (r *Runtime) ownDiscussionDelta(ctx context.Context, p Plan, before string,
 			}
 			if i.Kind == "reply_inline" {
 				now.PR.Inline = filtered
+				for _, thread := range now.PR.Threads {
+					comments, _ := thread["comments"].(map[string]any)
+					nodes, _ := comments["nodes"].([]any)
+					kept := []any{}
+					for _, node := range nodes {
+						comment, _ := node.(map[string]any)
+						if githubID(comment, "databaseId") == githubID(receipt.Result, "id") && stringValue(comment, "body") == stringValue(i.Payload, "body") {
+							continue
+						}
+						kept = append(kept, node)
+					}
+					if nodes != nil {
+						comments["nodes"] = kept
+					}
+				}
 			} else {
 				now.PR.Comments = filtered
 			}

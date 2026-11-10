@@ -768,7 +768,7 @@ func (r *Runtime) finish(ctx context.Context, p Plan, in ActionInput) (ActionOut
 	if state == "complete" {
 		for _, intent := range report.Operations {
 			intent.Discussion = live.Discussion
-			if intent.Kind == "merge" || intent.Kind == "split_pr" || intent.Kind == "reply" || intent.Kind == "reply_inline" || intent.Kind == "request_review" {
+			if intent.Kind != "push" && intent.Kind != "rewrite" && intent.Kind != "split_push" {
 				ev, err := readPREvidence(live.Evidence)
 				if err != nil {
 					return output(), err
@@ -828,6 +828,9 @@ func (r *Runtime) finish(ctx context.Context, p Plan, in ActionInput) (ActionOut
 						ids = append(ids, id)
 					}
 					intent.Before = map[string]any{"comment_ids": ids}
+					if matches := matchingReplies(ev, intent); len(matches) == 1 {
+						intent.Before["satisfied_comment_id"] = githubID(matches[0], "id")
+					}
 				}
 			}
 			if intent.Replaces != nil {

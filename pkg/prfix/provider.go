@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -131,6 +132,38 @@ type Receipt struct {
 }
 
 type GitHub struct{ Root string }
+
+type DispatchResponse struct {
+	Intent   Intent         `json:"intent"`
+	Response map[string]any `json:"response"`
+}
+
+func (r *DispatchResponse) UnmarshalJSON(data []byte) error {
+	type response DispatchResponse
+	return decodeGitHubJSON(data, (*response)(r))
+}
+
+func (g *GitHub) dispatchResponsePath(i Intent) string {
+	return filepath.Join(g.Root, ".agent-workflow", "pr-fix", "dispatch-responses", digest([]string{i.Run, i.ID, i.Fingerprint()})+".json")
+}
+
+func matchingReplies(ev PREvidence, i Intent) []map[string]any {
+	if i.ActorID <= 0 || ev.ViewerID != i.ActorID {
+		return nil
+	}
+	comments := ev.Comments
+	if i.Kind == "reply_inline" {
+		comments = ev.Inline
+	}
+	matches := []map[string]any{}
+	for _, comment := range comments {
+		user, _ := comment["user"].(map[string]any)
+		if numeric(githubID(comment, "id")) && stringValue(comment, "body") == stringValue(i.Payload, "body") && githubID(user, "id") == strconv.FormatInt(i.ActorID, 10) && stringValue(user, "login") == ev.Viewer && (i.Kind != "reply_inline" || githubID(comment, "in_reply_to_id") == stringValue(i.Payload, "comment_id")) {
+			matches = append(matches, comment)
+		}
+	}
+	return matches
+}
 
 func (g *GitHub) api(ctx context.Context, id Identity, method, path string, payload any, out any) error {
 	args := []string{"api", "--hostname", id.Host, "--method", method, path}
@@ -349,14 +382,42 @@ func (g *GitHub) ObserveCI(ctx context.Context, id Identity, head string) (CIObs
 }
 func stringValue(m map[string]any, key string) string { v, _ := m[key].(string); return v }
 func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
-	if i.Kind == "request_review" {
+	if i.Kind == "request_review" || i.Kind == "edit_pr" {
 		state, receipt, err := g.Reconcile(ctx, i)
 		if err != nil {
 			return Receipt{}, err
 		}
 		if state == "completed" {
-			receipt.Evidence = append(receipt.Evidence, "requested set already satisfied; no write")
+			message := "requested set already satisfied; no write"
+			if i.Kind == "edit_pr" {
+				message = "description already satisfied; no write"
+			}
+			receipt.Evidence = append(receipt.Evidence, message)
 			return receipt, nil
+		}
+	}
+	if i.Kind == "reply" || i.Kind == "reply_inline" {
+		ev, err := g.Capture(ctx, i.PR)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if i.ActorID <= 0 || ev.ViewerID != i.ActorID || ev.Metadata.Head.SHA != i.Head {
+			return Receipt{}, fmt.Errorf("reply actor or head changed before dispatch")
+		}
+		matches := matchingReplies(ev, i)
+		if saved := stringValue(i.Before, "satisfied_comment_id"); saved != "" {
+			for _, comment := range matches {
+				if githubID(comment, "id") == saved {
+					return Receipt{i.ID, i.Kind, i.PR.URL, i.Head, comment, []string{"exact existing answer verified; no write"}}, nil
+				}
+			}
+			return Receipt{}, fmt.Errorf("prepared existing answer changed; fresh preparation required")
+		}
+		if len(matches) > 1 {
+			return Receipt{}, fmt.Errorf("multiple identical answers require exact identity")
+		}
+		if len(matches) == 1 {
+			return Receipt{i.ID, i.Kind, i.PR.URL, i.Head, matches[0], []string{"existing answer verified; no write"}}, nil
 		}
 	}
 	var raw map[string]any
@@ -401,6 +462,10 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 		// Endpoints returning 204 have an empty body; api handles those below.
 		return Receipt{}, e
 	}
+	responsePath := g.dispatchResponsePath(i)
+	if err := writeImmutable(responsePath, jsonBytes(DispatchResponse{Intent: i, Response: raw})); err != nil {
+		return Receipt{}, fmt.Errorf("retain acknowledged publication response: %w", err)
+	}
 	if errs, ok := raw["errors"].([]any); ok && len(errs) > 0 {
 		return Receipt{}, fmt.Errorf("GitHub mutation returned GraphQL errors")
 	}
@@ -412,7 +477,7 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 	}
 	outcome, receipt, e := g.Reconcile(ctx, i)
 	if e != nil {
-		return Receipt{}, e
+		return Receipt{}, fmt.Errorf("publication response retained at %s; observation failed: %w", responsePath, e)
 	}
 	if outcome != "completed" {
 		return Receipt{}, fmt.Errorf("GitHub accepted the request but its effect is not yet verified")
@@ -453,14 +518,10 @@ func (g *GitHub) Reconcile(ctx context.Context, i Intent) (string, Receipt, erro
 			return "unknown", Receipt{}, fmt.Errorf("exact creation actor and comment baseline required")
 		}
 		baseline := stringList(before)
-		comments := ev.Comments
-		if i.Kind == "reply_inline" {
-			comments = ev.Inline
-		}
+		satisfied := stringValue(i.Before, "satisfied_comment_id")
 		matches := []map[string]any{}
-		for _, c := range comments {
-			user, _ := c["user"].(map[string]any)
-			if githubID(c, "id") != "" && !contains(baseline, githubID(c, "id")) && stringValue(c, "body") == stringValue(i.Payload, "body") && githubID(user, "id") == strconv.FormatInt(i.ActorID, 10) && stringValue(user, "login") == ev.Viewer && (i.Kind != "reply_inline" || githubID(c, "in_reply_to_id") == stringValue(i.Payload, "comment_id")) {
+		for _, c := range matchingReplies(ev, i) {
+			if satisfied != "" && githubID(c, "id") == satisfied || satisfied == "" && !contains(baseline, githubID(c, "id")) {
 				matches = append(matches, c)
 			}
 		}

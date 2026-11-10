@@ -40,6 +40,12 @@ if os.environ.get('PRFIX_FAKE_REQUESTS'):
 if path not in responses:
  print('Unconfigured fake GitHub request: '+str(path),file=sys.stderr);sys.exit(2)
 value=responses[path]
+if isinstance(value,dict) and '__sequence' in value:
+ sequence=value['__sequence']
+ value=sequence[0]
+ if len(sequence)>1:
+  sequence.pop(0)
+  with open(os.environ['PRFIX_FAKE_API'],'w') as data: json.dump(responses,data)
 if isinstance(value,str): sys.stdout.write(value)
 else: json.dump(value,sys.stdout)
 if isinstance(value,str) and value.startswith("HTTP/") and value.split()[1]!="200": sys.exit(1)
@@ -141,7 +147,7 @@ func TestInlineReplyUsesPRScopedEndpointAndReconcilesExactThread(t *testing.T) {
 		"user":                                        map[string]any{"login": "author", "id": 7},
 		"repos/owner/repo/issues/1/comments?per_page=100": []any{[]any{}},
 		"repos/owner/repo/pulls/1/reviews?per_page=100":   []any{[]any{}},
-		"repos/owner/repo/pulls/1/comments?per_page=100":  []any{[]any{wrong, right}},
+		"repos/owner/repo/pulls/1/comments?per_page=100":  map[string]any{"__sequence": []any{[]any{[]any{wrong}}, []any{[]any{wrong, right}}}},
 		"graphql": map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{"totalCount": 0, "nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}}},
 	}
 	fakeGH(t, root, responses)

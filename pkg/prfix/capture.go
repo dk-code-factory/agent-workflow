@@ -179,6 +179,13 @@ func capture(ctx context.Context, root string, provider Provider, p Plan) (Snaps
 	preferences := selection.Preferences
 	selection.Preferences = nil
 	s.Settings = digest(selection)
+	options := jsonClone(selection.Config.Options)
+	for _, key := range []string{"tasks", "finalizers", "reviewers", "limits"} {
+		delete(options, key)
+	}
+	settings := jsonClone(selection.Settings)
+	delete(settings, "legacy_process")
+	s.TaskSettings = digest(map[string]any{"instructions": selection.Invocation.Instructions, "options": options, "settings": settings, "accounts": selection.Accounts})
 	selection.Preferences = preferences
 	resources := map[string]string{}
 	for _, o := range p.Occurrences {

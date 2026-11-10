@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
@@ -14,10 +16,11 @@ import (
 // Inspection establishes current context, never whether the historical POST
 // reached GitHub. Timeline events and reviews cannot prove delivery identity.
 type ReviewRequestObservation struct {
-	Intent    Intent           `json:"intent"`
-	PR        PREvidence       `json:"pr"`
-	Requested map[string]any   `json:"requested"`
-	Timeline  []map[string]any `json:"timeline"`
+	Intent    Intent            `json:"intent"`
+	PR        PREvidence        `json:"pr"`
+	Requested map[string]any    `json:"requested"`
+	Timeline  []map[string]any  `json:"timeline"`
+	Dispatch  *DispatchResponse `json:"dispatch,omitempty"`
 }
 
 func (o *ReviewRequestObservation) UnmarshalJSON(b []byte) error {
@@ -33,7 +36,41 @@ func (o *ReviewRequestObservation) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (o ReviewRequestObservation) Fingerprint() string { return digest(o) }
+func (o ReviewRequestObservation) Fingerprint() string {
+	person := func(value any) any {
+		v, _ := value.(map[string]any)
+		return map[string]any{"id": githubID(v, "id"), "login": v["login"], "slug": v["slug"], "node_id": v["node_id"]}
+	}
+	ordered := func(values []any) []any {
+		sort.Slice(values, func(a, b int) bool { return digest(values[a]) < digest(values[b]) })
+		return values
+	}
+	requested := map[string]any{}
+	for _, key := range []string{"users", "teams"} {
+		var values []map[string]any
+		if err := decodeGitHubJSON(jsonBytes(o.Requested[key]), &values); err != nil {
+			requested[key] = o.Requested[key]
+			continue
+		}
+		identities := []any{}
+		for _, value := range values {
+			identities = append(identities, person(value))
+		}
+		requested[key] = ordered(identities)
+	}
+	events := []any{}
+	for _, event := range o.Timeline {
+		if !contains([]string{"review_requested", "review_request_removed"}, stringValue(event, "event")) {
+			continue
+		}
+		events = append(events, map[string]any{"id": githubID(event, "id"), "event": event["event"], "created_at": event["created_at"], "requested_reviewer": person(event["requested_reviewer"]), "requested_team": person(event["requested_team"])})
+	}
+	reviews := []any{}
+	for _, review := range o.PR.Reviews {
+		reviews = append(reviews, map[string]any{"id": githubID(review, "id"), "state": review["state"], "submitted_at": review["submitted_at"], "commit_id": review["commit_id"], "user": person(review["user"])})
+	}
+	return digest(map[string]any{"intent": o.Intent.Fingerprint(), "pr": o.PR.Metadata.URL, "number": o.PR.Metadata.Number, "head": o.PR.Metadata.Head.SHA, "actor": o.PR.ViewerID, "requested": requested, "events": ordered(events), "reviews": ordered(reviews)})
+}
 
 type ReviewRequestInspector interface {
 	InspectReviewRequest(context.Context, Intent) (ReviewRequestObservation, error)
@@ -68,6 +105,17 @@ func (g *GitHub) InspectReviewRequest(ctx context.Context, i Intent) (ReviewRequ
 		return o, err
 	}
 	o.Timeline, err = g.pages(ctx, i.PR, "repos/"+i.PR.Owner+"/"+i.PR.Name+"/issues/"+fmt.Sprint(i.PR.Number)+"/timeline?per_page=100")
+	if err == nil {
+		var response DispatchResponse
+		if readErr := readJSON(g.dispatchResponsePath(i), &response); readErr == nil {
+			if response.Intent.Fingerprint() != i.Fingerprint() {
+				return o, fmt.Errorf("dispatch response identity differs from original intent")
+			}
+			o.Dispatch = &response
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return o, readErr
+		}
+	}
 	return o, err
 }
 
@@ -263,6 +311,15 @@ func (r *Runtime) verifyReviewRequestDisposition(ctx context.Context, l *Ledger,
 	}
 	if retained.Disposition.Decision != "no_resend" || retained.Delivery != "unknown" || retained.Disposition.Observation != current.Fingerprint() {
 		return fmt.Errorf("retained no_resend context changed; fresh inspection and reassessment required")
+	}
+	if discussionDigest(retained.Observation.PR) != discussionDigest(current.PR) {
+		allowed, err := ownPublicationDelta(ctx, l, i.Run, retained.Observation.PR, current.PR, nil)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return fmt.Errorf("substantive discussion changed; fresh inspection and reassessment required")
+		}
 	}
 	return nil
 }
