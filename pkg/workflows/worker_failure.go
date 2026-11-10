@@ -83,7 +83,7 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = decodeJSONWithNumbers(raw, &msg); err != nil {
 		return zero, err
 	}
-	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || !acknowledgeableFailure(msg.FailureClass) {
+	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || msg.UnsafeFailureClass != "" || !acknowledgeableFailure(msg.FailureClass) {
 		return zero, fmt.Errorf("native failure is not a settled ordinary failure in this execution")
 	}
 	if prior := msg.FailureAcknowledgement; prior != nil {

@@ -48,6 +48,7 @@ type WorkerMessage struct {
 	Generation             int64                         `json:"execution_generation,omitempty"`
 	FailureClass           string                        `json:"failure_class,omitempty"`
 	QueueTimeMS            int64                         `json:"queue_time_ms,omitempty"`
+	UnsafeFailureClass     string                        `json:"unsafe_failure_class,omitempty"`
 	ID                     string                        `json:"id"`
 	WorkerID               string                        `json:"worker_id"`
 	RequestID              string                        `json:"request_id"`
@@ -859,6 +860,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)
+	msg.UnsafeFailureClass = unsafeFailureClass(turnErr)
 	msg.FinishedAt = time.Now().UTC()
 	msg.Status = RunStatusSucceeded
 	if turnErr != nil || result.Status != RunStatusSucceeded {

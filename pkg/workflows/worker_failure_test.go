@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,17 +13,43 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
-type failedNativeSession struct{ fakeSession }
+type failedNativeSession struct {
+	fakeSession
+	failure error
+}
 
-func (*failedNativeSession) RunTurn(context.Context, SessionRequest, func(ProviderEvent)) (SessionResult, error) {
-	return SessionResult{Status: RunStatusFailed, SessionID: "original-session", Outputs: map[string]any{"original": "retained failure output"}}, errors.New("provider usage limit")
+func (s *failedNativeSession) RunTurn(ctx context.Context, req SessionRequest, _ func(ProviderEvent)) (SessionResult, error) {
+	if s.started != nil {
+		select {
+		case s.started <- req.Prompt:
+		case <-ctx.Done():
+			return SessionResult{}, ctx.Err()
+		}
+	}
+	if s.release != nil {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return SessionResult{}, ctx.Err()
+		}
+	}
+	failure := s.failure
+	if failure == nil {
+		failure = errors.New("provider usage limit")
+	}
+	return SessionResult{Status: RunStatusFailed, SessionID: "original-session", Outputs: map[string]any{"original": "retained failure output"}}, failure
 }
 
 func failureFixture(t *testing.T) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
 	t.Helper()
+	return failureFixtureWithSession(t, &failedNativeSession{})
+}
+
+func failureFixtureWithSession(t *testing.T, session *failedNativeSession) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
+	t.Helper()
 	m, run := workerFixture(t, &fakeSession{})
 	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
-		return &failedNativeSession{}, nil, nil, nil
+		return session, nil, nil, nil
 	}
 	w, err := m.Spawn(context.Background(), WorkerSpec{RunID: run, Role: "reviewer"})
 	if err != nil {
@@ -53,6 +80,31 @@ func failureFixture(t *testing.T) (*WorkerManager, WorkerFailureRequest, WorkerM
 		t.Fatal(err)
 	}
 	return m, WorkerFailureRequest{RunID: run, WorkerID: w.ID, MessageID: msg.ID, Generation: r.Generation, Owner: r.Owner, RequestID: "handled-1", Reason: "optional task", Evidence: "original-message:" + msg.ID}, msg
+}
+
+func TestFailureAcknowledgementRejectsMixedCancellation(t *testing.T) {
+	for _, failure := range []error{ErrProviderFailure, ErrUsageExhausted, errors.New("independent command failed")} {
+		t.Run(classifyFailure(failure), func(t *testing.T) {
+			mixed := errors.Join(failure, context.Canceled)
+			m, req, msg := failureFixtureWithSession(t, &failedNativeSession{failure: mixed})
+			if msg.FailureClass != classifyFailure(failure) {
+				t.Fatal("mixed cancellation replaced the independent diagnostic", msg.FailureClass)
+			}
+			if msg.UnsafeFailureClass != "canceled" {
+				t.Fatal("mixed cancellation lost its admission identity", msg.UnsafeFailureClass)
+			}
+			if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+				t.Fatal("mixed cancellation was acknowledged as an ordinary failure")
+			}
+			messages, err := m.Messages(context.Background(), req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed failure evidence", messages, err)
+			}
+			if err := m.StopRun(context.Background(), req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("mixed cancellation lost its finalization barrier", err)
+			}
+		})
+	}
 }
 
 func TestAcknowledgeFailurePreservesEvidenceAndDeduplicates(t *testing.T) {
@@ -175,9 +227,93 @@ func TestFailureAcknowledgementRequiresSettledInvocationAndToolEffects(t *testin
 	}
 }
 
+type workerJoinContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (ctx *workerJoinContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.waiting) })
+	return ctx.Context.Done()
+}
+
 func TestFailureAcknowledgementWaitsForActualWorkerJoin(t *testing.T) {
+	session := &failedNativeSession{fakeSession: fakeSession{started: make(chan string, 1), release: make(chan struct{})}}
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(session.release) }) })
+	m, run := workerFixture(t, &fakeSession{})
+	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
+		return session, nil, nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w, err := m.Spawn(ctx, WorkerSpec{RunID: run, Role: "reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := m.Send(ctx, run, w.ID, "failure", "bounded assignment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _, err := m.Store.Load(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := WorkerFailureRequest{RunID: run, WorkerID: w.ID, MessageID: msg.ID, Generation: r.Generation, Owner: r.Owner, RequestID: "handled-join", Reason: "optional task", Evidence: "original-message:" + msg.ID}
+	serveWorkers(t, m)
+	select {
+	case <-session.started:
+	case <-ctx.Done():
+		t.Fatal("native turn did not start", ctx.Err())
+	}
+	m.mu.Lock()
+	done := m.done[w.ID]
+	m.mu.Unlock()
+	if done == nil {
+		t.Fatal("active native turn has no production join notification")
+	}
+	canceled, cancelWait := context.WithCancel(ctx)
+	cancelWait()
+	if _, err := m.AcknowledgeFailure(canceled, req); !errors.Is(err, context.Canceled) {
+		t.Fatal("waiting for the live native turn ignored cancellation", err)
+	}
+	waiting := &workerJoinContext{Context: ctx, waiting: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.AcknowledgeFailure(waiting, req)
+		result <- err
+	}()
+	select {
+	case <-waiting.waiting:
+	case err := <-result:
+		t.Fatal("acknowledgement returned before waiting for the native turn", err)
+	case <-ctx.Done():
+		t.Fatal("acknowledgement never reached the live join wait", ctx.Err())
+	}
+	select {
+	case err := <-result:
+		t.Fatal("acknowledgement returned while the native turn was blocked", err)
+	default:
+	}
+	release.Do(func() { close(session.release) })
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal("joined native failure could not be acknowledged", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("acknowledgement did not complete after the native turn", ctx.Err())
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("acknowledgement preceded the actual native join")
+	}
+}
+
+func TestFailureAcknowledgementRejectsActiveWorkerAfterJoin(t *testing.T) {
 	m, req, _ := failureFixture(t)
-	// Hold the actual join boundary after terminal mailbox persistence.
 	m.mu.Lock()
 	original := m.done[req.WorkerID]
 	m.mu.Unlock()
@@ -189,16 +325,11 @@ func TestFailureAcknowledgementWaitsForActualWorkerJoin(t *testing.T) {
 		}
 	}
 	done := make(chan struct{})
+	close(done)
 	m.mu.Lock()
 	m.active[req.WorkerID] = func() {}
 	m.done[req.WorkerID] = done
 	m.mu.Unlock()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := m.AcknowledgeFailure(ctx, req); !errors.Is(err, context.Canceled) {
-		t.Fatal("active turn was acknowledged", err)
-	}
-	close(done)
 	if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
 		t.Fatal("active worker was ignored after join notification")
 	}
