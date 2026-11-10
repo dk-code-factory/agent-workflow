@@ -153,3 +153,22 @@ func acknowledgeableFailure(class string) bool {
 	}
 	return false
 }
+
+func unsafeWorkerFailureClass(err error) string {
+	if class := unsafeFailureClass(err); class != "" {
+		return class
+	}
+	if class := classifyFailure(err); !acknowledgeableFailure(class) {
+		return class
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if class := unsafeWorkerFailureClass(cause); class != "" {
+				return class
+			}
+		}
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return unsafeWorkerFailureClass(wrapped.Unwrap())
+	}
+	return ""
+}

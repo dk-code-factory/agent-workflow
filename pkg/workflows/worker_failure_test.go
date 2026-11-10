@@ -15,10 +15,16 @@ import (
 
 type failedNativeSession struct {
 	fakeSession
-	failure error
+	failure           error
+	maxOutput         int
+	progressSessionID string
 }
 
-func (s *failedNativeSession) RunTurn(ctx context.Context, req SessionRequest, _ func(ProviderEvent)) (SessionResult, error) {
+func (s *failedNativeSession) WorkerLimits(string) (WorkerLimits, error) {
+	return WorkerLimits{MaxOutput: s.maxOutput}, nil
+}
+
+func (s *failedNativeSession) RunTurn(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
 	if s.started != nil {
 		select {
 		case s.started <- req.Prompt:
@@ -36,6 +42,9 @@ func (s *failedNativeSession) RunTurn(ctx context.Context, req SessionRequest, _
 	failure := s.failure
 	if failure == nil {
 		failure = errors.New("provider usage limit")
+	}
+	if s.progressSessionID != "" {
+		emit(ProviderEvent{Type: "session", SessionID: s.progressSessionID})
 	}
 	return SessionResult{Status: RunStatusFailed, SessionID: "original-session", Outputs: map[string]any{"original": "retained failure output"}}, failure
 }
@@ -102,6 +111,64 @@ func TestFailureAcknowledgementRejectsMixedCancellation(t *testing.T) {
 			}
 			if err := m.StopRun(context.Background(), req.RunID); !errors.Is(err, process.ErrCleanup) {
 				t.Fatal("mixed cancellation lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
+func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testing.T) {
+	for _, validation := range []string{"output_limit", "session_identity"} {
+		t.Run(validation, func(t *testing.T) {
+			for _, failure := range []struct {
+				name   string
+				err    error
+				unsafe string
+			}{
+				{"mixed_cancellation", errors.Join(ErrProviderFailure, context.Canceled), "canceled"},
+				{"cleanup", process.ErrCleanup, "needs_attention"},
+				{"integrity", ErrActionIntegrity, "action_integrity"},
+				{"storage", errStepPersistence, "storage"},
+				{"authentication", errors.New("authentication failed"), "authentication"},
+				{"mixed_authentication", errors.Join(ErrProviderFailure, errors.New("authentication failed")), "authentication"},
+				{"deadline", context.DeadlineExceeded, "timeout"},
+				{"ordinary", ErrProviderFailure, ""},
+			} {
+				t.Run(failure.name, func(t *testing.T) {
+					session := &failedNativeSession{failure: failure.err}
+					diagnostic := "execution"
+					if validation == "output_limit" {
+						session.maxOutput = 1
+						diagnostic = "limit"
+					} else {
+						session.progressSessionID = "different-session"
+					}
+					m, req, msg := failureFixtureWithSession(t, session)
+					if msg.FailureClass != diagnostic {
+						t.Fatal("validation did not replace the diagnostic", msg.FailureClass)
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, err := m.AcknowledgeFailure(ctx, req)
+					if failure.unsafe == "" {
+						if err != nil || msg.UnsafeFailureClass != "" {
+							t.Fatal("ordinary validation failure was not acknowledgeable", msg, err)
+						}
+						if err := m.StopRun(ctx, req.RunID); err != nil {
+							t.Fatal("acknowledged ordinary failure retained its barrier", err)
+						}
+						return
+					}
+					if msg.UnsafeFailureClass != failure.unsafe || err == nil {
+						t.Fatal("validation erased unsafe failure admission identity", msg, err)
+					}
+					messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+					if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+						t.Fatal("rejected acknowledgement changed failure evidence", messages, err)
+					}
+					if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+						t.Fatal("validation erased unsafe failure finalization barrier", err)
+					}
+				})
 			}
 		})
 	}

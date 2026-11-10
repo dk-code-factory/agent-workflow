@@ -838,6 +838,8 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	if usageErr := m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update); usageErr != nil {
 		turnErr = errors.Join(turnErr, usageErr)
 	}
+	// Retain admission evidence before validation replaces the diagnostic.
+	failureCauses := errors.Join(turnErr, progressErr)
 	if progressErr != nil {
 		turnErr = progressErr
 	}
@@ -860,7 +862,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)
-	msg.UnsafeFailureClass = unsafeFailureClass(turnErr)
+	msg.UnsafeFailureClass = unsafeWorkerFailureClass(errors.Join(failureCauses, turnErr))
 	msg.FinishedAt = time.Now().UTC()
 	msg.Status = RunStatusSucceeded
 	if turnErr != nil || result.Status != RunStatusSucceeded {
