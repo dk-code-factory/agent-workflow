@@ -1,0 +1,61 @@
+{
+  "tasks": [
+    {
+      "skill": "dk-workflows:dk-pr-feedback-read",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-decisions",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-feedback-address",
+      "options": {},
+      "required": true,
+      "instructions": "Verify and address actionable discussion feedback within the agreed scope."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true,
+      "instructions": "Publish concrete prepared feedback-fix actions when authorized; otherwise return a no-op assessment."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-split",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-description",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-reviewers-run",
+      "options": {
+        "reviewers": [
+          {
+            "skill": "local:pr-review"
+          }
+        ],
+        "execution": "parallel",
+        "max_parallel": 2
+      },
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-feedback-address",
+      "options": {},
+      "required": true,
+      "instructions": "Assess the current original reviewer outputs and address actionable findings within the agreed scope."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true,
+      "instructions": "Publish concrete prepared reviewer-fix actions when authorized; otherwise return a no-op assessment."
+    }
+  ]
+}
