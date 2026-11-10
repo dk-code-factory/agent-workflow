@@ -202,6 +202,50 @@ func TestFailureAcknowledgementRejectsInvocationFilesystemFailures(t *testing.T)
 	}
 }
 
+type heartbeatFailureSession struct {
+	failedNativeSession
+	obstruction string
+}
+
+func (s *heartbeatFailureSession) RunTurn(ctx context.Context, _ SessionRequest, _ func(ProviderEvent)) (SessionResult, error) {
+	invocation, err := runtimeexec.Admit(ctx, "container")
+	if err != nil {
+		return SessionResult{}, err
+	}
+	if err = os.Mkdir(filepath.Join(invocation.Directory(), s.obstruction), 0700); err != nil {
+		return SessionResult{}, err
+	}
+	err = invocation.StartHeartbeat()
+	invocation.StopHeartbeat()
+	return SessionResult{Status: RunStatusFailed}, errors.Join(err, invocation.Save(context.WithoutCancel(ctx), "cleaned"))
+}
+
+func TestFailureAcknowledgementRejectsInitialHeartbeatFilesystemFailures(t *testing.T) {
+	for _, obstruction := range []string{"lease.partial", "lease"} {
+		t.Run(obstruction, func(t *testing.T) {
+			m, req, msg := failureFixtureWithSetup(t, &heartbeatFailureSession{obstruction: obstruction}, nil)
+			ctx := failureTestContext(t)
+			var unsettled int
+			if err := m.Store.db.QueryRowContext(ctx, "SELECT count(*) FROM invocations WHERE run_id=? AND state!='cleaned'", req.RunID).Scan(&unsettled); err != nil || unsettled != 0 {
+				t.Fatal("heartbeat failure did not finish invocation cleanup", unsettled, err)
+			}
+			if msg.FailureClass != "execution" || msg.UnsafeFailureClass != "storage" {
+				t.Fatal("initial heartbeat failure lost its diagnostic or storage identity", msg)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("initial heartbeat filesystem failure was acknowledged")
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed heartbeat failure evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("initial heartbeat failure lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
 func TestFailureAcknowledgementAllowsOrdinaryInputPathFailures(t *testing.T) {
 	_, inputErr := os.ReadFile(filepath.Join(t.TempDir(), "missing-input"))
 	if inputErr == nil {
@@ -255,6 +299,30 @@ func TestFailureAcknowledgementRejectsAuthorizationDenials(t *testing.T) {
 				t.Fatal("authorization denial lost its finalization barrier", err)
 			}
 		})
+	}
+}
+
+func TestFailureAcknowledgementRejectsWrappedAuthenticationFailures(t *testing.T) {
+	for _, failure := range []error{ErrProviderFailure, ErrUsageExhausted} {
+		for _, diagnostic := range []string{"authentication failed", "401 rejected", "credential invalid", "OAuth expired"} {
+			t.Run(failure.Error()+"/"+diagnostic, func(t *testing.T) {
+				m, req, msg := failureFixtureWithSession(t, &failedNativeSession{failure: fmt.Errorf("%w: %s", failure, diagnostic)})
+				ctx := failureTestContext(t)
+				if msg.FailureClass != classifyFailure(failure) || msg.UnsafeFailureClass != "authentication" {
+					t.Fatal("wrapped authentication lost its diagnostic or admission identity", msg)
+				}
+				if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+					t.Fatal("wrapped authentication failure was acknowledged")
+				}
+				messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+				if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+					t.Fatal("rejected acknowledgement changed authentication evidence", messages, err)
+				}
+				if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+					t.Fatal("wrapped authentication lost its finalization barrier", err)
+				}
+			})
+		}
 	}
 }
 
@@ -346,6 +414,7 @@ func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testi
 				{"storage", errStepPersistence, "storage"},
 				{"authentication", errors.New("authentication failed"), "authentication"},
 				{"mixed_authentication", errors.Join(ErrProviderFailure, errors.New("authentication failed")), "authentication"},
+				{"wrapped_authentication", fmt.Errorf("%w: authentication failed", ErrProviderFailure), "authentication"},
 				{"authorization", errors.New("provider failed: 403 Forbidden"), "authentication"},
 				{"deadline", context.DeadlineExceeded, "timeout"},
 				{"ordinary", ErrProviderFailure, ""},

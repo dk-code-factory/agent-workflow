@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
@@ -39,7 +40,7 @@ func providerStateDir(root, provider string, req workflows.SessionRequest) (stri
 	}
 	path := filepath.Join(root, ".agent-workflow", "providers", provider, origin, stateComponent(owner))
 	if err := os.MkdirAll(filepath.Join(path, "home"), 0700); err != nil {
-		return "", err
+		return "", &runtimeexec.StorageError{Err: err}
 	}
 	return path, nil
 }

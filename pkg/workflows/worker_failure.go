@@ -172,7 +172,7 @@ func unsafeWorkerFailureClass(err error) string {
 		return "storage"
 	}
 	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
+	if strings.Contains(text, "401") || strings.Contains(text, "authentication") || strings.Contains(text, "credential") || strings.Contains(text, "oauth") || strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
 		return "authentication"
 	}
 	if class := classifyFailure(err); !acknowledgeableFailure(class) {

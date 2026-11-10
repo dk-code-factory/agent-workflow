@@ -182,7 +182,7 @@ func (i *Invocation) StartHeartbeat() error {
 	if err := write(); err != nil {
 		cancel()
 		close(i.heartbeatDone)
-		return err
+		return &StorageError{Err: err}
 	}
 	go func() {
 		defer close(i.heartbeatDone)

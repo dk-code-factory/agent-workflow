@@ -1,12 +1,49 @@
 package clirunner
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
+
+func TestNativeTurnRetainsProviderStateFilesystemFailure(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		t.Run(provider, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, ".agent-workflow"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			obstruction := filepath.Join(root, ".agent-workflow", "providers")
+			if err := os.WriteFile(obstruction, []byte("obstructed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FIXTURE_CLAUDE_STATE_TOKEN", "fixture-only")
+			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"a": {
+				Provider: provider, Command: filepath.Join(root, "must-not-start"),
+				Authentication: Authentication{Mode: "native", CredentialEnv: "FIXTURE_CLAUDE_STATE_TOKEN"},
+			}}}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{
+				AgentID: "a", RunID: "run", InvocationID: "turn", ParentWorkerID: "worker",
+			}}, nil)
+			var storageErr *runtimeexec.StorageError
+			var pathErr *os.PathError
+			if !errors.As(err, &storageErr) || !errors.As(err, &pathErr) || pathErr.Op != "mkdir" {
+				t.Fatal("provider state failure lost its storage or filesystem identity", err)
+			}
+			if storageErr.Error() != pathErr.Error() {
+				t.Fatal("provider state storage marker changed its diagnostic", err)
+			}
+		})
+	}
+}
 
 func TestProviderStatePartitionsConversationSessions(t *testing.T) {
 	root := t.TempDir()
