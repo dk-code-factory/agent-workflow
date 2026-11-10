@@ -286,7 +286,9 @@ func TestCancellationAfterCreateEffectReconcilesExactlyOnce(t *testing.T) {
 	go func() { _, err := r.RunAction(ctx, req); done <- err }()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "pr.json")); err == nil {
+		// File creation precedes cp finishing the simulated remote effect. Do
+		// not cancel its process until reconciliation can read the whole object.
+		if data, err := os.ReadFile(filepath.Join(dir, "pr.json")); err == nil && json.Valid(data) {
 			break
 		}
 		if time.Now().After(deadline) {
