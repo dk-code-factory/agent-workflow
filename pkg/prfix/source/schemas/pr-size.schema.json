@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "identity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pr_size": {
+      "type": "object",
+      "properties": {
+        "added_lines_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000
+        },
+        "evacuate_unrelated": {
+          "enum": [
+            "automatic",
+            "manual",
+            "disabled"
+          ],
+          "default": "automatic"
+        },
+        "split_related": {
+          "enum": [
+            "automatic",
+            "manual",
+            "disabled"
+          ],
+          "default": "automatic"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "identity",
+    "pr_size"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/pr-size.schema.json",
+  "title": "Stored PR size policy"
+}

@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "minProperties": 1,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/rules.schema.json",
+  "title": "Private PR rules",
+  "description": "Domain-owned JSON preserved without semantic rewriting. Its contents are intentionally open."
+}

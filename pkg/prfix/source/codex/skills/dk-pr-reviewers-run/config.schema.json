@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-reviewers-run/config.schema.json",
+  "title": "dk-workflows:dk-pr-reviewers-run options",
+  "type": "object",
+  "properties": {
+    "reviewers": {
+      "type": "array",
+      "items": {
+        "$ref": "../../../schemas/invocation.schema.json"
+      },
+      "default": [],
+      "description": "Selected reviewer invocations, with original prompts and required/optional status. No reviewers are selected by default."
+    },
+    "execution": {
+      "type": "string",
+      "minLength": 1,
+      "default": "parallel",
+      "enum": [
+        "parallel",
+        "sequential"
+      ],
+      "description": "Schedule independent reviewers in parallel or sequentially through supported native tools.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "max_parallel": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "default": null,
+      "description": "Maximum concurrently launched reviewers. Null adds no configured cap beyond actual host capacity."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

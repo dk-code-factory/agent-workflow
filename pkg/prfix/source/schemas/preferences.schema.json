@@ -1,0 +1,157 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "revision",
+    "records"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/preferences.schema.json",
+  "title": "Private preference catalog",
+  "description": "The runtime additionally validates selector paths, prompt-only conditions, normalized duplicates, ownership and catalog revisions.",
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "file",
+            "directory",
+            "glob"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "record": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+          "not": {
+            "pattern": "\\s"
+          }
+        },
+        "owner": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "user"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "repo"
+                },
+                "repository": {
+                  "type": "string",
+                  "pattern": "^(remote:|path:).+"
+                }
+              },
+              "required": [
+                "type",
+                "repository"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "applies_to": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "implementation",
+              "review"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "default": [
+            "implementation",
+            "review"
+          ]
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/selector"
+              },
+              "default": []
+            },
+            "condition": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "include"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "owner",
+        "prompt",
+        "scope"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

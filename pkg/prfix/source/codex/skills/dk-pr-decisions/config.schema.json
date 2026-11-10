@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-decisions/config.schema.json",
+  "title": "dk-workflows:dk-pr-decisions options",
+  "type": "object",
+  "properties": {
+    "language_review_passes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3,
+      "default": 3,
+      "description": "Maximum decision-language review passes, including the first; stop early when unchanged. At most three."
+    },
+    "section_heading": {
+      "type": "string",
+      "minLength": 1,
+      "default": "Decisions",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*[\\r\\n#\\u0000])[\\s\\S]+$",
+      "description": "Heading text for the bounded decision section, without Markdown heading markers."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

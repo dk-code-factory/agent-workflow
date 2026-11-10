@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-split/config.schema.json",
+  "title": "dk-workflows:dk-pr-split options",
+  "type": "object",
+  "properties": {
+    "added_lines_threshold": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1000,
+      "description": "Added lines in the complete final PR diff that trigger size assessment, not commit churn."
+    },
+    "evacuate_unrelated": {
+      "type": "string",
+      "minLength": 1,
+      "default": "automatic",
+      "enum": [
+        "automatic",
+        "manual",
+        "disabled"
+      ],
+      "description": "Policy for moving unrelated work into separate draft PRs.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "split_related": {
+      "type": "string",
+      "minLength": 1,
+      "default": "automatic",
+      "enum": [
+        "automatic",
+        "manual",
+        "disabled"
+      ],
+      "description": "Policy for splitting related work into independently reviewable draft PRs.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

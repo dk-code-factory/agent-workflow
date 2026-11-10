@@ -1,0 +1,128 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "identity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ci-[0-9a-f]{16}$"
+          },
+          "kind": {
+            "enum": [
+              "test",
+              "pipeline"
+            ]
+          },
+          "workflow": {
+            "type": "string",
+            "pattern": "^\\.github/workflows/[^/]+\\.ya?ml$",
+            "not": {
+              "pattern": "[\\u0000\\r\\n]"
+            }
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              }
+            ]
+          },
+          "test": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              }
+            ]
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "workflow",
+          "job",
+          "test",
+          "signature",
+          "reason"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "test"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "job": {
+                  "type": "string",
+                  "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+                },
+                "test": {
+                  "type": "string",
+                  "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "test": {
+                  "type": "null"
+                },
+                "signature": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "identity",
+    "entries"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/ci-exceptions.schema.json",
+  "title": "Stored CI exceptions",
+  "description": "Python verifies repository ownership, matcher-derived IDs and uniqueness."
+}

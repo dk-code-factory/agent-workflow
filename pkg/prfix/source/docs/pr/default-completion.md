@@ -1,0 +1,5 @@
+Verify current required review coverage, finding dispositions and the selected finalizer results. With the default plan, verify the full commit-series assessment, PR title/body and Decisions updates, feedback replies and resolved fully answered threads. Preserve unrelated content and choices supported by sources. A custom plan controls which finalization actions run; do not restore omitted defaults. If governing context changes, refresh affected review coverage and selected finalizer evidence.
+
+When CI is selected, wait at the final gate after commit and governing-content changes, on the final published head. If CI repairs change code, refresh scope, affected reviews and selected cleanup before waiting on the new final head. Keep all deadlines and budgets.
+
+Reconcile pending publications and verify the current head, target and remote receipts. Report CI only from current evidence. With the default publisher finalizer, request re-review from appropriate prior reviewers when authorized. Return selected-plan completion or concrete blockers, and report skipped duties and missing readiness evidence separately. Do not merge.

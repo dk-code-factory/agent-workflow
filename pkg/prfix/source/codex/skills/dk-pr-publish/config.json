@@ -1,0 +1,4 @@
+{
+  "$schema": "./config.schema.json",
+  "default_merge_method": "squash"
+}

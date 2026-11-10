@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-feedback-address/config.schema.json",
+  "title": "dk-workflows:dk-pr-feedback-address options",
+  "type": "object",
+  "properties": {
+    "additional_validation_commands": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+        }
+      },
+      "default": [],
+      "description": "Additional command argument arrays run in the affected checkout. Supplement relevant checks; never launch Codex or Claude Code."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

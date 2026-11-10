@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-commit-split/config.schema.json",
+  "title": "dk-workflows:dk-commit-split options",
+  "type": "object",
+  "properties": {
+    "policy": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "../../../schemas/commit-policy.schema.json"
+        }
+      ],
+      "default": null,
+      "description": "Null selects built-in grouping/message behavior; otherwise an exact prompt or fully qualified policy-provider invocation. Policies replace as a whole."
+    },
+    "max_passes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "default": 5,
+      "description": "Maximum cleanup assessment passes, including the first; stop early when unchanged. At most five."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

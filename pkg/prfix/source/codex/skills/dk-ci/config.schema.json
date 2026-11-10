@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-ci/config.schema.json",
+  "title": "dk-workflows:dk-ci options",
+  "type": "object",
+  "properties": {
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1800,
+      "description": "Initial exact-head CI observation window in seconds; retained windows do not restart on resume."
+    },
+    "poll_interval_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "description": "Delay between CI observations in seconds."
+    },
+    "classification_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 60,
+      "description": "Maximum failure-classification duration in seconds."
+    },
+    "no_checks_grace_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 60,
+      "description": "Wait for absent checks before reporting no_checks, which does not satisfy CI."
+    },
+    "pending_extension_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1800,
+      "description": "One additional window allowed only while checks are pending."
+    },
+    "max_pending_extensions": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 1,
+      "description": "Zero disables the pending extension; one retains the existing one-extension ceiling."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

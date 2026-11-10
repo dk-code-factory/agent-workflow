@@ -1,0 +1,10 @@
+{
+  "$schema": "./config.schema.json",
+  "template": null,
+  "labels": [],
+  "assignees": [],
+  "fallback_sections": [
+    "Problem",
+    "Expected behavior"
+  ]
+}

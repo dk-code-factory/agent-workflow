@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-commit-message/config.schema.json",
+  "title": "dk-workflows:dk-commit-message options",
+  "type": "object",
+  "properties": {
+    "subject_target_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 72,
+      "description": "Preferred subject length where explicit policy and repository requirements leave a choice."
+    },
+    "body_wrap_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 72,
+      "description": "Fallback prose wrapping width where explicit policy and repository requirements leave a choice."
+    },
+    "max_line_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 80,
+      "description": "Fallback maximum message-line length; explicit policy and required repository formatting still govern."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

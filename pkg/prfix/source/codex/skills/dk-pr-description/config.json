@@ -1,0 +1,10 @@
+{
+  "$schema": "./config.schema.json",
+  "template": null,
+  "update_title": true,
+  "update_body": true,
+  "fallback_sections": [
+    "Issue",
+    "Fix"
+  ]
+}

@@ -1,0 +1,168 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "pr_url": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9.-]+/[a-z0-9_.-]+/[a-z0-9_.-]+/pull/[1-9][0-9]*$"
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "action": {
+            "enum": [
+              "enable",
+              "disable",
+              "instructions",
+              "clear-instructions",
+              "reset"
+            ]
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "instructions": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "instructions"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "revision",
+          "action",
+          "policy",
+          "reason",
+          "source",
+          "previous",
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "declines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "behavior": {
+            "enum": [
+              "evacuate_unrelated",
+              "split_related"
+            ]
+          },
+          "action_id": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "proposal": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "snapshot_key": {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              },
+              "head": {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              },
+              "tree": {
+                "type": "string",
+                "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+              }
+            },
+            "required": [
+              "state",
+              "snapshot_key",
+              "head",
+              "tree"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "behavior",
+          "action_id",
+          "reason",
+          "source",
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "pr_url",
+    "history",
+    "declines"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/pr-partition.schema.json",
+  "title": "Stored per-PR partition policy",
+  "description": "Python verifies canonical PR identity, policy transitions and hash-linked history. Edit through pr_config.py."
+}

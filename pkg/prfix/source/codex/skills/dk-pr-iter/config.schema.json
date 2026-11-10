@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-iter/config.schema.json",
+  "title": "dk-workflows:dk-pr-iter options",
+  "type": "object",
+  "properties": {
+    "personal_accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$"
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "host",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "default": [],
+      "description": "Verified immutable account IDs scoped to their GitHub host. Replaces the entire inherited list."
+    },
+    "routes": {
+      "type": "object",
+      "properties": {
+        "own_pr": {
+          "$ref": "../../../schemas/invocation.schema.json",
+          "default": {
+            "skill": "dk-workflows:dk-pr-fix",
+            "options": {},
+            "required": true
+          }
+        },
+        "other_pr": {
+          "$ref": "../../../schemas/invocation.schema.json",
+          "default": {
+            "skill": "dk-workflows:dk-pr-review",
+            "options": {},
+            "required": true
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "own_pr": {
+          "skill": "dk-workflows:dk-pr-fix",
+          "options": {},
+          "required": true
+        },
+        "other_pr": {
+          "skill": "dk-workflows:dk-pr-review",
+          "options": {},
+          "required": true
+        }
+      },
+      "description": "Fully qualified invocations selected by verified PR ownership. Routing does not grant publication permission."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

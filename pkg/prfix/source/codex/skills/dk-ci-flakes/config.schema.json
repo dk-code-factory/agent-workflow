@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-ci-flakes/config.schema.json",
+  "title": "dk-workflows:dk-ci-flakes options",
+  "type": "object",
+  "properties": {
+    "lookback_days": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "description": "Maximum days of Actions history searched for flake evidence."
+    },
+    "max_runs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 100,
+      "description": "Maximum Actions runs inspected during flake discovery."
+    },
+    "max_issues": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 500,
+      "description": "Maximum issues inspected during flake discovery; linked issues must still be verified open."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

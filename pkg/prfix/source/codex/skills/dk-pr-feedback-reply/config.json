@@ -1,0 +1,4 @@
+{
+  "$schema": "./config.schema.json",
+  "resolve_answered_threads": true
+}

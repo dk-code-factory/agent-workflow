@@ -1,0 +1,6 @@
+{
+  "$schema": "./config.schema.json",
+  "lookback_days": 30,
+  "max_runs": 100,
+  "max_issues": 500
+}

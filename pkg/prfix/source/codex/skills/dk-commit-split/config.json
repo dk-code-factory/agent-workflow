@@ -1,0 +1,5 @@
+{
+  "$schema": "./config.schema.json",
+  "policy": null,
+  "max_passes": 5
+}
