@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -165,8 +166,8 @@ func TestReportCollectionLimitsPrecedeTypedAllocation(t *testing.T) {
 		return parseReport(workflows.WorkerMessage{Result: workflows.SessionResult{Outputs: map[string]any{"text": text}}})
 	}
 	for _, name := range []string{"operations", "findings", "evidence"} {
-		// Each element is invalid for the typed collection. A decoder run before
-		// the shape guard must return that type error instead of the size error.
+		// Invalid elements distinguish the shape guard from typed decoding even
+		// when the decoder would otherwise return early on its first type error.
 		_, err := report(`{"` + name + `":[0]}`)
 		var typeError *json.UnmarshalTypeError
 		if !errors.As(err, &typeError) {
@@ -179,6 +180,24 @@ func TestReportCollectionLimitsPrecedeTypedAllocation(t *testing.T) {
 		if _, err := report(text); err == nil || !strings.Contains(err.Error(), "collection limit") {
 			t.Fatal("oversized collection typed before rejection", name, err)
 		}
+	}
+	// Error precedence alone cannot prove allocation order: a decoder could
+	// retain its error and return the shape error afterward. Measure a valid
+	// collection built before the sample. Half its minimum typed backing array
+	// is a generous budget for the shape guard, which stops at the limit.
+	const count = 100001
+	oversized := `{"operations":[` + strings.Repeat(`{},`, count-1) + `{}]}`
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, allocationErr := report(oversized)
+	runtime.ReadMemStats(&after)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	budget := uint64(reflect.TypeOf(Intent{}).Size()) * count / 2
+	if allocationErr == nil || !strings.Contains(allocationErr.Error(), "collection limit") {
+		t.Fatal("oversized valid collection accepted", allocationErr)
+	}
+	if allocated >= budget {
+		t.Fatalf("oversized collection allocated %d bytes before rejection; budget %d", allocated, budget)
 	}
 	boundary := `{"operations":[` + strings.Repeat(`{},`, maxReportCollection-1) + `{}]}`
 	got, err := report(boundary)
