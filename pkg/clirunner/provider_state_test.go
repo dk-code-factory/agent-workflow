@@ -141,6 +141,50 @@ func TestNativeCodexReferencePreservesProviderOwnedAuthentication(t *testing.T) 
 	}
 }
 
+func TestNativeCodexReferenceRetainsStateFilesystemFailure(t *testing.T) {
+	for _, operation := range []string{"lstat", "symlink"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			authFile := filepath.Join(root, "auth.json")
+			raw := []byte(`{"OPENAI_API_KEY":"fixture-key"}`)
+			if err := os.WriteFile(authFile, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(root, "state")
+			if operation == "lstat" {
+				if err := os.WriteFile(state, []byte("obstructed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := referenceNativeCodexAuth(state, Agent{Authentication: Authentication{Mode: "native", CredentialFile: authFile}})
+			var storageErr *runtimeexec.StorageError
+			if !errors.As(err, &storageErr) {
+				t.Fatal("authentication reference lost its state filesystem identity", err)
+			}
+			var cause error
+			if operation == "lstat" {
+				var pathErr *os.PathError
+				if !errors.As(err, &pathErr) || pathErr.Op != operation {
+					t.Fatal("state lookup lost its filesystem cause", err)
+				}
+				cause = pathErr
+			} else {
+				var linkErr *os.LinkError
+				if !errors.As(err, &linkErr) || linkErr.Op != operation {
+					t.Fatal("state reference lost its filesystem cause", err)
+				}
+				cause = linkErr
+			}
+			if storageErr.Error() != cause.Error() || workflows.FailureClass(err) != workflows.FailureClass(cause) {
+				t.Fatal("state reference storage marker changed its diagnostic", err)
+			}
+			if current, err := os.ReadFile(authFile); err != nil || string(current) != string(raw) {
+				t.Fatal("state preparation changed provider-owned authentication", err)
+			}
+		})
+	}
+}
+
 func TestNativeCodexCredentialsIncludeEveryTokenForRedaction(t *testing.T) {
 	for _, api := range []string{"", "fixture-api-key"} {
 		path := filepath.Join(t.TempDir(), "auth.json")

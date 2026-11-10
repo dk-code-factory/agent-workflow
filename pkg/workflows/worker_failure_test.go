@@ -412,6 +412,7 @@ func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testi
 				{"cleanup", process.ErrCleanup, "needs_attention"},
 				{"integrity", ErrActionIntegrity, "action_integrity"},
 				{"storage", errStepPersistence, "storage"},
+				{"state_link", &runtimeexec.StorageError{Err: &os.LinkError{Op: "symlink", Old: "/source/auth.json", New: "/state/auth.json", Err: errors.New("no space left on device")}}, "storage"},
 				{"authentication", errors.New("authentication failed"), "authentication"},
 				{"mixed_authentication", errors.Join(ErrProviderFailure, errors.New("authentication failed")), "authentication"},
 				{"wrapped_authentication", fmt.Errorf("%w: authentication failed", ErrProviderFailure), "authentication"},

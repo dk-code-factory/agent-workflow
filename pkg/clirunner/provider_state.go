@@ -124,7 +124,10 @@ func referenceNativeCodexAuth(state string, a Agent) error {
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
-		return err
+		return &runtimeexec.StorageError{Err: err}
 	}
-	return os.Symlink(source, target)
+	if err = os.Symlink(source, target); err != nil {
+		return &runtimeexec.StorageError{Err: err}
+	}
+	return nil
 }
