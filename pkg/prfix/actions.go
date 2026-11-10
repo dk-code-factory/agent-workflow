@@ -193,6 +193,13 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 			if digest(saved) != digest(cp.Result.Output) {
 				return fmt.Errorf("action checkpoint evidence differs")
 			}
+			if name == "completion" && saved.Ready {
+				p, err := r.plan(cp.Input)
+				if err != nil {
+					return err
+				}
+				return r.validateCompletionCI(context.WithValue(ctx, ciExecutionContextKey{}, ac), p, saved)
+			}
 			return nil
 		}
 		spec.Reconcile = func(ctx context.Context, ac workflows.ActionContext, cp workflows.ActionCheckpoint[ActionInput, ActionOutput]) (workflows.ActionReconciliation[ActionOutput], error) {
@@ -366,7 +373,7 @@ func (r *Runtime) handle(ctx context.Context, name string, ac workflows.ActionCo
 	case "ci_classify":
 		return r.classifyCI(ctx, p, in)
 	case "ci":
-		return r.ci(ctx, p, in)
+		return r.ci(context.WithValue(ctx, ciExecutionContextKey{}, ac), p, in)
 	case "reserve":
 		l, e := r.ledger()
 		if e != nil {
@@ -383,7 +390,7 @@ func (r *Runtime) handle(ctx context.Context, name string, ac workflows.ActionCo
 		}
 		return output(), l.Reserve(ctx, p.LogicalRun, in.Kind, scope, ac.OperationKey, "selected CI repair")
 	case "completion":
-		return r.completion(ctx, p, in)
+		return r.completion(context.WithValue(ctx, ciExecutionContextKey{}, ac), p, in)
 	case "close":
 		return r.close(ctx, p, ac)
 	case "receipt":

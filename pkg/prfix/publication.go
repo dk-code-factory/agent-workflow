@@ -22,6 +22,9 @@ var operationPermissions = map[string]string{"push": "push_commits", "rewrite": 
 
 func intentID(run string, i Intent) string {
 	values := []any{run, i.Kind, i.Head, i.Lease, i.Target, i.Branch, i.Payload}
+	if i.Source != nil {
+		values = append(values, i.Source)
+	}
 	if i.Replaces != nil {
 		values = append(values, i.Replaces)
 	}
@@ -263,6 +266,11 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 		if i.ActorID <= 0 || ev.ViewerID != i.ActorID {
 			return fmt.Errorf("authenticated publication actor changed after preparation")
 		}
+		if i.Source != nil && (i.Kind == "reply" || i.Kind == "reply_inline") {
+			if err := verifyFeedbackSource(i, ev); err != nil {
+				return err
+			}
+		}
 	}
 	if i.Kind == "push" || i.Kind == "rewrite" {
 		if s.LocalHead != i.Head {
@@ -452,7 +460,7 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 		if !liveCompletion {
 			return fmt.Errorf("merge follows accepted current managed completion")
 		}
-		count, e := completedReviewCount(reports, s)
+		count, e := completedReviewCount(p, reports, s)
 		if e != nil {
 			return e
 		}

@@ -16,6 +16,12 @@ import (
 
 type replyRecoveryProvider struct{ *fakeProvider }
 
+func recoveryReviewSource(provider *fakeProvider) *FeedbackSource {
+	source := &FeedbackSource{Kind: "review", ID: "17", URL: provider.ev.Metadata.URL + "#pullrequestreview-17"}
+	provider.ev.Reviews = []map[string]any{{"id": 17, "html_url": source.URL, "body": "Please explain this change."}}
+	return source
+}
+
 func (f *replyRecoveryProvider) Execute(ctx context.Context, i Intent) (Receipt, error) {
 	receipt, err := f.fakeProvider.Execute(ctx, i)
 	if err == nil && contains([]string{"reply", "reply_inline"}, i.Kind) {
@@ -50,6 +56,7 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 	root, base, req := fixture(t)
 	base.discussionWrites = true
 	provider := &replyRecoveryProvider{base}
+	source := recoveryReviewSource(base)
 	replacementAuth := Authorization{"replacement-user-request", "Replace the missing answer on this PR with the same verified answer.", "chat:replacement"}
 	req.Authorizations = map[string]Authorization{"iterate": {"initial-user-request", "Fix and publish this PR.", "chat:initial"}}
 	req.Options["tasks"] = []any{"dk-workflows:dk-pr-feedback-read"}
@@ -89,7 +96,7 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 		if o.ID != "reply_recovery" {
 			return
 		}
-		i := Intent{ID: "replacement", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}
+		i := Intent{ID: "replacement", Kind: "reply", Source: source, Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}
 		i.Replaces = &ReplyReplacement{Run: observed.Observation.Intent.Run, ID: observed.Observation.Intent.ID, Inspection: observed.Path, Observation: observed.Fingerprint, Decision: "replacement_required", Reason: "Current code and complete discussion still require the answer; the verified historical comment is unavailable.", Sources: append(append([]string{}, observed.Observation.Intent.Sources...), observed.Path), Authorization: replacementAuth}
 		report.Operations = []Intent{i}
 	}, reportReplies: func(o Occurrence, s Snapshot, obligations []retainedObligation, report *Report) {
@@ -99,7 +106,7 @@ func TestAuthorizedSameBodyReplyReplacementIsLinkedAndReplaySafe(t *testing.T) {
 		for _, item := range obligations {
 			report.Responses = append(report.Responses, ReplyResponse{ID: item.Obligation.ID, Outcome: "reply", Reason: "Verified answer.", Sources: []string{item.Original}, Operation: "original"})
 		}
-		report.Operations = []Intent{{ID: "original", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}}
+		report.Operations = []Intent{{ID: "original", Kind: "reply", Source: source, Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The exact supported answer."}, Sources: []string{s.Evidence}}}
 	}}
 	ex, _, runtime := executeFixture(t, root, provider, prepared, session)
 	p, err := ReadPlan(prepared.Plan)
@@ -280,10 +287,11 @@ func TestReplyReplacementRejectsUncertainOriginalAndMissingAuthority(t *testing.
 
 func TestGitHubReplyInspectionDistinguishesMissingEditedAndInaccessible(t *testing.T) {
 	root, base, req := fixture(t)
+	source := recoveryReviewSource(base)
 	id, _ := ParseIdentity(req.PR)
 	const created = "9007199254740993"
 	comment := map[string]any{"id": json.Number(created), "body": "Original answer", "user": map[string]any{"id": 7, "login": "author"}}
-	i := Intent{ID: "original", Kind: "reply", PR: id, ActorID: 7, Head: base.ev.Metadata.Head.SHA, Payload: map[string]any{"body": "Original answer"}, Sources: []string{"original-source"}}
+	i := Intent{ID: "original", Kind: "reply", Source: source, PR: id, ActorID: 7, Head: base.ev.Metadata.Head.SHA, Payload: map[string]any{"body": "Original answer"}, Sources: []string{"original-source"}}
 	receipt := Receipt{ID: i.ID, Kind: i.Kind, PR: id.URL, Head: i.Head, Result: comment}
 	endpoint := "repos/owner/repo/issues/comments/" + created
 	responses := map[string]any{
@@ -291,7 +299,7 @@ func TestGitHubReplyInspectionDistinguishesMissingEditedAndInaccessible(t *testi
 		"user":                     map[string]any{"id": 7, "login": "author"},
 		"repos/owner/repo/issues/1/comments?per_page=100": []any{[]any{comment}},
 		"repos/owner/repo/pulls/1/comments?per_page=100":  []any{[]any{}},
-		"repos/owner/repo/pulls/1/reviews?per_page=100":   []any{[]any{}},
+		"repos/owner/repo/pulls/1/reviews?per_page=100":   []any{[]any{base.ev.Reviews[0]}},
 		"graphql": map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"reviewThreads": map[string]any{"totalCount": 0, "nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}}},
 		endpoint:  "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n" + string(jsonBytes(comment)),
 	}

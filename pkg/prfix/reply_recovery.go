@@ -55,6 +55,9 @@ func (g *GitHub) InspectReply(ctx context.Context, i Intent, receipt Receipt) (R
 	if o.PR, err = g.Capture(ctx, i.PR); err != nil {
 		return o, err
 	}
+	if err = verifyFeedbackSource(i, o.PR); err != nil {
+		return o, err
+	}
 	id := githubID(receipt.Result, "id")
 	if !numeric(id) {
 		return o, fmt.Errorf("historical numeric reply ID required")
@@ -100,6 +103,9 @@ func (r *Runtime) inspectReply(ctx context.Context, i Intent, receipt Receipt) (
 	}
 	if o.Intent.Fingerprint() != i.Fingerprint() || digest(o.Receipt) != digest(receipt) || o.PR.ViewerID <= 0 || o.PR.ViewerID != i.ActorID || o.PR.Metadata.Number != i.PR.Number || o.PR.Metadata.URL != i.PR.URL || !validSHA(o.PR.Metadata.Head.SHA) || o.PR.Comments == nil || o.PR.Inline == nil || len(i.Sources) == 0 {
 		return o, fmt.Errorf("complete exact historical reply, current PR/source and actor evidence required")
+	}
+	if err := verifyFeedbackSource(i, o.PR); err != nil {
+		return o, err
 	}
 	comments := o.PR.Comments
 	if i.Kind == "reply_inline" {
@@ -227,7 +233,7 @@ func validateReplacementLink(ctx context.Context, tx sqlRW, p Plan, i Intent) er
 	if err := json.Unmarshal([]byte(raw), &old); err != nil {
 		return err
 	}
-	if state != "completed" || old.PR != i.PR || old.Kind != i.Kind || old.ActorID != i.ActorID || old.ActorID <= 0 || stringValue(old.Payload, "comment_id") != stringValue(i.Payload, "comment_id") {
+	if state != "completed" || old.PR != i.PR || old.Kind != i.Kind || old.ActorID != i.ActorID || old.ActorID <= 0 || digest(old.Source) != digest(i.Source) || stringValue(old.Payload, "comment_id") != stringValue(i.Payload, "comment_id") {
 		return fmt.Errorf("replacement must retain verified original PR/actor/source/destination")
 	}
 	var run, id string
@@ -283,7 +289,7 @@ func (r *Runtime) verifyLinkedReplyReplacement(ctx context.Context, l *Ledger, o
 		return false, err
 	}
 	d := replacement.Replaces
-	if d == nil || d.Run != original.Run || d.ID != original.ID || d.Observation != linked.observation || d.Decision != "replacement_required" || replacement.PR != original.PR || replacement.Kind != original.Kind || replacement.ActorID != original.ActorID || stringValue(replacement.Payload, "comment_id") != stringValue(original.Payload, "comment_id") {
+	if d == nil || d.Run != original.Run || d.ID != original.ID || d.Observation != linked.observation || d.Decision != "replacement_required" || replacement.PR != original.PR || replacement.Kind != original.Kind || replacement.ActorID != original.ActorID || digest(replacement.Source) != digest(original.Source) || stringValue(replacement.Payload, "comment_id") != stringValue(original.Payload, "comment_id") {
 		return false, fmt.Errorf("exact historical reply replacement link required")
 	}
 	current, err := r.inspectReply(ctx, replacement, receipt)

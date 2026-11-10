@@ -570,6 +570,7 @@ func generate(p Plan, planPath, dir string) (map[string][]byte, error) {
 	previous := []string{}
 	counter := 0
 	hookGate := false
+	var hookDefinitionError error
 	addGroups := func(groups [][]string) {
 		for _, group := range groups {
 			join := []string{}
@@ -594,12 +595,26 @@ func generate(p Plan, planPath, dir string) (map[string][]byte, error) {
 				}
 				j := callJob(ref, previous, map[string]any{"plan": expr("inputs.plan"), "cycle": expr("inputs.cycle"), "occurrence": id})
 				if hookGate {
-					j.Needs = append(append([]string{}, j.Needs...), "review_admission")
-					j.If = expr("needs.review_admission.outputs.invoke")
+					wrapper := workflows.Workflow{Name: "PR fix conditional cycle hook", On: workflows.WorkflowTriggers{WorkflowCall: &workflows.WorkflowCall{Inputs: map[string]workflows.Input{"plan": {Type: "string", Required: true}, "cycle": {Type: "string", Required: true}, "occurrence": {Type: "string", Required: true}, "invoke": {Type: "boolean", Required: true}}}}, Jobs: map[string]workflows.Job{"invoke": {If: expr("inputs.invoke"), Uses: ref, With: map[string]any{"plan": expr("inputs.plan"), "cycle": expr("inputs.cycle"), "occurrence": expr("inputs.occurrence")}}}}
+					if o.Kind == "publication" {
+						wrapper.Jobs["intents"] = workflows.Job{Needs: []string{"invoke"}, Steps: []workflows.Step{{ID: "intents", Uses: "action/prfix_intents", With: map[string]any{"plan": expr("inputs.plan")}}}, Outputs: map[string]string{"items": expr("steps.intents.outputs.items")}}
+						wrapper.Jobs["publish"] = workflows.Job{Needs: []string{"intents"}, Uses: dir + "/publication.yml", ForEach: &workflows.ForEach{Items: expr("needs.intents.outputs.items"), Key: expr("item.id")}, With: map[string]any{"plan": expr("inputs.plan"), "cycle": expr("inputs.cycle"), "intent": expr("item")}}
+					}
+					wrappedRef := dir + "/hook_" + jobID + ".yml"
+					b, err := yaml.Marshal(wrapper)
+					if err != nil && hookDefinitionError == nil {
+						hookDefinitionError = err
+					}
+					defs[wrappedRef] = b
+					j.Uses = wrappedRef
+					if !contains(j.Needs, "review_admission") {
+						j.Needs = append(append([]string{}, j.Needs...), "review_admission")
+					}
+					j.With["invoke"] = expr("needs.review_admission.outputs.invoke")
 				}
 				phase.Jobs[jobID] = j
 				join = append(join, jobID)
-				if o.Kind == "publication" {
+				if o.Kind == "publication" && !hookGate {
 					listID := jobID + "_intents"
 					phase.Jobs[listID] = workflows.Job{Needs: []string{jobID}, Steps: []workflows.Step{{ID: "intents", Uses: "action/prfix_intents", With: map[string]any{"plan": expr("inputs.plan")}}}, Outputs: map[string]string{"items": expr("steps.intents.outputs.items")}}
 					pubID := jobID + "_publish"
@@ -676,6 +691,9 @@ func generate(p Plan, planPath, dir string) (map[string][]byte, error) {
 		afterHooks()
 	}
 
+	if hookDefinitionError != nil {
+		return nil, hookDefinitionError
+	}
 	phase.Jobs["completion"] = callJob(dir+"/completion.yml", previous, map[string]any{"plan": expr("inputs.plan"), "cycle": expr("inputs.cycle")})
 	phaseBytes, e := yaml.Marshal(phase)
 	if e != nil {

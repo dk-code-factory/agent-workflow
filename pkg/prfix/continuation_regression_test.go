@@ -223,7 +223,7 @@ func TestRequiredHookResourcesStayFreshWithinSameCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := completedReviewCount(reports, live)
+	count, err := completedReviewCount(p, reports, live)
 	if err != nil || initial.LocalTree != live.LocalTree || initial.Resources != live.Resources || count != 1 {
 		t.Fatal("hook-only update changed unrelated review inputs")
 	}

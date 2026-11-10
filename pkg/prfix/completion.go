@@ -386,6 +386,10 @@ func (r *Runtime) ci(ctx context.Context, p Plan, in ActionInput) (ActionOutput,
 		if e != nil {
 			return out, e
 		}
+		obs.Execution, e = r.ciExecution(ctx)
+		if e != nil {
+			return out, e
+		}
 		path, e := artifact(r.Root, obs)
 		if e != nil {
 			return out, e
@@ -478,10 +482,16 @@ func (r *Runtime) reviewCurrent(ctx context.Context, p Plan, s Snapshot) (bool, 
 
 // Optional failures may finish selected work, but only accepted current native
 // reviews can supply readiness or merge coverage.
-func completedReviewCount(reports []retainedReport, current Snapshot) (int, error) {
+func completedReviewCount(p Plan, reports []retainedReport, current Snapshot) (int, error) {
+	selected := map[string]Occurrence{}
+	for _, o := range p.Occurrences {
+		if o.Review {
+			selected[o.ID] = o
+		}
+	}
 	latest := map[string]retainedReport{}
 	for _, rr := range reports {
-		if rr.Occurrence.Review {
+		if _, ok := selected[rr.Occurrence.ID]; ok {
 			latest[rr.Occurrence.ID] = rr
 		}
 	}
@@ -494,7 +504,8 @@ func completedReviewCount(reports []retainedReport, current Snapshot) (int, erro
 		if err := readJSON(rr.Claim.Snapshot, &initial); err != nil {
 			return 0, err
 		}
-		if occurrenceFingerprint(initial, rr.Occurrence) == occurrenceFingerprint(current, rr.Occurrence) {
+		o := selected[rr.Occurrence.ID]
+		if occurrenceFingerprint(initial, rr.Occurrence) == occurrenceFingerprint(current, o) {
 			count++
 		}
 	}
@@ -556,7 +567,7 @@ func (r *Runtime) completion(ctx context.Context, p Plan, in ActionInput) (Actio
 		if err != nil {
 			return out, err
 		}
-		count, err := completedReviewCount(reports, s)
+		count, err := completedReviewCount(p, reports, s)
 		if err != nil {
 			return out, err
 		}
@@ -587,6 +598,16 @@ func (r *Runtime) completion(ctx context.Context, p Plan, in ActionInput) (Actio
 			var ci CIObservation
 			if e = readJSON(path, &ci); e != nil {
 				return out, e
+			}
+			var changed bool
+			ci, changed, e = r.refreshResumedCI(ctx, p, s, ci)
+			if e != nil {
+				return out, e
+			}
+			if changed {
+				readiness = append(readiness, "CI changed after resume; selected CI must refresh")
+				out.Complete = false
+				ciNeedsRefresh = true
 			}
 			if ci.Head != s.Head || !ci.Success() {
 				readiness = append(readiness, "exact-head CI has not passed")

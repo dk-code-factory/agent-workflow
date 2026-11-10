@@ -9,11 +9,11 @@ import (
 )
 
 func replyIdentity(i Intent) string {
-	return digest([]any{i.PR.URL, i.Kind, i.ActorID, stringValue(i.Payload, "comment_id"), stringValue(i.Payload, "body")})
+	return digest([]any{i.PR.URL, i.Kind, i.ActorID, stringValue(i.Payload, "comment_id"), stringValue(i.Payload, "body"), i.Source})
 }
 
-// Aliases retain caller IDs while making a reply's actor, destination and exact
-// text identify one effect. Transport pins and observation baselines belong to
+// Aliases retain caller IDs while making a reply's source, actor, destination and
+// exact text identify one effect. Transport pins and observation baselines belong to
 // the original intent, including after a lost response or a later logical run.
 func prepareReplyAlias(ctx context.Context, tx sqlRW, i Intent) (bool, error) {
 	var proposal, state string

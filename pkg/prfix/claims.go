@@ -129,6 +129,7 @@ func (r *Runtime) claim(ctx context.Context, p Plan, ac workflows.ActionContext,
 		assignment["commit_policy"] = policy
 	}
 	if o.Kind == "reply" {
+		assignment["reply_source_contract"] = "For an operation answering feedback, retain source with kind inline_comment, review or issue_comment, id as a decimal database-ID string, and the exact original url. Inline sources also require their original thread_id; payload.comment_id remains the root routing parent even when answering later feedback. Preserve source unchanged in any replacement. Recovery without structured original provenance is blocked."
 		assignment["reply_obligations"], e = r.replyObligations(ctx, p)
 		if e != nil {
 			return out, e

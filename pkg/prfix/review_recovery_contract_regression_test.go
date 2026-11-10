@@ -206,6 +206,7 @@ func TestNoReplacementDispositionSettlesObsoleteRequiredAnswerWithoutWrite(t *te
 	root, base, req := fixture(t)
 	base.discussionWrites = true
 	provider := &replyRecoveryProvider{base}
+	source := recoveryReviewSource(base)
 	req.Options["tasks"] = []any{"dk-workflows:dk-pr-feedback-read"}
 	req.Options["finalizers"] = []any{"dk-workflows:dk-pr-feedback-reply", "dk-workflows:dk-pr-publish"}
 	req.Authorizations = map[string]Authorization{"iterate": {"reply", "Reply to required feedback.", "chat:reply"}}
@@ -243,7 +244,7 @@ func TestNoReplacementDispositionSettlesObsoleteRequiredAnswerWithoutWrite(t *te
 		for _, item := range obligations {
 			report.Responses = append(report.Responses, ReplyResponse{ID: item.Obligation.ID, Outcome: "reply", Reason: "Verified answer.", Sources: []string{item.Original}, Operation: "historical"})
 		}
-		report.Operations = []Intent{{ID: "historical", Kind: "reply", Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The verified historical answer."}, Sources: []string{s.Evidence}}}
+		report.Operations = []Intent{{ID: "historical", Kind: "reply", Source: source, Head: s.Head, Lease: s.Head, Target: s.Target, Branch: s.HeadBranch, HeadRepository: s.HeadRepository, Payload: map[string]any{"body": "The verified historical answer."}, Sources: []string{s.Evidence}}}
 	}}
 	ex, _, runtime := executeFixture(t, root, provider, prepared, session)
 	p, err := ReadPlan(prepared.Plan)

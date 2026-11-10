@@ -59,11 +59,12 @@ type PRMetadata struct {
 	MergeableState string `json:"mergeable_state"`
 }
 type CIObservation struct {
-	Verified []CIProof         `json:"verified,omitempty"`
-	Logs     map[string]string `json:"logs,omitempty"`
-	Head     string            `json:"head"`
-	Checks   []CICheck         `json:"checks"`
-	Evidence string            `json:"evidence"`
+	Execution *CIExecution      `json:"execution,omitempty"`
+	Verified  []CIProof         `json:"verified,omitempty"`
+	Logs      map[string]string `json:"logs,omitempty"`
+	Head      string            `json:"head"`
+	Checks    []CICheck         `json:"checks"`
+	Evidence  string            `json:"evidence"`
 }
 type CICheck struct {
 	ID         string `json:"id"`
@@ -100,6 +101,7 @@ func (c CIObservation) Success() bool {
 }
 
 type Intent struct {
+	Source         *FeedbackSource   `json:"source,omitempty"`
 	CreatedAt      string            `json:"created_at,omitempty"`
 	Replaces       *ReplyReplacement `json:"replaces,omitempty"`
 	CreatedHead    string            `json:"created_head,omitempty"`
@@ -384,7 +386,14 @@ func (g *GitHub) ObserveCI(ctx context.Context, id Identity, head string) (CIObs
 func stringValue(m map[string]any, key string) string { v, _ := m[key].(string); return v }
 func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 	if i.Kind == "request_review" || i.Kind == "edit_pr" {
-		state, receipt, err := g.Reconcile(ctx, i)
+		ev, err := g.Capture(ctx, i.PR)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if ev.Metadata.Head.SHA != i.Head || i.Lease != "" && ev.Metadata.Head.SHA != i.Lease || i.Target != "" && ev.Metadata.Base.SHA != i.Target || i.Branch != "" && ev.Metadata.Head.Ref != i.Branch || i.HeadRepository != "" && ev.Metadata.Head.Repo.FullName != i.HeadRepository {
+			return Receipt{}, fmt.Errorf("publication head/target/branch changed before dispatch")
+		}
+		state, receipt, err := g.reconcileObservation(ctx, i, ev)
 		if err != nil {
 			return Receipt{}, err
 		}
@@ -404,6 +413,11 @@ func (g *GitHub) Execute(ctx context.Context, i Intent) (Receipt, error) {
 		}
 		if i.ActorID <= 0 || ev.ViewerID != i.ActorID || ev.Metadata.Head.SHA != i.Head {
 			return Receipt{}, fmt.Errorf("reply actor or head changed before dispatch")
+		}
+		if i.Source != nil {
+			if err := verifyFeedbackSource(i, ev); err != nil {
+				return Receipt{}, err
+			}
 		}
 		matches := matchingReplies(ev, i)
 		if saved := stringValue(i.Before, "satisfied_comment_id"); saved != "" {
@@ -492,6 +506,11 @@ func (g *GitHub) Reconcile(ctx context.Context, i Intent) (string, Receipt, erro
 	if e != nil {
 		return "unknown", Receipt{}, e
 	}
+	return g.reconcileObservation(ctx, i, ev)
+}
+
+func (g *GitHub) reconcileObservation(ctx context.Context, i Intent, ev PREvidence) (string, Receipt, error) {
+	var e error
 	found := false
 	absent := false
 	var result any = ev.Metadata
