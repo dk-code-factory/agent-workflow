@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
 // WorkerFailureAcknowledgement records a controller's disposition without
@@ -185,8 +186,31 @@ func unsafeWorkerFailureClass(err error) string {
 }
 
 func workerPersistenceError(err error) error {
-	if err == nil {
-		return nil
+	if err == nil || cancellationOnly(err) || onlyError(err, context.DeadlineExceeded) {
+		return err
 	}
 	return fmt.Errorf("%w: %w", errStepPersistence, err)
+}
+
+type workerInvocationJournal struct {
+	runtimeexec.Journal
+	observe func(error)
+}
+
+func (j workerInvocationJournal) retain(err error) error {
+	if err != nil {
+		if unsafeWorkerFailureClass(err) == "" {
+			err = workerPersistenceError(err)
+		}
+		j.observe(err)
+	}
+	return err
+}
+
+func (j workerInvocationJournal) AdmitInvocation(ctx context.Context, record runtimeexec.Record) error {
+	return j.retain(j.Journal.AdmitInvocation(ctx, record))
+}
+
+func (j workerInvocationJournal) UpdateInvocation(ctx context.Context, record runtimeexec.Record) error {
+	return j.retain(j.Journal.UpdateInvocation(ctx, record))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -63,7 +64,7 @@ func failureFixtureWithSession(t *testing.T, session *failedNativeSession) (*Wor
 	return failureFixtureWithSetup(t, session, nil)
 }
 
-func failureFixtureWithSetup(t *testing.T, session *failedNativeSession, setup func(*WorkerManager)) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
+func failureFixtureWithSetup(t *testing.T, session SessionRunner, setup func(*WorkerManager)) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
 	t.Helper()
 	m, run := workerFixture(t, &fakeSession{})
 	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
@@ -108,6 +109,72 @@ func failureTestContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+type invocationFailureSession struct {
+	failedNativeSession
+	update bool
+}
+
+func (s *invocationFailureSession) RunTurn(ctx context.Context, _ SessionRequest, _ func(ProviderEvent)) (SessionResult, error) {
+	invocation, err := runtimeexec.Admit(ctx, "native")
+	if err == nil && s.update {
+		err = invocation.Save(ctx, "cleaned")
+	}
+	return SessionResult{Status: RunStatusFailed}, err
+}
+
+func TestFailureAcknowledgementRejectsInvocationJournalFailures(t *testing.T) {
+	for _, phase := range []string{"admission", "update"} {
+		t.Run(phase, func(t *testing.T) {
+			session := &invocationFailureSession{update: phase == "update"}
+			m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+				operation := "INSERT"
+				if session.update {
+					operation = "UPDATE"
+				}
+				if _, err := m.Store.db.Exec("CREATE TRIGGER reject_worker_invocation BEFORE " + operation + " ON invocations BEGIN SELECT RAISE(ABORT,'native checkpoint failed'); END"); err != nil {
+					t.Fatal(err)
+				}
+			})
+			ctx := failureTestContext(t)
+			if msg.FailureClass != "storage" || msg.UnsafeFailureClass != "storage" {
+				t.Fatal("invocation checkpoint lost its storage identity", msg)
+			}
+			if !session.update {
+				var count int
+				if err := m.Store.db.QueryRowContext(ctx, "SELECT count(*) FROM invocations WHERE run_id=?", req.RunID).Scan(&count); err != nil || count != 0 {
+					t.Fatal("failed admission unexpectedly left an invocation barrier", count, err)
+				}
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("invocation checkpoint failure was acknowledged")
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed invocation failure evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("invocation checkpoint failure lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
+func TestWorkerPersistenceErrorPreservesCancellation(t *testing.T) {
+	for _, signal := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(signal.Error(), func(t *testing.T) {
+			original := fmt.Errorf("usage admission interrupted: %w", signal)
+			retained := workerPersistenceError(original)
+			if retained != original || classifyFailure(retained) != classifyFailure(original) {
+				t.Fatal("clean interruption became a storage failure", retained)
+			}
+			mixed := workerPersistenceError(errors.Join(errors.New("checkpoint rejected"), signal))
+			if !errors.Is(mixed, errStepPersistence) || !errors.Is(mixed, signal) {
+				t.Fatal("independent persistence failure lost its storage identity", mixed)
+			}
+		})
+	}
 }
 
 func TestFailureAcknowledgementRejectsAuthorizationDenials(t *testing.T) {

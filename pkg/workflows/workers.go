@@ -788,7 +788,12 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			request.Tools = &InvocationTools{Binding: binding, Lease: lease}
 		}
 	}
-	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: m.Store, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
+	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: func(err error) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		journalErr = errors.Join(journalErr, err)
+	}}
+	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
 	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: w.SessionID}, func(event ProviderEvent) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
