@@ -257,7 +257,7 @@ change alone neither omits the duty nor supplies its completion.
 Deterministic validation uses fake providers, fake GitHub commands,
 and disposable local repositories. No live-provider or publication conformance
 scenario is part of the application test suite.
-`make test` runs the full suite with the race detector and a forty-minute
+`make test` runs the full suite with the race detector and a sixty-minute
 per-package deadline for the workflow recovery integration tests.
 
 ## Source and license
