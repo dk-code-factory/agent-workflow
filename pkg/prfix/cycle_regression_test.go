@@ -155,7 +155,9 @@ func TestPublicationLockCancellationAndRelease(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("contending lock ignored cancellation", err)
 	}
-	unlock, err = other.lockPublication(context.Background())
+	reuseCtx, reuseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer reuseCancel()
+	unlock, err = other.lockPublication(reuseCtx)
 	if err != nil {
 		t.Fatal("released lock not reusable", err)
 	}

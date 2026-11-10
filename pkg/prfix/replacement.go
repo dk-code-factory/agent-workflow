@@ -88,10 +88,6 @@ func reconcileReplacement(ctx context.Context, l *Ledger, provider Provider, old
 			if _, e = runtime.completeEffect(ctx, l, intent, receipt); e != nil {
 				return e
 			}
-		case "no_effect":
-			if _, e = l.db.ExecContext(ctx, "UPDATE effects SET state='superseded' WHERE run=? AND id=?", old.LogicalRun, id); e != nil {
-				return e
-			}
 		default:
 			return fmt.Errorf("operation %s is still uncertain; replacement cannot dispatch another effect", id)
 		}

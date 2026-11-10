@@ -315,11 +315,11 @@ func TestUncertainReviewRequestNoResendRecoveryAndLostCheckpoint(t *testing.T) {
 	}
 	recovered, err := ex.Resume(ctx, recovery.ID, nil, true)
 	if err != nil || recovered.Status != workflows.RunStatusSucceeded {
-		t.Fatal(recovered.Status, err)
+		t.Fatal(recovered, err)
 	}
 	finished, err := ex.Resume(ctx, original.ID, nil, true)
 	if err != nil || finished.Status != workflows.RunStatusSucceeded || base.writes != 1 {
-		t.Fatal("recovery resent or blocked", finished.Status, base.writes, err)
+		t.Fatal("recovery resent or blocked", finished, base.writes, err)
 	}
 	l, err := OpenLedger(root)
 	if err != nil {

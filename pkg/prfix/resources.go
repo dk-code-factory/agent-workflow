@@ -105,6 +105,9 @@ func resourceDigestWithOpen(path string, maxBytes int64, open func(string) (*os.
 			}
 			children := map[string]string{}
 			for _, entry := range entries {
+				if contains([]string{".git", "__pycache__", ".pytest_cache"}, entry.Name()) {
+					continue
+				}
 				hash, e := walk(filepath.Join(path, entry.Name()))
 				if e != nil {
 					return "", e

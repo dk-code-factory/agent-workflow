@@ -302,55 +302,7 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 			return fmt.Errorf("inline reply requires comment_id/body")
 		}
 	case "resolve_thread":
-		if len(i.Payload) != 2 || stringValue(i.Payload, "thread_id") == "" || stringValue(i.Payload, "reply_operation") == "" {
-			return fmt.Errorf("resolution needs exact thread and verified reply operation")
-		}
-		var state string
-		l, e := r.ledger()
-		if e != nil {
-			return e
-		}
-		reply, e := l.Intent(ctx, p.LogicalRun, stringValue(i.Payload, "reply_operation"))
-		if e != nil {
-			l.Close()
-			return e
-		}
-		e = l.db.QueryRowContext(ctx, "SELECT state FROM effects WHERE run=? AND id=?", reply.Run, reply.ID).Scan(&state)
-		if e != nil || state != "completed" {
-			l.Close()
-			return fmt.Errorf("reply must be reconciled before thread resolution")
-		}
-		l.Close()
-		if reply.Kind != "reply_inline" {
-			return fmt.Errorf("resolution requires an inline reply to that exact thread")
-		}
-		ev, e := readPREvidence(s.Evidence)
-		if e != nil {
-			return e
-		}
-		root := ""
-		for _, thread := range ev.Threads {
-			if stringValue(thread, "id") == stringValue(i.Payload, "thread_id") {
-				comments, _ := thread["comments"].(map[string]any)
-				nodes, _ := comments["nodes"].([]any)
-				if len(nodes) > 0 {
-					node, _ := nodes[0].(map[string]any)
-					root = githubID(node, "databaseId")
-				}
-			}
-		}
-		if root == "" || root != stringValue(reply.Payload, "comment_id") {
-			return fmt.Errorf("reply does not belong to the exact resolution thread")
-		}
-		found := false
-		for _, comment := range ev.Inline {
-			if stringValue(comment, "body") == stringValue(reply.Payload, "body") && githubID(comment, "in_reply_to_id") == root {
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("published inline answer is no longer present")
-		}
+		return r.threadResolutionGate(ctx, p, i, s)
 
 	case "split_push":
 		if len(i.Payload) != 3 {
@@ -527,6 +479,53 @@ func (r *Runtime) publicationGate(ctx context.Context, p Plan, i Intent, claim s
 	}
 	return nil
 }
+func (r *Runtime) threadResolutionGate(ctx context.Context, p Plan, i Intent, s Snapshot) error {
+	if len(i.Payload) != 2 || stringValue(i.Payload, "thread_id") == "" || stringValue(i.Payload, "reply_operation") == "" {
+		return fmt.Errorf("resolution needs exact thread and verified reply operation")
+	}
+	l, e := r.ledger()
+	if e != nil {
+		return e
+	}
+	reply, receipt, e := completedReply(ctx, l, p.LogicalRun, stringValue(i.Payload, "reply_operation"))
+	l.Close()
+	if e != nil {
+		return fmt.Errorf("reply must be reconciled before thread resolution: %w", e)
+	}
+	if reply.Kind != "reply_inline" {
+		return fmt.Errorf("resolution requires an inline reply to that exact thread")
+	}
+	ev, e := readPREvidence(s.Evidence)
+	if e != nil {
+		return e
+	}
+	root := ""
+	for _, thread := range ev.Threads {
+		if stringValue(thread, "id") == stringValue(i.Payload, "thread_id") {
+			comments, _ := thread["comments"].(map[string]any)
+			nodes, _ := comments["nodes"].([]any)
+			if len(nodes) > 0 {
+				node, _ := nodes[0].(map[string]any)
+				root = githubID(node, "databaseId")
+			}
+		}
+	}
+	if root == "" || root != stringValue(reply.Payload, "comment_id") {
+		return fmt.Errorf("reply does not belong to the exact resolution thread")
+	}
+	found := false
+	for _, comment := range ev.Inline {
+		user, _ := comment["user"].(map[string]any)
+		if reply.ActorID > 0 && ev.ViewerID == reply.ActorID && githubID(comment, "id") == githubID(receipt.Result, "id") && githubID(user, "id") == strconv.FormatInt(reply.ActorID, 10) && stringValue(user, "login") == ev.Viewer && stringValue(comment, "body") == stringValue(reply.Payload, "body") && githubID(comment, "in_reply_to_id") == root {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("published inline answer is no longer present")
+	}
+	return nil
+}
+
 func numeric(s string) bool { n, e := strconv.ParseUint(s, 10, 64); return e == nil && n > 0 }
 func (r *Runtime) publish(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
 	unlock, err := r.lockPublication(ctx)
