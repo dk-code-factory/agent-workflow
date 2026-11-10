@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
@@ -39,7 +40,7 @@ func providerStateDir(root, provider string, req workflows.SessionRequest) (stri
 	}
 	path := filepath.Join(root, ".agent-workflow", "providers", provider, origin, stateComponent(owner))
 	if err := os.MkdirAll(filepath.Join(path, "home"), 0700); err != nil {
-		return "", err
+		return "", &runtimeexec.StorageError{Err: err}
 	}
 	return path, nil
 }
@@ -103,15 +104,7 @@ func referenceNativeCodexAuth(state string, a Agent) error {
 	if a.Execution.Mode == "container" {
 		return nil
 	} // launcher mounts the explicit file read-only
-	source, err := nativeCodexCredentialFile(a)
-	if err != nil {
-		return err
-	}
-	source, err = filepath.Abs(source)
-	if err != nil {
-		return err
-	}
-	source, err = filepath.EvalSymlinks(source)
+	source, err := resolveNativeCodexAuthSource(a)
 	if err != nil {
 		return err
 	}
@@ -123,7 +116,26 @@ func referenceNativeCodexAuth(state string, a Agent) error {
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
-		return err
+		return &runtimeexec.StorageError{Err: err}
 	}
-	return os.Symlink(source, target)
+	if err = os.Symlink(source, target); err != nil {
+		return &runtimeexec.StorageError{Err: err}
+	}
+	return nil
+}
+
+func resolveNativeCodexAuthSource(a Agent) (string, error) {
+	source, err := nativeCodexCredentialFile(a)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	source, err = filepath.Abs(source)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	return source, nil
 }

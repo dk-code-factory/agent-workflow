@@ -3,11 +3,14 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
 // WorkerFailureAcknowledgement records a controller's disposition without
@@ -35,6 +38,9 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 	var zero WorkerFailureAcknowledgement
 	if strings.TrimSpace(req.RequestID) == "" || len(req.RequestID) > 128 || strings.TrimSpace(req.Reason) == "" || len(req.Reason) > 4096 || strings.TrimSpace(req.Evidence) == "" || len(req.Evidence) > 4096 {
 		return zero, fmt.Errorf("failure acknowledgement requires bounded request identity, reason, and evidence")
+	}
+	if !utf8.ValidString(req.RequestID) || !utf8.ValidString(req.Reason) || !utf8.ValidString(req.Evidence) {
+		return zero, fmt.Errorf("failure acknowledgement requires valid UTF-8 request identity, reason, and evidence")
 	}
 	// Terminal mailbox persistence precedes the provider goroutine's final join.
 	m.mu.Lock()
@@ -83,7 +89,7 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = decodeJSONWithNumbers(raw, &msg); err != nil {
 		return zero, err
 	}
-	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || !acknowledgeableFailure(msg.FailureClass) {
+	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || msg.UnsafeFailureClass != "" || !acknowledgeableFailure(msg.FailureClass) {
 		return zero, fmt.Errorf("native failure is not a settled ordinary failure in this execution")
 	}
 	if prior := msg.FailureAcknowledgement; prior != nil {
@@ -152,4 +158,77 @@ func acknowledgeableFailure(class string) bool {
 		return true
 	}
 	return false
+}
+
+func unsafeWorkerFailureClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	if class := unsafeFailureClass(err); class != "" {
+		return class
+	}
+	var storageErr *runtimeexec.StorageError
+	if errors.As(err, &storageErr) {
+		return "storage"
+	}
+	text := strings.ToLower(err.Error())
+	if authenticationDiagnostic(text) || strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
+		return "authentication"
+	}
+	if class := classifyFailure(err); !acknowledgeableFailure(class) {
+		return class
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if class := unsafeWorkerFailureClass(cause); class != "" {
+				return class
+			}
+		}
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return unsafeWorkerFailureClass(wrapped.Unwrap())
+	}
+	return ""
+}
+
+func workerPersistenceError(err error) error {
+	if err == nil || cancellationOnly(err) || onlyError(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errStepPersistence, err)
+}
+
+type workerInvocationJournal struct {
+	runtimeexec.Journal
+	observe func(error)
+}
+
+type workerToolBinding struct {
+	ToolBinding
+	observe func(error)
+}
+
+func (b workerToolBinding) Call(ctx context.Context, req ToolRequest) (json.RawMessage, error) {
+	result, err := b.ToolBinding.Call(ctx, req)
+	if unsafeWorkerFailureClass(err) != "" {
+		b.observe(err)
+	}
+	return result, err
+}
+
+func (j workerInvocationJournal) retain(err error) error {
+	if err != nil {
+		if unsafeWorkerFailureClass(err) == "" {
+			err = workerPersistenceError(err)
+		}
+		j.observe(err)
+	}
+	return err
+}
+
+func (j workerInvocationJournal) AdmitInvocation(ctx context.Context, record runtimeexec.Record) error {
+	return j.retain(j.Journal.AdmitInvocation(ctx, record))
+}
+
+func (j workerInvocationJournal) UpdateInvocation(ctx context.Context, record runtimeexec.Record) error {
+	return j.retain(j.Journal.UpdateInvocation(ctx, record))
 }

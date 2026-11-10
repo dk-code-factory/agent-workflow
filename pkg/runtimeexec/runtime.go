@@ -133,6 +133,14 @@ type Invocation struct {
 	finalized     bool
 }
 
+// StorageError identifies a runtime state persistence failure while retaining its diagnostic.
+type StorageError struct {
+	Err error
+}
+
+func (e *StorageError) Error() string { return e.Err.Error() }
+func (e *StorageError) Unwrap() error { return e.Err }
+
 func Admit(ctx context.Context, kind string) (*Invocation, error) {
 	b, ok := BindingFrom(ctx)
 	if !ok {
@@ -141,7 +149,7 @@ func Admit(ctx context.Context, kind string) (*Invocation, error) {
 	id := NewID()
 	dir := filepath.Join(b.Dir, "invocations", id)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
+		return nil, &StorageError{Err: err}
 	}
 	r := Record{ID: id, RunID: b.RunID, Generation: b.Generation, LogicalID: b.LogicalID, Owner: b.Owner, Kind: kind, State: "intent", Token: NewID(), CompletionPath: filepath.Join(dir, "complete.json"), StartedAt: time.Now().UTC()}
 	r.UpdatedAt = r.StartedAt
@@ -174,7 +182,7 @@ func (i *Invocation) StartHeartbeat() error {
 	if err := write(); err != nil {
 		cancel()
 		close(i.heartbeatDone)
-		return err
+		return &StorageError{Err: err}
 	}
 	go func() {
 		defer close(i.heartbeatDone)

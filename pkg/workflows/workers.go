@@ -48,6 +48,7 @@ type WorkerMessage struct {
 	Generation             int64                         `json:"execution_generation,omitempty"`
 	FailureClass           string                        `json:"failure_class,omitempty"`
 	QueueTimeMS            int64                         `json:"queue_time_ms,omitempty"`
+	UnsafeFailureClass     string                        `json:"unsafe_failure_class,omitempty"`
 	ID                     string                        `json:"id"`
 	WorkerID               string                        `json:"worker_id"`
 	RequestID              string                        `json:"request_id"`
@@ -757,6 +758,12 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	var eventMu sync.Mutex
 	callbacksClosed := false
+	var journalErr error
+	retainJournalError := func(err error) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		journalErr = errors.Join(journalErr, err)
+	}
 	expectedSession := w.SessionID
 	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Prompt: msg.Prompt}
 	usageIdentity := UsageIdentity{ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
@@ -766,20 +773,28 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		usageIdentity.Provider, usageIdentity.Model = source.UsageProvider(w.Role, "")
 	}
 	if err := m.Store.BeginUsage(ctx, usageIdentity); err != nil {
-		runner = &failedSessionRunner{err: err}
+		journalErr = workerPersistenceError(err)
+		runner = &failedSessionRunner{err: journalErr}
 	}
 	request.ObserveUsage = func(update UsageUpdate) error {
-		return m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update)
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		err := workerPersistenceError(m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update))
+		if err != nil {
+			journalErr = errors.Join(journalErr, err)
+		}
+		return err
 	}
 	if m.BindTools != nil {
 		binding, bindErr := m.BindTools(ctx, ToolInvocation{RunID: w.RunID, Owner: origin.Owner, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, Role: w.Role, Workspace: w.Access.Workspace, Secrets: secrets, Grants: w.ToolGrants})
 		if bindErr != nil {
 			runner = &failedSessionRunner{err: bindErr}
 		} else {
-			request.Tools = &InvocationTools{Binding: binding, Lease: lease}
+			request.Tools = &InvocationTools{Binding: workerToolBinding{ToolBinding: binding, observe: retainJournalError}, Lease: lease}
 		}
 	}
-	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: m.Store, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
+	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: retainJournalError}
+	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
 	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: w.SessionID}, func(event ProviderEvent) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
@@ -799,7 +814,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		eventCtx := context.WithoutCancel(ctx)
 		tx, err := m.Store.db.BeginTx(eventCtx, nil)
 		if err != nil {
-			progressErr = err
+			progressErr = workerPersistenceError(err)
 			cancelTurn()
 			return
 		}
@@ -822,21 +837,25 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			err = tx.Commit()
 		}
 		if err != nil {
-			progressErr = err
+			progressErr = workerPersistenceError(err)
 			cancelTurn()
 		}
 
 	})
 	eventMu.Lock()
 	callbacksClosed = true
+	retainedJournalErr := journalErr
 	eventMu.Unlock()
+	turnErr = errors.Join(turnErr, retainedJournalErr)
 	update := usageUpdate(result.Outputs, true)
 	if update.SessionID == "" {
 		update.SessionID = result.SessionID
 	}
 	if usageErr := m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update); usageErr != nil {
-		turnErr = errors.Join(turnErr, usageErr)
+		turnErr = errors.Join(turnErr, workerPersistenceError(usageErr))
 	}
+	// Retain admission evidence before validation replaces the diagnostic.
+	failureCauses := errors.Join(turnErr, progressErr)
 	if progressErr != nil {
 		turnErr = progressErr
 	}
@@ -859,6 +878,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)
+	msg.UnsafeFailureClass = unsafeWorkerFailureClass(errors.Join(failureCauses, turnErr))
 	msg.FinishedAt = time.Now().UTC()
 	msg.Status = RunStatusSucceeded
 	if turnErr != nil || result.Status != RunStatusSucceeded {
