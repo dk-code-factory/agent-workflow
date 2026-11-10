@@ -1,0 +1,64 @@
+{
+  "$schema": "./config.schema.json",
+  "tasks": [
+    {
+      "skill": "dk-workflows:dk-pr-feedback-read",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-reviewers-run",
+      "options": {},
+      "required": true
+    },
+    {
+      "instructions": "Independently verify candidate findings against pinned source and governing instructions. Return confirmed, rejected or uncertain findings with evidence. Do not edit, publish or recursively invoke the review workflow.",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-review-post",
+      "options": {},
+      "required": true
+    }
+  ],
+  "finalizers": [
+    {
+      "skill": "dk-workflows:dk-ci-approve",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-ci",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true
+    }
+  ],
+  "limits": {
+    "review_cycles": 5,
+    "retries_per_task": 1,
+    "ci_repairs_per_cycle": 5,
+    "ci_reruns_per_head": 3
+  },
+  "permissions": {
+    "push_commits": false,
+    "rewrite_commits": false,
+    "edit_pr": false,
+    "reply_to_feedback": false,
+    "resolve_threads": false,
+    "create_draft_prs": false,
+    "request_review": false,
+    "post_review": true,
+    "approve_fork_ci": true,
+    "approve_pr": false,
+    "merge_pr": {
+      "enabled": false,
+      "method": "squash"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-publish/config.schema.json",
+  "title": "dk-workflows:dk-pr-publish options",
+  "type": "object",
+  "properties": {
+    "default_merge_method": {
+      "type": "string",
+      "minLength": 1,
+      "default": "squash",
+      "enum": [
+        "squash",
+        "merge"
+      ],
+      "description": "Fallback method for an already authorized concrete merge request that omits its method. All live guards still apply.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

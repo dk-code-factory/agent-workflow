@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-description/config.schema.json",
+  "title": "dk-workflows:dk-pr-description options",
+  "type": "object",
+  "properties": {
+    "template": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "default": null,
+      "description": "Repository-relative template path; null selects repository template discovery.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "update_title": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether this invocation may update the PR title when publication is authorized."
+    },
+    "update_body": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether this invocation may update the PR body when publication is authorized; preserve unrelated sections."
+    },
+    "fallback_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+      },
+      "default": [
+        "Issue",
+        "Fix"
+      ],
+      "uniqueItems": true,
+      "description": "Fallback section order used only where the repository template and conventions leave a choice."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

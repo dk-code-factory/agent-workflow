@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-review/config.schema.json",
+  "title": "dk-workflows:dk-pr-review options",
+  "type": "object",
+  "properties": {
+    "tasks": {
+      "$ref": "../../../schemas/invocation.schema.json#/$defs/plan",
+      "default": [
+        {
+          "skill": "dk-workflows:dk-pr-feedback-read",
+          "options": {},
+          "required": true
+        },
+        {
+          "skill": "dk-workflows:dk-pr-reviewers-run",
+          "options": {},
+          "required": true
+        },
+        {
+          "instructions": "Independently verify candidate findings against pinned source and governing instructions. Return confirmed, rejected or uncertain findings with evidence. Do not edit, publish or recursively invoke the review workflow.",
+          "options": {},
+          "required": true
+        },
+        {
+          "skill": "dk-workflows:dk-pr-review-post",
+          "options": {},
+          "required": true
+        }
+      ],
+      "description": "Ordered invocations for the owning skill; explicit parallel groups join before continuing. The skill controls iteration and applicability."
+    },
+    "finalizers": {
+      "$ref": "../../../schemas/invocation.schema.json#/$defs/plan",
+      "default": [
+        {
+          "skill": "dk-workflows:dk-ci-approve",
+          "options": {},
+          "required": true
+        },
+        {
+          "skill": "dk-workflows:dk-ci",
+          "options": {},
+          "required": true
+        },
+        {
+          "skill": "dk-workflows:dk-pr-publish",
+          "options": {},
+          "required": true
+        }
+      ],
+      "description": "Ordered completion invocations. An explicit empty list disables inherited finalizers without claiming omitted checks passed."
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "review_cycles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 5
+        },
+        "retries_per_task": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1,
+          "description": "Zero disables these attempts; retained counters and tighter limits survive resume."
+        },
+        "ci_repairs_per_cycle": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 5,
+          "description": "Zero disables these attempts; retained counters and tighter limits survive resume."
+        },
+        "ci_reruns_per_head": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 3,
+          "description": "Zero disables these attempts; retained counters and tighter limits survive resume."
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "review_cycles": 5,
+        "retries_per_task": 1,
+        "ci_repairs_per_cycle": 5,
+        "ci_reruns_per_head": 3
+      },
+      "description": "Retained execution ceilings. Lower settings never reset consumed counters or grant a fresh run."
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "push_commits": {
+          "type": "boolean",
+          "default": false
+        },
+        "rewrite_commits": {
+          "type": "boolean",
+          "default": false
+        },
+        "edit_pr": {
+          "type": "boolean",
+          "default": false
+        },
+        "reply_to_feedback": {
+          "type": "boolean",
+          "default": false
+        },
+        "resolve_threads": {
+          "type": "boolean",
+          "default": false
+        },
+        "create_draft_prs": {
+          "type": "boolean",
+          "default": false
+        },
+        "request_review": {
+          "type": "boolean",
+          "default": false
+        },
+        "post_review": {
+          "type": "boolean",
+          "default": true
+        },
+        "approve_fork_ci": {
+          "type": "boolean",
+          "default": true
+        },
+        "approve_pr": {
+          "type": "boolean",
+          "default": false
+        },
+        "merge_pr": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1,
+              "default": "squash",
+              "enum": [
+                "squash",
+                "merge"
+              ],
+              "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "enabled": false,
+            "method": "squash"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "push_commits": false,
+        "rewrite_commits": false,
+        "edit_pr": false,
+        "reply_to_feedback": false,
+        "resolve_threads": false,
+        "create_draft_prs": false,
+        "request_review": false,
+        "post_review": true,
+        "approve_fork_ci": true,
+        "approve_pr": false,
+        "merge_pr": {
+          "enabled": false,
+          "method": "squash"
+        }
+      },
+      "description": "Actions permitted by saved policy, subject to the actual assignment and narrower current user instructions."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,408 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "accounts": {
+      "type": "object",
+      "properties": {
+        "personal": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$",
+                "not": {
+                  "pattern": "\\s"
+                }
+              },
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "host",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "skill_defaults": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "not": {
+          "pattern": "\\s"
+        },
+        "description": "Fully qualified installed plugin:skill identity. Short names and paths are rejected."
+      },
+      "additionalProperties": {
+        "$ref": "invocation.schema.json#/$defs/settings",
+        "unevaluatedProperties": false
+      },
+      "properties": {
+        "dk-workflows:dk-ci": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-ci/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-ci-approve": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-ci-approve/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-ci-flakes": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-ci-flakes/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-commit-message": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-commit-message/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-commit-split": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-commit-split/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-config": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-config/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-issue": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-issue/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-decisions": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-decisions/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-description": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-description/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-feedback-address": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-feedback-address/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-feedback-read": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-feedback-read/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-feedback-reply": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-feedback-reply/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-fix": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-fix/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-iter": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-iter/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-publish": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-publish/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-review": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-review/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-review-post": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-review-post/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-reviewers-run": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-reviewers-run/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-pr-split": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-pr-split/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "dk-workflows:dk-preferences": {
+          "$ref": "invocation.schema.json#/$defs/settings",
+          "properties": {
+            "options": {
+              "$ref": "../codex/skills/dk-preferences/config.schema.json"
+            }
+          },
+          "unevaluatedProperties": false
+        }
+      }
+    },
+    "processes": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "not": {
+          "pattern": "\\s"
+        }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "coordinator": {
+            "$ref": "invocation.schema.json"
+          },
+          "tasks": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$",
+              "not": {
+                "pattern": "\\s"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "invocation.schema.json"
+            },
+            "description": "Invocations named by purpose. Tasks merge by name; the process recipe determines when they run."
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "review_cycles": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5,
+                "default": 5
+              },
+              "retries_per_task": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1,
+                "default": 1
+              },
+              "ci_repairs_per_cycle": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5,
+                "default": 5
+              },
+              "ci_reruns_per_head": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3,
+                "default": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          "permissions": {
+            "type": "object",
+            "properties": {
+              "push_commits": {
+                "type": "boolean"
+              },
+              "rewrite_commits": {
+                "type": "boolean"
+              },
+              "edit_pr": {
+                "type": "boolean"
+              },
+              "reply_to_feedback": {
+                "type": "boolean"
+              },
+              "resolve_threads": {
+                "type": "boolean"
+              },
+              "create_draft_prs": {
+                "type": "boolean"
+              },
+              "request_review": {
+                "type": "boolean"
+              },
+              "post_review": {
+                "type": "boolean"
+              },
+              "approve_pr": {
+                "type": "boolean"
+              },
+              "merge_pr": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "method": {
+                    "enum": [
+                      "squash",
+                      "merge"
+                    ],
+                    "default": "squash"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "approve_fork_ci": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "hooks": {
+            "type": "object",
+            "properties": {
+              "before_cycle": {
+                "type": "array",
+                "items": {
+                  "$ref": "invocation.schema.json"
+                }
+              },
+              "after_cycle": {
+                "type": "array",
+                "items": {
+                  "$ref": "invocation.schema.json"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "routes": {
+            "type": "object",
+            "properties": {
+              "own_pr": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                "not": {
+                  "pattern": "\\s"
+                }
+              },
+              "other_pr": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                "not": {
+                  "pattern": "\\s"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "finalizers": {
+            "$ref": "invocation.schema.json#/$defs/plan"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/config.schema.json",
+  "title": "Workflow configuration",
+  "description": "Compact overrides for bundled process defaults. Objects merge by key; invocation lists replace. Cross-record identity, routing, capability and receipt checks remain in Python."
+}

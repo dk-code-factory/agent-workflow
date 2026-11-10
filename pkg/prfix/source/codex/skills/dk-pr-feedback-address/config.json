@@ -1,0 +1,4 @@
+{
+  "$schema": "./config.schema.json",
+  "additional_validation_commands": []
+}

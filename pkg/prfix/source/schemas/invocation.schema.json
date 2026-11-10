@@ -1,0 +1,527 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/invocation.schema.json",
+  "title": "Native invocation",
+  "description": "Shared by process coordinators, named tasks, reviewers, hooks, finalizers, drafting selections and commit policy providers.",
+  "$ref": "#/$defs/invocation",
+  "$defs": {
+    "skill": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9_.-]*$",
+      "not": {
+        "pattern": "\\s"
+      },
+      "description": "Fully qualified installed plugin:skill identity. Short names and paths are rejected."
+    },
+    "instructions": {
+      "type": "string",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$",
+      "description": "Original task-specific prompt, preserved verbatim alongside the skill's governing instructions."
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$",
+          "description": "Model identifier verified against the native host's available models."
+        },
+        "reasoning_effort": {
+          "type": "string",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Presence requests a separate native agent; omission uses normal process execution."
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/invocation"
+          },
+          "description": "Ordered reviewer invocations. Each uses this same invocation schema."
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "instructions": {
+          "$ref": "#/$defs/instructions"
+        },
+        "options": {
+          "$ref": "#/$defs/options"
+        },
+        "agent": {
+          "$ref": "#/$defs/agent"
+        },
+        "required": {
+          "type": "boolean",
+          "default": true,
+          "description": "Required work must complete before its caller can claim required coverage."
+        }
+      }
+    },
+    "invocation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/skill"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/settings"
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-ci"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-ci/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-ci-approve"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-ci-approve/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-ci-flakes"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-ci-flakes/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-commit-message"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-commit-message/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-commit-split"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-commit-split/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-config"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-config/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-issue"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-issue/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-decisions"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-decisions/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-description"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-description/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-feedback-address"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-feedback-address/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-feedback-read"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-feedback-read/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-feedback-reply"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-feedback-reply/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-fix"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-fix/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-iter"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-iter/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-publish"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-publish/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-review"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-review/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-review-post"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-review-post/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-reviewers-run"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-reviewers-run/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-pr-split"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-pr-split/config.schema.json"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "skill": {
+                    "const": "dk-workflows:dk-preferences"
+                  }
+                },
+                "required": [
+                  "skill"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "options": {
+                    "$ref": "../codex/skills/dk-preferences/config.schema.json"
+                  }
+                }
+              }
+            }
+          ],
+          "type": "object",
+          "properties": {
+            "skill": {
+              "$ref": "#/$defs/skill"
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "skill"
+              ]
+            },
+            {
+              "required": [
+                "instructions"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/invocation"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "parallel": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/invocation"
+                }
+              }
+            },
+            "required": [
+              "parallel"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/invocation"
+            },
+            "deprecated": true
+          }
+        ]
+      }
+    }
+  }
+}

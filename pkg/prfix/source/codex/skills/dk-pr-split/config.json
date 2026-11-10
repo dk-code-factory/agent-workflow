@@ -1,0 +1,6 @@
+{
+  "$schema": "./config.schema.json",
+  "added_lines_threshold": 1000,
+  "evacuate_unrelated": "automatic",
+  "split_related": "automatic"
+}

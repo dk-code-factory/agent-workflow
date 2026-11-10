@@ -1,0 +1,6 @@
+{
+  "$schema": "./config.schema.json",
+  "subject_target_length": 72,
+  "body_wrap_length": 72,
+  "max_line_length": 80
+}

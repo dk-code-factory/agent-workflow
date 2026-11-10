@@ -1,0 +1,16 @@
+{
+  "$schema": "./config.schema.json",
+  "personal_accounts": [],
+  "routes": {
+    "own_pr": {
+      "skill": "dk-workflows:dk-pr-fix",
+      "options": {},
+      "required": true
+    },
+    "other_pr": {
+      "skill": "dk-workflows:dk-pr-review",
+      "options": {},
+      "required": true
+    }
+  }
+}

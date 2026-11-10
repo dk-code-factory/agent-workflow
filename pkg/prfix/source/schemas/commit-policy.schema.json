@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/schemas/commit-policy.schema.json",
+  "title": "Commit policy",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "$ref": "invocation.schema.json"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "$schema": "./config.schema.json",
+  "include_summary": false,
+  "blocking_event": "REQUEST_CHANGES",
+  "nonblocking_event": "COMMENT"
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-pr-review-post/config.schema.json",
+  "title": "dk-workflows:dk-pr-review-post options",
+  "type": "object",
+  "properties": {
+    "include_summary": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include a substantive repository summary in the review body when authorized; operational diagnostics always remain private."
+    },
+    "blocking_event": {
+      "type": "string",
+      "minLength": 1,
+      "default": "REQUEST_CHANGES",
+      "enum": [
+        "REQUEST_CHANGES",
+        "COMMENT"
+      ],
+      "description": "Review event for completed, independently verified blocking findings. Never grants approval permission.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "nonblocking_event": {
+      "type": "string",
+      "minLength": 1,
+      "default": "COMMENT",
+      "enum": [
+        "COMMENT"
+      ],
+      "description": "Review event for nonblocking findings. Partial review publication always uses COMMENT.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

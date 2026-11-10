@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-issue/config.schema.json",
+  "title": "dk-workflows:dk-issue options",
+  "type": "object",
+  "properties": {
+    "template": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "default": null,
+      "description": "Repository-relative template path; null selects repository template discovery.",
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+      },
+      "default": [],
+      "uniqueItems": true,
+      "description": "Default issue labels, verified in the target repository; explicit request metadata takes precedence."
+    },
+    "assignees": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+      },
+      "default": [],
+      "uniqueItems": true,
+      "description": "Default issue assignees, verified in the target repository; explicit request metadata takes precedence."
+    },
+    "fallback_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+      },
+      "default": [
+        "Problem",
+        "Expected behavior"
+      ],
+      "uniqueItems": true,
+      "description": "Fallback section order used only where the repository template and conventions leave a choice."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "./config.schema.json",
+  "default_applies_to": [
+    "implementation",
+    "review"
+  ]
+}

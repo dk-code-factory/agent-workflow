@@ -1,0 +1,109 @@
+{
+  "$schema": "./config.schema.json",
+  "tasks": [
+    {
+      "skill": "dk-workflows:dk-pr-feedback-read",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-decisions",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-feedback-address",
+      "options": {},
+      "required": true,
+      "instructions": "Verify and address actionable discussion feedback within the agreed scope."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true,
+      "instructions": "Publish concrete prepared feedback-fix actions when authorized; otherwise return a no-op assessment."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-split",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-description",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-reviewers-run",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-feedback-address",
+      "options": {},
+      "required": true,
+      "instructions": "Assess the current original reviewer outputs and address actionable findings within the agreed scope."
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true,
+      "instructions": "Publish concrete prepared reviewer-fix actions when authorized; otherwise return a no-op assessment."
+    }
+  ],
+  "finalizers": [
+    {
+      "skill": "dk-workflows:dk-commit-split",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-decisions",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-description",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-feedback-reply",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-ci",
+      "options": {},
+      "required": true
+    },
+    {
+      "skill": "dk-workflows:dk-pr-publish",
+      "options": {},
+      "required": true
+    }
+  ],
+  "limits": {
+    "review_cycles": 5,
+    "retries_per_task": 1,
+    "ci_repairs_per_cycle": 5,
+    "ci_reruns_per_head": 3
+  },
+  "permissions": {
+    "push_commits": true,
+    "rewrite_commits": true,
+    "edit_pr": true,
+    "reply_to_feedback": true,
+    "resolve_threads": true,
+    "create_draft_prs": true,
+    "request_review": true,
+    "post_review": false,
+    "approve_fork_ci": false,
+    "approve_pr": false,
+    "merge_pr": {
+      "enabled": false,
+      "method": "squash"
+    }
+  },
+  "completion_instructions": null
+}

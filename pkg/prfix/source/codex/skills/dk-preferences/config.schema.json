@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dk-code-factory/dk-workflows/main/codex/skills/dk-preferences/config.schema.json",
+  "title": "dk-workflows:dk-preferences options",
+  "type": "object",
+  "properties": {
+    "default_applies_to": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "implementation",
+          "review"
+        ]
+      },
+      "default": [
+        "implementation",
+        "review"
+      ],
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Default modes for newly admitted preferences. Does not reinterpret persisted records or change existing modes on an update."
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*\\u0000)[\\s\\S]*$"
+    }
+  },
+  "additionalProperties": false
+}
