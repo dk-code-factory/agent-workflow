@@ -68,7 +68,7 @@ AND (m.status='running' OR json_extract(CAST(m.record AS TEXT),'$.failure_class'
 OR (m.status='failed' AND NOT COALESCE(
 json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.execution_generation')=r.generation
 AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.message_id')=m.id
-AND length(json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id'))>0,0)))`, run).Scan(&uncertain)
+AND length(CAST(json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id') AS BLOB))>0,0)))`, run).Scan(&uncertain)
 	if queryErr != nil {
 		return errors.Join(err, process.ErrCleanup, queryErr)
 	}

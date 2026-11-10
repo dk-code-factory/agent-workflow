@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
@@ -35,6 +36,9 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 	var zero WorkerFailureAcknowledgement
 	if strings.TrimSpace(req.RequestID) == "" || len(req.RequestID) > 128 || strings.TrimSpace(req.Reason) == "" || len(req.Reason) > 4096 || strings.TrimSpace(req.Evidence) == "" || len(req.Evidence) > 4096 {
 		return zero, fmt.Errorf("failure acknowledgement requires bounded request identity, reason, and evidence")
+	}
+	if !utf8.ValidString(req.RequestID) || !utf8.ValidString(req.Reason) || !utf8.ValidString(req.Evidence) {
+		return zero, fmt.Errorf("failure acknowledgement requires valid UTF-8 request identity, reason, and evidence")
 	}
 	// Terminal mailbox persistence precedes the provider goroutine's final join.
 	m.mu.Lock()

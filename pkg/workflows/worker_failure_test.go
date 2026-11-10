@@ -307,6 +307,60 @@ func TestAcknowledgeFailurePreservesEvidenceAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestFailureAcknowledgementRejectsInvalidUTF8(t *testing.T) {
+	for _, field := range []string{"request_id", "reason", "evidence"} {
+		t.Run(field, func(t *testing.T) {
+			m, req, original := failureFixture(t)
+			valid := req
+			switch field {
+			case "request_id":
+				req.RequestID = "request\xff"
+			case "reason":
+				req.Reason = "reason\xff"
+			case "evidence":
+				req.Evidence = "evidence\xff"
+			}
+			ctx := failureTestContext(t)
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("accepted receipt text that cannot survive JSON persistence")
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], original) {
+				t.Fatal("invalid text changed failure evidence", messages, err)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, valid); err != nil {
+				t.Fatal("invalid request prevented a valid acknowledgement", err)
+			}
+		})
+	}
+}
+
+func TestFailureAcknowledgementPreservesUnicodeAndNULText(t *testing.T) {
+	m, req, _ := failureFixture(t)
+	req.RequestID = "\x00receipt-処理済み"
+	req.Reason = "任意の作業\x00handled"
+	req.Evidence = "確認済み\x00original evidence"
+	ctx := failureTestContext(t)
+	ack, err := m.AcknowledgeFailure(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.RequestID != req.RequestID || ack.Reason != req.Reason || ack.Evidence != req.Evidence {
+		t.Fatal("receipt text changed", ack)
+	}
+	repeated, err := m.AcknowledgeFailure(ctx, req)
+	if err != nil || !reflect.DeepEqual(ack, repeated) {
+		t.Fatal("receipt text did not survive replay", repeated, err)
+	}
+	messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+	if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0].FailureAcknowledgement, &ack) {
+		t.Fatal("stored receipt differs from the returned receipt", messages, err)
+	}
+	if err := m.StopRun(ctx, req.RunID); err != nil {
+		t.Fatal("accepted receipt text blocked finalization", err)
+	}
+}
+
 func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
 	for _, mode := range []string{"owner", "generation", "message", "empty_evidence", "finalizing", "queued", "needs_attention", "storage", "authentication", "action_integrity", "canceled", "timeout", "prerequisite"} {
 		t.Run(mode, func(t *testing.T) {
