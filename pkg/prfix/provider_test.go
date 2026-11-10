@@ -104,9 +104,28 @@ func TestGitHubExactAttemptFlakeAndExceptionVerification(t *testing.T) {
 	if _, e = g.VerifyCI(context.Background(), id, head, []CIClassification{classification}, rules); e == nil {
 		t.Fatal("one exception hid another failure")
 	}
-	classification.Attempt = 1
-	if _, e = g.VerifyCI(context.Background(), id, head, []CIClassification{classification}, rules); e == nil {
-		t.Fatal("stale attempt accepted")
+	response["repos/owner/repo/actions/jobs/22/logs"] = "--- FAIL: TestIntermittent (0.0s)\nconnection reset by peer\nFAIL\n"
+	update(response)
+	if proof, e = g.VerifyCI(context.Background(), id, head, []CIClassification{classification}, rules); e != nil || !proof.Exempt {
+		t.Fatal("restored exact exception fixture is invalid", proof, e)
+	}
+	for _, tc := range []struct {
+		name              string
+		attempt, run, job int
+		want              string
+	}{
+		{"run", 1, 2, 1, "CI evidence belongs to another head or attempt"},
+		{"job", 2, 2, 1, "failed job does not match the exact check/run/attempt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			classification.Attempt = tc.attempt
+			response["repos/owner/repo/actions/runs/11"].(map[string]any)["run_attempt"] = tc.run
+			response["repos/owner/repo/actions/jobs/22"].(map[string]any)["run_attempt"] = tc.job
+			update(response)
+			if _, err := g.VerifyCI(context.Background(), id, head, []CIClassification{classification}, rules); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatal("stale attempt did not reach the production identity guard", err)
+			}
+		})
 	}
 }
 func TestCIObservationRetainsExactFailureLogs(t *testing.T) {

@@ -165,7 +165,14 @@ func TestReportCollectionLimitsPrecedeTypedAllocation(t *testing.T) {
 		return parseReport(workflows.WorkerMessage{Result: workflows.SessionResult{Outputs: map[string]any{"text": text}}})
 	}
 	for _, name := range []string{"operations", "findings", "evidence"} {
-		text := `{"complete":true,"` + name + `":[` + strings.Repeat(`{},`, 100000) + `{}]}`
+		// Each element is invalid for the typed collection. A decoder run before
+		// the shape guard must return that type error instead of the size error.
+		_, err := report(`{"` + name + `":[0]}`)
+		var typeError *json.UnmarshalTypeError
+		if !errors.As(err, &typeError) {
+			t.Fatal("fixture does not distinguish typed decoding", name, err)
+		}
+		text := `{"complete":true,"` + name + `":[` + strings.Repeat(`0,`, 100000) + `0]}`
 		if len(text) >= 16<<20 {
 			t.Fatal("fixture no longer below serialized cap")
 		}
