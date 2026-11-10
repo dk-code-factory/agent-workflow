@@ -471,6 +471,18 @@ func (g *GitHub) Reconcile(ctx context.Context, i Intent) (string, Receipt, erro
 		// Missing or ambiguous post-baseline creations remain uncertain; never resend.
 
 	case "resolve_thread":
+		l, err := openLedgerReadOnly(ctx, g.Root)
+		if err != nil {
+			return "unknown", Receipt{}, err
+		}
+		reply, receipt, err := completedReply(ctx, l, i.Run, stringValue(i.Payload, "reply_operation"))
+		l.Close()
+		if err == nil {
+			err = verifyThreadAnswer(ev, i, reply, receipt)
+		}
+		if err != nil {
+			return "unknown", Receipt{}, err
+		}
 		for _, t := range ev.Threads {
 			if stringValue(t, "id") == stringValue(i.Payload, "thread_id") {
 				found, _ = t["isResolved"].(bool)

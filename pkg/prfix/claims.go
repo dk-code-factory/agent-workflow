@@ -854,7 +854,7 @@ func (r *Runtime) finish(ctx context.Context, p Plan, in ActionInput) (ActionOut
 				if intent.Kind == "ci_rerun" {
 					return output(), fmt.Errorf("a completed rerun cannot be proposed as a new attempt; use current CI evidence")
 				}
-				observed, _, err := r.reconcileIntent(ctx, retained)
+				observed, _, err := r.reconcileCompletedIntent(ctx, l, retained)
 				if err != nil {
 					return output(), err
 				}

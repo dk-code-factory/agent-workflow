@@ -492,12 +492,16 @@ func (r *Runtime) threadResolutionGate(ctx context.Context, p Plan, i Intent, s 
 	if e != nil {
 		return fmt.Errorf("reply must be reconciled before thread resolution: %w", e)
 	}
-	if reply.Kind != "reply_inline" {
-		return fmt.Errorf("resolution requires an inline reply to that exact thread")
-	}
 	ev, e := readPREvidence(s.Evidence)
 	if e != nil {
 		return e
+	}
+	return verifyThreadAnswer(ev, i, reply, receipt)
+}
+
+func verifyThreadAnswer(ev PREvidence, i, reply Intent, receipt Receipt) error {
+	if reply.Kind != "reply_inline" {
+		return fmt.Errorf("resolution requires an inline reply to that exact thread")
 	}
 	root := ""
 	for _, thread := range ev.Threads {
@@ -608,6 +612,16 @@ func (r *Runtime) completeEffect(ctx context.Context, l *Ledger, i Intent, recei
 		return out, e
 	}
 	e = l.transaction(ctx, func(tx sqlRW) error {
+		var state, saved string
+		if e := tx.QueryRowContext(ctx, "SELECT state,receipt FROM effects WHERE run=? AND id=?", i.Run, i.ID).Scan(&state, &saved); e != nil {
+			return e
+		}
+		if state == "completed" {
+			if saved != path {
+				return fmt.Errorf("completed publication receipt is immutable")
+			}
+			return nil
+		}
 		if i.Kind == "ci_rerun" {
 			if _, e := tx.ExecContext(ctx, "INSERT INTO ci_windows(run,head,operation,started) VALUES(?,?,?,?) ON CONFLICT(run,operation) DO NOTHING", i.Run, i.Head, i.ID, r.now().Format(time.RFC3339Nano)); e != nil {
 				return e
@@ -682,6 +696,22 @@ func (r *Runtime) reconcileIntent(ctx context.Context, i Intent) (string, Receip
 		return "no_effect", receipt, nil
 	}
 	return "unknown", receipt, nil
+}
+
+func (r *Runtime) reconcileCompletedIntent(ctx context.Context, l *Ledger, i Intent) (string, Receipt, error) {
+	var path string
+	if err := l.db.QueryRowContext(ctx, "SELECT receipt FROM effects WHERE run=? AND id=? AND state='completed'", i.Run, i.ID).Scan(&path); err != nil {
+		return "unknown", Receipt{}, err
+	}
+	var saved Receipt
+	if err := readJSON(path, &saved); err != nil {
+		return "unknown", saved, err
+	}
+	state, observed, err := r.reconcileIntent(ctx, i)
+	if err == nil && state == "completed" && contains([]string{"reply", "reply_inline"}, i.Kind) && githubID(observed.Result, "id") != githubID(saved.Result, "id") {
+		return "unknown", saved, fmt.Errorf("current reply does not match its historical receipt")
+	}
+	return state, saved, err
 }
 func (r *Runtime) validateCleanup(ctx context.Context, p Plan, initial, live Snapshot, c *Cleanup) error {
 	if c == nil || len(c.BoundaryReasons) == 0 || len(c.Validation) == 0 || c.ReviewedHead != initial.LocalHead || c.FinalHead != live.LocalHead || c.FinalTree != live.LocalTree {
@@ -944,8 +974,19 @@ func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.Actio
 			l.Close()
 			return "unknown", out, e
 		}
-		var status string
-		e = l.db.QueryRowContext(ctx, "SELECT state FROM effects WHERE run=? AND id=?", i.Run, i.ID).Scan(&status)
+		var status, path string
+		e = l.db.QueryRowContext(ctx, "SELECT state,receipt FROM effects WHERE run=? AND id=?", i.Run, i.ID).Scan(&status, &path)
+		if e == nil && status == "completed" {
+			l.Close()
+			// The application already verified this publication. Recover that exact
+			// historical result without identifying a new post-baseline creation.
+			var receipt Receipt
+			if e = readJSON(path, &receipt); e != nil {
+				return "unknown", out, e
+			}
+			out.Report, out.Receipt, out.Settled = path, &receipt, true
+			return "completed", out, nil
+		}
 		if e == nil && status == "disposed" {
 			e = r.verifyReviewRequestDisposition(ctx, l, i)
 			l.Close()
