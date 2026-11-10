@@ -18,6 +18,7 @@ type failedNativeSession struct {
 	failure           error
 	maxOutput         int
 	progressSessionID string
+	beforeResult      func(SessionRequest)
 }
 
 func (s *failedNativeSession) WorkerLimits(string) (WorkerLimits, error) {
@@ -46,6 +47,9 @@ func (s *failedNativeSession) RunTurn(ctx context.Context, req SessionRequest, e
 	if s.progressSessionID != "" {
 		emit(ProviderEvent{Type: "session", SessionID: s.progressSessionID})
 	}
+	if s.beforeResult != nil {
+		s.beforeResult(req)
+	}
 	return SessionResult{Status: RunStatusFailed, SessionID: "original-session", Outputs: map[string]any{"original": "retained failure output"}}, failure
 }
 
@@ -55,6 +59,11 @@ func failureFixture(t *testing.T) (*WorkerManager, WorkerFailureRequest, WorkerM
 }
 
 func failureFixtureWithSession(t *testing.T, session *failedNativeSession) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
+	t.Helper()
+	return failureFixtureWithSetup(t, session, nil)
+}
+
+func failureFixtureWithSetup(t *testing.T, session *failedNativeSession, setup func(*WorkerManager)) (*WorkerManager, WorkerFailureRequest, WorkerMessage) {
 	t.Helper()
 	m, run := workerFixture(t, &fakeSession{})
 	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
@@ -67,6 +76,9 @@ func failureFixtureWithSession(t *testing.T, session *failedNativeSession) (*Wor
 	msg, err := m.Send(context.Background(), run, w.ID, "failure", "bounded assignment")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(m)
 	}
 	serveWorkers(t, m)
 	deadline := time.Now().Add(5 * time.Second)
@@ -91,6 +103,84 @@ func failureFixtureWithSession(t *testing.T, session *failedNativeSession) (*Wor
 	return m, WorkerFailureRequest{RunID: run, WorkerID: w.ID, MessageID: msg.ID, Generation: r.Generation, Owner: r.Owner, RequestID: "handled-1", Reason: "optional task", Evidence: "original-message:" + msg.ID}, msg
 }
 
+func failureTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestFailureAcknowledgementRejectsAuthorizationDenials(t *testing.T) {
+	for _, denial := range []string{"403 Forbidden", "authorization failed", "permission denied", "access denied", "unauthorized"} {
+		t.Run(denial, func(t *testing.T) {
+			m, req, msg := failureFixtureWithSession(t, &failedNativeSession{failure: errors.New("provider failed: " + denial)})
+			ctx := failureTestContext(t)
+			if msg.UnsafeFailureClass != "authentication" {
+				t.Fatal("authorization denial lost its admission barrier", msg)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("authorization denial was acknowledged")
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed authorization evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("authorization denial lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
+func TestFailureAcknowledgementRejectsUsageJournalFailures(t *testing.T) {
+	for _, phase := range []string{"begin", "stream", "final"} {
+		t.Run(phase, func(t *testing.T) {
+			session := &failedNativeSession{failure: ErrProviderFailure, maxOutput: 1}
+			observed := make(chan error, 1)
+			if phase == "stream" {
+				session.beforeResult = func(req SessionRequest) {
+					observed <- req.ObserveUsage(UsageUpdate{Key: "stream"})
+				}
+			}
+			m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+				table, condition := "usage_observations", "NEW.observation_key='final'"
+				if phase == "begin" {
+					table, condition = "usage_invocations", "1"
+				} else if phase == "stream" {
+					condition = "NEW.observation_key='stream'"
+				}
+				if _, err := m.Store.db.Exec("CREATE TRIGGER reject_worker_usage BEFORE INSERT ON " + table + " WHEN " + condition + " BEGIN SELECT RAISE(ABORT,'usage checkpoint failed'); END"); err != nil {
+					t.Fatal(err)
+				}
+			})
+			ctx := failureTestContext(t)
+			if phase == "stream" {
+				select {
+				case err := <-observed:
+					if !errors.Is(err, errStepPersistence) {
+						t.Fatal("stream callback lost storage provenance", err)
+					}
+				case <-ctx.Done():
+					t.Fatal("stream usage callback did not run", ctx.Err())
+				}
+			}
+			if msg.UnsafeFailureClass != "storage" {
+				t.Fatal("usage checkpoint lost its storage admission barrier", msg)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("usage checkpoint failure was acknowledged")
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed storage evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("usage checkpoint failure lost its finalization barrier", err)
+			}
+		})
+	}
+}
+
 func TestFailureAcknowledgementRejectsMixedCancellation(t *testing.T) {
 	for _, failure := range []error{ErrProviderFailure, ErrUsageExhausted, errors.New("independent command failed")} {
 		t.Run(classifyFailure(failure), func(t *testing.T) {
@@ -102,14 +192,14 @@ func TestFailureAcknowledgementRejectsMixedCancellation(t *testing.T) {
 			if msg.UnsafeFailureClass != "canceled" {
 				t.Fatal("mixed cancellation lost its admission identity", msg.UnsafeFailureClass)
 			}
-			if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+			if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err == nil {
 				t.Fatal("mixed cancellation was acknowledged as an ordinary failure")
 			}
 			messages, err := m.Messages(context.Background(), req.RunID, req.WorkerID)
 			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
 				t.Fatal("rejected acknowledgement changed failure evidence", messages, err)
 			}
-			if err := m.StopRun(context.Background(), req.RunID); !errors.Is(err, process.ErrCleanup) {
+			if err := m.StopRun(failureTestContext(t), req.RunID); !errors.Is(err, process.ErrCleanup) {
 				t.Fatal("mixed cancellation lost its finalization barrier", err)
 			}
 		})
@@ -130,6 +220,7 @@ func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testi
 				{"storage", errStepPersistence, "storage"},
 				{"authentication", errors.New("authentication failed"), "authentication"},
 				{"mixed_authentication", errors.Join(ErrProviderFailure, errors.New("authentication failed")), "authentication"},
+				{"authorization", errors.New("provider failed: 403 Forbidden"), "authentication"},
 				{"deadline", context.DeadlineExceeded, "timeout"},
 				{"ordinary", ErrProviderFailure, ""},
 			} {
@@ -176,7 +267,7 @@ func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testi
 
 func TestAcknowledgeFailurePreservesEvidenceAndDeduplicates(t *testing.T) {
 	m, req, original := failureFixture(t)
-	ctx := context.Background()
+	ctx := failureTestContext(t)
 	if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
 		t.Fatal("unhandled failure lost its barrier", err)
 	}
@@ -250,7 +341,7 @@ func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+			if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err == nil {
 				t.Fatal("unsafe acknowledgement accepted")
 			}
 			messages, err := m.Messages(context.Background(), req.RunID, req.WorkerID)
@@ -275,7 +366,7 @@ func TestFailureAcknowledgementRequiresSettledInvocationAndToolEffects(t *testin
 					t.Fatal(err)
 				}
 			}
-			if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+			if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err == nil {
 				t.Fatal("unsettled effect acknowledged")
 			}
 			if kind == "invocation" {
@@ -287,7 +378,7 @@ func TestFailureAcknowledgementRequiresSettledInvocationAndToolEffects(t *testin
 					t.Fatal(err)
 				}
 			}
-			if _, err := m.AcknowledgeFailure(context.Background(), req); err != nil {
+			if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err != nil {
 				t.Fatal("settled effect still blocked", err)
 			}
 		})
@@ -397,14 +488,14 @@ func TestFailureAcknowledgementRejectsActiveWorkerAfterJoin(t *testing.T) {
 	m.active[req.WorkerID] = func() {}
 	m.done[req.WorkerID] = done
 	m.mu.Unlock()
-	if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+	if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err == nil {
 		t.Fatal("active worker was ignored after join notification")
 	}
 	m.mu.Lock()
 	delete(m.active, req.WorkerID)
 	delete(m.done, req.WorkerID)
 	m.mu.Unlock()
-	if _, err := m.AcknowledgeFailure(context.Background(), req); err != nil {
+	if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -414,7 +505,7 @@ func TestFailureAcknowledgementRollsBackReceiptFailure(t *testing.T) {
 	if _, err := m.Store.db.Exec(`CREATE TRIGGER reject_failure_receipt BEFORE INSERT ON events WHEN NEW.type='worker.failure_acknowledged' BEGIN SELECT RAISE(ABORT,'lost receipt checkpoint'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.AcknowledgeFailure(context.Background(), req); err == nil {
+	if _, err := m.AcknowledgeFailure(failureTestContext(t), req); err == nil {
 		t.Fatal("receipt failure was ignored")
 	}
 	messages, err := m.Messages(context.Background(), req.RunID, req.WorkerID)
@@ -428,7 +519,7 @@ func TestFailureAcknowledgementRollsBackReceiptFailure(t *testing.T) {
 	if _, err = m.Store.db.Exec("DROP TRIGGER reject_failure_receipt"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = m.AcknowledgeFailure(context.Background(), req); err != nil {
+	if _, err = m.AcknowledgeFailure(failureTestContext(t), req); err != nil {
 		t.Fatal(err)
 	}
 }

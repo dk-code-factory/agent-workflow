@@ -155,8 +155,15 @@ func acknowledgeableFailure(class string) bool {
 }
 
 func unsafeWorkerFailureClass(err error) string {
+	if err == nil {
+		return ""
+	}
 	if class := unsafeFailureClass(err); class != "" {
 		return class
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
+		return "authentication"
 	}
 	if class := classifyFailure(err); !acknowledgeableFailure(class) {
 		return class
@@ -171,4 +178,11 @@ func unsafeWorkerFailureClass(err error) string {
 		return unsafeWorkerFailureClass(wrapped.Unwrap())
 	}
 	return ""
+}
+
+func workerPersistenceError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errStepPersistence, err)
 }
