@@ -133,7 +133,7 @@ type Invocation struct {
 	finalized     bool
 }
 
-// StorageError identifies a runtime state filesystem failure while retaining its diagnostic.
+// StorageError identifies a runtime state persistence failure while retaining its diagnostic.
 type StorageError struct {
 	Err error
 }

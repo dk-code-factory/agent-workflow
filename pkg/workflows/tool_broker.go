@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -139,7 +140,7 @@ func (b *Broker) checkOwner(ctx context.Context, in ToolInvocation) error {
 	var count int
 	err := b.Store.db.QueryRowContext(ctx, "SELECT count(*) FROM runs r WHERE id=? AND generation=? AND owner=? AND status='running' AND EXISTS(SELECT 1 FROM executions e WHERE e.run_id=r.id AND e.generation=r.generation AND e.finalizing=0)", in.RunID, in.Generation, in.Owner).Scan(&count)
 	if err != nil {
-		return err
+		return &runtimeexec.StorageError{Err: err}
 	}
 	if count != 1 {
 		return fmt.Errorf("tool invocation owner is no longer active")
@@ -148,7 +149,7 @@ func (b *Broker) checkOwner(ctx context.Context, in ToolInvocation) error {
 		var parent Worker
 		parent, err = b.Workers.Get(ctx, in.RunID, in.ParentWorkerID)
 		if err != nil {
-			return err
+			return &runtimeexec.StorageError{Err: err}
 		}
 		if parent.Status != "running" {
 			return fmt.Errorf("parent worker is not running")
@@ -315,12 +316,12 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 	}
 	tx, err := b.Store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	defer tx.Rollback()
 	var owned int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM runs r WHERE id=? AND generation=? AND owner=? AND status='running' AND EXISTS(SELECT 1 FROM executions e WHERE e.run_id=r.id AND e.generation=r.generation AND e.finalizing=0)", in.RunID, in.Generation, in.Owner).Scan(&owned); err != nil {
-		return nil, err
+		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	if owned != 1 {
 		return nil, fmt.Errorf("tool invocation execution ownership changed before dispatch")
@@ -330,7 +331,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 	if err == nil {
 		var previous ToolCallRecord
 		if err = decodeJSONWithNumbers(raw, &previous); err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 		if previous.ArgumentFingerprint != fingerprint {
 			return nil, fmt.Errorf("provider call ID reused with conflicting content")
@@ -345,18 +346,18 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 			return nil, ErrUncertainTool
 		}
 		if err = checkEffectAdmission(ctx, tx, in.RunID); err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 		// Engine operations reconcile their deterministic child/message IDs; they
 		// never reserve a child's grant a second time after a lost response.
 		record = previous
 	} else if errors.Is(err, sql.ErrNoRows) {
 		if err = checkEffectAdmission(ctx, tx, in.RunID); err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 		var uncertain int
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE run_id=? AND generation=? AND status='uncertain'", in.RunID, in.Generation).Scan(&uncertain); err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 		if uncertain > 0 {
 			return nil, ErrUncertainTool
@@ -367,16 +368,16 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 		}
 		_, err = tx.ExecContext(ctx, "INSERT INTO tool_calls VALUES(?,?,?,?,?,?,?,?,?)", in.RunID, in.Generation, in.InvocationID, req.CallID, record.Server, record.Tool, fingerprint, record.Status, raw)
 		if err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 		if err = addEvent(ctx, tx, in.RunID, "tool."+record.Status, record); err != nil {
-			return nil, err
+			return nil, &runtimeexec.StorageError{Err: err}
 		}
 	} else {
-		return nil, err
+		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, err
+		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	if denied != nil {
 		return nil, errors.New(record.Error)

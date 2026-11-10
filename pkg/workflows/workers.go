@@ -759,6 +759,11 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	var eventMu sync.Mutex
 	callbacksClosed := false
 	var journalErr error
+	retainJournalError := func(err error) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		journalErr = errors.Join(journalErr, err)
+	}
 	expectedSession := w.SessionID
 	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Prompt: msg.Prompt}
 	usageIdentity := UsageIdentity{ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
@@ -785,14 +790,10 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		if bindErr != nil {
 			runner = &failedSessionRunner{err: bindErr}
 		} else {
-			request.Tools = &InvocationTools{Binding: binding, Lease: lease}
+			request.Tools = &InvocationTools{Binding: workerToolBinding{ToolBinding: binding, observe: retainJournalError}, Lease: lease}
 		}
 	}
-	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: func(err error) {
-		eventMu.Lock()
-		defer eventMu.Unlock()
-		journalErr = errors.Join(journalErr, err)
-	}}
+	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: retainJournalError}
 	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
 	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: w.SessionID}, func(event ProviderEvent) {
 		eventMu.Lock()

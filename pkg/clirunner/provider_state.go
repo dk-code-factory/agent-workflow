@@ -104,15 +104,7 @@ func referenceNativeCodexAuth(state string, a Agent) error {
 	if a.Execution.Mode == "container" {
 		return nil
 	} // launcher mounts the explicit file read-only
-	source, err := nativeCodexCredentialFile(a)
-	if err != nil {
-		return err
-	}
-	source, err = filepath.Abs(source)
-	if err != nil {
-		return err
-	}
-	source, err = filepath.EvalSymlinks(source)
+	source, err := resolveNativeCodexAuthSource(a)
 	if err != nil {
 		return err
 	}
@@ -130,4 +122,20 @@ func referenceNativeCodexAuth(state string, a Agent) error {
 		return &runtimeexec.StorageError{Err: err}
 	}
 	return nil
+}
+
+func resolveNativeCodexAuthSource(a Agent) (string, error) {
+	source, err := nativeCodexCredentialFile(a)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	source, err = filepath.Abs(source)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		return "", &runtimeexec.StorageError{Err: err}
+	}
+	return source, nil
 }

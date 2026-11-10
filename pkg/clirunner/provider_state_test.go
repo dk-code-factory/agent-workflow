@@ -185,6 +185,29 @@ func TestNativeCodexReferenceRetainsStateFilesystemFailure(t *testing.T) {
 	}
 }
 
+func TestNativeCodexReferenceRetainsDisappearingSourceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte(`{"OPENAI_API_KEY":"fixture-key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Authentication: Authentication{Mode: "native", CredentialFile: path}}
+	if _, err := nativeCodexCredentials(agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveNativeCodexAuthSource(agent)
+	var storageErr *runtimeexec.StorageError
+	var pathErr *os.PathError
+	if !errors.As(err, &storageErr) || !errors.As(err, &pathErr) || pathErr.Op != "lstat" || !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("disappearing authentication source lost its filesystem admission identity", err)
+	}
+	if storageErr.Error() != pathErr.Error() || workflows.FailureClass(err) != workflows.FailureClass(pathErr) {
+		t.Fatal("authentication source marker changed the diagnostic", err)
+	}
+}
+
 func TestNativeCodexCredentialsIncludeEveryTokenForRedaction(t *testing.T) {
 	for _, api := range []string{"", "fixture-api-key"} {
 		path := filepath.Join(t.TempDir(), "auth.json")

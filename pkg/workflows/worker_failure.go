@@ -202,6 +202,19 @@ type workerInvocationJournal struct {
 	observe func(error)
 }
 
+type workerToolBinding struct {
+	ToolBinding
+	observe func(error)
+}
+
+func (b workerToolBinding) Call(ctx context.Context, req ToolRequest) (json.RawMessage, error) {
+	result, err := b.ToolBinding.Call(ctx, req)
+	if unsafeWorkerFailureClass(err) != "" {
+		b.observe(err)
+	}
+	return result, err
+}
+
 func (j workerInvocationJournal) retain(err error) error {
 	if err != nil {
 		if unsafeWorkerFailureClass(err) == "" {

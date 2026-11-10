@@ -164,6 +164,86 @@ func TestFailureAcknowledgementRejectsInvocationJournalFailures(t *testing.T) {
 	}
 }
 
+func TestFailureAcknowledgementRetainsConsumedToolAdmissionFailures(t *testing.T) {
+	for _, phase := range []string{"record", "event", "ordinary"} {
+		t.Run(phase, func(t *testing.T) {
+			observed := make(chan error, 1)
+			session := &failedNativeSession{failure: ErrProviderFailure, beforeResult: func(req SessionRequest) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, err := req.Tools.Binding.Call(ctx, ToolRequest{CallID: "lookup", Server: "external", Tool: "lookup", Arguments: json.RawMessage(`{}`)})
+				observed <- err
+			}}
+			m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+				broker := &Broker{Store: m.Store, Workers: m, External: func(context.Context, ToolDefinition, json.RawMessage) (json.RawMessage, error) {
+					t.Error("failed tool admission reached dispatch")
+					return nil, nil
+				}}
+				m.BindTools = func(ctx context.Context, in ToolInvocation) (ToolBinding, error) {
+					if phase != "ordinary" {
+						in.Grants = []ToolGrant{{Server: "external", Tool: "lookup"}}
+						in.Catalog = []ToolDefinition{{Server: "external", Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+					}
+					return broker.Bind(ctx, in)
+				}
+				if phase != "ordinary" {
+					table, condition := "tool_calls", "1"
+					if phase == "event" {
+						table, condition = "events", "NEW.type='tool.dispatched'"
+					}
+					if _, err := m.Store.db.Exec("CREATE TRIGGER reject_tool_admission BEFORE INSERT ON " + table + " WHEN " + condition + " BEGIN SELECT RAISE(ABORT,'checkpoint rejected'); END"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			ctx := failureTestContext(t)
+			var callbackErr error
+			select {
+			case err := <-observed:
+				callbackErr = err
+				if err == nil {
+					t.Fatal("tool admission unexpectedly succeeded")
+				}
+			case <-ctx.Done():
+				t.Fatal("tool callback did not complete", ctx.Err())
+			}
+			if phase == "ordinary" {
+				if msg.UnsafeFailureClass != "" {
+					t.Fatal("ordinary tool denial acquired an unsafe admission barrier", msg)
+				}
+				if _, err := m.AcknowledgeFailure(ctx, req); err != nil {
+					t.Fatal("ordinary consumed tool error was not acknowledgeable", err)
+				}
+				if err := m.StopRun(ctx, req.RunID); err != nil {
+					t.Fatal("acknowledged ordinary tool error retained finalization barrier", err)
+				}
+				return
+			}
+			var count int
+			if err := m.Store.db.QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE run_id=?", req.RunID).Scan(&count); err != nil || count != 0 {
+				t.Fatal("failed tool admission unexpectedly left a durable effect", count, err)
+			}
+			if _, err := m.AcknowledgeFailure(ctx, req); err == nil {
+				t.Fatal("consumed tool admission failure was acknowledged")
+			}
+			if msg.UnsafeFailureClass != "storage" {
+				t.Fatal("consumed tool admission error lost its storage barrier", msg)
+			}
+			var storageErr *runtimeexec.StorageError
+			if !errors.As(callbackErr, &storageErr) || storageErr.Error() != "constraint failed: checkpoint rejected (1811)" {
+				t.Fatal("tool admission lost storage identity or changed its diagnostic", callbackErr)
+			}
+			messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || !reflect.DeepEqual(messages[0], msg) {
+				t.Fatal("rejected acknowledgement changed tool failure evidence", messages, err)
+			}
+			if err := m.StopRun(ctx, req.RunID); !errors.Is(err, process.ErrCleanup) {
+				t.Fatal("consumed tool storage error lost finalization barrier", err)
+			}
+		})
+	}
+}
+
 func TestFailureAcknowledgementRejectsInvocationFilesystemFailures(t *testing.T) {
 	for _, outputLimit := range []int{0, 1} {
 		t.Run(fmt.Sprint(outputLimit), func(t *testing.T) {
@@ -413,6 +493,7 @@ func TestFailureAcknowledgementPreservesUnsafeFailuresThroughValidation(t *testi
 				{"integrity", ErrActionIntegrity, "action_integrity"},
 				{"storage", errStepPersistence, "storage"},
 				{"state_link", &runtimeexec.StorageError{Err: &os.LinkError{Op: "symlink", Old: "/source/auth.json", New: "/state/auth.json", Err: errors.New("no space left on device")}}, "storage"},
+				{"auth_source", &runtimeexec.StorageError{Err: &os.PathError{Op: "lstat", Path: "/source/key", Err: os.ErrNotExist}}, "storage"},
 				{"authentication", errors.New("authentication failed"), "authentication"},
 				{"mixed_authentication", errors.Join(ErrProviderFailure, errors.New("authentication failed")), "authentication"},
 				{"wrapped_authentication", fmt.Errorf("%w: authentication failed", ErrProviderFailure), "authentication"},
