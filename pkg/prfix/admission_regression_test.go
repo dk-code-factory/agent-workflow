@@ -84,7 +84,7 @@ func TestChecklistEnvelopeAdmissionCoversSameSessionBoundary(t *testing.T) {
 	session := &fakeSession{omitChecklist: true, assignmentHook: func(b []byte) { lengths = append(lengths, len(b)) }}
 	_, run, runtime := executeFixture(t, root, provider, prepared, session)
 	if len(lengths) != 2 || session.calls["completion"] != 2 {
-		t.Fatal("near-limit same-session continuation was not exercised", lengths)
+		t.Fatal("near-limit same-session continuation was not exercised", lengths, run.Status, run.FailureClass, run.Error)
 	}
 	for _, n := range lengths {
 		if n > (1<<20) || n < (1<<20)-4096 {

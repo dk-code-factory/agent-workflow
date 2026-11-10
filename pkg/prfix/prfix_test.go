@@ -17,6 +17,7 @@ import (
 )
 
 type fakeProvider struct {
+	stopWorkers      func()
 	mu               sync.Mutex
 	ev               PREvidence
 	ci               CIObservation
@@ -25,6 +26,13 @@ type fakeProvider struct {
 	lose             bool
 	mergeReady       bool
 	discussionWrites bool
+}
+
+func (f *fakeProvider) replaceWorkerService(stop func()) {
+	if f.stopWorkers != nil {
+		f.stopWorkers()
+	}
+	f.stopWorkers = stop
 }
 
 func (f *fakeProvider) PullRequestNumbers(context.Context, Identity) ([]string, error) {
@@ -398,8 +406,15 @@ func (f *fakeSession) RunTurn(ctx context.Context, req workflows.SessionRequest,
 	}
 	return result, nil
 }
-func executeFixture(t *testing.T, root string, provider Provider, prepared Prepared, session *fakeSession, expectFailure ...bool) (*workflows.Executor, *workflows.Run, *Runtime) {
+func executeFixture(t *testing.T, root string, provider interface {
+	Provider
+	replaceWorkerService(func())
+}, prepared Prepared, session *fakeSession, expectFailure ...bool) (*workflows.Executor, *workflows.Run, *Runtime) {
 	t.Helper()
+	// Replacement executions share the worker store. Join the prior scheduler
+	// before installing another factory, so it cannot consume the new session's
+	// messages with an earlier fake runner. Keep the current service for resume.
+	provider.replaceWorkerService(nil)
 	// Race-instrumented SQLite snapshots make the full default plan substantially
 	// slower than individual recovery fixtures; keep a deadline below make test's.
 	timeout := 10 * time.Minute
@@ -428,14 +443,16 @@ func executeFixture(t *testing.T, root string, provider Provider, prepared Prepa
 	}
 	done := make(chan struct{})
 	go func() { defer close(done); workers.Serve(ctx) }()
-	t.Cleanup(func() {
+	stopWorkers := func() {
 		cancel()
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Error("managed worker service did not stop within five seconds")
 		}
-	})
+	}
+	provider.replaceWorkerService(stopWorkers)
+	t.Cleanup(stopWorkers)
 	runtime := &Runtime{Root: root, Store: store, Workers: workers, Provider: provider, PollInterval: time.Millisecond}
 	var failed atomic.Bool
 	runtime.BeforeCheckpoint = func(name string, _ ActionOutput) error {
