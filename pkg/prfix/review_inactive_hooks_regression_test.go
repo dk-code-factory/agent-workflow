@@ -100,3 +100,99 @@ func TestReplacementWithoutReviewersKeepsHistoricalHooksInactive(t *testing.T) {
 		})
 	}
 }
+
+func TestAfterCycleReviewerDoesNotBlockEarlierFinalizerCI(t *testing.T) {
+	root, provider, req := fixture(t)
+	req.Options["finalizers"] = []any{"custom:review", "dk-workflows:dk-ci"}
+	req.Adapters = map[string]Adapter{"custom:review": reviewAdapter()}
+	configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{"after_cycle": []any{"custom:review"}}}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	prepared, err := Prepare(ctx, root, provider, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := ReadPlan(prepared.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{Root: root, Provider: provider}
+	session := &fakeSession{reportHook: func(o Occurrence, s Snapshot, report *Report) {
+		if o.Kind == "ci" {
+			path, err := runtime.latestCI(ctx, plan, s.Head)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			report.CI = &CIReport{Head: s.Head, Status: "success", Checks: []string{"1"}, Evidence: []string{path}}
+		}
+	}}
+	_, run, _ := executeFixture(t, root, provider, prepared, session)
+	for _, id := range []string{plan.Groups["finalizers"][0][0], plan.Groups["finalizers"][1][0], plan.Groups["after_cycle"][0][0], "completion"} {
+		if session.calls[id] != 1 {
+			t.Fatal("selected finalizer or after-cycle reviewer did not execute", id, session.calls)
+		}
+	}
+	if run.Outputs["selected_complete"] != true {
+		t.Fatal("after-cycle reviewer prevented selected completion", run.Outputs)
+	}
+}
+
+func TestReplacementHookChangesAdmitNewReviewCycle(t *testing.T) {
+	for _, phase := range []string{"before_cycle", "after_cycle"} {
+		t.Run(phase, func(t *testing.T) {
+			root, provider, req := fixture(t)
+			req.Options["tasks"] = []any{"custom:review"}
+			req.Adapters = map[string]Adapter{"custom:review": reviewAdapter()}
+			configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{}}}})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			prepared, err := Prepare(ctx, root, provider, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, runtime := executeFixture(t, root, provider, prepared, &fakeSession{})
+			configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{phase: []any{map[string]any{"instructions": "New hook for future cycles."}}}}}})
+			req.Run = prepared.LogicalRun
+			replacement, err := Prepare(ctx, root, provider, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := ReadPlan(replacement.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous, err := ReadPlan(prepared.Plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			live, err := runtime.live(ctx, plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldReview, _ := previous.Occurrence(previous.Groups["tasks"][0][0])
+			newReview, _ := plan.Occurrence(plan.Groups["tasks"][0][0])
+			if occurrenceFingerprint(previous.Snapshot, oldReview) == occurrenceFingerprint(live, newReview) {
+				t.Fatal("changed governing hook configuration did not invalidate review")
+			}
+			session := &fakeSession{}
+			ex, run, _ := executeFixture(t, root, provider, replacement, session)
+			if run.Outputs["selected_complete"] != true || session.calls["completion"] != 1 || session.calls[newReview.ID] != 1 || session.calls[plan.Groups[phase][0][0]] != 1 {
+				t.Fatal("replacement review or newly admitted hook did not complete", run.Outputs, session.calls)
+			}
+			ledger, err := runtime.ledger()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cycles int
+			err = ledger.db.QueryRowContext(ctx, "SELECT count(*) FROM reservations WHERE run=? AND kind='review'", plan.LogicalRun).Scan(&cycles)
+			ledger.Close()
+			if err != nil || cycles != 2 {
+				t.Fatal("replacement failed to retain both review cycles", cycles, err)
+			}
+			if _, err := resumeFixture(t, ex, run.ID, false); err != nil {
+				t.Fatal("replacement cache reuse failed", err)
+			}
+		})
+	}
+}

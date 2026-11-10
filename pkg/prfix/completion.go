@@ -471,13 +471,15 @@ func (r *Runtime) reviewCurrent(ctx context.Context, p Plan, s Snapshot) (bool, 
 	for _, rr := range reports {
 		latest[rr.Occurrence.ID] = rr
 	}
-	selected, hooks, cycle, e := r.selectedOccurrences(ctx, p)
+	selected, hooks, _, e := r.selectedOccurrences(ctx, p)
 	if e != nil {
 		return false, nil, e
 	}
 	missing := []string{}
 	for _, o := range p.Occurrences {
-		if !selected[o.ID] || !o.Review || !o.Required {
+		// Cycle hooks are ordered around the selected work and checked by final
+		// coverage. An after-cycle reviewer may intentionally run after this CI.
+		if !selected[o.ID] || hooks[o.ID] || !o.Review || !o.Required {
 			continue
 		}
 		rr, ok := latest[o.ID]
@@ -489,7 +491,7 @@ func (r *Runtime) reviewCurrent(ctx context.Context, p Plan, s Snapshot) (bool, 
 		if e = readJSON(rr.Claim.Snapshot, &original); e != nil {
 			return false, nil, e
 		}
-		if occurrenceFingerprint(original, o) != occurrenceFingerprint(s, o) || hooks[o.ID] && rr.Claim.Cycle != cycle {
+		if occurrenceFingerprint(original, o) != occurrenceFingerprint(s, o) {
 			missing = append(missing, o.ID)
 		}
 	}
