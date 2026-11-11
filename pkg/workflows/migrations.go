@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS input_gates_run ON input_gates(run_id);
 `
 
 const schemaV11 = schemaV10InputIndexes + `
-CREATE TABLE worker_waits(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,operation_id TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,operation_id));
+CREATE TABLE IF NOT EXISTS worker_waits(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,operation_id TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,operation_id));
 `
 
 // Migrate must be called while holding exclusive workspace ownership. Existing
