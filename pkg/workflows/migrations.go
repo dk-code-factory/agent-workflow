@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -80,6 +80,10 @@ CREATE INDEX input_gates_origin ON input_gates(origin_id,state);
 const schemaV10InputIndexes = `
 CREATE INDEX IF NOT EXISTS input_controls_continuations ON input_controls(run_id) WHERE continuation=1 AND paused=0 AND canceled=0;
 CREATE INDEX IF NOT EXISTS input_gates_run ON input_gates(run_id);
+`
+
+const schemaV11 = schemaV10InputIndexes + `
+CREATE TABLE worker_waits(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,operation_id TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(run_id,operation_id));
 `
 
 // Migrate must be called while holding exclusive workspace ownership. Existing
@@ -171,7 +175,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		}
 		return tx.Commit()
 	}
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)

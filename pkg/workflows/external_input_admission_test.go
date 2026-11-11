@@ -487,7 +487,7 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.Close()
-		if _, err = s.db.Exec(`DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9`); err != nil {
+		if _, err = s.db.Exec(`DROP TABLE worker_waits; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9`); err != nil {
 			t.Fatal(err)
 		}
 		lock, err := ownership.Own(s.Dir)
@@ -501,7 +501,7 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 		if !inputContinuationIndexPresent(t, s.db) || !inputGateRunIndexPresent(t, s.db) {
 			t.Fatal("v9 upgrade lacks required input indexes")
 		}
-		backup, err := openBackupSource(ctx, filepath.Join(s.Dir, "state.pre-v10.db"))
+		backup, err := openBackupSource(ctx, filepath.Join(s.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion)))
 		if err != nil {
 			t.Fatal(err)
 		}
