@@ -347,7 +347,7 @@ func TestOrderedIterationMigrationFromV8(t *testing.T) {
 	}
 	_, snap, _ := s.Load(ctx, run.ID)
 	before := actionHash(snap)
-	if _, err = s.db.Exec("DROP TABLE input_gates; DROP TABLE input_controls; DROP TABLE iteration_attempts; DROP TABLE iteration_plans; PRAGMA user_version=8"); err != nil {
+	if _, err = s.db.Exec("DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; DROP TABLE iteration_attempts; DROP TABLE iteration_plans; PRAGMA user_version=8"); err != nil {
 		t.Fatal(err)
 	}
 	owner, err := ownership.Own(s.Dir)

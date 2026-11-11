@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -77,6 +77,12 @@ CREATE TABLE input_gates(id TEXT PRIMARY KEY,origin_id TEXT NOT NULL REFERENCES 
 CREATE INDEX input_gates_origin ON input_gates(origin_id,state);
 ` + schemaV10InputIndexes
 
+const schemaV11 = `
+CREATE TABLE helper_assets(origin_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,id TEXT NOT NULL,manifest BLOB NOT NULL,PRIMARY KEY(origin_id,id));
+CREATE TABLE run_helper_assets(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,asset_origin TEXT NOT NULL,asset_id TEXT NOT NULL,PRIMARY KEY(run_id,asset_origin,asset_id),FOREIGN KEY(asset_origin,asset_id) REFERENCES helper_assets(origin_id,id) ON DELETE CASCADE);
+CREATE TRIGGER helper_assets_immutable BEFORE UPDATE ON helper_assets BEGIN SELECT RAISE(ABORT,'helper asset manifests are immutable'); END;
+`
+
 const schemaV10InputIndexes = `
 CREATE INDEX IF NOT EXISTS input_controls_continuations ON input_controls(run_id) WHERE continuation=1 AND paused=0 AND canceled=0;
 CREATE INDEX IF NOT EXISTS input_gates_run ON input_gates(run_id);
@@ -103,7 +109,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 			return err
 		}
 		if indexed == 2 {
-			return nil
+			return s.CleanupHelperStaging(ctx, owner)
 		}
 		// Same-version repair remains explicit and owned. Preserve each pre-repair
 		// state, including after restoring an earlier v10 backup without these indexes.
@@ -171,7 +177,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		}
 		return tx.Commit()
 	}
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)
@@ -185,7 +191,10 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.CleanupHelperStaging(ctx, owner)
 }
 
 func originID(r *Run, snap Snapshot) string {

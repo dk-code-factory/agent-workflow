@@ -70,6 +70,14 @@ func (s *ContainerSession) Exec(ctx context.Context, q containerapi.ExecRequest,
 				}
 			}
 		}
+		if owner.Selection.Transport == containerapi.PodmanCLI && returned != nil {
+			// A stopped CLI cannot establish that its container process stopped.
+			// Remove the owned parent before allowing any later workload effects.
+			if err := s.Close(); err != nil {
+				state = "uncertain"
+				returned = errors.Join(returned, err)
+			}
+		}
 		returned = errors.Join(returned, i.Save(context.WithoutCancel(ctx), state))
 	}()
 	q.Command = append([]string{MountedGuardian, "__container_exec_guardian_v1", "/engine-lifetime/commands/" + i.Record.ID + "/lease", i.Record.Token, "--"}, q.Command...)

@@ -101,7 +101,7 @@ func TestContainerDeclarationScalarNormalization(t *testing.T) {
 
 type fakeContainer struct {
 	env                    []string
-	id, name, dir          string
+	id, name, dir, actions string
 	workingDir             string
 	labels                 map[string]string
 	argv                   []string
@@ -122,6 +122,7 @@ type fakeExec struct {
 	code    int
 }
 type workflowDocker struct {
+	imageReferences       []string
 	helper                func([]string, []byte, []string) ([]byte, []byte, int, bool)
 	t                     *testing.T
 	mu                    sync.Mutex
@@ -149,6 +150,9 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 	for i, a := range args {
 		a = strings.ReplaceAll(a, "/tmp/", c.dir+"/")
 		a = strings.ReplaceAll(a, "/workspace", d.workspace)
+		if c.actions != "" {
+			a = strings.ReplaceAll(a, "/actions", c.actions)
+		}
 		args[i] = a
 	}
 	if len(args) == 0 {
@@ -162,6 +166,7 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 		dir = d.workspace + strings.TrimPrefix(dir, "/workspace")
 	}
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin = strings.NewReader(string(input))
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -222,15 +227,24 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(p, "/images/") {
+		d.mu.Lock()
+		d.imageReferences = append(d.imageReferences, p)
+		d.mu.Unlock()
 		fmt.Fprintf(w, `{"Id":%q,"Os":"linux","Architecture":"amd64","Config":{"Entrypoint":["/bin/sh"],"Cmd":["-c","printf baked"]}}`, "sha256:"+strings.Repeat("a", 64))
 		return
 	}
 	if p == "/containers/create" {
 		var q struct {
+			WorkingDir string
 			Cmd        []string
 			Labels     map[string]string
-			WorkingDir string
 			Env        []string
+			HostConfig struct {
+				Mounts []struct {
+					Source string
+					Target string
+				}
+			}
 		}
 		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 			d.t.Error(err)
@@ -255,6 +269,12 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, env: q.Env, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
 		if d.stallOnce && d.stallPhase == "running" {
 			d.startDelayInspections = 0
+		}
+		for _, m := range q.HostConfig.Mounts {
+			if m.Target == "/actions" {
+				c.actions = m.Source
+			}
+
 		}
 		d.containers[id] = c
 		d.containers[c.name] = c

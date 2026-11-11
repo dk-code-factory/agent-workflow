@@ -809,3 +809,13 @@ sources are the [UI guide](../ui/README.md),
 - **Starting point:** A command has a job container, or a step uses a Docker image.
 - **My flow:** I open **Helper protocol and environment**, choose **action-v1**, select an explicit effect, enter both object schemas and business input, then set environment references if needed.
 - **What I see:** Structured business input stays separate from executable commands and Docker arguments. Schema fields accept a mapping or a workflow-local name. The engine validates input/output and recovers checkpoints through the action journal. Ordinary commands retain stdout/stderr/exit-code results.
+
+### UF-50 — Package retained helper files
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-50.spec.ts)
+
+- **Coverage:** Job helper editing converts scalar container syntax to a mapping, preserves paths during image changes, and exports both job and sibling bundles. Docker replacement declarations distinguish empty bundles from inheritance. Step conversion reviews file removal, cancellation preserves the declaration, and Undo restores it. Invalid relative paths and files on ordinary steps remain diagnosable and repairable through YAML.
+
+- **Starting point:** I select a job with a container or a Docker step.
+- **My flow:** I enter relative files or recursive directories in **Job helper files (YAML)**. For a Docker sibling I optionally declare **Docker helper files (YAML)** to replace the inherited job bundle, using `[]` for an empty replacement.
+- **What I see:** Export retains the declared paths. The host captures them relative to their owning workflow, mounts retained content read-only at `/actions`, and validates checksums during recovery. Browser validation identifies traversal and misplaced declarations; host admission also checks symlinks, file types and bundle limits.

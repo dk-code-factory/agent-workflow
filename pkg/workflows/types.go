@@ -129,6 +129,7 @@ type Job struct {
 }
 
 type Step struct {
+	Files                   []string                 `json:"files,omitempty" yaml:"files,omitempty"`
 	Protocol                string                   `json:"protocol,omitempty" yaml:"protocol,omitempty"`
 	Effect                  ActionEffect             `json:"effect,omitempty" yaml:"effect,omitempty"`
 	InputSchema             any                      `json:"input-schema,omitempty" yaml:"input-schema,omitempty"`

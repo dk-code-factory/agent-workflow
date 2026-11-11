@@ -73,7 +73,7 @@ const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
- protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
+ files: ['strict-string'], protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
   conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
@@ -325,6 +325,9 @@ function validateWorkflow(w: Workflow, add: Add) {
   if (mapping(callable?.inputs)) for (const [id, input] of Object.entries(callable.inputs)) {
     if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
   }
+  const validateFiles = (files: unknown, path: Path) => {
+    if (!Array.isArray(files) || files.some(value => typeof value !== 'string' || !value || value.startsWith('/') || /[\\\x00]/.test(value) || value.split('/').includes('..') || value.includes('${{'))) add('files', 'Helper files require static relative paths without traversal', path);
+  };
   for (const [id, job] of Object.entries(jobs)) {
     const p: Path = ['jobs', id];
     if (!identifier.test(id)) add('identifier', 'Invalid job ID', p);
@@ -340,7 +343,8 @@ function validateWorkflow(w: Workflow, add: Add) {
     if (job.container != null) {
       const image = typeof job.container === 'string' ? job.container : job.container?.image;
       if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
-      if (mapping(job.container)) for (const key of Object.keys(job.container)) if (key !== 'image') add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
+      if (mapping(job.container)) for (const key of Object.keys(job.container)) if (!['image', 'files'].includes(key)) add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
+      if (mapping(job.container) && job.container.files !== undefined) validateFiles(job.container.files, [...p, 'container', 'files']);
       if (job.uses) add('container', 'Reusable calls cannot declare a container', [...p, 'container']);
     }
     const needs = dependencies(job);
@@ -365,6 +369,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       seen.add(sid);
       const kind = blockKind(step);
       const docker = step.uses?.startsWith('docker://');
+      if (step.files !== undefined) { validateFiles(step.files, [...sp, 'files']); if (!docker) add('files', 'Step files require a Docker step; use container.files for job helpers', [...sp, 'files']); }
       if (job.container && (step.parallel || step.conversation || stepAction(step) && !docker)) add('container', 'Shared containers support sequential commands, Docker steps and sequence blocks only', sp);
       if (kind) {
         if (depth > 0) add('handler-action', 'Structural blocks cannot appear inside lifecycle handlers', sp);

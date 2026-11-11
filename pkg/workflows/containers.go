@@ -18,14 +18,17 @@ import (
 const GitHubContainersV1 = "github-containers-v1"
 
 type JobContainer struct {
+	Files          []string                 `json:"files,omitempty" yaml:"files,omitempty"`
 	Image          string                   `json:"image" yaml:"image"`
 	Implementation *ContainerImplementation `json:"implementation,omitempty" yaml:"-"`
 }
 type ContainerImplementation struct {
-	Selection containerapi.Selection    `json:"selection"`
-	Image     containerapi.Image        `json:"image"`
-	Guardian  runtimeexec.GuardianAsset `json:"guardian"`
-	Policy    runtimeexec.Policy        `json:"policy"`
+	ContractVersion int                       `json:"contract_version,omitempty"`
+	Bundle          *HelperBundle             `json:"helper_bundle,omitempty"`
+	Selection       containerapi.Selection    `json:"selection"`
+	Image           containerapi.Image        `json:"image"`
+	Guardian        runtimeexec.GuardianAsset `json:"guardian"`
+	Policy          runtimeexec.Policy        `json:"policy"`
 }
 
 func (c *JobContainer) UnmarshalYAML(n *yaml.Node) error {
@@ -127,6 +130,23 @@ func dockerCommand(step Step, image containerapi.Image) ([]string, error) {
 }
 func validateJobContainer(w *Workflow, id string, j Job) error {
 	if j.Container != nil {
+		for _, name := range j.Container.Files {
+			if _, err := assetPath(name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, step := range lifecycleSteps(j.Steps) {
+		if step.Files != nil && !isDockerStep(step) {
+			return fmt.Errorf("helper files belong under container for job commands, or on Docker steps")
+		}
+		for _, name := range step.Files {
+			if _, err := assetPath(name); err != nil {
+				return err
+			}
+		}
+	}
+	if j.Container != nil {
 		if !staticContainerValue(j.Container.Image) {
 			return fmt.Errorf("job %s: container.image must be a static image", id)
 		}
@@ -175,7 +195,7 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 			return nil, fmt.Errorf("%s requires durable invocation ownership", GitHubContainersV1)
 		}
 		if retained != nil {
-			if err := retained.Guardian.Verify(); err != nil {
+			if _, err := e.guardianForImplementation(retained); err != nil {
 				return nil, err
 			}
 			r, err := containerapi.Open(retained.Selection)
@@ -223,7 +243,7 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 			return nil, err
 		}
 		policy.Image = i.ID
-		return &ContainerImplementation{Selection: s, Image: i, Guardian: g, Policy: policy}, nil
+		return &ContainerImplementation{ContractVersion: 1, Selection: s, Image: i, Guardian: g, Policy: policy}, nil
 	}
 	for ref, w := range all {
 		for id, j := range w.Jobs {
@@ -267,6 +287,7 @@ func cancelContainerCleanup(ctx context.Context) {
 }
 
 type jobContainerScope struct {
+	failed         error
 	implementation *ContainerImplementation
 	session        *runtimeexec.ContainerSession
 	held           bool
@@ -384,11 +405,24 @@ func (e *Executor) launchOptions(ctx context.Context, p *ContainerImplementation
 	if !ok {
 		return runtimeexec.LaunchOptions{}, fmt.Errorf("container requires owned execution")
 	}
-	state := filepath.Join(b.Dir, "containers", b.RunID, runtimeexec.NewID())
+	state := filepath.Join(b.Dir, "containers", containerStateOrigin(e.bundleOrigin, b.RunID), runtimeexec.NewID())
 	if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
 		return runtimeexec.LaunchOptions{}, err
 	}
-	return runtimeexec.LaunchOptions{Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: p.Guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}, nil
+	actions := ""
+	if p.Bundle != nil {
+		store := invocationStore(e.Store)
+		var err error
+		actions, err = store.HelperBundlePath(p.Bundle)
+		if err != nil {
+			return runtimeexec.LaunchOptions{}, err
+		}
+	}
+	guardian, err := e.guardianForImplementation(p)
+	if err != nil {
+		return runtimeexec.LaunchOptions{}, err
+	}
+	return runtimeexec.LaunchOptions{Actions: actions, Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}, nil
 }
 func containerWorkingDirectory(dir string) string {
 	if filepath.IsAbs(dir) {
@@ -400,6 +434,14 @@ func (e *Executor) runContainerIO(ctx context.Context, step Step, argv, env []st
 	scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope)
 	queued := time.Now()
 	if scope != nil {
+		if scope.failed != nil {
+			return -1, 0, scope.failed
+		}
+		if bundle := scope.implementation.Bundle; bundle != nil {
+			if err := invocationStore(e.Store).VerifyHelperBundle(bundle); err != nil {
+				return -1, 0, err
+			}
+		}
 		if err := scope.acquire(ctx); err != nil {
 			return -1, queueTime, err
 		}
@@ -449,6 +491,10 @@ func (e *Executor) runContainerIO(ctx context.Context, step Step, argv, env []st
 			return -1, queueTime, err
 		}
 		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, Env: env, WorkingDir: containerWorkingDirectory(step.WorkingDirectory)}, streams)
+		if err != nil || code == 125 {
+			scope.failed = errors.Join(err, fmt.Errorf("shared container command lifetime is unconfirmed; later commands are blocked"))
+			err = errors.Join(scope.failed, scope.session.Close())
+		}
 	}
 
 	return code, queueTime, err
@@ -481,4 +527,23 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 		return out, fmt.Errorf("container command exited with code %d", code)
 	}
 	return out, nil
+}
+
+// Retained identity is portable; a moved release can supply the same verified binary.
+func (e *Executor) guardianForImplementation(p *ContainerImplementation) (runtimeexec.GuardianAsset, error) {
+	if err := p.Guardian.Verify(); err == nil {
+		return p.Guardian, nil
+	}
+	directory := e.ContainerGuardianDirectory
+	if directory == "" {
+		directory = runtimeexec.DefaultGuardianDirectory()
+	}
+	g, err := runtimeexec.GuardianFor(directory, p.Image)
+	if err != nil {
+		return g, err
+	}
+	if g.SHA256 != p.Guardian.SHA256 || g.Platform != p.Guardian.Platform {
+		return g, fmt.Errorf("retained guardian identity unavailable")
+	}
+	return g, nil
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -164,6 +165,12 @@ func (a *cliAttachment) Copy(s Streams) error {
 		if a.err == nil {
 			a.err = a.command.Wait()
 			a.code = a.command.ProcessState.ExitCode()
+			// Podman forwards workload exits through its process status. Transport
+			// failures (125 and signals) remain errors and require parent teardown.
+			var exit *exec.ExitError
+			if errors.As(a.err, &exit) && a.code >= 0 && a.code < 125 {
+				a.err = nil
+			}
 		}
 		close(a.done)
 	})

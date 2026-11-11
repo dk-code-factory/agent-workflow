@@ -33,7 +33,7 @@ func (s *SQLiteStore) RecoveryBundle(ctx context.Context, destination string, ow
 	if err != nil {
 		return err
 	}
-	for _, part := range []string{"workspaces", "providers", "invocations"} {
+	for _, part := range []string{"workspaces", "providers", "invocations", "containers", "assets"} {
 		root, err := filepath.Abs(filepath.Join(s.Dir, part))
 		if err != nil {
 			return err
@@ -154,6 +154,59 @@ func (s *SQLiteStore) RecoveryBundle(ctx context.Context, destination string, ow
 			}
 			if !info.Mode().IsRegular() && !info.IsDir() {
 				return nil
+			}
+			return add(path, name, info)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	// Export only committed immutable manifests. Abandoned stages are never portable evidence.
+	rows, err := s.db.QueryContext(ctx, "SELECT manifest FROM helper_assets ORDER BY origin_id,id")
+	if err != nil {
+		return err
+	}
+	var bundles []*HelperBundle
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var b HelperBundle
+		if err = json.Unmarshal(raw, &b); err != nil {
+			rows.Close()
+			return err
+		}
+		bundles = append(bundles, &b)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, b := range bundles {
+		if err = s.VerifyHelperBundle(b); err != nil {
+			return err
+		}
+		root, _ := s.bundleDirectory(b)
+		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("helper asset symlink during export")
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && !info.Mode().IsRegular() {
+				return fmt.Errorf("invalid helper export entry")
+			}
+			name, err := filepath.Rel(s.Dir, path)
+			if err != nil {
+				return err
 			}
 			return add(path, name, info)
 		})

@@ -162,7 +162,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 	}
 	for ref, w := range all {
 		for job, j := range w.Jobs {
-			for _, step := range FlattenSteps(j.Steps) {
+			for _, step := range containerContractSteps(j.Steps) {
 				if step.Protocol != ContainerActionV1 {
 					continue
 				}
@@ -190,6 +190,25 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 					Container *ContainerImplementation
 					Step      Step
 				}{p, step})
+				if p.ContractVersion >= 1 {
+					argv, err := structuredCommand(step, p.Image)
+					if err != nil {
+						return err
+					}
+					bundle := ""
+					if p.Bundle != nil {
+						bundle = p.Bundle.ID
+					}
+					implementation = actionHash(struct {
+						Selection                             any
+						ImageID, OS, Architecture             string
+						Command                               []string
+						Protocol, WorkingDir, Timeout         string
+						Policy                                any
+						GuardianSHA, GuardianPlatform, Bundle string
+						Env                                   map[string]string
+					}{p.Selection, p.Image.ID, p.Image.OS, p.Image.Architecture, argv, step.Protocol, step.WorkingDirectory, step.Timeout, p.Policy, p.Guardian.SHA256, p.Guardian.Platform, bundle, step.Env})
+				}
 				a := &registeredAction{contract: buildActionContract(name, implementation, step.Effect, in, out), input: ir, output: or}
 				a.recovery = validateContainerRecoveryRequest
 				helper := step
@@ -354,19 +373,9 @@ func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImp
 	if err != nil {
 		return containerResponse{}, err
 	}
-	argv := append([]string(nil), step.Argv...)
-	if step.Run != "" {
-		shell := step.Shell
-		if shell == "" {
-			shell = "sh"
-		}
-		argv = []string{shell, "-c", step.Run}
-	}
-	if isDockerStep(step) {
-		argv, err = dockerCommand(step, p.Image)
-		if err != nil {
-			return containerResponse{}, err
-		}
+	argv, err := structuredCommand(step, p.Image)
+	if err != nil {
+		return containerResponse{}, err
 	}
 	env := make([]string, 0, len(step.Env))
 	keys := make([]string, 0, len(step.Env))
@@ -455,7 +464,7 @@ func (e *Executor) validateCompletedContainerActions(ctx context.Context, origin
 	has := false
 	for _, w := range snap.Definitions {
 		for _, j := range w.Jobs {
-			for _, s := range FlattenSteps(j.Steps) {
+			for _, s := range containerContractSteps(j.Steps) {
 				has = has || s.Protocol == ContainerActionV1
 			}
 		}
@@ -503,6 +512,42 @@ func forwardCredentialAliases(declaration any, parent map[string]string) map[str
 				}
 			}
 		}
+	}
+	return out
+}
+
+func structuredCommand(step Step, image containerapi.Image) ([]string, error) {
+	if isDockerStep(step) {
+		return dockerCommand(step, image)
+	}
+	if step.Run != "" {
+		shell := step.Shell
+		if shell == "" {
+			shell = "sh"
+		}
+		return []string{shell, "-c", step.Run}, nil
+	}
+	return append([]string(nil), step.Argv...), nil
+}
+
+// Handler IDs mirror executeLifecycleStep; block IDs retain physical index paths.
+func containerContractSteps(steps []Step) []Step {
+	var out []Step
+	var add func(Step)
+	add = func(step Step) {
+		out = append(out, step)
+		for _, hook := range []struct {
+			kind string
+			list []Step
+		}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+			for i, child := range hook.list {
+				child.ID = step.ID + "/" + hook.kind + "/" + stepID(child, i)
+				add(child)
+			}
+		}
+	}
+	for _, step := range FlattenSteps(steps) {
+		add(step)
 	}
 	return out
 }

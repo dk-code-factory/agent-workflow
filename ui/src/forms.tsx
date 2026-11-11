@@ -130,7 +130,7 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
     {pickingResult && result && <JobResultPicker {...result} selection={cursor.current} close={() => { setPickingResult(false); control.current?.focus(); }} />}
   </div>;
 }
-export function StructuredField({ store, path, label, replacement = false }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean }) {
+export function StructuredField({ store, path, label, replacement = false, onApply }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean; onApply?: (value: unknown) => void }) {
   let value: unknown = store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow;
   for (const key of path) value = (value as Mapping | undefined)?.[key];
   const text = value === undefined ? '' : stringify(value).trimEnd();
@@ -139,7 +139,7 @@ export function StructuredField({ store, path, label, replacement = false }: { s
     const doc = parseDocument(text);
     if (doc.errors.length) throw new Error(doc.errors[0].message);
     const data = doc.toJS({ maxAliasCount: 0 });
-    store.setField(path, text.trim() ? data : undefined);
+    if (onApply) onApply(text.trim() ? data : undefined); else store.setField(path, text.trim() ? data : undefined);
   })} /></>;
 }
 function valueAt(store: WorkflowDocument, path: Path): unknown {
@@ -346,6 +346,8 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
           if (confirmConversion(discarded)) store.setJobKind(selection.job!, reusable);
         })}><option value="steps">Sequential steps</option><option value="reusable">Reusable workflow</option></select></label>
         {!job.uses && <Field path={[...path, 'container']} label="Job container image" value={typeof job.container === 'string' ? job.container : job.container?.image} readOnly={disabled} onApply={value => applyEdit(() => store.setField(value && typeof job.container !== 'string' ? [...path, 'container', 'image'] : [...path, 'container'], value || undefined))} />}
+        {!job.uses && job.container && <StructuredField store={store} path={[...path, 'container', 'files']} label="Job helper files (YAML)" onApply={value => store.setJobHelperFiles(selection.job!, value)} />}
+
         {job.uses && field('Reusable workflow', 'uses')}
         {job.uses && <CallFields key={job.uses} store={store} job={selection.job!} suggestionsID={suggestionsID} />}
         <NamedFields suggestionsID={suggestionsID} requestDelete={requestEntryDelete} store={store} path={[...path, 'outputs']} kind="jobOutputs" title="Job outputs" /><details><summary>Advanced output YAML</summary>{advanced('outputs', 'Job outputs (YAML)')}</details>
@@ -376,7 +378,7 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
           if (!value.trim()) throw new Error('Action target is required');
           if (!changeStepKind(value)) throw new Error('Type change cancelled; the previous configuration is unchanged');
         })} />}
-        {uses?.startsWith('docker://') && <><Field path={[...path, 'with', 'entrypoint']} label="Docker entrypoint" value={params.entrypoint} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'entrypoint'], value || undefined))} /><Field path={[...path, 'with', 'args']} label="Docker arguments" value={params.args} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'args'], value))} />{field('Timeout', 'timeout')}</>}
+        {uses?.startsWith('docker://') && <><StructuredField store={store} path={[...path, 'files']} label="Docker helper files (YAML)" /><Field path={[...path, 'with', 'entrypoint']} label="Docker entrypoint" value={params.entrypoint} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'entrypoint'], value || undefined))} /><Field path={[...path, 'with', 'args']} label="Docker arguments" value={params.args} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'args'], value))} />{field('Timeout', 'timeout')}</>}
         {uses?.startsWith('agent/') && <>{shorthand && !Object.hasOwn(params, 'prompt') ? field('Prompt', 'prompt', true) : paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
         {(Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : undefined)?.map(key => key === 'independent' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', key])} key={key}><input type="checkbox" disabled={disabled} checked={!!params[key]} onChange={e => attempt(() => store.setField([...path, 'with', key], e.target.checked))} />Independent workspace</label> : key === 'commits' ? <StructuredField key={key} store={store} path={[...path, 'with', key]} label="Commits (YAML)" /> : paramField(key, key[0].toUpperCase() + key.slice(1), key === 'body'))}
         {action?.fields?.map(f => f.type === 'yaml' ? <StructuredField key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} /> : f.type === 'number' ? <TypedValue key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} type="number" expressions suggestionsID={suggestionsID} /> : f.type === 'boolean' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', f.key])} key={f.key}><input type="checkbox" disabled={disabled} checked={!!params[f.key]} onChange={e => attempt(() => store.setField([...path, 'with', f.key], e.target.checked))} />{f.label}</label> : paramField(f.key, f.label, f.type === 'textarea'))}
