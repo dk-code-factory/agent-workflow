@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
+	"io/fs"
 	"strings"
 
 	"modernc.org/sqlite"
@@ -68,7 +69,7 @@ func classifyFailure(err error) string {
 	if errors.Is(err, ErrUsageExhausted) {
 		return "usage_exhausted"
 	}
-	text := strings.ToLower(err.Error())
+	text := failureDiagnosticText(err)
 	switch {
 	case classes["authentication"], authenticationDiagnostic(text):
 		return "authentication"
@@ -86,6 +87,30 @@ func classifyFailure(err error) string {
 		return "command"
 	}
 	return "execution"
+}
+
+// Paths are resource identities, not provider diagnostics. In particular a
+// temporary path containing 401/403 or credential names cannot establish an
+// authentication failure. Preserve surrounding wrapper messages and errno text.
+func failureDiagnosticText(err error) string {
+	text := err.Error()
+	var sanitize func(error)
+	sanitize = func(cause error) {
+		if path, ok := cause.(*fs.PathError); ok {
+			text = strings.ReplaceAll(text, path.Error(), path.Op+": "+path.Err.Error())
+		}
+		if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+			for _, child := range joined.Unwrap() {
+				if child != nil {
+					sanitize(child)
+				}
+			}
+		} else if wrapped, ok := cause.(interface{ Unwrap() error }); ok && wrapped.Unwrap() != nil {
+			sanitize(wrapped.Unwrap())
+		}
+	}
+	sanitize(err)
+	return strings.ToLower(text)
 }
 
 func authenticationDiagnostic(text string) bool {

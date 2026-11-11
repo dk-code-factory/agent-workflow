@@ -16,12 +16,13 @@ import (
 )
 
 type Owner struct {
-	Network  *network.Reference `json:"network_runtime,omitempty"`
-	Runtime  string             `json:"runtime"`
-	Identity string             `json:"identity"`
-	Name     string             `json:"name"`
-	ID       string             `json:"id,omitempty"`
-	Labels   map[string]string  `json:"labels"`
+	Selection *Selection         `json:"selection,omitempty"`
+	Network   *network.Reference `json:"network_runtime,omitempty"`
+	Runtime   string             `json:"runtime"`
+	Identity  string             `json:"identity"`
+	Name      string             `json:"name"`
+	ID        string             `json:"id,omitempty"`
+	Labels    map[string]string  `json:"labels"`
 }
 
 type limitedBuffer struct{ bytes.Buffer }
@@ -138,6 +139,15 @@ type inspected struct {
 }
 
 func Inspect(ctx context.Context, owner Owner) (id string, exists bool, err error) {
+	if owner.Selection != nil {
+		r, e := Open(*owner.Selection)
+		if e != nil {
+			return "", false, e
+		}
+		defer r.Close()
+		object, exists, e := VerifyOwned(ctx, r, owner)
+		return object.ID, exists, e
+	}
 	identity, err := identityAt(ctx, owner.Runtime, owner.Network, true)
 	if err != nil {
 		return "", false, err
@@ -186,6 +196,9 @@ func Inspect(ctx context.Context, owner Owner) (id string, exists bool, err erro
 }
 
 func Remove(ctx context.Context, owner Owner) error {
+	if owner.Selection != nil {
+		return removeSelected(ctx, owner)
+	}
 	id, exists, err := Inspect(ctx, owner)
 	if err != nil {
 		return err

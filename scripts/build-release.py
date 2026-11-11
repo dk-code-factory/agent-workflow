@@ -6,6 +6,7 @@ import io
 import gzip
 from release_lib import source_fingerprint as fingerprint_source
 from go_locks import check_go_locks
+from guardian_assets import build_guardians
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,8 @@ while raw.strip():
     raw = raw.lstrip()[end:]
     modules.append(value)
 goroot = Path(subprocess.check_output(["go", "env", "GOROOT"], text=True).strip())
+guardian_stage = scratch / "guardians"
+build_guardians(ROOT, guardian_stage, ldflags)
 archives = []
 for target in targets:
     goos, arch = target.split("/")
@@ -59,6 +62,7 @@ for target in targets:
     with tempfile.TemporaryDirectory(dir=scratch) as temporary:
         stage = Path(temporary) / name
         stage.mkdir()
+        shutil.copytree(guardian_stage, stage / "guardians")
         env = dict(os.environ, CGO_ENABLED="0", GOOS=goos, GOARCH=arch)
         for command in ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance"]:
             run(["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", str(stage / command), "./cmd/" + command], env=env)

@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 import sys
 import tarfile
+import tempfile
+from guardian_assets import verify_guardians
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else "dist").resolve()
 source_root = Path(__file__).resolve().parents[1]
@@ -47,6 +49,15 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
         for required in ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance", "agents.yml", "LICENSE", "NOTICE", "licenses/index.json", "bridge/claude/bridge.mjs", "bridge/claude/package-lock.json", "build.json"]:
             if required not in names:
                 raise SystemExit("archive missing " + required)
+        with tempfile.TemporaryDirectory(prefix="verify-guardians-") as temporary:
+            for name in ["checksums.json", "linux-amd64", "linux-arm64"]:
+                entry = source.getmember(prefix + "/guardians/" + name)
+                if not entry.isfile():
+                    raise SystemExit("archive guardian must be a regular file")
+                target = Path(temporary) / name
+                target.write_bytes(source.extractfile(entry).read())
+                target.chmod(entry.mode)
+            verify_guardians(temporary)
         for entry in members:
             if not (entry.isfile() or entry.isdir()) or entry.name.startswith("/") or ".." in Path(entry.name).parts or "node_modules" in Path(entry.name).parts or ".agent-workflow" in Path(entry.name).parts:
                 raise SystemExit("archive contains unsafe/private/unlocked content")

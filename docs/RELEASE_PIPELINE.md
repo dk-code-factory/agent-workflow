@@ -252,3 +252,8 @@ restart/outage and broader provider-frame boundary certification also remain in
 the production audit; the new real-container removal test covers runtime-side
 container loss, not every daemon restart behavior. Do not publish `v0.2.0` until
 these nondeferred gates are closed.
+
+All CLI archives also contain both static Linux workload guardians under
+`guardians/`, with a SHA256 manifest. This includes macOS archives, which must
+select a guardian by image architecture rather than host OS. Packaging and
+verification reject changed bytes, missing platforms and dynamic linkage.
