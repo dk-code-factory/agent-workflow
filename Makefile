@@ -1,5 +1,6 @@
 .PHONY: build test check dist
 build:
+	python3 scripts/build-guardians.py
 	go build -o bin/agent-workflow ./cmd/agent-workflow
 	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
 test:

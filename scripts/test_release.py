@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 from release_lib import source_fingerprint
+from test_guardian_assets import fixture_guardians
 
 def module(name):
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
@@ -151,6 +152,10 @@ class PluginArchiveTests(unittest.TestCase):
                     files[name] = (b'fixture executable', 0o755)
                 for name in ['agents.yml', 'LICENSE', 'NOTICE', 'licenses/index.json', 'bridge/claude/bridge.mjs', 'bridge/claude/package-lock.json']:
                     files[name] = (b'fixture', 0o644)
+                with tempfile.TemporaryDirectory() as guardian_fixture:
+                    fixture_guardians(Path(guardian_fixture))
+                    for path in Path(guardian_fixture).iterdir():
+                        files['guardians/' + path.name] = (path.read_bytes(), path.stat().st_mode & 0o777)
                 files['build.json'] = (json.dumps({'source_fingerprint': 'a' * 64, 'os': os_name, 'arch': arch}).encode(), 0o644)
                 if change:
                     change(files)

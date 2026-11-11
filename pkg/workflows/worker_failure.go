@@ -171,7 +171,7 @@ func unsafeWorkerFailureClass(err error) string {
 	if errors.As(err, &storageErr) {
 		return "storage"
 	}
-	text := strings.ToLower(err.Error())
+	text := failureDiagnosticText(err)
 	if authenticationDiagnostic(text) || strings.Contains(text, "403") || strings.Contains(text, "forbidden") || strings.Contains(text, "authorization") || strings.Contains(text, "permission denied") || strings.Contains(text, "access denied") || strings.Contains(text, "unauthorized") {
 		return "authentication"
 	}
