@@ -64,6 +64,31 @@ func TestGuardianSelectionUsesImagePlatformAndVerifiesRetainedBytes(t *testing.T
 	}
 }
 
+func TestBuildRequestRequiresGuardianForAdmittedImagePlatform(t *testing.T) {
+	for _, imageArch := range []string{"amd64", "arm64"} {
+		for _, guardianArch := range []string{"amd64", "arm64"} {
+			t.Run(imageArch+"-image/"+guardianArch+"-guardian", func(t *testing.T) {
+				options := LaunchOptions{
+					Policy:    Policy{Mode: "container", Image: "fixture"},
+					Image:     containerapi.Image{ID: "sha256:" + strings.Repeat("a", 64), OS: "linux", Architecture: imageArch},
+					Guardian:  fixtureGuardian(t, guardianArch),
+					Workspace: t.TempDir(),
+					State:     t.TempDir(),
+				}
+				owner := containerapi.Owner{Name: "owned", Labels: map[string]string{"agent-workflow.token": "token"}}
+				_, err := BuildRequest(options, owner, t.TempDir())
+				if imageArch == guardianArch {
+					if err != nil {
+						t.Fatalf("matching guardian rejected: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "guardian platform") {
+					t.Fatalf("expected guardian platform mismatch, got %v", err)
+				}
+			})
+		}
+	}
+}
+
 type apiJournal struct {
 	mu          sync.Mutex
 	records     []Record
