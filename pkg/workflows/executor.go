@@ -49,6 +49,7 @@ type RunStore interface {
 
 type Executor struct {
 	ContainerGuardianDirectory string
+	runSecrets                 map[string]string
 	// BeforeFinalize retains execution ownership until supervised workers stop.
 	BeforeFinalize   func(context.Context, string) error
 	Capacity         *Capacity
@@ -73,19 +74,20 @@ type Executor struct {
 }
 
 type RunRequest struct {
-	Execution       runtimeexec.Policy
-	RequestID       string
-	Metadata        map[string]any
-	Ref             string
-	Inputs          map[string]any
-	Secrets         map[string]string
-	Event           map[string]any
-	SecretRefs      map[string]string
-	RetryUncertain  bool
-	actionContracts map[string]ActionContract
-	runID           string
-	iteration       int
-	ordered         bool
+	credentialAliases map[string]string
+	Execution         runtimeexec.Policy
+	RequestID         string
+	Metadata          map[string]any
+	Ref               string
+	Inputs            map[string]any
+	Secrets           map[string]string
+	Event             map[string]any
+	SecretRefs        map[string]string
+	RetryUncertain    bool
+	actionContracts   map[string]ActionContract
+	runID             string
+	iteration         int
+	ordered           bool
 }
 
 // Load snapshots and validates the entire reusable workflow closure before any
@@ -181,6 +183,7 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	}
 	copy := *e
 	e = &copy
+	e.runSecrets = req.Secrets
 	if err := e.pinExecution(ctx); err != nil {
 		return nil, err
 	}
@@ -222,6 +225,7 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	if slots == nil {
 		slots = make(chan struct{}, limit)
 	}
+	e.Slots = slots
 	run, runErr := e.execute(ctx, ref, req, all, slots, 0, nil)
 	return safeResult(run, runErr, e.redactionValues)
 }
@@ -234,6 +238,15 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		origin := nativeString(req.Metadata, "origin_run_id")
 		if err := e.checkEffectAdmission(ctx, origin); err != nil {
 			return nil, err
+		}
+	}
+	ctx = context.WithValue(ctx, definitionKey{}, ref)
+	if req.credentialAliases == nil {
+		req.credentialAliases = map[string]string{}
+		for key := range req.Secrets {
+			if _, ok := e.runSecrets[key]; ok {
+				req.credentialAliases[key] = key
+			}
 		}
 	}
 	w := all[ref]
@@ -534,7 +547,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		out.FailureClass = classifyFailure(err)
 		return out
 	}
-	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
+	ec := expressionContext{CredentialAliases: req.credentialAliases, Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
@@ -570,7 +583,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		if err != nil {
 			return fail(err)
 		}
-		childReq := RunRequest{ordered: req.ordered, Execution: req.Execution, Ref: job.Uses, Inputs: args, Event: req.Event, Secrets: map[string]string{}, Metadata: req.Metadata}
+		childReq := RunRequest{credentialAliases: forwardCredentialAliases(job.Secrets, req.credentialAliases), ordered: req.ordered, Execution: req.Execution, Ref: job.Uses, Inputs: args, Event: req.Event, Secrets: map[string]string{}, Metadata: req.Metadata}
 		switch secretMap := job.Secrets.(type) {
 		case string:
 			if secretMap != "inherit" {
@@ -659,7 +672,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 			}
 			for _, a := range attempts {
 				completed := a.Status == RunStatusSucceeded || !a.FinishedAt.IsZero() || a.Phase == "lifecycle_task_completed"
-				if a.RunID == ec.RunID && a.JobID == id && a.Iteration == req.iteration && completed {
+				if a.RunID == ec.RunID && a.JobID == id && a.Iteration == req.iteration && completed && !e.isStructuredAttempt(ctx, a) {
 					return fail(fmt.Errorf("%w: shared job %s lost transient container state after completed commands; start a new run", ErrActionIntegrity, id))
 				}
 			}
@@ -957,6 +970,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if !ok {
 		return nil, fmt.Errorf("legacy JSON records cannot resume")
 	}
+	e.runSecrets = secrets
 	e.redactionValues = e.redactions(secrets)
 	defer func() { result, err = safeResult(result, err, e.redactionValues) }()
 	e.Store = redactedStore{Journal: journal, secrets: e.redactionValues}
@@ -1031,12 +1045,19 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if err = e.preflight(ctx, snap.Definitions); err != nil {
 		return nil, err
 	}
+	if e.Slots == nil {
+		limit := snap.Parallel
+		if limit <= 0 {
+			limit = 4
+		}
+		e.Slots = make(chan struct{}, limit)
+	}
 	e.Roles = snap.Roles
 	if err = e.validateIterationRecovery(ctx, run, snap, secrets); err != nil {
 		return nil, err
 	}
 	if run.Status == RunStatusSucceeded && !iterationRetry(run) {
-		if err = e.validateActionRecovery(ctx, run.ID, snap); err != nil {
+		if err = e.validateCompletedContainerActions(ctx, run, snap); err != nil {
 			return nil, err
 		}
 		return run, nil
@@ -1053,7 +1074,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		return run, errors.Join(err, e.save(fenceContext(ctx, run), run))
 	}
 	resetIterationDependents(run, snap.Definitions)
-	req := RunRequest{actionContracts: snap.ActionContracts, Execution: snap.Execution, Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
+	req := RunRequest{credentialAliases: snap.CredentialAliases, actionContracts: snap.ActionContracts, Execution: snap.Execution, Ref: run.WorkflowRef, Inputs: snap.Inputs, Event: snap.Event, Secrets: secrets, SecretRefs: snap.SecretRefs, RetryUncertain: retry, Metadata: snap.Metadata}
 	slots := e.Slots
 	if slots == nil {
 		limit := snap.Parallel

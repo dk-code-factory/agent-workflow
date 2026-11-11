@@ -239,6 +239,13 @@ export class WorkflowDocument {
       }
     });
   }
+  setContainerProtocol(id: string, index: number, protocol: string) {
+    this.edit(doc => {
+      const path = ['jobs', id, 'steps', index];
+      if (protocol) doc.setIn([...path, 'protocol'], protocol);
+      else for (const key of ['protocol', 'effect', 'input-schema', 'output-schema', 'input']) doc.deleteIn([...path, key]);
+    });
+  }
   setStepKind(id: string, index: number, kind: string) {
     const step = this.snapshot.workflow?.jobs[id]?.steps?.[index];
     if (!step) throw new Error('Unknown step');

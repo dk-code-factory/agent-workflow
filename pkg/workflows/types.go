@@ -129,6 +129,12 @@ type Job struct {
 }
 
 type Step struct {
+	Protocol                string                   `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Effect                  ActionEffect             `json:"effect,omitempty" yaml:"effect,omitempty"`
+	InputSchema             any                      `json:"input-schema,omitempty" yaml:"input-schema,omitempty"`
+	OutputSchema            any                      `json:"output-schema,omitempty" yaml:"output-schema,omitempty"`
+	Input                   map[string]any           `json:"input,omitempty" yaml:"input,omitempty"`
+	Env                     map[string]string        `json:"env,omitempty" yaml:"env,omitempty"`
 	ContainerImplementation *ContainerImplementation `json:"container_implementation,omitempty" yaml:"-"`
 	Conversation            []string                 `json:"conversation,omitempty" yaml:"conversation,omitempty"`
 	Start                   string                   `json:"start,omitempty" yaml:"start,omitempty"`

@@ -100,6 +100,7 @@ func TestContainerDeclarationScalarNormalization(t *testing.T) {
 }
 
 type fakeContainer struct {
+	env                    []string
 	id, name, dir          string
 	workingDir             string
 	labels                 map[string]string
@@ -112,6 +113,7 @@ type fakeContainer struct {
 	mu                     sync.Mutex
 }
 type fakeExec struct {
+	env     []string
 	id      string
 	parent  *fakeContainer
 	argv    []string
@@ -120,6 +122,7 @@ type fakeExec struct {
 	code    int
 }
 type workflowDocker struct {
+	helper                func([]string, []byte, []string) ([]byte, []byte, int, bool)
 	t                     *testing.T
 	mu                    sync.Mutex
 	containers            map[string]*fakeContainer
@@ -136,7 +139,12 @@ type workflowDocker struct {
 	startDelayInspections int
 }
 
-func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, dir string) ([]byte, []byte, int) {
+func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, dir string, env []string) ([]byte, []byte, int) {
+	if d.helper != nil {
+		if out, logs, code, handled := d.helper(argv, input, env); handled {
+			return out, logs, code
+		}
+	}
 	args := append([]string(nil), argv...)
 	for i, a := range args {
 		a = strings.ReplaceAll(a, "/tmp/", c.dir+"/")
@@ -222,6 +230,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			Cmd        []string
 			Labels     map[string]string
 			WorkingDir string
+			Env        []string
 		}
 		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 			d.t.Error(err)
@@ -243,7 +252,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		if err := os.Mkdir(dir, 0700); err != nil {
 			d.t.Error(err)
 		}
-		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
+		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, env: q.Env, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
 		if d.stallOnce && d.stallPhase == "running" {
 			d.startDelayInspections = 0
 		}
@@ -275,6 +284,8 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, `{"ID":%q,"ContainerID":%q,"Running":%t,"ExitCode":%d}`, e.id, e.parent.id, e.running, e.code)
 			return
 		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
 		conn, err := fakeStream(w)
 		if err != nil {
 			d.t.Error(err)
@@ -285,7 +296,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		e.running = true
 		d.mu.Unlock()
 		input, _ := io.ReadAll(conn)
-		stdout, stderr, code := d.command(e.parent, e.argv, input, e.dir)
+		stdout, stderr, code := d.command(e.parent, e.argv, input, e.dir, e.env)
 		d.mu.Lock()
 		e.running = false
 		e.code = code
@@ -340,6 +351,8 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		close(c.started)
 		w.WriteHeader(204)
 	case "attach":
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
 		conn, err := fakeStream(w)
 		if err != nil {
 			d.t.Error(err)
@@ -360,7 +373,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			close(c.done)
 			return
 		}
-		stdout, stderr, code := d.command(c, c.argv, input, c.workingDir)
+		stdout, stderr, code := d.command(c, c.argv, input, c.workingDir, c.env)
 		c.mu.Lock()
 		c.running = false
 		c.code = code
@@ -386,6 +399,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		var q struct {
 			Cmd        []string
 			WorkingDir string
+			Env        []string
 		}
 		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 			d.t.Error(err)
@@ -395,7 +409,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		defer d.mu.Unlock()
 		d.executions++
 		id := fmt.Sprintf("exec-%d", d.executions)
-		d.execs[id] = &fakeExec{id: id, parent: c, argv: argv, dir: q.WorkingDir, running: false}
+		d.execs[id] = &fakeExec{env: q.Env, id: id, parent: c, argv: argv, dir: q.WorkingDir, running: false}
 		fmt.Fprintf(w, `{"Id":%q}`, id)
 	default:
 		http.Error(w, "unexpected", 500)

@@ -8,6 +8,7 @@ export function stepConversion(step: Step, kind: string) {
   const shorthand = Object.hasOwn(step, 'agent');
   const command = kind === 'argv' || kind === 'shell';
   const remove: Path[] = [];
+  if (!command && !kind.startsWith('docker://')) for (const key of ['protocol', 'effect', 'input-schema', 'output-schema', 'input', 'env']) if (Object.hasOwn(step, key)) remove.push([key]);
   const set: { path: Path; value: unknown }[] = [];
   const conversation = kind === 'conversation';
   for (const key of ['conversation', 'start', 'finishBy', 'maxTurns', 'maxMessages']) if (!conversation && Object.hasOwn(step, key)) remove.push([key]);
