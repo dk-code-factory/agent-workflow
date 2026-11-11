@@ -38,7 +38,9 @@ need no guardian/action labels. Existing guardian-equipped images remain usable.
 Every distribution, including macOS, includes Linux amd64 and arm64 guardians in
 `guardians/` plus `checksums.json`. Runtime selection verifies a regular executable
 file, SHA256, ELF architecture and static linkage before mounting the selected
-binary read-only at `/engine-guardian/guardian`. `make build` builds both variants
+binary read-only at `/engine-guardian/guardian`. The launcher rejects a guardian
+whose platform differs from the admitted image before creating a container.
+`make build` builds both variants
 for development. Releases include and independently verify both variants.
 
 The following stages add GitHub-style job-container/Docker-step authoring,

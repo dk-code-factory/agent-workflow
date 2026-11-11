@@ -49,6 +49,9 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 	if err := o.Guardian.Verify(); err != nil {
 		return containerapi.CreateRequest{}, err
 	}
+	if o.Guardian.Platform != o.Image.OS+"/"+o.Image.Architecture {
+		return containerapi.CreateRequest{}, fmt.Errorf("guardian platform %q does not match admitted image platform %s/%s", o.Guardian.Platform, o.Image.OS, o.Image.Architecture)
+	}
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid == 0 {
 		uid = 65532
