@@ -52,3 +52,16 @@ jobs:
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(source);
 });
+
+test('conversion to a reusable call reviews and removes the owned job container', async ({ page }) => {
+  const source = `jobs: {build: {container: {image: 'ubuntu:24.04'}, steps: [{run: 'echo ready'}]}}`;
+  const ui = await open(page, source); await job(page);
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('container'); await dialog.dismiss(); });
+  await ui.getByLabel('Job kind', { exact: true }).selectOption('reusable');
+  expect((await snapshot(page)).source).toBe(source);
+  page.once('dialog', dialog => dialog.accept());
+  await ui.getByLabel('Job kind', { exact: true }).selectOption('reusable');
+  expect((await snapshot(page)).workflow.jobs.build.container).toBeUndefined();
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+});

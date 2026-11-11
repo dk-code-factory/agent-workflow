@@ -53,9 +53,13 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if !ok {
 			return nil, fmt.Errorf("run must render to a string")
 		}
-		argv = []string{step.Shell, "-c", script}
+		shell := step.Shell
+		if shell == "" && ctx.Value(jobContainerKey{}) != nil {
+			shell = "sh"
+		}
+		argv = []string{shell, "-c", script}
 	}
-	if len(argv) == 0 || argv[0] == "" {
+	if !isDockerStep(step) && (len(argv) == 0 || argv[0] == "") {
 		return nil, fmt.Errorf("command requires executable")
 	}
 	if step.Timeout != "" {
@@ -66,6 +70,9 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
+	}
+	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
+		return e.executeContainerCommand(ctx, step, argv, slots)
 	}
 	queued := time.Now()
 	select {

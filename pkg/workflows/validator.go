@@ -36,8 +36,11 @@ func Validate(w *Workflow) error {
 		if !idPattern.MatchString(id) {
 			return fmt.Errorf("invalid job id %q", id)
 		}
+		if err := validateJobContainer(w, id, job); err != nil {
+			return err
+		}
 		if job.RunsOn != "" && job.RunsOn != "local" {
-			return fmt.Errorf("job %s: only runs-on: local is supported", id)
+			return fmt.Errorf("job %s: unsupported runner %q; only runs-on: local is supported", id, job.RunsOn)
 		}
 		if job.Repeat != nil && (job.Repeat.MaxAttempts < 1 || job.Repeat.MaxAttempts > 100 || strings.TrimSpace(job.Repeat.Until) == "") {
 			return fmt.Errorf("job %s: repeat requires max-attempts between 1 and 100 and until", id)
@@ -160,12 +163,15 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 		if step.Start != "" || step.FinishBy != "" || step.MaxTurns != 0 || step.MaxMessages != 0 {
 			return fmt.Errorf("step %s: conversation fields require conversation", sid)
 		}
+		if isDockerStep(step) {
+			continue
+		}
 		command := len(step.Argv) > 0 || step.Run != ""
 		if command {
 			if step.Uses != "" || len(step.With) > 0 {
 				return fmt.Errorf("step %s: commands cannot have uses or with", sid)
 			}
-			if step.Run != "" && (step.Shell == "" || len(step.Argv) > 0) {
+			if step.Run != "" && (step.Shell == "" && w.Jobs[id].Container == nil || len(step.Argv) > 0) {
 				return fmt.Errorf("step %s: run requires an explicit shell and cannot have argv", sid)
 			}
 			if step.Run == "" && step.Shell != "" {

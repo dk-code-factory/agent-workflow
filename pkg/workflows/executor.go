@@ -48,6 +48,7 @@ type RunStore interface {
 }
 
 type Executor struct {
+	ContainerGuardianDirectory string
 	// BeforeFinalize retains execution ownership until supervised workers stop.
 	BeforeFinalize   func(context.Context, string) error
 	Capacity         *Capacity
@@ -647,6 +648,26 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		out.Outputs = child.Outputs
 		return out
 	}
+	if job.Container != nil {
+		if store := invocationStore(e.Store); store != nil {
+			attempts, err := store.Attempts(ctx, ec.RunID)
+			if err != nil {
+				return fail(err)
+			}
+			for _, a := range attempts {
+				if a.JobID == id && a.Iteration == req.iteration && a.Status == RunStatusSucceeded {
+					return fail(fmt.Errorf("%w: shared job %s lost transient container state after completed commands; start a new run", ErrActionIntegrity, id))
+				}
+			}
+		}
+		scope := &jobContainerScope{implementation: job.Container.Implementation, slots: slots, executor: e, ctx: ctx}
+		ctx = context.WithValue(ctx, jobContainerKey{}, scope)
+		defer func() {
+			if err := scope.close(); err != nil {
+				out = fail(errors.Join(err, errors.New(out.Error)))
+			}
+		}()
+	}
 	status, err := e.executeStepSequence(ctx, job.Steps, "", ec, req, slots)
 	if err != nil {
 		return fail(err)
@@ -700,7 +721,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 		}
 		return e.Actions.RunAction(ctx, ActionRequest{RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Iteration: ec.IterationNumber, Uses: step.Uses, With: args, Metadata: ec.Metadata, Secrets: e.redactions(ec.Secrets), Needs: ec.Needs, Steps: ec.Steps})
 	}
-	if len(step.Argv) > 0 || step.Run != "" {
+	if len(step.Argv) > 0 || step.Run != "" || isDockerStep(step) {
 		return e.executeCommand(ctx, step, ec, slots)
 	}
 	if e.Agents == nil {

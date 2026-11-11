@@ -9,6 +9,7 @@ export interface Step extends Mapping {
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;
+  container?: string | { image: string };
   'for-each'?: { items: unknown[] | string; key: string } | null;
   repeat?: { 'max-attempts': number; until: string } | null; if?: string;
 }

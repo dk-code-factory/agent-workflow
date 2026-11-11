@@ -9,6 +9,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if err := e.pinContainers(ctx, all); err != nil {
+		return err
+	}
 	if err := e.preflightConversations(all); err != nil {
 		return err
 	}

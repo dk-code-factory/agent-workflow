@@ -231,7 +231,7 @@ export class WorkflowDocument {
   }
   setJobKind(id: string, reusable: boolean) {
     this.edit(doc => {
-      if (reusable) { doc.deleteIn(['jobs', id, 'steps']); doc.setIn(['jobs', id, 'uses'], this.options.workflows?.[0]?.id ?? 'workflows/example.yml'); }
+      if (reusable) { doc.deleteIn(['jobs', id, 'container']); doc.deleteIn(['jobs', id, 'steps']); doc.setIn(['jobs', id, 'uses'], this.options.workflows?.[0]?.id ?? 'workflows/example.yml'); }
       else {
         for (const key of ['uses', 'with', 'secrets']) doc.deleteIn(['jobs', id, key]);
         const steps = doc.getIn(['jobs', id, 'steps'], true);

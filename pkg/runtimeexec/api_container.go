@@ -227,6 +227,21 @@ func LaunchContainer(ctx context.Context, o LaunchOptions) (session *ContainerSe
 		_ = i.Save(context.WithoutCancel(ctx), "cleaned")
 		return nil, err
 	}
+	ids := strings.Split(q.User, ":")
+	uid, _ := strconv.Atoi(ids[0])
+	gid, _ := strconv.Atoi(ids[1])
+	if err = i.setLifetimeOwner(uid, gid); err != nil {
+		r.Close()
+		return nil, err
+	}
+	if os.Getuid() == 0 {
+		for _, path := range []string{o.State, filepath.Join(o.State, "home")} {
+			if err = os.Chown(path, uid, gid); err != nil {
+				r.Close()
+				return nil, err
+			}
+		}
+	}
 	session = &ContainerSession{Runtime: r, Invocation: i, Owner: owner}
 	defer func() {
 		if returned != nil {

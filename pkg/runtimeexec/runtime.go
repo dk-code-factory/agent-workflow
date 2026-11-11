@@ -80,6 +80,7 @@ func (p Policy) ValidateFor(goos string) error {
 }
 
 type Record struct {
+	ExecID         string              `json:"exec_id,omitempty"`
 	Network        *network.Reference  `json:"network_runtime,omitempty"`
 	ID             string              `json:"id"`
 	RunID          string              `json:"run_id"`
@@ -124,13 +125,14 @@ func NewID() string {
 }
 
 type Invocation struct {
-	Record        Record
-	binding       Binding
-	dir           string
-	stopHeartbeat context.CancelFunc
-	heartbeatDone chan struct{}
-	mu            sync.Mutex
-	finalized     bool
+	Record                   Record
+	binding                  Binding
+	dir                      string
+	stopHeartbeat            context.CancelFunc
+	heartbeatDone            chan struct{}
+	mu                       sync.Mutex
+	finalized                bool
+	lifetimeUID, lifetimeGID *int
 }
 
 // StorageError identifies a runtime state persistence failure while retaining its diagnostic.
@@ -165,6 +167,19 @@ func (i *Invocation) Save(ctx context.Context, state string) error {
 	return i.binding.Journal.UpdateInvocation(ctx, i.Record)
 }
 func (i *Invocation) Directory() string { return i.dir }
+
+func (i *Invocation) setLifetimeOwner(uid, gid int) error {
+	if os.Getuid() != 0 {
+		return nil
+	}
+	if err := os.Chown(i.dir, uid, gid); err != nil {
+		return err
+	}
+	i.lifetimeUID = &uid
+	i.lifetimeGID = &gid
+	return nil
+}
+
 func (i *Invocation) StartHeartbeat() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	i.stopHeartbeat = cancel
@@ -176,6 +191,11 @@ func (i *Invocation) StartHeartbeat() error {
 		tmp := filepath.Join(i.dir, "lease.partial")
 		if err := os.WriteFile(tmp, data, 0600); err != nil {
 			return err
+		}
+		if i.lifetimeUID != nil {
+			if err := os.Chown(tmp, *i.lifetimeUID, *i.lifetimeGID); err != nil {
+				return err
+			}
 		}
 		return os.Rename(tmp, filepath.Join(i.dir, "lease"))
 	}
