@@ -306,6 +306,12 @@ func (e *Executor) launchOptions(ctx context.Context, p *ContainerImplementation
 	}
 	return runtimeexec.LaunchOptions{Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: p.Guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}, nil
 }
+func containerWorkingDirectory(dir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.ToSlash(filepath.Join("/workspace", dir))
+}
 func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv []string, slots chan struct{}) (out map[string]any, returned error) {
 	scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope)
 	queued := time.Now()
@@ -339,6 +345,7 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 		if err != nil {
 			return nil, err
 		}
+		o.WorkingDir = containerWorkingDirectory(step.WorkingDirectory)
 		session, err := runtimeexec.LaunchContainer(ctx, o)
 		if err != nil {
 			return nil, err
@@ -379,14 +386,7 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 				return nil, err
 			}
 		}
-		dir := "/workspace"
-		if step.WorkingDirectory != "" {
-			dir = filepath.ToSlash(filepath.Join("/workspace", step.WorkingDirectory))
-			if filepath.IsAbs(step.WorkingDirectory) {
-				dir = step.WorkingDirectory
-			}
-		}
-		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, WorkingDir: dir}, streams)
+		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, WorkingDir: containerWorkingDirectory(step.WorkingDirectory)}, streams)
 	}
 	out = map[string]any{"stdout": stdout.String(), "stderr": stderr.String(), "exit_code": code, "queue_time_ms": queueTime}
 	if code == 125 {

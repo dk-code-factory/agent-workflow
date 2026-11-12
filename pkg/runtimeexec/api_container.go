@@ -35,6 +35,7 @@ type LaunchOptions struct {
 	Guardian               GuardianAsset
 	Workspace, State, Root string
 	Command, Env           []string
+	WorkingDir             string
 	Actions                string
 	EngineState            string
 }
@@ -66,6 +67,9 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 		gid = *o.Policy.GID
 	}
 	q := containerapi.CreateRequest{Name: owner.Name, Image: o.Image.ID, User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), WorkingDir: "/workspace", Labels: owner.Labels, Entrypoint: []string{MountedGuardian}, Command: append([]string{"__container_workload_guardian_v1", "/engine-lifetime/lease", owner.Labels["agent-workflow.token"], "--"}, o.Command...), KeepID: o.Selection.Transport == containerapi.PodmanCLI && o.Selection.Endpoint == "", Env: []string{"HOME=/state/home", "TMPDIR=/tmp", "AGENT_WORKFLOW_WORKSPACE_WRITABLE=" + strconv.FormatBool(o.Policy.Writable)}}
+	if o.WorkingDir != "" {
+		q.WorkingDir = o.WorkingDir
+	}
 	for _, value := range o.Env {
 		key, _, ok := strings.Cut(value, "=")
 		if !ok || key == "" || key == "AGENT_WORKFLOW_WORKSPACE_WRITABLE" || strings.HasPrefix(key, "AGENT_WORKFLOW_") {

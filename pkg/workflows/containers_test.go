@@ -76,6 +76,7 @@ func TestDockerEntrypointCmdAndQuotedArguments(t *testing.T) {
 
 type fakeContainer struct {
 	id, name, dir          string
+	workingDir             string
 	labels                 map[string]string
 	argv                   []string
 	resident               bool
@@ -182,8 +183,9 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == "/containers/create" {
 		var q struct {
-			Cmd    []string
-			Labels map[string]string
+			Cmd        []string
+			Labels     map[string]string
+			WorkingDir string
 		}
 		if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 			d.t.Error(err)
@@ -205,7 +207,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		if err := os.Mkdir(dir, 0700); err != nil {
 			d.t.Error(err)
 		}
-		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{})}
+		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{})}
 		d.containers[id] = c
 		d.containers[c.name] = c
 		fmt.Fprintf(w, `{"Id":%q}`, id)
@@ -303,7 +305,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			close(c.done)
 			return
 		}
-		stdout, stderr, code := d.command(c, c.argv, input, "")
+		stdout, stderr, code := d.command(c, c.argv, input, c.workingDir)
 		c.mu.Lock()
 		c.running = false
 		c.code = code
@@ -705,5 +707,46 @@ jobs: {build: {container: ubuntu:24.04, steps: [{id: where, run: pwd, working-di
 				}
 			}
 		})
+	}
+}
+
+func TestDockerCommandRendersWorkingDirectory(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		for _, dir := range []any{"", "subdir", "/workspace/subdir", 42} {
+			t.Run(fmt.Sprintf("shared=%t/dir=%v", shared, dir), func(t *testing.T) {
+				e, _, d := containerExecutor(t)
+				if err := os.Mkdir(filepath.Join(e.WorkspaceDir, "subdir"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				inputType, container := "string", ""
+				if dir == 42 {
+					inputType = "number"
+				}
+				if shared {
+					container = "container: ubuntu:24.04, "
+				}
+				writeWorkflow(t, e.WorkspaceDir, "test.yml", `on: {workflow_call: {inputs: {dir: {type: `+inputType+`}}}}
+jobs: {build: {`+container+`steps: [{id: where, uses: 'docker://ubuntu:24.04', working-directory: '${{ inputs.dir }}', with: {args: '-c pwd'}}]}}`)
+				run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml", Inputs: map[string]any{"dir": dir}})
+				if dir == 42 {
+					if err == nil || !strings.Contains(err.Error(), "working-directory must render to a string") {
+						t.Fatalf("non-string directory accepted: run=%+v err=%v", run, err)
+					}
+				} else {
+					want := e.WorkspaceDir
+					if dir != "" {
+						want = filepath.Join(want, "subdir")
+					}
+					if err != nil || run == nil || run.Jobs["build"].Steps["where"].Outputs["stdout"] != want+"\n" {
+						t.Fatalf("Docker directory expression failed: run=%+v err=%v", run, err)
+					}
+				}
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				if len(d.containers) != 0 || dir == 42 && d.creates != 0 {
+					t.Fatalf("unexpected container effects: creates=%d retained=%d", d.creates, len(d.containers))
+				}
+			})
+		}
 	}
 }

@@ -100,8 +100,10 @@ test('Docker image changes retain command overrides and command conversion revie
   await field(page, 'Action target', 'docker://ubuntu:22.04');
   expect((await snapshot(page)).workflow.jobs.build.steps[0]).toMatchObject({ uses: 'docker://ubuntu:22.04', with: { entrypoint: '/bin/sh', args: '-c "echo separate"' }, timeout: '2m' });
   const before = (await snapshot(page)).source;
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('with'); await dialog.dismiss(); });
+  let reviewMessage = '';
+  page.once('dialog', async dialog => { reviewMessage = dialog.message(); await dialog.dismiss(); });
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect(reviewMessage).toContain('with');
   expect((await snapshot(page)).source).toBe(before);
   page.once('dialog', dialog => dialog.accept());
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');

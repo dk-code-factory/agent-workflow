@@ -56,8 +56,10 @@ jobs:
 test('conversion to a reusable call reviews and removes the owned job container', async ({ page }) => {
   const source = `jobs: {build: {container: {image: 'ubuntu:24.04'}, steps: [{run: 'echo ready'}]}}`;
   const ui = await open(page, source); await job(page);
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('container'); await dialog.dismiss(); });
+  let reviewMessage = '';
+  page.once('dialog', async dialog => { reviewMessage = dialog.message(); await dialog.dismiss(); });
   await ui.getByLabel('Job kind', { exact: true }).selectOption('reusable');
+  expect(reviewMessage).toContain('container');
   expect((await snapshot(page)).source).toBe(source);
   page.once('dialog', dialog => dialog.accept());
   await ui.getByLabel('Job kind', { exact: true }).selectOption('reusable');
