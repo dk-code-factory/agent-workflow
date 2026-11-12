@@ -118,3 +118,8 @@ existing host custom action fields/renderers. It delegates registration and type
 schema admission to the embedding host. Deterministic tests use local SQLite
 fixtures and fake receipts; no provider credentials or real GitHub publication
 are needed.
+
+The runnable [receipt recovery fixture](../examples/receipt-recovery/README.md)
+uses an embedding host, the real controller resume API, and a separate SQLite
+fake counter to demonstrate lost responses, unknown/error reconciliation,
+validated completion, proof of no effect, and resume-request deduplication.
