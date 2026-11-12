@@ -25,10 +25,11 @@ func TestNativeAgentTaskRejectsSecretsBeforeRetainingDispatch(t *testing.T) {
           prompt: Review the task.
           input: {credential: '${{ secrets.token }}'}
 `, func(SessionRequest) (map[string]any, error) {
-		t.Fatal("secret-bearing task reached the provider")
-		return nil, nil
+		return nil, errors.New("secret-bearing task reached the provider")
 	})
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": secret}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": secret}})
 	if err == nil || !strings.Contains(err.Error(), "credential references") {
 		t.Fatalf("expected input rejection, got %v", err)
 	}

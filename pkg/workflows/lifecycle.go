@@ -259,6 +259,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			life.Skipped = map[string]string{}
 		}
 		if resuming {
+			// Replay candidate selection from the original task result; retained
+			// replacement outputs belong to later verifier ordinals.
+			result.Outputs = cloneJSONMap(life.Candidate)
 			attempts, loadErr := lifecycleAttempts(ctx, e.Store, ec.RunID)
 			if loadErr != nil {
 				return result, errors.Join(err, loadErr)
@@ -327,7 +330,16 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			if candidate == nil {
 				candidate = result.Outputs["text"]
 			}
-			local.Event = map[string]any{"type": kind, "agent": life.Agent, "result": candidate, "verification": life.Verification, "error": nil, "source": source}
+			verification := life.Verification
+			if kind == "onResult" {
+				// A verifier observes the previous candidate's verdict, including
+				// nil for the first candidate, even after a later verdict persisted.
+				verification = nil
+				if previous := ordinals[kind] - 2; previous >= 0 && previous < len(life.Verifications) {
+					verification = life.Verifications[previous]
+				}
+			}
+			local.Event = map[string]any{"type": kind, "agent": life.Agent, "result": candidate, "verification": verification, "error": nil, "source": source}
 			if err != nil {
 				local.Event["error"] = map[string]any{"message": Redact(err.Error(), e.redactions(ec.Secrets)), "class": classifyFailure(err)}
 			}
