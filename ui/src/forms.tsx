@@ -8,6 +8,7 @@ import { populated, stepConversionImpact } from './conversion';
 import { expressionSuggestions } from './source';
 import { hasExpressionReferences } from './expressions';
 import { JobResultPicker } from './result-picker';
+import { parseExactYAML } from './exact-yaml';
 
 export type ApplyResult = { ok: true } | { ok: false; error: string };
 export function applyEdit(fn: () => void): ApplyResult {
@@ -136,7 +137,7 @@ export function StructuredField({ store, path, label, replacement = false, prese
   const text = preserveNumbers ? store.getFieldYAML(path) : value === undefined ? '' : stringify(value).trimEnd();
   const readOnly = store.readOnly || store.getSnapshot().stale;
   return <>{replacement && <p className="aw-hint">Applying this YAML replaces the entire mapping or value, including its comments. Include every existing entry you want to keep. Guided fields change only their own values.</p>}<Field path={path} subtree label={label} value={text} readOnly={readOnly} multiline onApply={text => applyEdit(() => {
-    const doc = parseDocument(text, { intAsBigInt: preserveNumbers });
+    const doc = preserveNumbers ? parseExactYAML(text) : parseDocument(text);
     if (doc.errors.length) throw new Error(doc.errors[0].message);
     const data = doc.toJS({ maxAliasCount: 0 });
     store.setField(path, text.trim() ? preserveNumbers ? doc.contents : data : undefined);
@@ -359,10 +360,10 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
           <p className="aw-hint">Hooks are command or agent/run step lists. onResult verifies the candidate; onComplete processes accepted completion; onIncomplete prepares feedback or an explicit follow-up. Script hooks receive JSON on stdin; AI hooks receive event data as input. onError supplies a replacement result; onFailure reports a remaining failure; finally runs after success or safe failure. Handler prompts can use failed.id, failed.uses, failed.prompt, error.message, and error.class. Cancellation and unsafe failures skip handlers.</p>
           {field('Handler timeout', 'handlerTimeout')}
           <p className="aw-hint">Applying a handler list replaces that entire list and its comments. Include every child step you want to keep.</p>
-          {uses === 'agent/run' && <><StructuredField store={store} path={[...path, 'onResult']} label="Result verification steps (YAML)" /><StructuredField store={store} path={[...path, 'onComplete']} label="Completion steps (YAML)" /><StructuredField store={store} path={[...path, 'onIncomplete']} label="Incomplete steps (YAML)" /></>}
-          <StructuredField store={store} path={[...path, 'onError']} label="Fallback steps (YAML)" />
-          <StructuredField store={store} path={[...path, 'onFailure']} label="Failure reporting steps (YAML)" />
-          <StructuredField store={store} path={[...path, 'finally']} label="Finalization steps (YAML)" />
+          {uses === 'agent/run' && <><StructuredField store={store} path={[...path, 'onResult']} label="Result verification steps (YAML)" preserveNumbers /><StructuredField store={store} path={[...path, 'onComplete']} label="Completion steps (YAML)" preserveNumbers /><StructuredField store={store} path={[...path, 'onIncomplete']} label="Incomplete steps (YAML)" preserveNumbers /></>}
+          <StructuredField store={store} path={[...path, 'onError']} label="Fallback steps (YAML)" preserveNumbers />
+          <StructuredField store={store} path={[...path, 'onFailure']} label="Failure reporting steps (YAML)" preserveNumbers />
+          <StructuredField store={store} path={[...path, 'finally']} label="Finalization steps (YAML)" preserveNumbers />
         </details>}
         <label className="aw-field" data-aw-path={!uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={conversation ? 'conversation' : block ?? commandKind ?? uses ?? 'agent/run'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', 'parallel', 'sequence', 'conversation', 'agent/run', ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(uses ? [uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : kind === 'parallel' ? 'Parallel block' : kind === 'sequence' ? 'Sequence block' : kind === 'conversation' ? 'Conversation' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
         {conversation && <><p className="aw-hint">Participants retain sessions and can message declared peers. Only the finisher can complete the step. Host adapter admission checks session and messaging support.</p>{advanced('conversation', 'Participants (YAML)')}{field('Starter', 'start')}{field('Finisher', 'finishBy')}{field('Prompt', 'prompt', true)}{(['maxTurns', 'maxMessages'] as const).map(key => <Field key={key} path={[...path, key]} label={key === 'maxTurns' ? 'Maximum turns' : 'Maximum messages'} value={step[key]} type="number" readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, key], value === '' ? undefined : Number(value)))} />)}{field('Timeout', 'timeout')}{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}

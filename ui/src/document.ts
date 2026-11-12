@@ -1,9 +1,10 @@
-import { isMap, isScalar, isSeq, parseDocument, visit, type Document, type Node } from 'yaml';
+import { isMap, isScalar, isSeq, visit, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, hasAgentResult, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
 import { blockKind, producerStep, stepEntries } from './step-tree';
 import { stepConversion } from './conversion';
+import { parseExactYAML, preserveNumericTokens } from './exact-yaml';
 
 // Whole workflow/job/step replacements may change anonymous owners; field leaves do not.
 const preservesInspectorOwner = (path: Path) => path.length > 0 && (path[0] !== 'jobs' || (path.length >= 3 && path[2] !== 'steps') || path.length > 4);
@@ -126,12 +127,12 @@ export class WorkflowDocument {
   private edit(fn: (doc: Document) => void, preserveInspector = false) {
     if (this.readOnly) throw new Error('Viewer is read-only');
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
-    const doc = this.parsed.doc.clone();
+    const doc = preserveNumericTokens(this.parsed.doc.clone());
     // Typed input is opaque JSON data. Restore its exact source nodes before
     // serializing an unrelated edit; the semantic preview uses JS numbers.
     const sourceKey = (node: Node) => `${isMap(node) ? 'map' : isSeq(node) ? 'sequence' : 'scalar'}:${node.range?.join(',')}`;
     const exact = new Map<string, Node>();
-    visit(parseDocument(this.snapshot.source, { intAsBigInt: true }), (_key, node) => {
+    visit(parseExactYAML(this.snapshot.source), (_key, node) => {
       if ((isMap(node) || isSeq(node) || isScalar(node)) && node.range) exact.set(sourceKey(node), node);
     });
     visit(doc, (_key, node) => {
@@ -172,7 +173,7 @@ export class WorkflowDocument {
   getFieldYAML(path: Path): string {
     const node = this.parsed.doc?.getIn(path, true);
     if (!node || (!isMap(node) && !isSeq(node) && !isScalar(node))) return '';
-    const fragment: Document = parseDocument(this.snapshot.source, { intAsBigInt: true });
+    const fragment: Document = parseExactYAML(this.snapshot.source);
     // Semantic parsing omits null entries from typed sequences. Source ranges
     // still identify the original node, even when its sequence index shifted.
     let original: Node | undefined;

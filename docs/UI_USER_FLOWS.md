@@ -797,10 +797,12 @@ sources are the [UI guide](../ui/README.md),
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
 
 - **Coverage:** Definition, bounded turn allowance and typed input edits preserve
-  all six hook lists and exact integer literals beyond JavaScript's safe integer
-  range, including task inspection after omitted null steps. The flow opens the
-  handler section and checks every visible hook editor;
-  command conversion reviews the discarded completion hooks, and Undo/Redo and
+  all six hook lists and exact integer, decimal and exponent literals, including
+  integers beyond JavaScript's safe range and task inspection after omitted null
+  steps. The flow opens every hook editor and changes a native handler's prompt
+  while preserving its nested numeric input; unrelated task edits, history and
+  export retain those original numeric tokens. Command conversion reviews the
+  discarded completion hooks, and Undo/Redo and
   exported YAML retain the definition and typed values.
 - **Starting point:** I open a task using `agent/run`.
 - **My flow:** I change its definition path and optional turn allowance → edit

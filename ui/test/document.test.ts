@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { WorkflowDocument } from '../src/document';
 import { parseWorkflow } from '../src/validation';
 import { references } from '../src/expressions';
+import { parseExactYAML } from '../src/exact-yaml';
 const source = `# preserved header
 name: Example # inline
 jobs:
@@ -23,6 +24,22 @@ jobs:
       - argv: [ echo, '\${{ needs.build.outputs.result }}' ]
 `;
 describe('document edits', () => {
+  it.each(['0.10000000000000001', '1.0000000000000001', '1.234567890123456789e-20', '-0.0'])('retains exact typed numeric token %s across input and unrelated edits', token => {
+    const original = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, input: {fraction: ${token}}}}]}}`;
+    const doc = new WorkflowDocument({ source: original });
+    const path = ['jobs', 'review', 'steps', 0, 'with', 'input'];
+    expect(doc.getFieldYAML(path)).toContain(token);
+    doc.setField(['jobs', 'review', 'steps', 0, 'with', 'prompt'], 'Changed');
+    expect(doc.getSnapshot().source).toContain(token);
+    const fragment = parseExactYAML(`{fraction: ${token}, exact: 9007199254740993}`);
+    doc.setField(path, fragment.contents);
+    expect(doc.getFieldYAML(path)).toContain(token);
+    expect(doc.getSnapshot().source).toContain('9007199254740993');
+    doc.undo(); expect(doc.getSnapshot().source).toContain(token);
+    doc.redo(); expect(doc.getSnapshot().source).toContain(token);
+    expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+  });
+
   it('reads exact typed input after omitted nulls in steps and nested handlers', () => {
     const source = `jobs:
   review:
@@ -191,12 +208,12 @@ jobs:
     doc.redo(); expect(doc.getSnapshot().workflow!.jobs.build.steps![0].uses).toBe('agent/run');
   });
   it('retains common controller parameters and initializes null action parameters', () => {
-    const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: git/commit, with: { path: /work, message: Keep } }, { uses: agent/run, with: { agent: claude.toml } } ] } }
+    const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: git/commit, with: { path: /work, message: Keep } }, { uses: agent/run, with: null } ] } }
 ` });
     doc.setStepKind('build', 0, 'github/pr');
     expect(doc.getSnapshot().workflow!.jobs.build.steps![0]).toEqual({ uses: 'github/pr', with: { path: '/work' } });
     doc.setStepKind('build', 1, 'agent/run');
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({uses: 'agent/run', with: {agent: "claude.toml", prompt: ''}});
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({uses: 'agent/run', with: {agent: '', prompt: ''}});
   });
   it('creates an action parameter mapping when converting a command', () => {
     const original = 'jobs: {build: {steps: [{id: run, argv: [echo, before], timeout: 2m}]}}';

@@ -53,3 +53,45 @@ test('edit native definitions and typed input while retaining six visible hook l
   expect((await snapshot(page)).workflow.jobs.review.steps[0].onResult).toBeUndefined();
   await ui.getByRole('button',{name:'Undo',exact:true}).click();expect((await snapshot(page)).source).toBe(edited.source);
 });
+
+test('hook YAML edits preserve exact nested numeric input through prompt changes and export', async ({ page }) => {
+  const hooks = ['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally'];
+  const labels = ['Result verification steps (YAML)', 'Completion steps (YAML)', 'Incomplete steps (YAML)', 'Fallback steps (YAML)', 'Failure reporting steps (YAML)', 'Finalization steps (YAML)'];
+  const source = `jobs:
+  review:
+    steps:
+      - id: review
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: Review
+          input: {fraction: 0.10000000000000001, exponent: 1.234567890123456789e-20}
+          output: {format: json, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}
+${hooks.map(hook => `        ${hook}:
+          - uses: agent/run
+            with: {agent: reviewer.toml, prompt: Verify, input: {exact: 9007199254740993, fraction: 1.0000000000000001}}
+`).join('')}`;
+  const ui = await open(page, source); await step(page, 'review agent/run');
+  await expect(ui.getByLabel('Task input (YAML)', {exact:true})).toHaveValue(/0\.10000000000000001/);
+  await ui.getByText('Failure handlers and finalization', {exact:true}).click();
+  for (const label of labels) {
+    const control = ui.getByLabel(label, {exact:true});
+    const before = await control.inputValue();
+    expect(before).toContain('9007199254740993');
+    expect(before).toContain('1.0000000000000001');
+    await field(page, label, before.replace('prompt: Verify', 'prompt: Revised'));
+    await expect(control).toHaveValue(/prompt: Revised/);
+    await expect(control).toHaveValue(/9007199254740993/);
+    await expect(control).toHaveValue(/1\.0000000000000001/);
+  }
+  await field(page, 'Prompt', 'Review carefully');
+  const edited = await snapshot(page);
+  for (const token of ['9007199254740993', '0.10000000000000001', '1.0000000000000001', '1.234567890123456789e-20']) expect(edited.source).toContain(token);
+  for (const hook of hooks) expect(edited.workflow.jobs.review.steps[0][hook][0].with.prompt).toBe('Revised');
+  expect(edited.diagnostics.filter((d:any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toBe(edited.source);
+  await ui.getByRole('button', {name:'Undo', exact:true}).click();
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].with.prompt).toBe('Review');
+  await ui.getByRole('button', {name:'Redo', exact:true}).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+});
