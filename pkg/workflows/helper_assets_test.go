@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
@@ -558,15 +560,34 @@ func TestBundledMutationExampleCheckpointEvidence(t *testing.T) {
 }
 func TestSharedContainerTransportFailureBlocksFollowingSibling(t *testing.T) {
 	e, _, d := containerExecutor(t)
-	source := `jobs: {build: {container: ubuntu, steps: [{argv: [sh, -c, 'exit 125'], continue-on-error: true}, {uses: 'docker://ubuntu'}]}}`
+	d.execAttachError = true
+	source := `jobs: {build: {container: ubuntu, steps: [{argv: [echo, first], continue-on-error: true}, {uses: 'docker://ubuntu'}]}}`
 	installProtocolWorkflow(t, e, d, &protocolFixture{}, source)
-	if _, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"}); err == nil {
-		t.Fatal("unconfirmed lifetime did not fail job")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"}); err == nil || !strings.Contains(err.Error(), "received 502") || !strings.Contains(err.Error(), "shared container command lifetime is unconfirmed") {
+		t.Fatal("attachment failure did not poison the shared scope", err)
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.creates != 1 {
-		t.Fatal("sibling ran after unconfirmed command lifetime", d.creates)
+	if d.creates != 1 || d.executions != 1 || len(d.containers) != 0 {
+		t.Fatal("sibling ran or parent leaked after attachment failure", d.creates, d.executions, len(d.containers))
+	}
+}
+
+func TestSharedContainerCompletedHighExitAllowsFollowingSibling(t *testing.T) {
+	e, _, d := containerExecutor(t)
+	source := `jobs: {build: {container: ubuntu, steps: [{argv: [sh, -c, 'exit 200'], continue-on-error: true}, {uses: 'docker://ubuntu'}]}}`
+	installProtocolWorkflow(t, e, d, &protocolFixture{}, source)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"}); err != nil {
+		t.Fatal("completed workload exit blocked continuation", err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.creates != 2 || d.executions != 1 || len(d.containers) != 0 {
+		t.Fatal("unexpected continued container lifecycle", d.creates, d.executions, len(d.containers))
 	}
 }
 

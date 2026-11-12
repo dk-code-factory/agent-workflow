@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -42,7 +43,7 @@ elif args[0] in ["start", "exec"]:
     data=sys.stdin.read()
     print("output:"+data)
     print("diagnostic",file=sys.stderr)
-    sys.exit(7)
+    sys.exit(int((root / "exit-code").read_text()) if (root / "exit-code").exists() else 7)
 elif args[0] == "wait":
     print(7)
 elif args[:2] == ["container","inspect"]:
@@ -128,6 +129,37 @@ else:
 	status, err = runtime.ExecInspect(ctx, execID)
 	if err != nil || status.Running || status.ExitCode != 7 || status.ContainerID != id {
 		t.Fatal(status, err)
+	}
+	for _, exitCode := range []int{124, 125, 126, 127, 128, 200, 255} {
+		t.Run(fmt.Sprintf("exit-%d", exitCode), func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(root, "exit-code"), []byte(fmt.Sprint(exitCode)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			execID, err := runtime.ExecCreate(ctx, id, ExecRequest{Command: []string{"tool"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attached, err := runtime.ExecAttach(ctx, execID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer attached.Close()
+			done := make(chan error, 1)
+			go func() { done <- attached.Copy(Streams{Stdout: io.Discard, Stderr: io.Discard}) }()
+			select {
+			case err = <-done:
+			case <-ctx.Done():
+				t.Fatal("attached exec did not complete", ctx.Err())
+			}
+			reserved := exitCode >= 125 && exitCode <= 127
+			if (err != nil) != reserved {
+				t.Fatalf("exit %d: transport error=%v, want reserved=%t", exitCode, err, reserved)
+			}
+			status, err := runtime.ExecInspect(ctx, execID)
+			if err != nil || status.Running || status.ExitCode != exitCode || status.ContainerID != id {
+				t.Fatal(status, err)
+			}
+		})
 	}
 	if err = Remove(ctx, owner); err != nil {
 		t.Fatal(err)

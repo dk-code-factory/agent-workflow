@@ -134,6 +134,7 @@ type workflowDocker struct {
 	removalGate           chan struct{}
 	removalError          bool
 	createResponseError   bool
+	execAttachError       bool
 	stallPhase            string
 	stallRelease          chan struct{}
 	stallOnce, stallUsed  bool
@@ -293,6 +294,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 	if parts[0] == "exec" {
 		d.mu.Lock()
 		e := d.execs[parts[1]]
+		attachError := d.execAttachError
 		d.mu.Unlock()
 		if e == nil {
 			http.Error(w, "no exec", 404)
@@ -302,6 +304,10 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			fmt.Fprintf(w, `{"ID":%q,"ContainerID":%q,"Running":%t,"ExitCode":%d}`, e.id, e.parent.id, e.running, e.code)
+			return
+		}
+		if attachError {
+			http.Error(w, "fixture exec attach transport failure", http.StatusBadGateway)
 			return
 		}
 		_, _ = io.Copy(io.Discard, r.Body)

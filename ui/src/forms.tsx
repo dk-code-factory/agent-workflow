@@ -140,7 +140,9 @@ export function StructuredField({ store, path, label, replacement = false, strin
     if (doc.errors.length) throw new Error(doc.errors[0].message);
     if (stringItems && isSeq(doc.contents)) for (const item of doc.contents.items) {
       if (isScalar(item) && item.value != null && typeof item.value !== 'string') {
-        item.value = item.source ?? String(item.value);
+        item.value = item.tag === 'tag:yaml.org,2002:binary' && item.value instanceof Uint8Array
+          ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(item.value)
+          : item.source ?? String(item.value);
         if (item.tag) item.tag = 'tag:yaml.org,2002:str';
       }
     }

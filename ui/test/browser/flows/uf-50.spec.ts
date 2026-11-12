@@ -58,12 +58,18 @@ test('visual edits preserve inherited null bundles and runner scalar filenames t
 
 test('helper-file controls preserve entered scalar filenames and inheritance through export', async ({ page }) => {
   const ui = await open(page, `jobs: {build: {container: ubuntu, steps: [{id: sibling, uses: docker://ubuntu}]}}`);
-  const spelling = ['01', 'FALSE', '0xA', '1.0', '010'];
+  const spelling = ['01', 'FALSE', '0xA', '1.0', '010', 'helper.py', 'hélp.py', '\uFEFFhelper.py'];
   await job(page);
-  await field(page, 'Job helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010]');
+  await field(page, 'Job helper files (YAML)', '[!!binary /w==]');
+  await expect(ui.getByRole('alert')).toContainText('Edit has not been applied');
+  expect((await snapshot(page)).workflow.jobs.build.container).toBe('ubuntu');
+  await field(page, 'Job helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010, !!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]');
   expect((await snapshot(page)).workflow.jobs.build.container.files).toEqual(spelling);
   await ui.getByRole('button', { name: '1. sibling', exact: true }).click();
-  await field(page, 'Docker helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010]');
+  await field(page, 'Docker helper files (YAML)', '[!!binary /w==]');
+  await expect(ui.getByRole('alert')).toContainText('Edit has not been applied');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toBeUndefined();
+  await field(page, 'Docker helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010, !!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]');
   expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual(spelling);
   let exported = parse(await downloadText(page)).jobs.build;
   expect(exported.container.files).toEqual(spelling);

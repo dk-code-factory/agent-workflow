@@ -165,10 +165,10 @@ func (a *cliAttachment) Copy(s Streams) error {
 		if a.err == nil {
 			a.err = a.command.Wait()
 			a.code = a.command.ProcessState.ExitCode()
-			// Podman forwards workload exits through its process status. Transport
-			// failures (125 and signals) remain errors and require parent teardown.
+			// Podman forwards workload exits through its process status. Reserved
+			// CLI/launch statuses (125-127) and signals remain errors.
 			var exit *exec.ExitError
-			if errors.As(a.err, &exit) && a.code >= 0 && a.code < 125 {
+			if errors.As(a.err, &exit) && a.code >= 0 && (a.code < 125 || a.code > 127) {
 				a.err = nil
 			}
 		}
