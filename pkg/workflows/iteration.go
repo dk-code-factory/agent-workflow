@@ -263,8 +263,8 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			out.Items[i] = old
 		}
 	}
-	// The controller itself never acquires an execution slot. Children share
-	// the host/provider capacity passed through slots in addition to this bound.
+	// The controller itself never acquires an execution slot. Child command and
+	// provider work shares slots; registered controller callbacks remain slot-free.
 	concurrency := 1
 	if job.ForEach.Concurrency != nil {
 		concurrency = *job.ForEach.Concurrency

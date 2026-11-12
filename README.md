@@ -493,8 +493,13 @@ payloads remain data, including strings containing expression delimiters.
 supported; the browser preserves and validates YAML without guided iteration
 controls. Optional `concurrency` is a positive integer, pinned with the plan;
 omitting it preserves sequential execution. At most that many item controllers
-run concurrently, and their child work also obeys shared host/provider capacity.
-The iteration controller occupies no execution slot while waiting for children.
+run concurrently. Their agent invocations, commands and container execution use
+the existing shared host/provider capacity. Registered Go action hooks remain
+controller callbacks outside those execution leases and may overlap across
+active items. The item bound limits active child workflows; each child's own job
+and block concurrency still applies. Such callbacks can start and wait for engine
+workers, whose invocations share execution capacity. The
+iteration controller occupies no execution slot while waiting for children.
 Results retain input order regardless of completion order. A blocking failure or
 durable input suspension stops new item admission, cancels active siblings, and
 joins them before exposing the partial aggregate. Already completed siblings stay

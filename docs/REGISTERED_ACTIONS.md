@@ -76,6 +76,11 @@ retention. `SQLiteStore.ActionAttempts(ctx, runID)` includes descendant records.
 Hooks receive run, job, step, repeat iteration, attempt ID/number, execution
 generation, and a stable logical `OperationKey`. Bindings, checkpoint validation,
 and reconciliation must be read-only, cancellation-aware application operations.
+Hooks execute as controller/application callbacks without an execution lease,
+so a handler can wait for an engine worker at capacity one. Engine-dispatched
+agent, command and container work still uses the shared execution capacity;
+embedding code owns resource limits for work its hooks perform directly.
+Concurrent jobs, parallel blocks and `for-each` items can call hooks concurrently.
 Bind resources independently of the attempt/generation: retries must resolve the
 same application identity. Credential values belong in application-owned clients
 or closures, referenced through nonsensitive input/bindings. Known credential
