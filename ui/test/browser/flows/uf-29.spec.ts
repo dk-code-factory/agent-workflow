@@ -11,14 +11,14 @@ test('paste source and retain unfamiliar fields while updating the graph', async
   expect((await snapshot(page)).workflow.custom).toBe('retained');
 });
 
-test('author ordered iteration YAML and recover from invalid items and repeat conflicts', async ({ page }) => {
+test('author bounded iteration YAML and recover from invalid concurrency, items and repeat conflicts', async ({ page }) => {
   const ui = await open(page);
   await ui.getByRole('button', { name: 'Split', exact: true }).click();
   const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
   const source = `jobs:
   review:
     uses: workflows/reviewer.yml
-    for-each: {items: '\${{ inputs.reviewers }}', key: item.id}
+    for-each: {items: '\${{ inputs.reviewers }}', key: item.id, concurrency: 3}
     with: {task: '\${{ item }}', ordinal: '\${{ iteration.number }}'}
 `;
   await yaml.fill(source);
@@ -26,10 +26,15 @@ test('author ordered iteration YAML and recover from invalid items and repeat co
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await yaml.fill(source.replace("'${{ inputs.reviewers }}'", 'invalid'));
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'for-each' && d.path.at(-1) === 'items')).toBe(true);
+  for (const invalid of ['0', '-1', '1.5', '"2"', 'null', '_2', '_0x2']) {
+    await yaml.fill(source.replace('concurrency: 3', `concurrency: ${invalid}`));
+    expect((await snapshot(page)).diagnostics.some((d: any) => d.severity === 'error' && d.path.at(-1) === 'concurrency')).toBe(true);
+    expect((await snapshot(page)).source).toContain(`concurrency: ${invalid}`);
+  }
   await yaml.fill(source + '    repeat: {max-attempts: 2, until: true}\n');
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'for-each' && d.message.includes('repeat'))).toBe(true);
   await yaml.fill(source);
-  expect((await snapshot(page)).workflow.jobs.review['for-each'].items).toBe('${{ inputs.reviewers }}');
+  expect((await snapshot(page)).workflow.jobs.review['for-each']).toEqual({ items: '${{ inputs.reviewers }}', key: 'item.id', concurrency: 3 });
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
 

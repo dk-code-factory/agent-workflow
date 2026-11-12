@@ -76,6 +76,13 @@ retention. `SQLiteStore.ActionAttempts(ctx, runID)` includes descendant records.
 Hooks receive run, job, step, repeat iteration, attempt ID/number, execution
 generation, and a stable logical `OperationKey`. Bindings, checkpoint validation,
 and reconciliation must be read-only, cancellation-aware application operations.
+Registered Go action dispatch does not acquire execution capacity, so a handler
+can wait for an engine worker at capacity one. Lifecycle hooks run in the calling
+phase's capacity context: retained bindings and checkpoint validation can run
+while agent or command work already holds a lease. Engine-dispatched agent,
+command and container work still uses the shared execution capacity;
+embedding code owns resource limits for work its hooks perform directly.
+Concurrent jobs, parallel blocks and `for-each` items can call hooks concurrently.
 Bind resources independently of the attempt/generation: retries must resolve the
 same application identity. Credential values belong in application-owned clients
 or closures, referenced through nonsensitive input/bindings. Known credential

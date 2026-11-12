@@ -43,6 +43,9 @@ func Validate(w *Workflow) error {
 			return fmt.Errorf("job %s: repeat requires max-attempts between 1 and 100 and until", id)
 		}
 		if job.ForEach != nil {
+			if job.ForEach.Concurrency != nil && *job.ForEach.Concurrency < 1 {
+				return fmt.Errorf("job %s: for-each.concurrency must be a positive integer", id)
+			}
 			if job.Uses == "" || job.Repeat != nil || strings.TrimSpace(job.ForEach.Key) == "" {
 				return fmt.Errorf("job %s: for-each requires a reusable workflow and key, and cannot combine with repeat", id)
 			}

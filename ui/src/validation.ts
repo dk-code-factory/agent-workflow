@@ -36,16 +36,34 @@ export function runnerTimestamp(value: string): boolean {
   return !zone || zone === 'Z' || (Number(zone.slice(1, 3)) <= 24 && Number(zone.slice(4)) <= 60);
 }
 
+function runnerIntegerSpelling(source?: string): bigint | undefined {
+  const match = /^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|[0-9]+)$/.exec(source?.replaceAll('_', '') ?? '');
+  if (!match) return undefined;
+  const [, sign, digits] = match;
+  const magnitude = /^0[0-7]+$/.test(digits) ? BigInt('0o' + digits.slice(1)) : BigInt(digits);
+  return sign === '-' ? -magnitude : magnitude;
+}
+
+function runnerStrictInteger(node: Node | undefined): bigint | undefined {
+  if (!isScalar(node) || (node.tag ? node.tag !== 'tag:yaml.org,2002:int' : node.type !== 'PLAIN')) return undefined;
+  const source = node.source ?? '';
+  // yaml.v3 only attempts integer resolution for a digit or sign in the first
+  // byte. It then removes underscores, including those after that first byte.
+  // Explicit !!int also permits quoted scalar content, unlike untagged text.
+  if (!/^[+\-0-9]/.test(source)) return undefined;
+  // Its legacy binary/octal fallback also accepts a sign after the prefix.
+  const spelling = source.replaceAll('_', '').replace(/^0([bo])([+-])/, (_match, base: string, sign: string) => `${sign}0${base}`);
+  if (!/^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(spelling)) return undefined;
+  const integer = runnerIntegerSpelling(spelling);
+  return integer !== undefined && integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n ? integer : undefined;
+}
+
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
 function runnerInteger(value: unknown, source?: string): number | undefined {
   if (typeof value !== 'number') return undefined;
-  const spelling = source?.replaceAll('_', '') ?? '';
-  const match = /^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|[0-9]+)$/.exec(spelling);
-  if (match) {
-    const [, sign, digits] = match;
-    const magnitude = /^0[0-7]+$/.test(digits) ? BigInt('0o' + digits.slice(1)) : BigInt(digits);
-    const integer = sign === '-' ? -magnitude : magnitude;
+  const integer = runnerIntegerSpelling(source);
+  if (integer !== undefined) {
     if (integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n) return Number(integer);
     // Negative overflow resolves as a float in yaml.v3; Go's int64 conversion
     // produces MinInt64. Positive uint64 values overflow an int and are rejected.
@@ -84,7 +102,7 @@ const schema: Shape = {
     name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
-    'for-each': { items: 'any', key: 'string' },
+    'for-each': { items: 'any', key: 'string', concurrency: 'strict-integer' },
     steps: [stepShape],
   } },
 };
@@ -215,19 +233,19 @@ export function parseWorkflow(source: string): Parsed {
           }
         } else {
           const node = doc!.getIn(path, true);
-          // YAML core leaves Go's binary integer spelling as a plain string.
-          const integerValue = shape === 'strict-integer' && typeof value === 'string'
-            && isScalar(node) && node.type === 'PLAIN' && !node.tag ? 0 : value;
-          const decoded = runnerInteger(integerValue, isScalar(node) ? node.source : undefined);
-          valid = decoded !== undefined && (shape !== 'strict-integer' || (isScalar(node)
-            && (!node.tag || node.tag === 'tag:yaml.org,2002:int')
-            && /^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(node.source?.replaceAll('_', '') ?? '')));
+          const exact = shape === 'strict-integer' ? runnerStrictInteger(isNode(node) ? node : undefined) : undefined;
+          const decoded = shape === 'strict-integer' ? exact === undefined ? undefined : Number(exact)
+            : runnerInteger(value, isScalar(node) ? node.source : undefined);
+          valid = decoded !== undefined;
           if (valid) {
             assign(path, decoded);
             // Canonicalize the parsed integer before future visual edits, so
             // leading-zero octal and fractional syntax retain runner meaning.
             if (isScalar(node)) {
-              node.value = decoded;
+              // Snapshot numbers may round int64 bounds. Keep their exact
+              // integer in the editable YAML tree so unrelated edits/export
+              // cannot change an admitted concurrency value.
+              node.value = exact !== undefined && !Number.isSafeInteger(decoded) ? exact : decoded;
               if (node.tag === 'tag:yaml.org,2002:float') node.minFractionDigits = Math.max(1, node.minFractionDigits ?? 0);
             }
           }
@@ -317,6 +335,7 @@ function validateWorkflow(w: Workflow, add: Add) {
     if (job.repeat && (!Number.isInteger(job.repeat['max-attempts']) || job.repeat['max-attempts'] < 1 || job.repeat['max-attempts'] > 100 || !job.repeat.until?.trim())) add('repeat', 'Repeat requires max-attempts 1–100 and until', [...p, 'repeat']);
     const each = job['for-each'];
     if (each) {
+      if (each.concurrency !== undefined && (!Number.isInteger(each.concurrency) || each.concurrency < 1)) add('for-each', 'for-each.concurrency must be a positive integer', [...p, 'for-each', 'concurrency']);
       if (!job.uses || job.repeat || !each.key?.trim()) add('for-each', 'for-each requires a reusable workflow and key, and cannot combine with repeat', [...p, 'for-each']);
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');

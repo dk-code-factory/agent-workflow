@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 )
@@ -60,6 +61,11 @@ func (e *Executor) iterationEvidence(ctx context.Context, req RunRequest) error 
 		return fmt.Errorf("durable IterationJournal unavailable")
 	}
 	if err := j.CheckIteration(ctx); err != nil {
+		// Cancellation stops verification without proving evidence drift.
+		// Independent joined failures still retain the integrity guard below.
+		if cancellationOnly(err) {
+			return err
+		}
 		return fmt.Errorf("%w: %v", ErrActionIntegrity, err)
 	}
 	origin := nativeString(req.Metadata, "origin_run_id")
@@ -68,6 +74,9 @@ func (e *Executor) iterationEvidence(ctx context.Context, req RunRequest) error 
 	}
 	if e.Ready != nil {
 		if err := e.Ready(ctx); err != nil {
+			if cancellationOnly(err) {
+				return err
+			}
 			return fmt.Errorf("%w: %v", operational.ErrUnavailable, err)
 		}
 	}
@@ -254,210 +263,298 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 			out.Items[i] = old
 		}
 	}
-	for i, item := range p.Items {
-		if err = ctx.Err(); err != nil {
-			return fail(err)
+	// The controller itself never acquires an execution slot. Child command and
+	// provider work shares slots; Go action dispatch acquires no lease. Retained
+	// validation hooks can also run within a leased execution phase.
+	concurrency := 1
+	if job.ForEach.Concurrency != nil {
+		concurrency = *job.ForEach.Concurrency
+	}
+	if concurrency < 1 {
+		return fail(fmt.Errorf("for-each.concurrency must be a positive integer"))
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type completion struct {
+		index  int
+		result JobExecution
+	}
+	if concurrency > len(p.Items) {
+		concurrency = len(p.Items)
+	}
+	done := make(chan completion, concurrency)
+	next, active := 0, 0
+	var stopMu sync.Mutex
+	var blocking *JobExecution
+	stop := func(r JobExecution) {
+		stopMu.Lock()
+		// Preserve a genuine sibling failure even when a suspension or its
+		// cancellation was observed first. Cancellation alone cannot hide it.
+		if blocking == nil || (r.Status == RunStatusNeedsAttention && r.FailureClass != "canceled" && (blocking.Status != RunStatusNeedsAttention || blocking.FailureClass == "canceled")) {
+			blocking = &r
 		}
-		if err = e.checkEffectAdmission(ctx, req.runID); err != nil {
-			return fail(err)
-		}
-		if err = e.iterationEvidence(ctx, req); err != nil {
-			return fail(err)
-		}
-		last, exists := latest[item.Key]
-		if exists && last.Status == "completed" {
-			out.Items[i] = last
-			continue
-		}
-		var waitingChild *Run
-		// Recover a child's durable terminal record after a lost item checkpoint.
-		if exists {
-			child, childSnap, loadErr := journal.Load(ctx, last.ChildID)
-			// A canceled child can have committed its gate before publishing a
-			// waiting result. Reuse that physical attempt only for a pure
-			// interruption; genuine failures still take the retry guard below.
-			if loadErr == nil && child.Status != RunStatusSucceeded && (last.Status == "pending" || last.Status == "waiting" || last.Status == "interrupted") {
-				waiting, waitErr := e.inputSuspension(ctx, child, nil, req)
-				if waitErr != nil {
-					return fail(waitErr)
+		stopMu.Unlock()
+		cancel()
+	}
+	for next < len(p.Items) || active > 0 {
+		for ctx.Err() == nil && next < len(p.Items) && active < concurrency {
+			i := next
+			next++
+			active++
+			previous, exists := latest[p.Items[i].Key]
+			go func() {
+				result := e.executeIterationItem(ctx, id, job, inputs, req, needs, all, slots, depth, journal, p, p.Items[i], previous, exists)
+				if result.Status == RunStatusNeedsAttention || result.Status == RunStatusInterrupted || result.Status == RunStatusWaiting {
+					stop(result)
 				}
-				if !waiting && child.Status == RunStatusWaiting {
-					waiting = true
-				}
-				if waiting {
-					waitingChild = child
-					resetIterationDependents(waitingChild, all)
-				}
-			}
-			if loadErr == nil && child.Status != RunStatusSucceeded && len(child.Jobs) == len(all[child.WorkflowRef].Jobs) {
-				allSucceeded := true
-				for _, job := range child.Jobs {
-					if job.Status != RunStatusSucceeded {
-						allSucceeded = false
-					}
-				}
-				if allSucceeded {
-					childSecrets, secretErr := callSecrets(job.Secrets, req.Secrets, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Item: item.Item, Iteration: map[string]any{"number": item.Number, "key": item.Key}})
-					if secretErr != nil {
-						return fail(secretErr)
-					}
-					child, loadErr = e.execute(ctx, child.WorkflowRef, RunRequest{Ref: child.WorkflowRef, runID: child.ID, Inputs: childSnap.Inputs, Secrets: childSecrets, SecretRefs: req.SecretRefs, Metadata: childSnap.Metadata, Event: req.Event, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, ordered: true}, all, slots, depth+1, child)
-				}
-			}
-			if loadErr == nil && child.Status == RunStatusSucceeded && !iterationRetry(child) {
-				last.Status = "completed"
-				last.Outputs = child.Outputs
-				last.Jobs = child.Jobs
-				last.Error = ""
-				last.FailureClass = ""
-				if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
-					return fail(err)
-				}
-				out.Items[i] = last
-				continue
-			}
-			if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
-				return fail(loadErr)
-			}
-			// Preserve the old uncertain observation before allocating a new child.
-			if latest[item.Key].Status == "pending" && waitingChild == nil {
-				last.Status = "interrupted"
-				last.FailureClass = "owner_loss"
-				last.Error = "child completion was not committed"
-				if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
-					return fail(err)
-				}
-			}
+				done <- completion{i, result}
+			}()
 		}
-		if exists && waitingChild == nil {
-			if err = e.guardIterationRetry(ctx, last, req); err != nil {
-				out.Items[i] = last
-				return fail(err)
-			}
+		if active == 0 {
+			break
 		}
-		r := IterationItemResult{PlanFingerprint: p.Fingerprint, Key: item.Key, Number: item.Number, Attempt: last.Attempt + 1, Status: "pending"}
-		r.ChildID = iterationChildID(p.RunID, id, item.Key, r.Attempt)
-		if waitingChild != nil {
-			r = last
-		} else {
-			if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
-				return fail(err)
-			}
+		completed := <-done
+		active--
+		r := completed.result
+		out.Items[completed.index] = r.Items[0]
+		switch r.Status {
+		case RunStatusFailed:
+			out.Status = RunStatusFailed
+			out.Error, out.FailureClass = r.Error, r.FailureClass
 		}
-		out.Items[i] = r
-		ec.Item = item.Item
-		ec.Iteration = map[string]any{"key": item.Key, "number": item.Number}
-		secrets, err := callSecrets(job.Secrets, req.Secrets, ec)
-		if err != nil {
-			return fail(err)
-		}
-		ref, _ := CanonicalLocalRef(job.Uses)
-		metadata, _ := cloneJSONValue(req.Metadata).(map[string]any)
-		if metadata == nil {
-			metadata = map[string]any{}
-		}
-		ancestors, _ := metadata["iteration_ancestors"].([]any)
-		metadata["iteration_ancestors"] = append(ancestors, r.ChildID)
-		logical := nativeString(req.Metadata, "iteration_logical_run_id")
-		if logical == "" {
-			logical = req.runID
-		}
-		metadata["iteration_logical_run_id"] = actionHash([]any{logical, id, item.Key})
-		childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
-		child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, waitingChild)
-		r.Status = "completed"
+	}
+	if blocking != nil {
+		out.Status, out.Error, out.FailureClass = blocking.Status, blocking.Error, blocking.FailureClass
+	} else if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 
-		if child != nil {
-			r.Outputs = child.Outputs
-			r.Jobs = child.Jobs
-			r.FailureClass = child.FailureClass
-			r.Error = child.Error
+	return finish()
+}
+
+// executeIterationItem retains the serial path's recovery and effect guards.
+// Only the coordinator writes the aggregate; workers own independent outcomes.
+func (e *Executor) executeIterationItem(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, journal IterationJournal, p IterationPlan, item IterationPlanItem, previous IterationItemResult, exists bool) JobExecution {
+	out := JobExecution{ID: id, Status: RunStatusSucceeded, Items: []IterationItemResult{{PlanFingerprint: p.Fingerprint, Key: item.Key, Number: item.Number, Status: "pending"}}}
+	if exists {
+		out.Items[0] = previous
+	}
+	finish := func() JobExecution { return out }
+	fail := func(err error) JobExecution {
+		if onlyError(err, ErrExternalInputCanceled) {
+			out.Status = RunStatusInterrupted
+			return out
 		}
-		// Safe gate suspensions remain nonterminal observations. Reserving a
-		// terminal interrupted result here would prevent a later pause of this
-		// same child/attempt from recording its next durable question.
-		suspended, proofErr := e.inputSuspension(context.WithoutCancel(ctx), child, childErr, req)
-		if proofErr != nil {
-			return fail(errors.Join(childErr, proofErr))
+		out.Status = RunStatusNeedsAttention
+		out.Error = err.Error()
+		out.FailureClass = classifyFailure(err)
+		return out
+	}
+	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
+	var err error
+	if err = ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err = e.checkEffectAdmission(ctx, req.runID); err != nil {
+		return fail(err)
+	}
+	if err = e.iterationEvidence(ctx, req); err != nil {
+		return fail(err)
+	}
+	last := previous
+	if exists && last.Status == "completed" {
+		out.Items[0] = last
+		return finish()
+	}
+	var waitingChild *Run
+	// Recover a child's durable terminal record after a lost item checkpoint.
+	if exists {
+		child, childSnap, loadErr := journal.Load(ctx, last.ChildID)
+		// A canceled child can have committed its gate before publishing a
+		// waiting result. Reuse that physical attempt only for a pure
+		// interruption; genuine failures still take the retry guard below.
+		if loadErr == nil && child.Status != RunStatusSucceeded && (last.Status == "pending" || last.Status == "waiting" || last.Status == "interrupted") {
+			waiting, waitErr := e.inputSuspension(ctx, child, nil, req)
+			if waitErr != nil {
+				return fail(waitErr)
+			}
+			if !waiting && child.Status == RunStatusWaiting {
+				waiting = true
+			}
+			if waiting {
+				waitingChild = child
+				resetIterationDependents(waitingChild, all)
+			}
 		}
-		suspended = suspended && child.Status != RunStatusWaiting
-		if suspended || (childErr == nil && child != nil && child.Status == RunStatusWaiting) {
-			r.Status = "waiting"
-			r.Error = ""
-			r.FailureClass = ""
-			if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
+		if loadErr == nil && child.Status != RunStatusSucceeded && len(child.Jobs) == len(all[child.WorkflowRef].Jobs) {
+			allSucceeded := true
+			for _, job := range child.Jobs {
+				if job.Status != RunStatusSucceeded {
+					allSucceeded = false
+				}
+			}
+			if allSucceeded {
+				childSecrets, secretErr := callSecrets(job.Secrets, req.Secrets, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Item: item.Item, Iteration: map[string]any{"number": item.Number, "key": item.Key}})
+				if secretErr != nil {
+					return fail(secretErr)
+				}
+				child, loadErr = e.execute(ctx, child.WorkflowRef, RunRequest{Ref: child.WorkflowRef, runID: child.ID, Inputs: childSnap.Inputs, Secrets: childSecrets, SecretRefs: req.SecretRefs, Metadata: childSnap.Metadata, Event: req.Event, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, ordered: true}, all, slots, depth+1, child)
+			}
+		}
+		if loadErr == nil && child.Status == RunStatusSucceeded && !iterationRetry(child) {
+			last.Status = "completed"
+			last.Outputs = child.Outputs
+			last.Jobs = child.Jobs
+			last.Error = ""
+			last.FailureClass = ""
+			if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
 				return fail(err)
 			}
-			out.Items[i] = r
-			out.Status = RunStatusWaiting
-			if suspended {
-				out.Status = RunStatusInterrupted
-			}
+			out.Items[0] = last
 			return finish()
 		}
-		if child != nil && iterationRetry(child) && childErr == nil {
-			r.Status = "exhausted"
-			r.FailureClass = "usage_exhausted"
-			r.Error = "nested iteration contains exhausted skips"
+		if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
+			return fail(loadErr)
 		}
-		if childErr == nil && child != nil && iterationRetry(child) {
-			switch nestedIterationOutcome(child.Jobs) {
-			case "provider_failure":
-				childErr = fmt.Errorf("%w: nested iteration contains unresolved provider failures", ErrProviderFailure)
-			case "interrupted", "pending":
-				childErr = fmt.Errorf("%w: nested iteration is unfinished", errIterationBlocked)
+		// Preserve the old uncertain observation before allocating a new child.
+		if previous.Status == "pending" && waitingChild == nil {
+			last.Status = "interrupted"
+			last.FailureClass = "owner_loss"
+			last.Error = "child completion was not committed"
+			if err = e.appendIteration(ctx, journal, p.RunID, id, &last); err != nil {
+				return fail(err)
 			}
 		}
-		stop := false
-		if childErr != nil {
-			r.Error = childErr.Error()
-			r.FailureClass = classifyFailure(childErr)
-			// Provider/usage skips cannot admit another item after an
-			// acknowledged Cancel while the owner context is still healthy.
-			canceled := false
-			if input := externalInputJournal(e.Store); input != nil && (r.FailureClass == "provider_failure" || r.FailureClass == "usage_exhausted") {
-				origin := nativeString(req.Metadata, "origin_run_id")
-				if origin == "" {
-					origin = req.runID
-				}
-				control, controlErr := input.InputControl(context.WithoutCancel(ctx), origin)
-				if controlErr != nil {
-					return fail(errors.Join(childErr, controlErr))
-				}
-				canceled = control.Canceled
-			}
-			switch {
-			case canceled:
-				r.Status = "interrupted"
-				stop = true
-			case child != nil && child.Status == RunStatusNeedsAttention:
-				r.Status = "interrupted"
-				stop = true
-			case ctx.Err() != nil:
-				r.Status = "interrupted"
-				stop = true
-			case r.FailureClass == "usage_exhausted":
-				r.Status = "exhausted"
-			case r.FailureClass == "provider_failure":
-				r.Status = "provider_failure"
-				out.Status = RunStatusFailed
-				out.FailureClass = r.FailureClass
-				out.Error = r.Error
-			default:
-				r.Status = "interrupted"
-				stop = true
-			}
+	}
+	if exists && waitingChild == nil {
+		if err = e.guardIterationRetry(ctx, last, req); err != nil {
+			out.Items[0] = last
+			return fail(err)
 		}
+	}
+	r := IterationItemResult{PlanFingerprint: p.Fingerprint, Key: item.Key, Number: item.Number, Attempt: last.Attempt + 1, Status: "pending"}
+	r.ChildID = iterationChildID(p.RunID, id, item.Key, r.Attempt)
+	if waitingChild != nil {
+		r = last
+	} else {
 		if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
-			return fail(errors.Join(childErr, err))
+			return fail(err)
 		}
-		out.Items[i] = r
-		if stop {
-			return fail(childErr)
+	}
+	out.Items[0] = r
+	ec.Item = item.Item
+	ec.Iteration = map[string]any{"key": item.Key, "number": item.Number}
+	secrets, err := callSecrets(job.Secrets, req.Secrets, ec)
+	if err != nil {
+		return fail(err)
+	}
+	ref, _ := CanonicalLocalRef(job.Uses)
+	metadata, _ := cloneJSONValue(req.Metadata).(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	ancestors, _ := metadata["iteration_ancestors"].([]any)
+	metadata["iteration_ancestors"] = append(ancestors, r.ChildID)
+	logical := nativeString(req.Metadata, "iteration_logical_run_id")
+	if logical == "" {
+		logical = req.runID
+	}
+	metadata["iteration_logical_run_id"] = actionHash([]any{logical, id, item.Key})
+	childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
+	child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, waitingChild)
+	r.Status = "completed"
+
+	if child != nil {
+		r.Outputs = child.Outputs
+		r.Jobs = child.Jobs
+		r.FailureClass = child.FailureClass
+		r.Error = child.Error
+	}
+	// Safe gate suspensions remain nonterminal observations. Reserving a
+	// terminal interrupted result here would prevent a later pause of this
+	// same child/attempt from recording its next durable question.
+	suspended, proofErr := e.inputSuspension(context.WithoutCancel(ctx), child, childErr, req)
+	if proofErr != nil {
+		return fail(errors.Join(childErr, proofErr))
+	}
+	suspended = suspended && child.Status != RunStatusWaiting
+	if suspended || (childErr == nil && child != nil && child.Status == RunStatusWaiting) {
+		r.Status = "waiting"
+		r.Error = ""
+		r.FailureClass = ""
+		if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
+			return fail(err)
 		}
+		out.Items[0] = r
+		out.Status = RunStatusWaiting
+		if suspended {
+			out.Status = RunStatusInterrupted
+		}
+		return finish()
+	}
+	if child != nil && iterationRetry(child) && childErr == nil {
+		r.Status = "exhausted"
+		r.FailureClass = "usage_exhausted"
+		r.Error = "nested iteration contains exhausted skips"
+	}
+	if childErr == nil && child != nil && iterationRetry(child) {
+		switch nestedIterationOutcome(child.Jobs) {
+		case "provider_failure":
+			childErr = fmt.Errorf("%w: nested iteration contains unresolved provider failures", ErrProviderFailure)
+		case "interrupted", "pending":
+			childErr = fmt.Errorf("%w: nested iteration is unfinished", errIterationBlocked)
+		}
+	}
+	stop := false
+	if childErr != nil {
+		r.Error = childErr.Error()
+		r.FailureClass = classifyFailure(childErr)
+		// Provider/usage skips cannot admit another item after an
+		// acknowledged Cancel while the owner context is still healthy.
+		canceled := false
+		if input := externalInputJournal(e.Store); input != nil && (r.FailureClass == "provider_failure" || r.FailureClass == "usage_exhausted") {
+			origin := nativeString(req.Metadata, "origin_run_id")
+			if origin == "" {
+				origin = req.runID
+			}
+			control, controlErr := input.InputControl(context.WithoutCancel(ctx), origin)
+			if controlErr != nil {
+				return fail(errors.Join(childErr, controlErr))
+			}
+			canceled = control.Canceled
+		}
+		switch {
+		case canceled:
+			r.Status = "interrupted"
+			stop = true
+		case child != nil && child.Status == RunStatusNeedsAttention:
+			r.Status = "interrupted"
+			stop = true
+		case ctx.Err() != nil:
+			r.Status = "interrupted"
+			stop = true
+		case r.FailureClass == "usage_exhausted":
+			r.Status = "exhausted"
+		case r.FailureClass == "provider_failure":
+			r.Status = "provider_failure"
+			out.Status = RunStatusFailed
+			out.FailureClass = r.FailureClass
+			out.Error = r.Error
+		default:
+			r.Status = "interrupted"
+			stop = true
+		}
+	}
+	if err = e.appendIteration(ctx, journal, p.RunID, id, &r); err != nil {
+		return fail(errors.Join(childErr, err))
+	}
+	out.Items[0] = r
+	if stop {
+		return fail(childErr)
 	}
 	return finish()
 }
+
 func (e *Executor) appendIteration(ctx context.Context, j IterationJournal, run, job string, r *IterationItemResult) error {
 	r.Error = Redact(r.Error, e.redactionValues)
 	r.Outputs, _ = redactValue(r.Outputs, e.redactionValues).(map[string]any)
@@ -513,6 +610,9 @@ func (e *Executor) guardIterationRetry(ctx context.Context, last IterationItemRe
 					generation = fence.generation
 				}
 				if _, err = e.reconcileAction(ctx, j, &r, generation); err != nil {
+					if cancellationOnly(err) {
+						return err
+					}
 					err = fmt.Errorf("%w: %v", ErrActionIntegrity, err)
 
 					return err

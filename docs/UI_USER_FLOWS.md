@@ -180,7 +180,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported ordered iteration YAML retains its literal payloads and item input expressions through guided call edits.
+- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported iteration YAML retains its exact concurrency bound, including positive int64 values above JavaScript integer precision and explicitly tagged binary/underscore spellings, literal payloads and item input expressions through guided call/name edits, export, Undo and Redo.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under
@@ -195,7 +195,7 @@ fields. Escape discards an uncommitted field edit.
   configuration to discard. I can cancel; after confirming, **Undo** restores
   the prior definition in one edit. Defaults are shown without adding bindings.
   Guided fields preserve unknown bindings; inherited secrets stay inherited until
-  I choose **Configure named secrets**. Advanced YAML explains whole-value replacement. To call the workflow over an ordered list, I author `for-each: {items, key}` in YAML with `item`, `iteration.key`, and `iteration.number` input expressions. Guided call-input edits preserve that configuration; identity and evidence checks belong to the host runtime.
+  I choose **Configure named secrets**. Advanced YAML explains whole-value replacement. To call the workflow over an ordered list, I author `for-each: {items, key, concurrency}` in YAML with `item`, `iteration.key`, and `iteration.number` input expressions. The optional positive integer `concurrency` defaults to one. Guided call-input edits preserve that configuration; identity and evidence checks belong to the host runtime.
 
 ### UF-13 — Repeat a job until a condition is met
 
@@ -468,7 +468,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
+- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Bounded `for-each` YAML accepts list expressions, literal payloads and a positive integer concurrency, diagnoses zero/negative/fractional/string/null bounds and malformed underscore-prefixed scalars without rewriting their source, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -476,7 +476,7 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** Usable source updates the visual representation. Comments
   and unfamiliar fields remain available in the source; visual edits may
   normalize formatting. Pasting source replaces text I select, rather than
-  opening a file-import dialog. I can paste concise `agent: ROLE` steps with a top-level multiline `prompt` and optional `with` settings; competing `uses` or `with.prompt` declarations produce field diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
+  opening a file-import dialog. I can paste concise `agent: ROLE` steps with a top-level multiline `prompt` and optional `with` settings; competing `uses` or `with.prompt` declarations produce field diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression, with optional positive integer `concurrency` defaulting to one. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
 
 ### UF-30 — Search and replace in YAML
 

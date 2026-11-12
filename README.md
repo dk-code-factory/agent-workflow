@@ -469,7 +469,7 @@ also inspect `iteration.outputs` and `iteration.status`. Reusable workflow jobs
 can repeat. The engine retains all attempt history and fails on exhaustion.
 `max-attempts` must be 1–100; the development example uses three fix cycles.
 
-Reusable jobs also support ordered dynamic iteration:
+Reusable jobs also support dynamic iteration with ordered results:
 
 ```yaml
 jobs:
@@ -478,6 +478,7 @@ jobs:
     for-each:
       items: ${{ inputs.reviewers }}
       key: item.id
+      concurrency: 3 # optional; defaults to one
     with:
       reviewer: ${{ item }}
       ordinal: ${{ iteration.number }}
@@ -490,8 +491,21 @@ and call inputs are validated and pinned before starting any child. Literal item
 payloads remain data, including strings containing expression delimiters.
 `for-each` requires `uses` and cannot combine with `repeat`. YAML and Go are
 supported; the browser preserves and validates YAML without guided iteration
-controls. Each iteration job runs its children sequentially without occupying
-an execution slot while waiting for child jobs.
+controls. Optional `concurrency` is a positive integer, pinned with the plan;
+omitting it preserves sequential execution. At most that many item controllers
+run concurrently. Their agent invocations, commands and container execution use
+the existing shared host/provider capacity. Registered Go action dispatch does
+not acquire an execution lease; handlers may overlap across active items and can
+start and wait for engine workers, whose invocations share execution capacity.
+Retained bindings and checkpoint validation may also run while a later agent or
+command holds capacity. The item bound limits active child workflows; each
+child's own job and block concurrency still applies. The
+iteration controller occupies no execution slot while waiting for children.
+Results retain input order regardless of completion order. A blocking failure or
+durable input suspension stops new item admission, cancels active siblings, and
+joins them before exposing the partial aggregate. Already completed siblings stay
+immutable; interrupted siblings require the normal guarded resume. A genuine
+failure during sibling cleanup takes precedence over a safe input suspension.
 
 The job exposes `outputs.items` in configured order and `outputs.complete`.
 Each item retains its key, one-based number, physical attempt and child ID,

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, job } from './harness';
+import { open, snapshot, field, job, downloadText } from './harness';
 
 test('convert a job to a reusable call and restore it with undo', async ({ page }) => {
   const ui = await open(page); await job(page);
@@ -53,13 +53,14 @@ test('catalog metadata guides typed bindings without losing unknown inputs or in
   expect((await snapshot(page)).workflow.jobs.call.secrets).toEqual({ token: '${{ secrets.token }}' });
 });
 
-test('ordered iteration survives guided reusable input edits with literal payloads', async ({ page }) => {
+test('bounded iteration survives guided edits, export and undo with literal payloads', async ({ page }) => {
   const source = `jobs:
   review:
     uses: workflows/reviewer.yml
     for-each:
       items: [{id: first, text: '\${{ inputs.literal_payload }}'}, {id: second}]
       key: item.id
+      concurrency: 2
     with: {task: '\${{ item.text }}'}
 `;
   const ui = await open(page, source);
@@ -67,8 +68,33 @@ test('ordered iteration survives guided reusable input edits with literal payloa
   await job(page, 'review');
   await field(page, 'Call input: task', '${{ iteration.key }}: ${{ item.text }}');
   const result = await snapshot(page);
-  expect(result.workflow.jobs.review['for-each']).toEqual({ items: [{ id: 'first', text: '${{ inputs.literal_payload }}' }, { id: 'second' }], key: 'item.id' });
+  expect(result.workflow.jobs.review['for-each']).toEqual({ items: [{ id: 'first', text: '${{ inputs.literal_payload }}' }, { id: 'second' }], key: 'item.id', concurrency: 2 });
   expect(result.workflow.jobs.review.with.task).toBe('${{ iteration.key }}: ${{ item.text }}');
   expect(result.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await expect(ui.getByLabel('Reusable workflow', { exact: true })).toHaveValue('workflows/reviewer.yml');
+  const exported = await downloadText(page);
+  expect(exported).toContain('concurrency: 2');
+  expect(exported).toContain('iteration.key');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.review['for-each'].concurrency).toBe(2);
 });
+
+for (const bound of ['9007199254740993', '9223372036854775807', '!!int 0b10', '!!int 1_0']) {
+  test(`retain iteration bound ${bound} through guided edit, export and history`, async ({ page }) => {
+    const source = `jobs:\n  review:\n    uses: workflows/reviewer.yml\n    for-each: {items: [], key: item.id, concurrency: ${bound}}\n`;
+    const ui = await open(page, source);
+    await job(page, 'review');
+    await field(page, 'Name', 'Changed');
+    const result = await snapshot(page);
+    expect(result.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+    const canonical = bound === '!!int 0b10' ? '!!int 2' : bound === '!!int 1_0' ? '!!int 10' : bound;
+    expect(result.source).toContain(`concurrency: ${canonical}`);
+    expect(await downloadText(page)).toContain(`concurrency: ${canonical}`);
+    await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+    expect((await snapshot(page)).source).toBe(source);
+    await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+    expect((await snapshot(page)).source).toBe(result.source);
+  });
+}
