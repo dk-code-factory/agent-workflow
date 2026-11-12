@@ -184,7 +184,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 					return err
 				}
 				name := containerActionName(ref, job, step.ID)
-				// Do not include current credential values or image tags in implementation identity.
+				// Hash admitted container policy and authored step settings, without current credential values.
 				implementation := actionHash(struct {
 					Container *ContainerImplementation
 					Step      Step

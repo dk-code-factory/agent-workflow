@@ -401,6 +401,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
       if (step.protocol) {
+        if (depth > 0 || handlerKinds.some(kind => step[kind]?.length) || step.handlerTimeout) add('protocol', 'Structured helpers cannot own or appear inside ordinary lifecycle handlers', [...sp, 'protocol']);
         if (step.protocol !== 'action-v1') add('protocol', 'Unsupported container protocol', [...sp, 'protocol']);
         if (!job.container && !docker) add('protocol', 'action-v1 requires a job container or Docker step', [...sp, 'protocol']);
         if (!['read_only', 'external_mutation'].includes(step.effect ?? '')) add('protocol', 'Structured helpers require an explicit effect', [...sp, 'effect']);

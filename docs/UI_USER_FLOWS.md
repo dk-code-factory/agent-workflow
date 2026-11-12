@@ -804,7 +804,7 @@ sources are the [UI guide](../ui/README.md),
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-49.spec.ts)
 
-- **Coverage:** Protocol/effect controls and YAML fields preserve inline input schemas, named output schemas, nested business data and explicit secret references. Export retains schema authoring forms. Removing the protocol reviews discarded contract fields, cancellation keeps the helper intact and one Undo restores it. Following commands receive schema-derived helper output suggestions. Missing schema names and interpolated executable commands diagnose and clear after source repair.
+- **Coverage:** Protocol/effect controls and YAML fields preserve inline input schemas, named output schemas, nested business objects and arrays and explicit secret references. Export and Undo retain the nested values and schema authoring forms. Removing the protocol reviews discarded contract fields, cancellation keeps the helper intact and one Undo restores it. Following commands receive schema-derived helper output suggestions. Missing schema names and interpolated executable commands diagnose and clear after source repair. Structured helpers inside ordinary onError, onFailure and finally handlers are diagnosed before execution.
 
 - **Starting point:** A command has a job container, or a step uses a Docker image.
 - **My flow:** I open **Helper protocol and environment**, choose **action-v1**, select an explicit effect, enter both object schemas and business input, then set environment references if needed.

@@ -250,6 +250,28 @@ func TestStructuredHelperInputOutputAndCapabilityValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestStructuredHelpersCannotAppearInsideOrdinaryLifecycleHandlers(t *testing.T) {
+	for _, handler := range []string{"onError", "onFailure", "finally"} {
+		for _, nested := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nested=%t", handler, nested), func(t *testing.T) {
+				helper := "{argv: [helper], protocol: action-v1, effect: external_mutation, input-schema: {type: object}, output-schema: {type: object}}"
+				if nested {
+					helper = "{argv: [echo, nested], finally: [" + helper + "]}"
+				}
+				source := "jobs: {build: {container: ubuntu:24.04, steps: [{argv: [echo, ordinary], " + handler + ": [" + helper + "]}]}}"
+				w, err := Parse([]byte(source))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = Validate(w); err == nil || !strings.Contains(err.Error(), "structured helpers cannot appear inside ordinary lifecycle handlers") {
+					t.Fatalf("structured handler was not rejected: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestContainerProtocolRejectsFramingVersionsAndLimits(t *testing.T) {
 	for _, data := range []string{`{"protocol":"action-v1","phase":"execute"} {}`, `{"protocol":"v2","phase":"execute"}`, `{"protocol":"action-v1","phase":"bindings"}`, `{"protocol":"action-v1","phase":"execute","unknown":true}`, `not-json`} {
 		if _, err := decodeContainerResponse([]byte(data), "execute"); err == nil {

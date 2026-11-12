@@ -139,7 +139,8 @@ or `external_mutation`. Omitted business `input` defaults to `{}`. Business data
 renders once, preserving JSON numbers, arrays, objects, booleans, null and literal
 expression-looking strings supplied by a whole expression. Commands and container
 settings are static; structured commands cannot interpolate inputs or secrets.
-Structured helpers cannot own ordinary command lifecycle handlers.
+Structured helpers cannot own or appear inside ordinary command lifecycle
+handlers.
 
 The engine sends exactly one JSON request on stdin. The helper writes exactly one
 JSON response on stdout and diagnostics on stderr. Requests and responses are

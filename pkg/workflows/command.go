@@ -123,7 +123,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
 			return nil, err
 		}
-		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
+		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir, Environment: env})
 	} else {
 		cleanup, superviseErr = runtimeexec.SupervisePolicy(ctx, cmd, e.CommandExecution)
 	}
