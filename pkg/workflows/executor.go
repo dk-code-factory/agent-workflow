@@ -655,7 +655,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				return fail(err)
 			}
 			for _, a := range attempts {
-				completed := a.Status == RunStatusSucceeded || a.Phase == "lifecycle_task_completed" && a.Result.Status == RunStatusSucceeded
+				completed := a.Status == RunStatusSucceeded || !a.FinishedAt.IsZero() || a.Phase == "lifecycle_task_completed"
 				if a.RunID == ec.RunID && a.JobID == id && a.Iteration == req.iteration && completed {
 					return fail(fmt.Errorf("%w: shared job %s lost transient container state after completed commands; start a new run", ErrActionIntegrity, id))
 				}

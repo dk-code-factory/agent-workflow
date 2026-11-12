@@ -280,20 +280,66 @@ func (s *jobContainerScope) acquire(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func (s *jobContainerScope) close() error {
-	var err error
-	if s.session != nil {
-		err = s.session.Close()
-		if s.attachment != nil {
-			_ = s.attachment.Close()
-			<-s.drained
-		}
+func (s *jobContainerScope) closeSession() error {
+	if s.session == nil {
+		return nil
 	}
+	err := s.session.Close()
+	if s.attachment != nil {
+		_ = s.attachment.Close()
+		<-s.drained
+	}
+	if err == nil {
+		s.session, s.attachment, s.drained = nil, nil, nil
+	}
+	return err
+}
+func (s *jobContainerScope) close() error {
+	err := s.closeSession()
 	if s.held {
 		<-s.slots
 		s.held = false
 	}
 	return err
+}
+func (s *jobContainerScope) start(ctx context.Context) (returned error) {
+	if s.session != nil {
+		return nil
+	}
+	// Startup follows the command deadline; teardown owns the parent heartbeat.
+	parent := ctx
+	if b, ok := runtimeexec.BindingFrom(ctx); ok {
+		b.LogicalID = "job-container/" + b.LogicalID
+		parent = runtimeexec.WithBinding(parent, b)
+	}
+	o, err := s.executor.launchOptions(parent, s.implementation, []string{runtimeexec.MountedGuardian, "__container_idle_v1"})
+	if err != nil {
+		return err
+	}
+	session, err := runtimeexec.LaunchContainer(parent, o)
+	if err != nil {
+		return err
+	}
+	s.session = session
+	defer func() {
+		if returned != nil {
+			returned = errors.Join(returned, s.closeSession())
+		}
+	}()
+	a, err := session.Start(parent)
+	if err != nil {
+		return err
+	}
+	s.attachment = a
+	s.drained = make(chan struct{})
+	go func() { defer close(s.drained); _ = a.Copy(containerapi.Streams{}); _ = a.Close() }()
+	if err = session.Runtime.Start(parent, session.Owner.ID); err != nil {
+		return err
+	}
+	if err = s.waitForRunning(parent); err != nil {
+		return err
+	}
+	return session.Invocation.Save(parent, "running")
 }
 func (s *jobContainerScope) waitForRunning(ctx context.Context) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -379,38 +425,8 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 		if scope == nil {
 			return nil, fmt.Errorf("shared container scope unavailable")
 		}
-		if scope.session == nil {
-			// Startup follows the command deadline; teardown owns the parent heartbeat.
-			parent := ctx
-			if b, ok := runtimeexec.BindingFrom(ctx); ok {
-				b.LogicalID = "job-container/" + b.LogicalID
-				parent = runtimeexec.WithBinding(parent, b)
-			}
-			o, err := e.launchOptions(parent, scope.implementation, []string{runtimeexec.MountedGuardian, "__container_idle_v1"})
-			if err != nil {
-				return nil, err
-			}
-			session, err := runtimeexec.LaunchContainer(parent, o)
-			if err != nil {
-				return nil, err
-			}
-			scope.session = session
-			a, err := session.Start(parent)
-			if err != nil {
-				return nil, err
-			}
-			scope.attachment = a
-			scope.drained = make(chan struct{})
-			go func() { defer close(scope.drained); _ = a.Copy(containerapi.Streams{}); _ = a.Close() }()
-			if err = session.Runtime.Start(parent, session.Owner.ID); err != nil {
-				return nil, err
-			}
-			if err = scope.waitForRunning(parent); err != nil {
-				return nil, err
-			}
-			if err = session.Invocation.Save(parent, "running"); err != nil {
-				return nil, err
-			}
+		if err := scope.start(ctx); err != nil {
+			return nil, err
 		}
 		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, WorkingDir: containerWorkingDirectory(step.WorkingDirectory)}, streams)
 	}

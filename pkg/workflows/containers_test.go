@@ -105,6 +105,7 @@ type workflowDocker struct {
 	removalGate           chan struct{}
 	stallPhase            string
 	stallRelease          chan struct{}
+	stallOnce, stallUsed  bool
 	startDelayInspections int
 }
 
@@ -165,11 +166,17 @@ func writeDockerOutput(conn net.Conn, stdout, stderr []byte) {
 func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/v1.56")
 	if d.stallPhase != "" && (d.stallPhase == "create" && p == "/containers/create" || d.stallPhase != "create" && strings.HasPrefix(p, "/containers/") && strings.HasSuffix(p, "/"+d.stallPhase)) {
-		select {
-		case <-r.Context().Done():
-		case <-d.stallRelease:
+		d.mu.Lock()
+		stall := !d.stallOnce || !d.stallUsed
+		d.stallUsed = true
+		d.mu.Unlock()
+		if stall {
+			select {
+			case <-r.Context().Done():
+			case <-d.stallRelease:
+			}
+			return
 		}
-		return
 	}
 	if p == "/_ping" {
 		w.Header().Set("API-Version", "1.56")
@@ -210,6 +217,9 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			d.t.Error(err)
 		}
 		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
+		if d.stallOnce && d.stallPhase == "running" {
+			d.startDelayInspections = 0
+		}
 		d.containers[id] = c
 		d.containers[c.name] = c
 		fmt.Fprintf(w, `{"Id":%q}`, id)
@@ -501,6 +511,43 @@ func TestUnfinishedSharedJobDoesNotReplayCompletedOrdinaryCommands(t *testing.T)
 	}
 }
 
+func TestSharedJobRefusesRecoveryAfterFailedCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name, steps string
+		wantExecs   int
+	}{
+		{"failed command", `[{id: failed, run: 'echo ready > /tmp/state; exit 1'}]`, 1},
+		{"failed finalizer", `[{id: prepare, run: 'echo ready > /tmp/state', continue-on-error: true, finally: [{id: failed, run: exit 1}]}, {id: consume, run: 'cat /tmp/state; exit 1'}]`, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, store, d := containerExecutor(t)
+			writeWorkflow(t, e.WorkspaceDir, "test.yml", "jobs: {build: {container: ubuntu:24.04, steps: "+tc.steps+"}}")
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if err == nil || run == nil {
+				t.Fatalf("command did not fail: run=%+v err=%v", run, err)
+			}
+			attempts, err := store.Attempts(t.Context(), run.ID)
+			if err != nil || len(attempts) != tc.wantExecs {
+				t.Fatalf("missing failed command receipts: attempts=%+v err=%v", attempts, err)
+			}
+			for _, a := range attempts {
+				if a.Status != RunStatusFailed || a.FinishedAt.IsZero() {
+					t.Fatalf("fixture must have only completed failed receipts: %+v", a)
+				}
+			}
+			_, err = e.Resume(t.Context(), run.ID, nil, true)
+			if err == nil || !strings.Contains(err.Error(), "lost transient container state") {
+				t.Fatalf("resumed completed failed commands without transient state: %v", err)
+			}
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if d.creates != 1 || d.executions != tc.wantExecs || len(d.containers) != 0 {
+				t.Fatalf("recreated transient state: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+			}
+		})
+	}
+}
+
 func TestSharedContainerCleanupPrecedesJobCompletion(t *testing.T) {
 	e, store, d := containerExecutor(t)
 	d.removalStarted = make(chan struct{}, 1)
@@ -657,6 +704,68 @@ func TestSharedContainerWaitsForRunningBeforeFirstExec(t *testing.T) {
 	}
 }
 
+func TestSharedContainerStartupFailureAllowsCleanContinuation(t *testing.T) {
+	for _, phase := range []string{"attach", "start", "running"} {
+		for _, handler := range []string{"", "onError", "finally"} {
+			t.Run(phase+"/"+handler, func(t *testing.T) {
+				e, store, d := containerExecutor(t)
+				d.stallPhase, d.stallRelease, d.stallOnce = phase, make(chan struct{}), true
+				if phase == "running" {
+					d.startDelayInspections = -1
+				}
+				defer close(d.stallRelease)
+				first := "{id: first, timeout: 100ms, run: echo first, continue-on-error: true"
+				wantExecs := 1
+				if handler != "" {
+					first += ", " + handler + ": [{id: recovered, run: echo recovered}]"
+					wantExecs++
+				}
+				writeWorkflow(t, e.WorkspaceDir, "test.yml", "jobs: {build: {container: ubuntu:24.04, steps: ["+first+"}, {id: next, run: echo next}]}}")
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
+				if err != nil || run == nil || run.Jobs["build"].Steps["next"].Outputs["stdout"] != "next\n" {
+					t.Fatalf("startup failure poisoned continuation: run=%+v err=%v", run, err)
+				}
+				firstResult := run.Jobs["build"].Steps["first"]
+				if handler == "onError" {
+					if firstResult.Lifecycle == nil || firstResult.Lifecycle.OriginalClass != "timeout" {
+						t.Fatalf("fixture missed startup timeout: %+v", firstResult)
+					}
+				} else if firstResult.FailureClass != "timeout" {
+					t.Fatalf("fixture missed startup timeout: %+v", firstResult)
+				}
+				if handler != "" {
+					if firstResult.Lifecycle == nil {
+						t.Fatalf("missing handler lifecycle: %+v", firstResult)
+					}
+					results := firstResult.Lifecycle.Handlers[handler]
+					if len(results) != 1 || results[0].Outputs["stdout"] != "recovered\n" {
+						t.Fatalf("handler used an unready parent: %+v", firstResult)
+					}
+				}
+				if len(e.Slots) != 0 {
+					t.Fatal("startup recovery leaked capacity")
+				}
+				records, err := store.Invocations(t.Context(), run.ID, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, record := range records {
+					if record.State != "cleaned" {
+						t.Fatalf("startup recovery left an unresolved invocation: %+v", record)
+					}
+				}
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				if d.creates != 2 || d.executions != wantExecs || len(d.containers) != 0 {
+					t.Fatalf("unexpected startup recovery: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+				}
+			})
+		}
+	}
+}
+
 func TestSharedJobIgnoresSuccessfulReusableChildWithSameJobID(t *testing.T) {
 	e, _, _ := containerExecutor(t)
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
@@ -672,49 +781,57 @@ jobs: {build: {container: ubuntu:24.04, steps: [{run: echo child}]}}`)
 }
 
 func TestSharedJobRefusesRecoveryAfterCompletedLifecycleTask(t *testing.T) {
-	e, store, d := containerExecutor(t)
-	writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs:
+	for _, status := range []string{RunStatusSucceeded, RunStatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			command := "echo ready > /tmp/state"
+			if status == RunStatusFailed {
+				command += "; exit 1"
+			}
+			e, store, d := containerExecutor(t)
+			writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs:
   build:
     container: ubuntu:24.04
     steps:
       - id: prepare
-        run: echo ready > /tmp/state
+        run: `+command+`
         handlerTimeout: 5m
         finally: [{id: consume, run: cat /tmp/state}]
 `)
-	// Reject handler admission and final completion writes after the real task receipt.
-	for _, statement := range []string{
-		`CREATE TRIGGER stop_shared_handler BEFORE INSERT ON attempts WHEN NEW.step_id LIKE 'prepare/finally/%' BEGIN SELECT RAISE(ABORT, 'interrupted before shared handler'); END`,
-		`CREATE TRIGGER stop_shared_completion BEFORE UPDATE OF record ON attempts WHEN json_extract(CAST(NEW.record AS TEXT),'$.phase')='lifecycle_completed' BEGIN SELECT RAISE(ABORT, 'interrupted before lifecycle completion'); END`,
-	} {
-		if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
-	if err == nil || run == nil {
-		t.Fatalf("did not interrupt task receipt: run=%+v err=%v", run, err)
-	}
-	attempts, err := store.Attempts(t.Context(), run.ID)
-	if err != nil || len(attempts) != 1 || attempts[0].Status != RunStatusRunning || attempts[0].Phase != "lifecycle_task_completed" || attempts[0].Result.Status != RunStatusSucceeded {
-		t.Fatalf("missing completed-task receipt: attempts=%+v err=%v", attempts, err)
-	}
-	for _, statement := range []string{"DROP TRIGGER stop_shared_handler", "DROP TRIGGER stop_shared_completion"} {
-		if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.Recover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = e.Resume(t.Context(), run.ID, nil, true)
-	if err == nil || !strings.Contains(err.Error(), "lost transient container state") {
-		t.Fatalf("resumed handlers without transient state: %v", err)
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.creates != 1 || d.executions != 1 || len(d.containers) != 0 {
-		t.Fatalf("recreated transient state: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+			// Reject handler admission and final completion writes after the real task receipt.
+			for _, statement := range []string{
+				`CREATE TRIGGER stop_shared_handler BEFORE INSERT ON attempts WHEN NEW.step_id LIKE 'prepare/finally/%' BEGIN SELECT RAISE(ABORT, 'interrupted before shared handler'); END`,
+				`CREATE TRIGGER stop_shared_completion BEFORE UPDATE OF record ON attempts WHEN json_extract(CAST(NEW.record AS TEXT),'$.phase')='lifecycle_completed' BEGIN SELECT RAISE(ABORT, 'interrupted before lifecycle completion'); END`,
+			} {
+				if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if err == nil || run == nil {
+				t.Fatalf("did not interrupt task receipt: run=%+v err=%v", run, err)
+			}
+			attempts, err := store.Attempts(t.Context(), run.ID)
+			if err != nil || len(attempts) != 1 || attempts[0].Status != RunStatusRunning || attempts[0].Phase != "lifecycle_task_completed" || attempts[0].Result.Status != status {
+				t.Fatalf("missing completed-task receipt: attempts=%+v err=%v", attempts, err)
+			}
+			for _, statement := range []string{"DROP TRIGGER stop_shared_handler", "DROP TRIGGER stop_shared_completion"} {
+				if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Recover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			_, err = e.Resume(t.Context(), run.ID, nil, true)
+			if err == nil || !strings.Contains(err.Error(), "lost transient container state") {
+				t.Fatalf("resumed handlers without transient state: %v", err)
+			}
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if d.creates != 1 || d.executions != 1 || len(d.containers) != 0 {
+				t.Fatalf("recreated transient state: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+			}
+		})
 	}
 }
 
