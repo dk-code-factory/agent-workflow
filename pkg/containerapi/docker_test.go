@@ -203,10 +203,12 @@ func TestDockerAPIStreamsStartWaitAndExec(t *testing.T) {
 				return
 			}
 			defer conn.Close()
+			if strings.HasSuffix(r.URL.Path, "/attach") {
+				close(attached)
+			}
 			fmt.Fprint(buffer, "HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 			buffer.Flush()
 			if strings.HasSuffix(r.URL.Path, "/attach") {
-				close(attached)
 				<-started
 			}
 			_, _ = io.Copy(io.Discard, conn)
