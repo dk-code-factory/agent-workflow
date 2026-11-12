@@ -130,16 +130,16 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
     {pickingResult && result && <JobResultPicker {...result} selection={cursor.current} close={() => { setPickingResult(false); control.current?.focus(); }} />}
   </div>;
 }
-export function StructuredField({ store, path, label, replacement = false }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean }) {
+export function StructuredField({ store, path, label, replacement = false, preserveNumbers = false }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean; preserveNumbers?: boolean }) {
   let value: unknown = store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow;
   for (const key of path) value = (value as Mapping | undefined)?.[key];
-  const text = value === undefined ? '' : stringify(value).trimEnd();
+  const text = preserveNumbers ? store.getFieldYAML(path) : value === undefined ? '' : stringify(value).trimEnd();
   const readOnly = store.readOnly || store.getSnapshot().stale;
   return <>{replacement && <p className="aw-hint">Applying this YAML replaces the entire mapping or value, including its comments. Include every existing entry you want to keep. Guided fields change only their own values.</p>}<Field path={path} subtree label={label} value={text} readOnly={readOnly} multiline onApply={text => applyEdit(() => {
-    const doc = parseDocument(text);
+    const doc = parseDocument(text, { intAsBigInt: preserveNumbers });
     if (doc.errors.length) throw new Error(doc.errors[0].message);
     const data = doc.toJS({ maxAliasCount: 0 });
-    store.setField(path, text.trim() ? data : undefined);
+    store.setField(path, text.trim() ? preserveNumbers ? doc.contents : data : undefined);
   })} /></>;
 }
 function valueAt(store: WorkflowDocument, path: Path): unknown {
@@ -319,7 +319,6 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
   const conversation = step && Object.hasOwn(step, 'conversation');
   const common = <>{field('Condition', 'if')}{!block && <label className="aw-check" data-aw-path={JSON.stringify([...path, 'continue-on-error'])}><input type="checkbox" disabled={disabled} checked={!!obj?.['continue-on-error']} onChange={e => attempt(() => store.setField([...path, 'continue-on-error'], e.target.checked))} />Continue on error</label>}</>;
   const uses = step && stepAction(step);
-  const shorthand = step && Object.hasOwn(step, 'agent');
   const action = step && store.getOptions().actions?.find(a => a.uses === uses);
   const params = step?.with ?? {};
   const commandKind = step && (step.argv?.length ? 'argv' : step.run || step.shell ? 'shell' : uses ? undefined : step.argv ? 'argv' : step.run !== undefined ? 'shell' : undefined);
@@ -371,11 +370,11 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
         {commandKind === 'argv' && <CommandArguments store={store} path={[...path, 'argv']} suggestionsID={suggestionsID} attempt={attempt} />}
         {commandKind === 'shell' && <>{field('Shell', 'shell')}{field('Command', 'run', true)}</>}
         {commandKind && <>{field('Working directory', 'working-directory')}{field('Timeout', 'timeout')}</>}
-        {uses && <Field path={[...path, shorthand ? 'agent' : 'uses']} identifier label="Action target" value={uses} readOnly={disabled} onApply={value => applyEdit(() => {
+        {uses && <Field path={[...path, 'uses']} identifier label="Action target" value={uses} readOnly={disabled} onApply={value => applyEdit(() => {
           if (!value.trim()) throw new Error('Action target is required');
           if (!changeStepKind(value)) throw new Error('Type change cancelled; the previous configuration is unchanged');
         })} />}
-        {uses === 'agent/run' && <>{paramField('agent', 'Agent definition or reference')}<StructuredField store={store} path={[...path, 'with', 'input']} label="Task input (YAML)" />{shorthand && !Object.hasOwn(params, 'prompt') ? field('Prompt', 'prompt', true) : paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
+        {uses === 'agent/run' && <>{paramField('agent', 'Agent definition or reference')}<StructuredField store={store} path={[...path, 'with', 'input']} label="Task input (YAML)" preserveNumbers />{paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
         {(Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : undefined)?.map(key => key === 'independent' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', key])} key={key}><input type="checkbox" disabled={disabled} checked={!!params[key]} onChange={e => attempt(() => store.setField([...path, 'with', key], e.target.checked))} />Independent workspace</label> : key === 'commits' ? <StructuredField key={key} store={store} path={[...path, 'with', key]} label="Commits (YAML)" /> : paramField(key, key[0].toUpperCase() + key.slice(1), key === 'body'))}
         {action?.fields?.map(f => f.type === 'yaml' ? <StructuredField key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} /> : f.type === 'number' ? <TypedValue key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} type="number" expressions suggestionsID={suggestionsID} /> : f.type === 'boolean' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', f.key])} key={f.key}><input type="checkbox" disabled={disabled} checked={!!params[f.key]} onChange={e => attempt(() => store.setField([...path, 'with', f.key], e.target.checked))} />{f.label}</label> : paramField(f.key, f.label, f.type === 'textarea'))}
         {action?.renderInspector && <CustomForm definition={action} store={store} job={selection.job!} index={selection.step!} />}

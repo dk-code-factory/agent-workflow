@@ -21,9 +21,11 @@ test('edit native definitions and typed input while retaining six visible hook l
 `;
   const ui=await open(page,source);await step(page,'review agent/run');
   await field(page,'Agent definition or reference','../.codex/agents/reviewer.toml');
-  await field(page,'Task input (YAML)','{count: 9, enabled: false}');
+  await field(page,'Task input (YAML)','{count: 9, enabled: false, exact: 9007199254740993}');
   const edited=await snapshot(page);const task=edited.workflow.jobs.review.steps[0];
-  expect(task.with.input).toEqual({count:9,enabled:false});
+  expect(task.with.input.count).toBe(9);expect(task.with.input.enabled).toBe(false);
+  expect(edited.source).toContain('9007199254740993');
+  await expect(ui.getByLabel('Task input (YAML)',{exact:true})).toHaveValue(/9007199254740993/);
   for(const key of ['onResult','onComplete','onIncomplete','onError','onFailure','finally'])expect(task[key]).toHaveLength(1);
   await ui.getByRole('button',{name:'Undo',exact:true}).click();
   expect((await snapshot(page)).workflow.jobs.review.steps[0].with.input.count).toBe(7);

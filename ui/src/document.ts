@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
+import { isMap, isScalar, isSeq, parseDocument, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, hasAgentResult, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
@@ -152,6 +152,13 @@ export class WorkflowDocument {
     }
   }
   setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value), preservesInspectorOwner(path)); }
+  getFieldYAML(path: Path): string {
+    const node = this.parsed.doc?.getIn(path, true);
+    if (!node || (!isMap(node) && !isSeq(node) && !isScalar(node))) return '';
+    const fragment = parseDocument(this.snapshot.source, { intAsBigInt: true });
+    fragment.contents = (fragment.getIn(path, true) as Node).clone() as Node;
+    return fragment.toString({ lineWidth: 0 }).trimEnd();
+  }
   moveArgument(path: Path, from: number, to?: number) {
     this.edit(doc => {
       const seq = doc.getIn(path, true);

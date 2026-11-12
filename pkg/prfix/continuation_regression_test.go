@@ -21,7 +21,7 @@ func TestQueuedWorkerSetupFailureStopsApplicationWait(t *testing.T) {
 	// Spawn and Send preflight succeed; the scheduled native turn's setup fails.
 	session := &fakeSession{factoryError: errors.New("fixture runner setup failed"), factoryErrorAfter: 2, failureTimeout: 30 * time.Second}
 	_, run, runtime := executeFixture(t, root, provider, prepared, session, true)
-	if run.Status == workflows.RunStatusSucceeded || !strings.Contains(run.Error, "native worker stopped with unresolved message") || !strings.Contains(run.Error, "fixture runner setup failed") {
+	if run.Status == workflows.RunStatusSucceeded || !strings.Contains(run.Error, "stopped with unresolved message") || !strings.Contains(run.Error, "fixture runner setup failed") {
 		t.Fatal("setup failure was not surfaced before the fixture deadline", run.Status, run.Error)
 	}
 	workers, err := runtime.Workers.List(context.Background(), run.ID)

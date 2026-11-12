@@ -374,7 +374,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
       const uses = stepAction(step);
       if (shorthand) add('agent', 'agent shorthand was removed; use agent/run with with.agent', [...sp, 'agent']);
       if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
-      if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
+      if (prompt) add('agent', 'Top-level prompt requires conversation; use with.prompt for agent/run', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
       const command = !!(step.argv?.length || step.run);
       if (step.onResult?.length || step.onComplete?.length || step.onIncomplete?.length) {

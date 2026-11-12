@@ -793,7 +793,8 @@ sources are the [UI guide](../ui/README.md),
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
 
-- **Coverage:** Definition and typed input edits preserve all six hook lists;
+- **Coverage:** Definition and typed input edits preserve all six hook lists and
+  exact integer literals beyond JavaScript's safe integer range;
   command conversion reviews the discarded completion hooks, and Undo/Redo and
   exported YAML retain the definition and typed values.
 - **Starting point:** I open a task using `agent/run`.

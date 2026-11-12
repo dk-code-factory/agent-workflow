@@ -201,7 +201,7 @@ func testFinalizerDuties(t *testing.T, customCI bool) {
 	configFile(t, "", map[string]any{"skill_defaults": map[string]any{"dk-workflows:dk-pr-reviewers-run": map[string]any{"options": map[string]any{"reviewers": []any{map[string]any{"skill": "custom:review"}}}}}})
 	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "required", Role: "codex", Assignment: "Review the pinned request and diff.", Evidence: []string{"original"}}}}}}
 	if customCI {
-		a := BuiltinAdapters("leaf")["dk-workflows:dk-ci"]
+		a := BuiltinAdapters("codex")["dk-workflows:dk-ci"]
 		a.Identity = "custom:ci"
 		req.Adapters[a.Identity] = a
 		req.Options = map[string]any{"finalizers": []any{"dk-workflows:dk-commit-split", "dk-workflows:dk-pr-decisions", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-feedback-reply", "custom:ci", "dk-workflows:dk-pr-publish"}}

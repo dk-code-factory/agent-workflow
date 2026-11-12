@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 )
 
 const conversationToolServer = "workflow-conversation"
@@ -372,12 +375,6 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 			turnEC.Attempt = &turn
 			turnEC.Literal = true
 			prompt := fmt.Sprintf("Shared task: %s\nYou are %s. Participants: %s. Only %s may finish. Use send(to, message) to communicate and finish(result) to complete.\nMessage from %s:\n%s", c.state.Prompt, active.To, strings.Join(c.state.Roles, ", "), c.state.FinishBy, active.From, active.Message)
-			child := Step{ID: turnID, Uses: "agent/" + active.To, With: map[string]any{"prompt": prompt}}
-			for _, key := range []string{"model", "workspace"} {
-				if value, ok := args[key]; ok {
-					child.With[key] = value
-				}
-			}
 			ownerRun := logical
 			if ownerRun == "" {
 				ownerRun = ec.RunID
@@ -398,7 +395,7 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 				return &conversationTools{base: base, execution: c, role: active.To, turn: turnID}, nil
 			}
 			observed := StepExecution{ID: turnID, AttemptID: turn.ID, Status: RunStatusSucceeded, StartedAt: time.Now().UTC()}
-			observed.Outputs, err = execution.executeStep(invocationContext(ctx, e.Store, &turn), child, turnEC, slots)
+			observed.Outputs, err = execution.executeConversationTurn(invocationContext(ctx, e.Store, &turn), active.To, prompt, args, turnEC, slots)
 			observed.FinishedAt = time.Now().UTC()
 			if err != nil {
 				observed.Status, observed.Error, observed.FailureClass = executionFailureStatus(ctx, err), err.Error(), classifyFailure(err)
@@ -419,6 +416,82 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 			return result, err
 		}
 	}
+}
+
+// Conversation participants use the existing managed messaging protocol. They
+// are internal turns, not workflow-authored agent actions or native definitions.
+func (e *Executor) executeConversationTurn(ctx context.Context, role, prompt string, args map[string]any, ec expressionContext, slots chan struct{}) (map[string]any, error) {
+	if err := e.checkEffectAdmission(ctx, ec.RunID); err != nil {
+		return nil, err
+	}
+	if e.Ready != nil {
+		if err := e.Ready(ctx); err != nil {
+			return nil, fmt.Errorf("%w: %v", operational.ErrUnavailable, err)
+		}
+	}
+	if ec.Ordered {
+		if err := e.iterationEvidence(ctx, RunRequest{runID: ec.RunID, Metadata: ec.Metadata}); err != nil {
+			return nil, err
+		}
+	}
+	owner := nativeString(ec.Metadata, "origin_run_id")
+	if owner == "" {
+		owner = ec.RunID
+	}
+	workspace := nativeString(args, "workspace")
+	if workspace != "" && !filepath.IsAbs(workspace) {
+		workspace = filepath.Join(e.WorkspaceDir, workspace)
+	}
+	request := AgentRequest{RunID: owner, InvocationID: ec.Attempt.ID, AgentID: role, Prompt: prompt, Workspace: workspace, Model: nativeString(args, "model")}
+	queued := time.Now()
+	pool := e.Capacity
+	if pool == nil {
+		pool = &Capacity{Slots: slots}
+	}
+	lease, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	if e.BindTools != nil {
+		generation, ownerToken := int64(1), ""
+		if fence, ok := ctx.Value(fenceKey{}).(executionFence); ok {
+			generation, ownerToken = fence.generation, fence.owner
+		}
+		request.Generation = generation
+		binding, err := e.BindTools(ctx, ToolInvocation{RunID: owner, Owner: ownerToken, Generation: generation, InvocationID: request.InvocationID, Role: role, Workspace: workspace, Secrets: e.redactions(ec.Secrets)})
+		if err != nil {
+			return nil, err
+		}
+		request.Tools = &InvocationTools{Binding: binding, Lease: lease}
+	}
+	queueTime := time.Since(queued).Milliseconds()
+	identity := UsageIdentity{ID: request.InvocationID, RunID: owner, TaskAttemptID: ec.Attempt.ID, Kind: "task", Model: request.Model}
+	if source, ok := e.Agents.(interface {
+		UsageProvider(string, string) (string, string)
+	}); ok {
+		identity.Provider, identity.Model = source.UsageProvider(role, request.Model)
+	}
+	store := invocationStore(e.Store)
+	if store != nil {
+		if err := store.BeginUsage(ctx, identity); err != nil {
+			return nil, err
+		}
+		request.ObserveUsage = func(update UsageUpdate) error {
+			return store.ObserveUsage(context.WithoutCancel(ctx), identity, update)
+		}
+	}
+	outputs, err := e.Agents.RunAgent(ctx, request)
+	if outputs != nil {
+		outputs = cloneJSONMap(outputs)
+		outputs["queue_time_ms"] = queueTime
+	}
+	if store != nil {
+		if observeErr := store.ObserveUsage(context.WithoutCancel(ctx), identity, usageUpdate(outputs, true)); observeErr != nil {
+			err = errors.Join(err, iterationPersistence(observeErr, ec.Ordered))
+		}
+	}
+	return outputs, err
 }
 
 type conversationAgent struct {
