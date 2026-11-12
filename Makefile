@@ -4,7 +4,11 @@ build:
 	go build -o bin/agent-workflow ./cmd/agent-workflow
 	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
 test:
-	go test -race -timeout 60m ./...
+	@packages=$$(go list ./...) || exit $$?; \
+	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d') || exit $$?; \
+	test -n "$$packages" || { echo 'No non-PR-fix Go packages discovered' >&2; exit 1; }; \
+	go test -race -timeout 60m $$packages
+	python3 scripts/prfix_race.py --all --shards 4
 check: release-tooling-test
 	go vet ./...
 	go run ./cmd/agent-workflow validate workflows/parallel-review.yml

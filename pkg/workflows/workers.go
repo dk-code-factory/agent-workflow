@@ -104,6 +104,8 @@ type WorkerManager struct {
 	done           map[string]chan struct{}
 	wake           chan struct{}
 	wg             sync.WaitGroup
+	waitMu         sync.Mutex
+	waitChanged    chan struct{}
 }
 
 func (m *WorkerManager) Init(ctx context.Context) error {
@@ -152,6 +154,7 @@ func (m *WorkerManager) Init(ctx context.Context) error {
 	m.activeRuns = map[string]string{}
 	m.done = map[string]chan struct{}{}
 	m.wake = make(chan struct{}, 1)
+	m.waitChanged = make(chan struct{})
 
 	// Acknowledged queued messages remain queued. A turn interrupted by owner loss
 	// requires explicit acknowledgement before later mailbox entries can execute.
@@ -176,6 +179,9 @@ func (m *WorkerManager) saveWorker(ctx context.Context, w Worker) error {
 		return err
 	}
 	_, err = m.Store.db.ExecContext(ctx, "UPDATE workers SET status=?,record=? WHERE id=?", w.Status, b, w.ID)
+	if err == nil {
+		m.notifyWaiters()
+	}
 	return err
 }
 func (m *WorkerManager) Get(ctx context.Context, run, id string) (Worker, error) {
@@ -611,6 +617,8 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// One shared repair sweep covers missed/coalesced mailbox notifications.
+			m.notifyWaiters()
 		case <-m.wake:
 		}
 		if m.Store.CheckCleanupPrerequisites(ctx) != nil {
@@ -674,6 +682,7 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 	}
 }
 func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease) {
+	defer m.notifyWaiters()
 	ctx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 	var progressErr error

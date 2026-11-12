@@ -360,7 +360,7 @@ func TestExternalInputV10MigrationAndRestore(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			if _, err := s.db.Exec("DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
+			if _, err := s.db.Exec("DROP TABLE worker_waits; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
 				t.Fatal(err)
 			}
 			lock, err := ownership.Own(s.Dir)
@@ -371,7 +371,7 @@ func TestExternalInputV10MigrationAndRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 			lock.Close()
-			if _, err = os.Stat(filepath.Join(s.Dir, "state.pre-v10.db")); err != nil {
+			if _, err = os.Stat(filepath.Join(s.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion))); err != nil {
 				t.Fatal(err)
 			}
 			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
