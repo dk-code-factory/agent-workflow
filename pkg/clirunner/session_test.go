@@ -91,8 +91,8 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 			case "account/login/start":
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
 			case "thread/start", "thread/resume":
-				if frame.Params["model"] == "definition-model" {
-					if !strings.Contains(fmt.Sprint(frame.Params["baseInstructions"]), "Definition instructions.") {
+				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS") == "1" {
+					if frame.Params["model"] != "definition-model" || !strings.Contains(fmt.Sprint(frame.Params["baseInstructions"]), "Definition instructions.") {
 						os.Exit(4)
 					}
 				}
@@ -101,7 +101,7 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 				}
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"thread": map[string]string{"id": "thread-1"}}})
 			case "turn/start":
-				if frame.Params["effort"] != nil {
+				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS") == "1" {
 					if frame.Params["effort"] != "high" || !strings.Contains(fmt.Sprint(frame.Params["input"]), "9007199254740993") {
 						os.Exit(5)
 					}
@@ -248,7 +248,7 @@ func TestNativeCodexDefinitionSettingsAndTypedInput(t *testing.T) {
 	}
 	root := t.TempDir()
 	fake := filepath.Join(root, "fake-codex")
-	script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
+	script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1 AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS=1\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
 	if err = os.WriteFile(fake, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

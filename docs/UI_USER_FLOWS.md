@@ -715,14 +715,17 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-44.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Correcting agent references through both Action target and Step type keeps the prompt; correcting a workflow reference clears the remaining catalog warning.
+- **Coverage:** The native task starts without `codex` in the host catalog and asserts a distinct agent warning alongside the missing-workflow warning. Editing its definition preserves the prompt and does not clear the runtime warning; adding `codex` to the host catalog clears only that warning. Correcting the reusable workflow then clears the remaining warning.
 
 - **Starting point:** The host supplies catalogs, and diagnostics say a
   referenced agent or workflow is unavailable.
-- **My flow:** I select the affected step or job → review its **Action target**
-  or **Reusable workflow** → correct the reference to an available catalog
-  entry → review its parameters and diagnostics.
-- **What I see:** The warning clears when the reference matches the catalog.
+- **My flow:** For a native task, I select the affected step, review its
+  **Agent definition or reference**, and ask the host to make the `codex`
+  runtime available. For a reusable workflow, I select the job and correct
+  **Reusable workflow** to an available catalog entry.
+- **What I see:** The native runtime warning clears when the host catalog
+  includes `codex`; changing a definition alone leaves that warning visible.
+  The workflow warning clears when its reference matches the catalog.
   Both **Action target** and **Step type** keep parameters when changing agents
   and review incompatible changes as described in UF-21. Catalog membership
   does not verify provider authentication or resolve the reusable file.
