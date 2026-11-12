@@ -102,15 +102,13 @@ func (s *ContainerSession) Exec(ctx context.Context, q containerapi.ExecRequest,
 		<-done
 		return -1, ctx.Err()
 	}
-	if err != nil {
-		return -1, err
-	}
+	copyErr := err
 	status, err := s.Runtime.ExecInspect(ctx, id)
 	if err != nil {
-		return -1, err
+		return -1, errors.Join(copyErr, err)
 	}
 	if status.Running || status.ID != id || status.ContainerID != owner.ID {
-		return -1, fmt.Errorf("%w: exec completion is unconfirmed", process.ErrCleanup)
+		return -1, errors.Join(copyErr, fmt.Errorf("%w: exec completion is unconfirmed", process.ErrCleanup))
 	}
-	return status.ExitCode, nil
+	return status.ExitCode, copyErr
 }

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
+	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
 func TestContainerAuthoringAndUnsupportedSharedJobs(t *testing.T) {
@@ -71,6 +72,30 @@ func TestDockerEntrypointCmdAndQuotedArguments(t *testing.T) {
 		if _, err := SplitContainerArgs(bad); err == nil {
 			t.Fatal("accepted", bad)
 		}
+	}
+}
+
+func TestContainerDeclarationScalarNormalization(t *testing.T) {
+	for _, tc := range []struct{ declaration, image string }{
+		{"null", ""}, {"{image: 123}", "123"}, {"{image: 01}", "01"}, {"{image: true}", "true"},
+	} {
+		t.Run(tc.declaration, func(t *testing.T) {
+			w, err := Parse([]byte("jobs: {build: {container: " + tc.declaration + ", steps: [{argv: [echo, ready]}]}}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = Validate(w); err != nil {
+				t.Fatal(err)
+			}
+			container := w.Jobs["build"].Container
+			if tc.image == "" {
+				if container != nil {
+					t.Fatalf("null container became %+v", container)
+				}
+			} else if container == nil || container.Image != tc.image {
+				t.Fatalf("image=%+v; want %q", container, tc.image)
+			}
+		})
 	}
 }
 
@@ -459,6 +484,32 @@ func TestSharedJobStateSiblingIsolationCapacityAndCleanup(t *testing.T) {
 		}
 	}
 }
+func TestSharedJobPreflightIgnoresUnusedLegacyImage(t *testing.T) {
+	for _, legacyJob := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy-job-%t", legacyJob), func(t *testing.T) {
+			e, _, _ := containerExecutor(t)
+			e.CommandExecution = runtimeexec.Policy{Mode: "container", Runtime: "docker", Image: "unused-legacy-image"}
+			source := "jobs: {build: {container: ubuntu:24.04, steps: [{id: command, run: echo ready}]}}"
+			if legacyJob {
+				source = "jobs: {build: {container: ubuntu:24.04, steps: [{run: echo ready}]}, legacy: {steps: [{argv: [echo, legacy]}]}}"
+			}
+			if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows/test.yml"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if legacyJob {
+				if err == nil || !strings.Contains(err.Error(), "container image must be pinned") {
+					t.Fatalf("legacy command bypassed image admission: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if run.Jobs["build"].Steps["command"].Outputs["stdout"] != "ready\n" {
+				t.Fatalf("shared command did not execute: %+v", run)
+			}
+		})
+	}
+}
+
 func TestNestedReusableContainerCallsUseOwningDefinitionAndOutputs(t *testing.T) {
 	e, _, d := containerExecutor(t)
 	files := map[string]string{

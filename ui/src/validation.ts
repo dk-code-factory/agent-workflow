@@ -68,7 +68,7 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | 'container' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
@@ -92,7 +92,7 @@ const schema: Shape = {
     workflow_call: { inputs: { '*': input }, secrets: { '*': { required: 'boolean' } }, outputs: { '*': { value: 'string' } } },
   },
   jobs: { '*': {
-    container: 'any', name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
+    container: 'container', name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
     'for-each': { items: 'any', key: 'string' },
@@ -168,6 +168,10 @@ export function parseWorkflow(source: string): Parsed {
     };
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
+      if (shape === 'container') {
+        if (value != null) checkShape(value, mapping(value) ? { image: 'string' } : 'strict-string', path);
+        return;
+      }
       if (shape === 'any') return;
       if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
@@ -332,7 +336,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');
     }
-    if (job.container !== undefined) {
+    if (job.container != null) {
       const image = typeof job.container === 'string' ? job.container : job.container?.image;
       if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
       if (mapping(job.container)) for (const key of Object.keys(job.container)) if (key !== 'image') add('container', `Unsupported container field ${key}`, [...p, 'container', key]);

@@ -2,6 +2,20 @@ import { expect, test } from '@playwright/test';
 import { parse } from 'yaml';
 import { open, snapshot, field, job, downloadText } from './harness';
 
+for (const { declaration, image } of [
+  { declaration: 'null', image: undefined },
+  { declaration: '{image: 123}', image: '123' },
+  { declaration: '{image: 01}', image: '01' },
+  { declaration: '{image: true}', image: 'true' },
+]) test(`container ${declaration} matches runner scalar normalization`, async ({ page }) => {
+  const source = `jobs: {build: {container: ${declaration}, steps: [{argv: [echo, ready]}]}}`;
+  await open(page, source);
+  const current = await snapshot(page);
+  expect(current.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(current.workflow.jobs.build.container?.image).toBe(image);
+  expect(await downloadText(page)).toBe(source);
+});
+
 test('configure job and sibling Docker containers and export exact command arguments', async ({ page }) => {
   const ui = await open(page, `jobs: {build: {runs-on: local, container: 'ubuntu:24.04', steps: [{id: shared, run: 'echo ready'}, {id: sibling, uses: 'docker://ubuntu:24.04'}]}}`);
   await job(page);
