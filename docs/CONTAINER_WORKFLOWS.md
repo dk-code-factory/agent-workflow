@@ -147,6 +147,12 @@ JSON response on stdout and diagnostics on stderr. Requests and responses are
 limited to 1 MiB each; diagnostics are limited to 4 MiB. Extra documents, unknown
 response fields, wrong versions/phases, oversized streams and nonzero exits fail
 the phase. The configured timeout applies to each phase (default five minutes).
+Recovery requests include input, bindings and the retained result within the same
+1 MiB limit. The engine checks that combined budget before execution and durable
+completion, reserving space for future ownership metadata. Oversized results fail
+without releasing an admitted mutation for replay; recovery still requires
+authoritative reconciliation. Keep bindings and results compact or use references
+to application-owned evidence.
 
 Every request has `protocol: "action-v1"`, `phase`, the original action `context`,
 the current `runtime_owner` (run ID and generation), and schema-validated `input`.

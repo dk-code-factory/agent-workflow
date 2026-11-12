@@ -12,6 +12,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,6 +184,7 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	}
 	copy := *e
 	e = &copy
+	req.Secrets = maps.Clone(req.Secrets)
 	e.runSecrets = req.Secrets
 	if err := e.pinExecution(ctx); err != nil {
 		return nil, err
@@ -216,11 +218,6 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	// Detach caller-owned input maps before workers read them.
 	req.Inputs, _ = cloneJSONValue(req.Inputs).(map[string]any)
 	req.Event, _ = cloneJSONValue(req.Event).(map[string]any)
-	secrets := map[string]string{}
-	for k, v := range req.Secrets {
-		secrets[k] = v
-	}
-	req.Secrets = secrets
 	slots := e.Slots
 	if slots == nil {
 		slots = make(chan struct{}, limit)
@@ -970,6 +967,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	if !ok {
 		return nil, fmt.Errorf("legacy JSON records cannot resume")
 	}
+	secrets = maps.Clone(secrets)
 	e.runSecrets = secrets
 	e.redactionValues = e.redactions(secrets)
 	defer func() { result, err = safeResult(result, err, e.redactionValues) }()

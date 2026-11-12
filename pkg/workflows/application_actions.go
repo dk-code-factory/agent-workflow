@@ -101,6 +101,7 @@ type registeredAction struct {
 	contract      ActionContract
 	input, output *jsonschema.Resolved
 	bindings      func(context.Context, ActionContext, json.RawMessage) (json.RawMessage, error)
+	recovery      func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) error
 	handler       func(context.Context, ActionContext, json.RawMessage) (ActionValue, error)
 	validate      func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) error
 	reconcile     func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) (actionReconciliation, error)

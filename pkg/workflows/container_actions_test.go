@@ -31,6 +31,7 @@ jobs:
 type protocolFixture struct {
 	mu                                                 sync.Mutex
 	binding                                            string
+	output                                             string
 	execute, validations, reconciles, unknown          int
 	mutation, lostResponse, badOutput, badCapabilities bool
 	receipts                                           map[string]bool
@@ -66,7 +67,11 @@ func (f *protocolFixture) call(argv []string, input []byte, env []string) ([]byt
 	}
 	key := ac["operation_key"].(string)
 	f.calls = append(f.calls, protocolHookCall{phase: phase, operationKey: key, env: append([]string(nil), env...)})
-	result := map[string]any{"output": map[string]any{"head": "ready"}, "evidence": map[string]any{"head": "ready"}}
+	head := f.output
+	if head == "" {
+		head = "ready"
+	}
+	result := map[string]any{"output": map[string]any{"head": head}, "evidence": map[string]any{"head": "ready"}}
 	switch phase {
 	case "bindings":
 		v["capabilities"] = []string{"bindings", "execute", "validate_checkpoint", "reconcile"}

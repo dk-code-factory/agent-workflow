@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -190,6 +191,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 					Step      Step
 				}{p, step})
 				a := &registeredAction{contract: buildActionContract(name, implementation, step.Effect, in, out), input: ir, output: or}
+				a.recovery = validateContainerRecoveryRequest
 				helper := step
 				selected := p
 				call := func(ctx context.Context, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
@@ -298,19 +300,7 @@ func decodeContainerResponse(data []byte, phase string) (containerResponse, erro
 	}
 	return v, nil
 }
-func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImplementation, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
-	f, owned := ctx.Value(fenceKey{}).(executionFence)
-	if !owned {
-		return containerResponse{}, fmt.Errorf("structured helper hooks require current execution ownership")
-	}
-	if err := e.checkEffectAdmission(ctx, f.id); err != nil {
-		return containerResponse{}, err
-	}
-	if e.Ready != nil {
-		if err := e.Ready(ctx); err != nil {
-			return containerResponse{}, err
-		}
-	}
+func encodeContainerRequest(f executionFence, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) ([]byte, error) {
 	request := struct {
 		Protocol     string          `json:"protocol"`
 		Phase        string          `json:"phase"`
@@ -324,10 +314,45 @@ func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImp
 	}
 	raw, err := json.Marshal(request)
 	if err != nil {
-		return containerResponse{}, err
+		return nil, err
 	}
 	if len(raw) > 1<<20 {
-		return containerResponse{}, fmt.Errorf("helper request exceeds 1 MiB")
+		return nil, fmt.Errorf("helper request exceeds 1 MiB")
+	}
+	return raw, nil
+}
+
+func validateContainerRecoveryRequest(ctx context.Context, ac ActionContext, input, bindings json.RawMessage, result ActionValue) error {
+	f, owned := ctx.Value(fenceKey{}).(executionFence)
+	if !owned {
+		return fmt.Errorf("structured helper hooks require current execution ownership")
+	}
+	// Future validation uses a fresh 32-character run ID; reserve the full
+	// generation width so a later owner cannot outgrow this admitted budget.
+	f.id = strings.Repeat("0", max(32, len(f.id)))
+	f.generation = math.MaxInt64
+	if _, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result); err != nil {
+		return fmt.Errorf("helper recovery request exceeds the combined input/bindings/result budget: %w", err)
+	}
+	return nil
+}
+
+func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImplementation, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
+	f, owned := ctx.Value(fenceKey{}).(executionFence)
+	if !owned {
+		return containerResponse{}, fmt.Errorf("structured helper hooks require current execution ownership")
+	}
+	if err := e.checkEffectAdmission(ctx, f.id); err != nil {
+		return containerResponse{}, err
+	}
+	if e.Ready != nil {
+		if err := e.Ready(ctx); err != nil {
+			return containerResponse{}, err
+		}
+	}
+	raw, err := encodeContainerRequest(f, ac, phase, input, bindings, result)
+	if err != nil {
+		return containerResponse{}, err
 	}
 	argv := append([]string(nil), step.Argv...)
 	if step.Run != "" {

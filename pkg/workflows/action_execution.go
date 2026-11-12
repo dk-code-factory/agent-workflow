@@ -91,6 +91,11 @@ func (a *registeredAction) validateResult(ctx context.Context, r ActionAttempt) 
 	if err := validateActionJSON(r.Result.Output, a.output); err != nil {
 		return fmt.Errorf("output schema: %w", err)
 	}
+	if a.recovery != nil {
+		if err := a.recovery(ctx, r.Context, r.Input, r.Bindings, r.Result); err != nil {
+			return err
+		}
+	}
 	return a.validate(ctx, r.Context, r.Input, r.Bindings, r.Result)
 }
 
@@ -278,6 +283,11 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	if err != nil {
 		return fail(err)
 	}
+	if a.recovery != nil {
+		if err = a.recovery(ctx, ac, input, bindings, ActionValue{}); err != nil {
+			return fail(err)
+		}
+	}
 	r := ActionAttempt{Context: ac, Contract: a.contract, Input: input, Bindings: bindings, InputFingerprint: actionHash(input), BindingsFingerprint: actionHash(bindings), State: "admitted", Revision: 1,
 		Attempt: Attempt{ID: ac.AttemptID, RunID: ac.RunID, JobID: ac.JobID, StepID: ac.StepID, Iteration: ac.Iteration, Number: ac.Attempt, Status: RunStatusRunning, StartedAt: time.Now().UTC()}}
 	if err = j.AdmitAction(ctx, r); err != nil {
@@ -297,6 +307,13 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 	}
 	value, callErr := a.handler(ctx, ac, input)
 	r.Result, err = e.safeActionResult(value)
+	if err == nil && a.recovery != nil {
+		if err = a.recovery(ctx, ac, input, bindings, r.Result); err != nil {
+			// Retain the admitted mutation barrier, as for a lost response. Its
+			// empty candidate still fits the recovery request checked above.
+			r.Result = ActionValue{}
+		}
+	}
 	if err == nil && callErr == nil {
 		err = validateActionJSON(r.Result.Output, a.output)
 	}
