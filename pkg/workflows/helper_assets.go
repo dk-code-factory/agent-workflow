@@ -100,6 +100,31 @@ func writeAssetFile(name string, data []byte, mode fs.FileMode) error {
 	return closeErr
 }
 
+func openRegularAsset(root *os.Root, name string) (*os.File, error) {
+	f, err := openAssetFile(root, name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("helper must be a regular file: %s", name)
+	}
+	return f, nil
+}
+
+func readRegularAsset(root *os.Root, name string, limit int64) ([]byte, error) {
+	f, err := openRegularAsset(root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit))
+}
+
 // CaptureHelperBundle stages only declared regular files. OpenRoot prevents a
 // concurrent workspace symlink replacement from escaping the owning package.
 func (s *SQLiteStore) CaptureHelperBundle(ctx context.Context, origin, base string, declarations []string) (bundle *HelperBundle, returned error) {
@@ -150,7 +175,7 @@ func (s *SQLiteStore) CaptureHelperBundle(ctx context.Context, origin, base stri
 		if info.Size() > MaxHelperBytes {
 			return fmt.Errorf("helper bundle exceeds 32 MiB")
 		}
-		f, err := root.Open(name)
+		f, err := openRegularAsset(root, name)
 		if err != nil {
 			return err
 		}
@@ -323,11 +348,11 @@ func verifyBundleDirectory(directory string, bundle *HelperBundle) error {
 	if err = noSymlinkComponents(root, "bundle.json"); err != nil {
 		return err
 	}
-	raw, err := root.ReadFile("bundle.json")
+	expected, _ := json.Marshal(bundle)
+	raw, err := readRegularAsset(root, "bundle.json", int64(len(expected))+1)
 	if err != nil {
 		return err
 	}
-	expected, _ := json.Marshal(bundle)
 	if !bytes.Equal(raw, expected) {
 		return fmt.Errorf("retained helper manifest differs from admitted manifest")
 	}
@@ -349,7 +374,7 @@ func verifyBundleDirectory(directory string, bundle *HelperBundle) error {
 		if err = noSymlinkComponents(root, path.Join("files", name)); err != nil {
 			return err
 		}
-		f, err := root.Open(path.Join("files", name))
+		f, err := openRegularAsset(root, path.Join("files", name))
 		if err != nil {
 			return err
 		}
@@ -509,7 +534,12 @@ func (s *SQLiteStore) CleanupHelperStaging(ctx context.Context, owner *ownership
 				continue
 			}
 			directory := filepath.Join(groupPath, entry.Name())
-			raw, err := os.ReadFile(filepath.Join(directory, "owner.json"))
+			root, err := os.OpenRoot(directory)
+			if err != nil {
+				continue
+			}
+			raw, err := readRegularAsset(root, "owner.json", 4097)
+			_ = root.Close()
 			if err != nil {
 				continue
 			}

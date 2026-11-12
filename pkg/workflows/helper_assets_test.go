@@ -241,44 +241,53 @@ func TestHelperBundlesSiblingInheritanceAndImmutableReferences(t *testing.T) {
 	}
 }
 func TestHelperAssetRecoveryRemovesOnlyMarkedAbandonedStorage(t *testing.T) {
-	e, store, d := containerExecutor(t)
-	putHelper(t, e.WorkspaceDir, "workflows/helpers/x", "x", 0644)
-	installProtocolWorkflow(t, e, d, &protocolFixture{}, helperBundleWorkflow())
-	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, snap, _ := store.Load(t.Context(), run.ID)
-	committed := snap.Definitions[run.WorkflowRef].Jobs["capture"].Container.Implementation.Bundle
-	orphan, err := store.CaptureHelperBundle(t.Context(), randomID(), filepath.Join(e.WorkspaceDir, "workflows"), []string{"helpers"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	orphanDir, _ := store.bundleDirectory(orphan)
-	stageID := randomID()
-	stage := filepath.Join(store.Dir, "assets/staging", stageID)
-	marker, _ := json.Marshal(assetStageOwner{OriginID: randomID(), StageID: stageID})
-	putHelper(t, stage, "owner.json", string(marker), 0400)
-	unknown := filepath.Join(store.Dir, "assets/staging/unknown")
-	putHelper(t, unknown, "keep", "unowned", 0600)
-	lock, err := ownership.Own(store.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	if err = store.CleanupHelperStaging(t.Context(), lock); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{orphanDir, stage} {
-		if _, err = os.Stat(path); !os.IsNotExist(err) {
-			t.Fatal("abandoned stage retained", path, err)
-		}
-	}
-	if err = store.VerifyHelperBundle(committed); err != nil {
-		t.Fatal("committed assets removed", err)
-	}
-	if _, err = os.Stat(filepath.Join(unknown, "keep")); err != nil {
-		t.Fatal("unowned files removed", err)
+	for _, missing := range []string{"", "input_controls_continuations", "input_gates_run", "input_controls_continuations input_gates_run"} {
+		t.Run("missing-indexes="+missing, func(t *testing.T) {
+			e, store, d := containerExecutor(t)
+			putHelper(t, e.WorkspaceDir, "workflows/helpers/x", "x", 0644)
+			installProtocolWorkflow(t, e, d, &protocolFixture{}, helperBundleWorkflow())
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, snap, _ := store.Load(t.Context(), run.ID)
+			committed := snap.Definitions[run.WorkflowRef].Jobs["capture"].Container.Implementation.Bundle
+			orphan, err := store.CaptureHelperBundle(t.Context(), randomID(), filepath.Join(e.WorkspaceDir, "workflows"), []string{"helpers"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			orphanDir, _ := store.bundleDirectory(orphan)
+			stageID := randomID()
+			stage := filepath.Join(store.Dir, "assets/staging", stageID)
+			marker, _ := json.Marshal(assetStageOwner{OriginID: randomID(), StageID: stageID})
+			putHelper(t, stage, "owner.json", string(marker), 0400)
+			unknown := filepath.Join(store.Dir, "assets/staging/unknown")
+			putHelper(t, unknown, "keep", "unowned", 0600)
+			for _, index := range strings.Fields(missing) {
+				if _, err = store.db.Exec("DROP INDEX " + index); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock, err := ownership.Own(store.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err = store.Migrate(t.Context(), lock); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{orphanDir, stage} {
+				if _, err = os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("abandoned stage retained", path, err)
+				}
+			}
+			if err = store.VerifyHelperBundle(committed); err != nil {
+				t.Fatal("committed assets removed", err)
+			}
+			if _, err = os.Stat(filepath.Join(unknown, "keep")); err != nil {
+				t.Fatal("unowned files removed", err)
+			}
+		})
 	}
 }
 func TestHelperAssetsPortableRecoveryBundle(t *testing.T) {

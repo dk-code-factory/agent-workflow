@@ -175,7 +175,10 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		if _, err = tx.ExecContext(ctx, schemaV10InputIndexes); err != nil {
 			return err
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return s.CleanupHelperStaging(ctx, owner)
 	}
 	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11}
 	for next := version + 1; next <= schemaVersion; next++ {

@@ -55,3 +55,26 @@ test('visual edits preserve inherited null bundles and runner scalar filenames t
   expect(exported.container.files).toEqual(['123', 'true', '01']);
   expect(exported.steps.map((step: any) => step.files)).toEqual([null, undefined, [], ['FALSE', '0xA']]);
 });
+
+test('helper-file controls preserve entered scalar filenames and inheritance through export', async ({ page }) => {
+  const ui = await open(page, `jobs: {build: {container: ubuntu, steps: [{id: sibling, uses: docker://ubuntu}]}}`);
+  const spelling = ['01', 'FALSE', '0xA', '1.0', '010'];
+  await job(page);
+  await field(page, 'Job helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010]');
+  expect((await snapshot(page)).workflow.jobs.build.container.files).toEqual(spelling);
+  await ui.getByRole('button', { name: '1. sibling', exact: true }).click();
+  await field(page, 'Docker helper files (YAML)', '[01, FALSE, 0xA, 1.0, !!int 010]');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual(spelling);
+  let exported = parse(await downloadText(page)).jobs.build;
+  expect(exported.container.files).toEqual(spelling);
+  expect(exported.steps[0].files).toEqual(spelling);
+  await field(page, 'Docker helper files (YAML)', 'null');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toBeNull();
+  expect(parse(await downloadText(page)).jobs.build.steps[0].files).toBeNull();
+  await field(page, 'Docker helper files (YAML)', '[]');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual([]);
+  await field(page, 'Docker helper files (YAML)', '');
+  exported = parse(await downloadText(page)).jobs.build;
+  expect(Object.hasOwn(exported.steps[0], 'files')).toBe(false);
+  expect(exported.container.files).toEqual(spelling);
+});
