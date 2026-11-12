@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
@@ -35,14 +34,16 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 
 func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
 	if ec.Hook && step.Run != "" {
+		scriptContext := ec
+		scriptContext.NoShellEvent = true
 		for _, match := range expressionPattern.FindAllStringSubmatch(step.Run, -1) {
-			value, err := renderString(match[0], ec)
+			value, err := renderString(match[0], scriptContext)
 			if err != nil {
 				return nil, err
 			}
 			_, object := value.(map[string]any)
 			_, array := value.([]any)
-			if strings.Contains(match[1], "event") || object || array {
+			if object || array {
 				return nil, fmt.Errorf("script hooks receive event JSON on stdin; event interpolation into shell scripts is unsupported")
 			}
 		}
