@@ -33,12 +33,14 @@ func TestLifecycleRestartIgnoresReusableChildReceipts(t *testing.T) {
       result: ${{ steps.work.text }}
     steps:
       - id: work
-        agent: a
-        prompt: root task
         onError:
-          - {id: backup, agent: a, prompt: root fallback}
+          - {id: backup, uses: agent/run, with: {agent: a.toml, prompt: root fallback}}
         finally:
-          - {agent: a, prompt: root cleanup}
+          - {uses: agent/run, with: {agent: a.toml, prompt: root cleanup}}
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: root task
 `
 	var calls []string
 	e, store := durableExecutor(t, source, agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
@@ -59,13 +61,15 @@ jobs:
   task:
     steps:
       - id: work
-        agent: a
-        prompt: child task
         onError:
-          - {id: backup, agent: a, prompt: child fallback}
+          - {id: backup, uses: agent/run, with: {agent: a.toml, prompt: child fallback}}
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: child task
 `)
 	e.Store = interruptRootLifecycleJournal{Journal: store}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run == nil {
 		t.Fatalf("root task was not interrupted: run=%+v err=%v", run, err)
 	}
@@ -93,7 +97,7 @@ jobs:
 		t.Fatalf("missing colliding physical-run receipts: %+v", attempts)
 	}
 	e.Store = store
-	resumed, err := e.Resume(ctx, run.ID, nil, false)
+	resumed, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true)
 	if err != nil || resumed == nil || resumed.Status != RunStatusSucceeded {
 		t.Fatalf("foreign child failure prevented root recovery: run=%+v err=%v", resumed, err)
 	}

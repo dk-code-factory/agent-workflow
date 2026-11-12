@@ -93,5 +93,9 @@ AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id')=
 	if err != nil {
 		return errors.Join(err, process.ErrCleanup)
 	}
+	m.mu.Lock()
+	delete(m.taskSecrets, run)
+	m.mu.Unlock()
+
 	return nil
 }

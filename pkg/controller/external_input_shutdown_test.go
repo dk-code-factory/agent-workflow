@@ -20,9 +20,9 @@ import (
 const shutdownInputSource = `jobs:
   ask:
     steps:
-      - {id: before, uses: agent/a, with: {prompt: preparation}}
+      - {id: before, uses: agent/run, with: {prompt: preparation, agent: a.toml}}
       - {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}
-  after: {needs: ask, steps: [{id: effect, uses: agent/a, with: {prompt: dependent}}]}
+  after: {needs: ask, steps: [{id: effect, uses: agent/run, with: {prompt: dependent, agent: a.toml}}]}
 `
 
 type shutdownInputAgent struct {
@@ -137,6 +137,7 @@ func shutdownHeldInput(t *testing.T, c *Client, j *shutdownInputJournal, stop fu
 func restartShutdownInput(t *testing.T, old *Server, store *workflows.SQLiteStore, agent workflows.AgentRunner) (*Server, *Client, func()) {
 	t.Helper()
 	s := &Server{Dir: store.Dir, Store: store, Executor: &workflows.Executor{WorkspaceDir: old.Executor.WorkspaceDir, Store: store, Agents: agent}}
+	nativeControllerFixture(t, s)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	done := make(chan error, 1)
 	go func() { done <- s.Serve(ctx) }()
@@ -208,7 +209,7 @@ func TestInputControllerGracefulShutdownRestartsDurableWait(t *testing.T) {
 			}
 			agent := &shutdownInputAgent{holdStarted: make(chan struct{})}
 			s.mu.Lock()
-			s.Executor.Agents = agent
+			s.Executor.Agents = nativeAgentFixture{agent}
 			s.MaxRuns = 1
 			s.mu.Unlock()
 			var barrier *shutdownInputJournal
@@ -224,7 +225,8 @@ func TestInputControllerGracefulShutdownRestartsDurableWait(t *testing.T) {
 			} else {
 				// Occupy the one controller owner with an actual cancelable execution so
 				// the public target admission stays durably queued, never claimed.
-				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "block.yml"), []byte(`jobs: {hold: {steps: [{uses: agent/a, with: {prompt: hold}}]}}`), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "block.yml"), []byte(`jobs: {hold: {steps: [{uses: agent/run, with: {prompt: hold, agent: a.toml}}]}}
+`), 0600); err != nil {
 					t.Fatal(err)
 				}
 				if err := c.Call(ctx, "POST", "/runs", StartRequest{Ref: "workflows/block.yml"}, nil); err != nil {
@@ -359,7 +361,7 @@ func TestInputControllerShutdownPreservesExplicitControls(t *testing.T) {
 			s, c, stop := inputLifecycleFixture(t, shutdownInputSource, false)
 			agent := &shutdownInputAgent{}
 			s.mu.Lock()
-			s.Executor.Agents = agent
+			s.Executor.Agents = nativeAgentFixture{agent}
 			s.mu.Unlock()
 			barrier := shutdownInputBarrier(t, s, "gate")
 			run := startInput(t, c)
@@ -410,12 +412,12 @@ func TestInputControllerShutdownCannotBypassUncertaintyOrCleanup(t *testing.T) {
 			ctx := context.Background()
 			source := shutdownInputSource
 			if hazard == "uncertain" {
-				source += "  failure: {continue-on-error: true, steps: [{id: lost, uses: agent/a, with: {prompt: failure}}]}\n"
+				source += "  failure: {continue-on-error: true, steps: [{id: lost, uses: agent/run, with: {prompt: failure, agent: a.toml}}]}\n"
 			}
 			s, c, stop := inputLifecycleFixture(t, source, hazard == "cleanup")
 			agent := &shutdownInputAgent{}
 			s.mu.Lock()
-			s.Executor.Agents = agent
+			s.Executor.Agents = nativeAgentFixture{agent}
 			s.mu.Unlock()
 			barrier := shutdownInputBarrier(t, s, "gate")
 			run := startInput(t, c)
@@ -542,7 +544,7 @@ func TestInputControllerNestedCancelBeforeOwnerContextCancellation(t *testing.T)
 	ctx := context.Background()
 	source := `jobs:
   review: {uses: workflows/child.yml, for-each: {items: [{id: a}, {id: b}], key: item.id}}
-  dependent: {needs: review, steps: [{uses: agent/a, with: {prompt: dependent}}]}
+  dependent: {needs: review, steps: [{uses: agent/run, with: {prompt: dependent, agent: a.toml}}]}
 `
 	s, c, stop := inputLifecycleFixture(t, source, false)
 	if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "child.yml"), []byte("on: {workflow_call: {}}\n"+shutdownInputSource), 0600); err != nil {
@@ -556,7 +558,7 @@ func TestInputControllerNestedCancelBeforeOwnerContextCancellation(t *testing.T)
 	journal := &inputCancelBeforeOwnerJournal{SQLiteStore: s.Store, committed: committed, entered: make(chan struct{}), denied: make(chan struct{}), published: make(chan struct{})}
 	s.mu.Lock()
 	s.Executor.Store = journal
-	s.Executor.Agents = agent
+	s.Executor.Agents = nativeAgentFixture{agent}
 	s.mu.Unlock()
 	run := startInput(t, c)
 	awaitStatus(t, c, run.ID, workflows.RunStatusWaiting)

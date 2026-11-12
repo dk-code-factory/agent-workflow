@@ -132,7 +132,7 @@ func fixture(t *testing.T, agent workflows.AgentRunner) (*Server, *Client, conte
 	if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte("jobs: {x: {steps: [{uses: agent/a, with: {prompt: hello}}]}}"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte("jobs: {x: {steps: [{uses: agent/run, with: {prompt: hello, agent: a.toml}}]}}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, ".agent-workflow")
@@ -141,6 +141,7 @@ func fixture(t *testing.T, agent workflows.AgentRunner) (*Server, *Client, conte
 		t.Fatal(err)
 	}
 	server := &Server{Dir: dir, Store: store, Executor: &workflows.Executor{WorkspaceDir: root, Agents: agent, Store: store, MaxParallel: 1}}
+	nativeControllerFixture(t, server)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ctx) }()
@@ -369,7 +370,7 @@ func TestAdmissionExecutesDeclaredNumericInputs(t *testing.T) {
 			close(release)
 			agent := &fakeAgent{started: make(chan struct{}, 1), release: release}
 			s, client, _, _ := fixture(t, agent)
-			source := "on:\n  workflow_call:\n    inputs:\n      value: {type: number}\njobs:\n  x:\n    if: inputs.value\n    steps: [{uses: agent/a, with: {prompt: hello}}]\n"
+			source := "on:\n  workflow_call:\n    inputs:\n      value: {type: number}\njobs:\n  x:\n    if: inputs.value\n    steps: [{uses: agent/run, with: {prompt: hello, agent: a.toml}}]\n"
 			if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "main.yml"), []byte(source), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -415,7 +416,7 @@ func TestAdmissionPreservesNumericOutputRepairBudget(t *testing.T) {
 			t.Run(key+"/"+raw, func(t *testing.T) {
 				agent := &secondRepairAgent{}
 				s, client, _, _ := fixture(t, agent)
-				source := "on:\n  workflow_call:\n    inputs:\n      attempts: {type: number}\njobs:\n  x:\n    steps:\n      - uses: agent/a\n        with:\n          prompt: hello\n          output:\n            format: json\n            " + key + ": '${{ inputs.attempts }}'\n"
+				source := "on:\n  workflow_call:\n    inputs:\n      attempts: {type: number}\njobs:\n  x:\n    steps:\n      - uses: agent/run\n        with:\n          prompt: hello\n          output:\n            format: json\n            " + key + ": '${{ inputs.attempts }}'\n          agent: a.toml\n"
 				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "main.yml"), []byte(source), 0600); err != nil {
 					t.Fatal(err)
 				}

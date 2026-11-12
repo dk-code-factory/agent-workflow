@@ -237,7 +237,7 @@ func TestEveryReviewBlockAndFinalizerReviewGetsVerification(t *testing.T) {
 
 func TestCacheableHooksBindTheirNewReviewCycle(t *testing.T) {
 	root, provider, req := fixture(t)
-	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Procedure: [][]Pass{{{ID: "hook", Role: "leaf", Assignment: "Read the cycle context.", Evidence: []string{"original"}}}}}
+	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Procedure: [][]Pass{{{ID: "hook", Role: "codex", Assignment: "Read the cycle context.", Evidence: []string{"original"}}}}}
 	req.Adapters = map[string]Adapter{hook.Identity: hook, "custom:review": reviewAdapter()}
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}}
 	configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{"before_cycle": []any{map[string]any{"skill": hook.Identity}}}}}})

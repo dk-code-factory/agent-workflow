@@ -50,6 +50,9 @@ func TestForegroundInputWaitReturnsHandleAndDistinctStatus(t *testing.T) {
 	if !errors.Is(err, errInputWaiting) || !strings.Contains(out.String(), `"status": "waiting"`) || !strings.Contains(out.String(), `"gate_id"`) {
 		t.Fatal(out.String(), stderr.String(), err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.toml"), []byte("name='fixture'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +83,23 @@ func (a *inputCompletionAgent) RunAgent(ctx context.Context, _ workflows.AgentRe
 	}
 }
 
+func (a *inputCompletionAgent) AdmitNativeTask(d *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
+	c := *d
+	return &c, nil
+}
+func (a *inputCompletionAgent) Capabilities(string) (workflows.ProviderCapabilities, error) {
+	return workflows.ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true}, nil
+}
+func (a *inputCompletionAgent) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	id := q.SessionID
+	if id == "" {
+		id = "fixture-" + q.ParentWorkerID
+	}
+	emit(workflows.ProviderEvent{Type: "session", SessionID: id})
+	out, err := a.RunAgent(ctx, q.AgentRequest)
+	return workflows.SessionResult{SessionID: id, Status: workflows.RunStatusSucceeded, Outputs: out}, err
+}
+
 func TestInputCLICompletionPreservesLargeNumbers(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
@@ -87,9 +107,12 @@ func TestInputCLICompletionPreservesLargeNumbers(t *testing.T) {
 	}
 	source := `jobs:
   ask: {steps: [{id: q, uses: input/wait, with: {prompt: q, evidence-id: evidence}}]}
-  after: {needs: ask, steps: [{uses: agent/fixture, with: {prompt: after}}]}
+  after: {needs: ask, steps: [{uses: agent/run, with: {prompt: after, agent: fixture.toml}}]}
 `
 	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.toml"), []byte("name='fixture'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
@@ -109,6 +132,9 @@ func TestInputCLICompletionPreservesLargeNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := &controller.Server{Dir: store.Dir, Store: store, Executor: &workflows.Executor{WorkspaceDir: root, Store: store, Agents: agent, MaxParallel: 4, Roles: roles}}
+	owner.Workers = &workflows.WorkerManager{Store: store, Factory: func(context.Context, string, string, []string) (workflows.SessionRunner, []string, map[string]string, error) {
+		return agent, nil, nil, nil
+	}}
 	ownerDone := make(chan error, 1)
 	go func() { ownerDone <- owner.Serve(ctx) }()
 	defer func() {

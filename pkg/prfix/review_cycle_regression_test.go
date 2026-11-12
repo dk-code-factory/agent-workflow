@@ -160,7 +160,14 @@ func TestUncertainResolutionDoesNotOverwriteReviewerReopening(t *testing.T) {
 			if err := runtime.Register(registry); err != nil {
 				t.Fatal(err)
 			}
-			ex := &workflows.Executor{WorkspaceDir: root, Store: store, Roles: prepared.Roles, ApplicationActions: registry}
+			session := &fakeSession{}
+			workers := &workflows.WorkerManager{Store: store, Factory: func(context.Context, string, string, []string) (workflows.SessionRunner, []string, map[string]string, error) {
+				return session, nil, nil, nil
+			}}
+			if err := workers.Init(ctx); err != nil {
+				t.Fatal(err)
+			}
+			ex := &workflows.Executor{WorkspaceDir: root, Store: store, Agents: session, Workers: workers, Roles: prepared.Roles, ApplicationActions: registry}
 			engine, err := ex.Prepare(ctx, workflows.RunRequest{Ref: prepared.Workflow, Inputs: prepared.Inputs})
 			if err != nil {
 				t.Fatal(err)

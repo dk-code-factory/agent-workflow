@@ -68,10 +68,11 @@ for (const mode of ['Visual', 'Split']) {
     await expect(ui.getByRole('textbox', { name: 'Workflow YAML' })).toBeFocused();
     await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('{uses: workflows/call.yml, steps: [{argv: [echo]}]}');
     expect(await snapshot(page)).toEqual(before);
-    await page.evaluate(() => (window as any).first.update({ source: 'jobs: {build: {steps: [{uses: agent/invalid.name, with: {prompt: text}}]}}' }));
+    await page.evaluate(() => (window as any).first.update({ source: `jobs: { build: { steps: [ { uses: agent/invalid.name, with: { prompt: text } } ] } }
+` }));
     await ui.getByRole('button', { name: mode, exact: true }).click();
     const scalar = await snapshot(page);
-    await ui.locator('.aw-diagnostics').getByRole('button', { name: /Expected agent\/<name>/ }).click();
+    await ui.locator('.aw-diagnostics').getByRole('button', { name: /Expected agent\/run/ }).click();
     await expect(ui.getByLabel('Action target', { exact: true })).toBeFocused();
     expect(await snapshot(page)).toEqual(scalar);
     await page.evaluate(() => (window as any).first.update({ source: 'jobs: {"bad.id": {steps: [{argv: [echo]}]}}' }));
@@ -221,7 +222,7 @@ test('viewer can navigate diagnostics without changing source', async ({ page })
 
 test('unavailable inspector paths preserve the current selection and save failure', async ({ page }) => {
   const ui = await open(page);
-  await step(page, 'greet agent/claude');
+  await step(page, 'greet agent/run');
   await page.evaluate(() => (window as any).first.update({
     onSave: async () => { throw new Error('Retry persistence'); },
     validate: async () => [{ code: 'missing', severity: 'error', source: 'host', path: ['jobs', 'test', 'unavailable'], message: 'Unavailable field' }],

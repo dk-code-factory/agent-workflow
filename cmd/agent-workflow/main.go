@@ -375,6 +375,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		fmt.Fprintln(stderr, "Controller listening in", dir)
 		workers := workerManager(store, root)
 		prFixRuntime.Workers = workers
+		executor.Workers = workers
 		binder := toolBinder(store, workers, root)
 		executor.BindTools = binder
 		workers.BindTools = binder
@@ -430,6 +431,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		workers := workerManager(store, root)
 		prFixRuntime.Workers = workers
+		executor.Workers = workers
 		if executor.Slots == nil {
 			executor.Slots = make(chan struct{}, *parallel)
 		}
@@ -717,5 +719,30 @@ func initialize(root string, out io.Writer) error {
 		}
 		created++
 	}
+	definitions, err := workflowassets.Examples.ReadDir("workflows/agents")
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Join(root, "workflows", "agents"), 0700); err != nil {
+		return err
+	}
+	for _, entry := range definitions {
+		data, err := workflowassets.Examples.ReadFile("workflows/agents/" + entry.Name())
+		if err != nil {
+			return err
+		}
+		file, err := os.OpenFile(filepath.Join(root, "workflows", "agents", entry.Name()), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write(data)
+		if err = errors.Join(writeErr, file.Close()); err != nil {
+			return err
+		}
+	}
+
 	return json.NewEncoder(out).Encode(map[string]any{"workspace": root, "config_created": true, "workflows_created": created, "workflows_preserved": preserved})
 }

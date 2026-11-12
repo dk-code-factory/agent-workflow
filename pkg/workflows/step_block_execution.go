@@ -18,7 +18,7 @@ func (e *Executor) executeStepSequence(ctx context.Context, steps []Step, prefix
 		}
 		result, err := e.executeDeclaredStep(ctx, step, path, ec, req, slots)
 		ec.Steps[step.ID] = result
-		if err != nil && (isStepBlock(step) || req.ordered || !step.ContinueOnError || hardExecutionFailure(err)) {
+		if err != nil && (isStepBlock(step) || !step.ContinueOnError || hardExecutionFailure(err) || (req.ordered && !e.observedNativeTaskFailure(ctx, step, result, ec))) {
 			return result.Status, err
 		}
 		if result.Status == RunStatusWaiting && err == nil {

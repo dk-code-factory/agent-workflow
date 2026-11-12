@@ -4,6 +4,16 @@ for (const viewer of [false, true]) test(`${viewer ? 'viewer' : 'editor'} select
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`/test/browser.html${viewer ? '?viewer' : ''}`);
   const editor = page.locator('#a');
+  const initial = await page.evaluate(() => (window as any).first.getSnapshot());
+  const native = editor.getByRole('button', { name: 'greet', exact: false }).first();
+  await native.click();
+  await expect(editor.getByLabel('Agent definition or reference', { exact: true })).toHaveValue('claude.toml');
+  await expect(editor.locator('.cm-line').filter({ hasText: /uses: agent\/run/ })).toBeInViewport();
+  await expect(native).toBeFocused();
+  const inspected = await page.evaluate(() => (window as any).first.getSnapshot());
+  expect(inspected.source).toBe(initial.source);
+  expect(inspected.revision).toBe(initial.revision);
+  expect(inspected.canUndo).toBe(initial.canUndo);
   const text = `${'# Header padding\n'.repeat(80)}jobs:\n  target:\n    steps:\n      - id: first\n        shell: sh\n        run: |\n${'          echo padding\n'.repeat(60)}      - id: second\n        argv: [echo, selected]\n`;
   const source = viewer ? text.replaceAll('\n', '\r\n') : text;
   await page.evaluate(source => (window as any).first.update({ source }), source);

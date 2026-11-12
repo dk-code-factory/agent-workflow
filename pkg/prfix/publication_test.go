@@ -96,7 +96,7 @@ func TestMergeRequiresSeparateAuthorityAndLiveRepositoryRequirements(t *testing.
 			root, provider, req := fixture(t)
 			provider.mergeReady = ready
 			req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}, map[string]any{"skill": "dk-workflows:dk-pr-description"}}
-			req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "review", Role: "leaf", Assignment: "Review this exact diff.", Evidence: []string{"original"}}}}}}
+			req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "review", Role: "codex", Assignment: "Review this exact diff.", Evidence: []string{"original"}}}}}}
 			req.Authorizations = map[string]Authorization{"merge": {"user-merge", "Merge this PR when verified ready.", "chat:merge"}}
 			prepared, e := Prepare(context.Background(), root, provider, req)
 			if e != nil {

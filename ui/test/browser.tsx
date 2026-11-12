@@ -2,13 +2,26 @@ import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { mountWorkflowEditor, mountWorkflowViewer, WorkflowEditor, WorkflowViewer } from '../src';
 import type { Snapshot, WorkflowHandle, WorkflowOptions } from '../src';
-const source = `# Fixture\nname: Browser workflow\non: {manual: {}}\njobs:\n  build:\n    steps:\n      - id: greet\n        uses: agent/claude\n        with: {prompt: Hello}\n  test:\n    needs: build\n    steps:\n      - argv: [echo, ok]\n`;
+const source = `# Fixture
+name: Browser workflow
+on: { manual: {} }
+jobs:
+  build:
+    steps:
+      - id: greet
+        uses: agent/run
+        with: { prompt: Hello, agent: claude.toml }
+  test:
+    needs: build
+    steps:
+      - argv: [ echo, ok ]
+`;
 const mode = new URLSearchParams(location.search);
 const globals = window as unknown as { first: WorkflowHandle; second: WorkflowHandle; latest: unknown; cleanupCount: number; reactUnmount: () => void };
 globals.cleanupCount = 0;
 const options: WorkflowOptions = {
   source, onChange: snapshot => { globals.latest = snapshot; },
-  actions: [{ uses: 'agent/claude', label: 'Custom Claude', fields: [{ key: 'model', label: 'Custom model' }], renderInspector: (element, context) => {
+  actions: [{ uses: 'agent/run', label: 'Custom Claude', fields: [{ key: 'model', label: 'Custom model' }], renderInspector: (element, context) => {
     const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Custom prompt'; button.disabled = context.readOnly;
     button.onclick = () => context.setField(['with', 'prompt'], 'Custom value'); element.append(button);
     (window as any).customSetField = context.setField;

@@ -7,7 +7,6 @@ import (
 
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"github.com/dk-code-factory/agent-workflow/pkg/controller"
-	"github.com/dk-code-factory/agent-workflow/pkg/prfix"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
@@ -49,6 +48,6 @@ func workerManager(store *workflows.SQLiteStore, root string) *workflows.WorkerM
 		for key, value := range runner.SecretValues() {
 			secrets[key] = value
 		}
-		return prfix.WrapRunner(root, runner), agent.Tools, secrets, nil
+		return runner, agent.Tools, secrets, nil
 	}}
 }

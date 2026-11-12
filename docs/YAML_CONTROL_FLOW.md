@@ -11,21 +11,29 @@ jobs:
       - id: reviews
         parallel:
           - id: correctness
-            agent: reviewer_claude
-            prompt: Check correctness.
+            uses: agent/run
+            with:
+              agent: review_correctness.toml
+              prompt: Check correctness.
           - sequence:
               - id: security
-                agent: reviewer_codex
-                prompt: Check security.
+                uses: agent/run
+                with:
+                  agent: review_security.toml
+                  prompt: Check security.
               - id: verify
-                agent: reviewer_codex
-                prompt: 'Verify these findings: ${{ steps.security.outputs.text }}'
+                uses: agent/run
+                with:
+                  agent: review_security.toml
+                  prompt: 'Verify these findings: ${{ steps.security.outputs.text }}'
       - id: combine
-        agent: claude
-        prompt: |
-          Combine these findings:
-          ${{ steps.correctness.outputs.text }}
-          ${{ steps.verify.outputs.text }}
+        uses: agent/run
+        with:
+          agent: task.toml
+          prompt: |
+            Combine these findings:
+            ${{ steps.correctness.outputs.text }}
+            ${{ steps.verify.outputs.text }}
 ```
 
 Blocks accept `id`, `name`, `if`, and exactly one nonempty `parallel` or

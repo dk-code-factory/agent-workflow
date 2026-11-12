@@ -48,6 +48,8 @@ type RunStore interface {
 }
 
 type Executor struct {
+	Workers *WorkerManager
+
 	// BeforeFinalize retains execution ownership until supervised workers stop.
 	BeforeFinalize   func(context.Context, string) error
 	Capacity         *Capacity
@@ -124,6 +126,9 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if err := Validate(w); err != nil {
 			return fmt.Errorf("%s: %w", ref, err)
 		}
+		if err := e.admitAgentDefinitions(w, resolved.Path); err != nil {
+			return err
+		}
 		// Expand local names before snapshotting, including handler contracts.
 		for id, job := range w.Jobs {
 			if err := expandLifecycleOutputs(w, job.Steps); err != nil {
@@ -163,7 +168,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 							return nil, fmt.Errorf("%s references unconfigured conversation agent %q", ref, role)
 						}
 					}
-					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(strings.TrimPrefix(s.Uses, "agent/")) {
+					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(agentRole(s)) {
 						return nil, fmt.Errorf("%s references unconfigured agent %q", ref, s.Uses)
 					}
 				}
@@ -744,32 +749,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	if owner == "" {
 		owner = ec.RunID
 	}
-	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: step.Uses[len("agent/"):], Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
-	queued := time.Now()
-	pool := e.Capacity
-	if pool == nil {
-		pool = &Capacity{Slots: slots}
-	}
-	lease, err := pool.Acquire(ctx)
+	turns, err := agentTaskTurns(args["turns"])
 	if err != nil {
 		return nil, err
 	}
-	defer lease.Release()
-	if e.BindTools != nil {
-		generation := int64(1)
-		ownerToken := ""
-		if f, ok := ctx.Value(fenceKey{}).(executionFence); ok {
-			generation = f.generation
-			ownerToken = f.owner
-		}
-		req.Generation = generation
-		binding, err := e.BindTools(ctx, ToolInvocation{RunID: owner, Owner: ownerToken, Generation: generation, InvocationID: invocation, Role: req.AgentID, Workspace: workspace, Secrets: e.redactions(ec.Secrets)})
-		if err != nil {
-			return nil, err
-		}
-		req.Tools = &InvocationTools{Binding: binding, Lease: lease}
+	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: agentRole(step), Definition: step.Definition, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
+	if step.Uses != "agent/run" {
+		return nil, fmt.Errorf("only agent/run accepts native definitions")
 	}
-	queueTime := time.Since(queued).Milliseconds()
 	a := ec.Attempt
 	if a == nil {
 		a = &Attempt{}
@@ -781,44 +768,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 		return nil
 	}
 	call := func(request AgentRequest) (map[string]any, error) {
-		store := invocationStore(e.Store)
-		identity := UsageIdentity{ID: invocation, RunID: owner, TaskAttemptID: a.ID, Kind: "task", Model: request.Model}
-		if source, ok := e.Agents.(interface {
-			UsageProvider(string, string) (string, string)
-		}); ok {
-			identity.Provider, identity.Model = source.UsageProvider(request.AgentID, request.Model)
-		}
-		if request.RepairOnly {
-			identity.ID = repairUsageID(a.ID, a.RepairCount)
-			identity.Kind = "repair"
-			identity.TaskAttemptID = a.TaskAttemptID
-		}
-		if store != nil && invocation != "" {
-			if err := store.BeginUsage(ctx, identity); err != nil {
-				return nil, err
-			}
-			request.ObserveUsage = func(update UsageUpdate) error {
-				return store.ObserveUsage(context.WithoutCancel(ctx), identity, update)
-			}
-		}
 		if ec.Ordered {
 			if err := e.iterationEvidence(ctx, RunRequest{runID: ec.RunID, Metadata: ec.Metadata}); err != nil {
 				return nil, err
 			}
 		}
-		outputs, err := e.Agents.RunAgent(ctx, request)
-		if outputs != nil {
-			outputs = cloneJSONValue(outputs).(map[string]any)
-			outputs["queue_time_ms"] = queueTime
-		}
-		if store != nil && invocation != "" {
-			update := usageUpdate(outputs, true)
-			if observeErr := store.ObserveUsage(context.WithoutCancel(ctx), identity, update); observeErr != nil {
-				err = errors.Join(err, iterationPersistence(observeErr, ec.Ordered))
-			}
-		}
-		return outputs, err
+		return e.executeAgentTask(ctx, step, ec, request)
 	}
+
 	var outputs map[string]any
 	if contract != nil && schemaPhase(a.Phase) {
 		outputs = cloneJSONValue(a.TaskOutputs).(map[string]any)

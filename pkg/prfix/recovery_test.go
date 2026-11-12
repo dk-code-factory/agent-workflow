@@ -12,7 +12,7 @@ import (
 )
 
 func TestStoppedChecklistWorkerRecoversOriginalSessionAcrossLostCheckpoints(t *testing.T) {
-	for _, fault := range []string{"worker_recover", "worker_adopt"} {
+	for _, fault := range []string{"task_prepare", "task_result"} {
 		t.Run(fault, func(t *testing.T) {
 			root, provider, req := fixture(t)
 			prepared, e := Prepare(context.Background(), root, provider, req)
@@ -48,7 +48,7 @@ func TestStoppedChecklistWorkerRecoversOriginalSessionAcrossLostCheckpoints(t *t
 func TestOptionalNativeFailureCompletesWithOriginalEvidence(t *testing.T) {
 	root, provider, req := fixture(t)
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:optional", "required": false}}
-	req.Adapters = map[string]Adapter{"custom:optional": {Identity: "custom:optional", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "read", Role: "leaf", Assignment: "Inspect only.", Evidence: []string{"original"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:optional": {Identity: "custom:optional", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "read", Role: "codex", Assignment: "Inspect only.", Evidence: []string{"original"}}}}}}
 	prepared, e := Prepare(context.Background(), root, provider, req)
 	if e != nil {
 		t.Fatal(e)
@@ -80,7 +80,7 @@ func TestOptionalNativeFailureCompletesWithOriginalEvidence(t *testing.T) {
 	}
 }
 
-func assertAcknowledgedNativeFailure(t *testing.T, runtime *Runtime, run string) {
+func assertAcknowledgedNativeFailure(t *testing.T, runtime *Runtime, run string, expected ...int) {
 	t.Helper()
 	workers, e := runtime.Workers.List(context.Background(), run)
 	if e != nil {
@@ -102,7 +102,11 @@ func assertAcknowledgedNativeFailure(t *testing.T, runtime *Runtime, run string)
 			}
 		}
 	}
-	if acknowledged != 1 {
+	want := 1
+	if len(expected) > 0 {
+		want = expected[0]
+	}
+	if acknowledged != want {
 		t.Fatal("failure was not acknowledged exactly once", acknowledged)
 	}
 }
@@ -115,7 +119,7 @@ func TestLostFailureAcknowledgementCheckpointRetainsRetry(t *testing.T) {
 		t.Fatal(e)
 	}
 	failed := false
-	session := &fakeSession{failCheckpoint: "worker_acknowledge", nativeError: func(o Occurrence) error {
+	session := &fakeSession{failCheckpoint: "status", nativeError: func(o Occurrence) error {
 		if o.Kind == "hook" && !failed {
 			failed = true
 			return errors.New("provider usage limit")
@@ -139,7 +143,7 @@ func TestLostFailureAcknowledgementCheckpointRetainsRetry(t *testing.T) {
 	}
 }
 
-func TestExhaustedNativeRetryRetainsUnacknowledgedFailure(t *testing.T) {
+func TestExhaustedNativeRetryRetainsFailuresWithoutCoverage(t *testing.T) {
 	root, provider, req := fixture(t)
 	req.Options["tasks"] = []any{map[string]any{"instructions": "Inspect this required bounded task."}}
 	prepared, e := Prepare(context.Background(), root, provider, req)
@@ -156,7 +160,7 @@ func TestExhaustedNativeRetryRetainsUnacknowledgedFailure(t *testing.T) {
 	if run.Status == workflows.RunStatusSucceeded || session.calls["completion"] != 0 {
 		t.Fatal("exhausted retry was treated as completion", run.Status, session.calls)
 	}
-	assertAcknowledgedNativeFailure(t, runtime, run.ID)
+	assertAcknowledgedNativeFailure(t, runtime, run.ID, 2)
 	workers, e := runtime.Workers.List(context.Background(), run.ID)
 	if e != nil {
 		t.Fatal(e)
@@ -173,8 +177,8 @@ func TestExhaustedNativeRetryRetainsUnacknowledgedFailure(t *testing.T) {
 			}
 		}
 	}
-	if unhandled != 1 {
-		t.Fatal("a later failure was hidden by an earlier acknowledgement", unhandled)
+	if unhandled != 0 {
+		t.Fatal("native error observation receipt was lost", unhandled)
 	}
 }
 

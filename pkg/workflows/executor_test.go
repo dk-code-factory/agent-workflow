@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,6 +19,7 @@ func (f agentFunc) RunAgent(ctx context.Context, r AgentRequest) (map[string]any
 
 func writeWorkflow(t *testing.T, root, name, data string) {
 	t.Helper()
+	writeNativeFixtureDefinitions(t, root, name, data)
 	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -41,24 +41,25 @@ jobs:
       text: ${{ steps.run.outputs.text }}
     steps:
       - id: run
-        uses: agent/claude
-        with: {prompt: first}
+        uses: agent/run
+        with: {prompt: first, agent: claude.toml}
   second:
     outputs:
       text: ${{ steps.run.outputs.text }}
     steps:
       - id: run
-        uses: agent/codex
-        with: {prompt: second}
+        uses: agent/run
+        with: {prompt: second, agent: codex.toml}
   combine:
     needs: [first, second]
     outputs:
       summary: ${{ steps.run.outputs.text }}
     steps:
       - id: run
-        uses: agent/claude
+        uses: agent/run
         with:
           prompt: "${{ needs.first.outputs.text }} + ${{ needs.second.outputs.text }}"
+          agent: claude.toml
 `
 
 func TestParallelJobsWaitForBothAndPassOutputs(t *testing.T) {
@@ -83,13 +84,16 @@ func TestParallelJobsWaitForBothAndPassOutputs(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	e := Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 2, Store: FileStore{Dir: filepath.Join(root, "runs")}}
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 2, Store: FileStore{Dir: filepath.Join(root, "runs")}})
 	type result struct {
 		run *Run
 		err error
 	}
 	finished := make(chan result, 1)
-	go func() { r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); finished <- result{r, err} }()
+	go func() {
+		r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+		finished <- result{r, err}
+	}()
 	for i := 0; i < 2; i++ {
 		select {
 		case <-started:
@@ -108,17 +112,11 @@ func TestParallelJobsWaitForBothAndPassOutputs(t *testing.T) {
 	if got.run.Outputs["summary"] != "first + second" || got.run.Status != RunStatusSucceeded {
 		t.Fatalf("unexpected run: %+v", got.run)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "runs", got.run.ID+".json"))
-	if err != nil {
-		t.Fatal(err)
+	saved, _, err := e.Store.(*SQLiteStore).Load(context.Background(), got.run.ID)
+	if err != nil || saved.Status != RunStatusSucceeded || len(saved.Jobs) != 3 {
+		t.Fatalf("bad checkpoint: %+v %v", saved, err)
 	}
-	var saved Run
-	if err := json.Unmarshal(data, &saved); err != nil {
-		t.Fatal(err)
-	}
-	if saved.Status != RunStatusSucceeded || len(saved.Jobs) != 3 {
-		t.Fatalf("bad checkpoint: %+v", saved)
-	}
+
 }
 
 func TestParallelLimitAndFailurePropagation(t *testing.T) {
@@ -149,7 +147,7 @@ func TestParallelLimitAndFailurePropagation(t *testing.T) {
 				}
 				return map[string]any{"text": req.Prompt}, nil
 			})
-			run, err := (&Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 1}).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 1})).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if maximum.Load() != 1 {
 				t.Fatalf("parallel cap exceeded: %d", maximum.Load())
 			}
@@ -178,7 +176,7 @@ jobs:
       answer: ${{ steps.ask.outputs.structured.answer }}
     steps:
       - id: ask
-        uses: agent/claude
+        uses: agent/run
         with:
           prompt: ${{ inputs.task }}
           output:
@@ -188,6 +186,7 @@ jobs:
               required: [answer]
               properties:
                 answer: {type: string}
+          agent: claude.toml
 `)
 	writeWorkflow(t, root, "main.yml", `on:
   workflow_call:
@@ -208,7 +207,7 @@ jobs:
 		}
 		return map[string]any{"text": `{"answer":"ok"}`}, nil
 	})
-	run, err := (&Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 1}).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner, MaxParallel: 1})).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func TestCancellationAndInvalidClosureHaveNoFurtherEffects(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		r, err := (&Executor{WorkspaceDir: root, Agents: runner}).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+		r, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner})).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 		done <- result{r, err}
 	}()
 	select {
@@ -254,7 +253,7 @@ func TestCancellationAndInvalidClosureHaveNoFurtherEffects(t *testing.T) {
   child:
     uses: workflows/cycle.yml
 `)
-	if _, err := (&Executor{WorkspaceDir: root, Agents: runner}).Load("workflows/cycle.yml"); err == nil {
+	if _, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner})).Load("workflows/cycle.yml"); err == nil {
 		t.Fatal("accepted reusable cycle")
 	}
 }
@@ -269,9 +268,9 @@ func TestStrictParseAndValidation(t *testing.T) {
 		}
 	}
 	for _, source := range []string{
-		"on: {schedule: [{cron: '* * * * *'}]}\njobs: {x: {steps: [{uses: agent/claude, with: {prompt: hi}}]}}",
-		"jobs: {x: {needs: y, steps: [{uses: agent/claude, with: {prompt: hi}}]}}",
-		"jobs: {x: {needs: x, steps: [{uses: agent/claude, with: {prompt: hi}}]}}",
+		"on: {schedule: [{cron: '* * * * *'}]}\njobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
+		"jobs: {x: {needs: y, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
+		"jobs: {x: {needs: x, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
 		"jobs: {x: {steps: [{uses: tool/shell, with: {prompt: hi}}]}}",
 		"jobs: {x: {steps: [{run: echo hi}]}}",
 	} {

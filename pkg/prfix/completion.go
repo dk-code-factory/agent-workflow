@@ -872,44 +872,5 @@ func (r *Runtime) effectiveReport(ctx context.Context, c claimRecord) (Report, e
 }
 
 func (r *Runtime) claimMessages(ctx context.Context, c claimRecord) ([]workflows.WorkerMessage, error) {
-	messages, e := r.Workers.Messages(ctx, c.Engine, c.Worker)
-	if e != nil {
-		return nil, e
-	}
-	l, e := r.ledger()
-	if e != nil {
-		return nil, e
-	}
-	rows, e := l.db.QueryContext(ctx, "SELECT worker FROM worker_rounds WHERE run=? AND claim=? ORDER BY round", c.Run, c.ID)
-	if e != nil {
-		l.Close()
-		return nil, e
-	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if e = rows.Scan(&id); e != nil {
-			rows.Close()
-			l.Close()
-			return nil, e
-		}
-		ids = append(ids, id)
-	}
-	e = rows.Err()
-	rows.Close()
-	l.Close()
-	if e != nil {
-		return nil, e
-	}
-	for _, id := range ids {
-		if id == c.Worker {
-			continue
-		}
-		part, e := r.Workers.Messages(ctx, c.Engine, id)
-		if e != nil {
-			return nil, e
-		}
-		messages = append(messages, part...)
-	}
-	return messages, nil
+	return r.Workers.Messages(ctx, c.Engine, c.Worker)
 }

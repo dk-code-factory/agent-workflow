@@ -16,8 +16,9 @@ jobs:
           prompt: Which policy should apply?
           evidence-id: review-evidence-v1
           payload: {choices: [strict, permissive]}
-      - uses: agent/reviewer
+      - uses: agent/run
         with:
+          agent: reviewer.toml
           prompt: 'Use the selected policy: ${{ steps.question.outputs.answer }}'
 ```
 

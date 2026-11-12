@@ -13,7 +13,7 @@ func TestResumedExecutionStaysRunningDuringFinalCleanup(t *testing.T) {
 	for _, cleanupFailure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancellation", true: "uncertain-cleanup"}[cleanupFailure], func(t *testing.T) {
 			e, store := durableExecutor(t, "jobs: {x: {steps: [{argv: [true]}]}}", nil)
-			run, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,7 +40,7 @@ func TestResumedExecutionStaysRunningDuringFinalCleanup(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { _, err := e.Resume(ctx, run.ID, nil, false); done <- err }()
+			go func() { _, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); done <- err }()
 			select {
 			case <-cleaning:
 			case <-time.After(5 * time.Second):

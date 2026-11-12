@@ -48,7 +48,7 @@ jobs:
         with: {value: forbidden-child}
 `)
 			}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusWaiting {
 				t.Fatal(run, err)
 			}
@@ -59,7 +59,7 @@ jobs:
 				}
 			}}
 			e.Store = wrapper
-			done, err := e.Resume(ctx, run.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if done == nil || done.Status != RunStatusCanceled || effects.Load() != 0 {
 				t.Fatalf("effect admitted after committed Cancel: %+v %v calls=%d", done, err, effects.Load())
 			}
@@ -217,7 +217,7 @@ func TestInputCancelCompletedActionCheckpointSurvives(t *testing.T) {
 		return ActionResult[actionOutput]{Output: actionOutput{input.Value}, Evidence: json.RawMessage(`{"digest":"fixture"}`)}, nil
 	}
 	registerTestAction(t, e, spec)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || run == nil || run.Status != RunStatusCanceled || effects.Load() != 1 {
 		t.Fatal(run, err, effects.Load())
 	}
@@ -238,7 +238,7 @@ func TestInputLifecycleCallbackAcceptanceFailureReturns(t *testing.T) {
 		_, err := s.AcceptInput(ctx, g.OriginID, g.ID, ExternalInputAnswer{AnswerID: "fault", EvidenceID: g.EvidenceID, Value: json.RawMessage(`true`)})
 		return err
 	}}
-	_, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	_, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || !strings.Contains(err.Error(), "answer acceptance fault") {
 		t.Fatal("callback acceptance failure did not return", err)
 	}
@@ -278,7 +278,8 @@ func TestInputCancelLateAdmissionBoundaries(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			ctx := context.Background()
 			var effects atomic.Int32
-			source := `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/a, with: {prompt: forbidden}}]}}`
+			source := `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+`
 			if boundary == "action binding" {
 				source = `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: action/capture, with: {value: forbidden}}]}}`
 			}
@@ -294,7 +295,8 @@ func TestInputCancelLateAdmissionBoundaries(t *testing.T) {
 			}))
 			if boundary == "new child" {
 				writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
-jobs: {effect: {steps: [{uses: agent/a, with: {prompt: forbidden}}]}}`)
+jobs: {effect: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+`)
 			}
 			spec := readSpec(&effects)
 			var origin string
@@ -309,7 +311,7 @@ jobs: {effect: {steps: [{uses: agent/a, with: {prompt: forbidden}}]}}`)
 			if boundary == "action binding" {
 				registerTestAction(t, e, spec)
 			}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -321,7 +323,7 @@ jobs: {effect: {steps: [{uses: agent/a, with: {prompt: forbidden}}]}}`)
 			case "new child":
 				e.Store = &cancelBeforeChildJournal{SQLiteStore: s, origin: run.ID}
 			}
-			result, err := e.Resume(ctx, run.ID, nil, false)
+			result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if result == nil || result.Status != RunStatusCanceled || effects.Load() != 0 || err != nil {
 				t.Fatal("late Cancel admission escalated/dispatched", result, err, effects.Load())
 			}
@@ -357,18 +359,19 @@ func (j *declaredCancelJournal) ConsumeInput(ctx context.Context, id string) (Ex
 func TestInputCancelDeclaredJournalPreDispatch(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
-	e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/a, with: {prompt: forbidden}}]}}`, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+`, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{}, nil
 	}))
 	journal := &declaredCancelJournal{ExternalInputJournal: s}
 	e.Store = journal
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	answerGate(t, s, inputGate(t, s, run.ID))
-	result, err := e.Resume(ctx, run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || result == nil || result.Status != RunStatusCanceled || calls.Load() != 0 {
 		t.Fatal("declared journal Cancel missed", result, err, calls.Load())
 	}
@@ -435,7 +438,8 @@ func TestInputCancelLateTransactionalActionAndStepPublication(t *testing.T) {
 	for _, kind := range []string{"action admission", "admitted step"} {
 		t.Run(kind, func(t *testing.T) {
 			var calls atomic.Int32
-			source := `jobs: {work: {steps: [{uses: agent/a, with: {prompt: forbidden}}]}}`
+			source := `jobs: {work: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+`
 			if kind == "action admission" {
 				source = actionSource
 			}
@@ -446,7 +450,7 @@ func TestInputCancelLateTransactionalActionAndStepPublication(t *testing.T) {
 			if kind == "action admission" {
 				registerTestAction(t, e, readSpec(&calls))
 			}
-			run, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -455,7 +459,7 @@ func TestInputCancelLateTransactionalActionAndStepPublication(t *testing.T) {
 			} else {
 				e.Store = &cancelOnAdmittedStepJournal{SQLiteStore: s, origin: run.ID}
 			}
-			result, err := e.Resume(context.Background(), run.ID, nil, false)
+			result, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if err != nil || result == nil || result.Status != RunStatusCanceled || calls.Load() != 0 {
 				t.Fatal("late pure denial escalated/dispatched", result, err, calls.Load())
 			}

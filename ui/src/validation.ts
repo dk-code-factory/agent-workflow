@@ -15,7 +15,7 @@ export const controllerParameters: Record<string, string[]> = {
   'github/pr': ['path', 'commit', 'title', 'body'],
 };
 export const dependencies = (job: Job): string[] => (Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []).map(s => s.trim()).filter(Boolean);
-export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(step, 'agent') ? `agent/${step.agent}` : step.uses as string | undefined;
+export const stepAction = (step: Mapping): string | undefined => step.uses as string | undefined;
 export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'conversation') || !!stepAction(step)?.startsWith('agent/');
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -67,7 +67,7 @@ const stepShape: { [key: string]: Shape } = {
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
 };
 
-export const handlerKinds = ['onError', 'onFailure', 'finally'] as const;
+export const handlerKinds = ['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally'] as const;
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
@@ -271,7 +271,7 @@ export function parseWorkflow(source: string): Parsed {
     }
     if (!shaped || Object.values(value.jobs).some(j => Array.isArray((j as Job).steps) && (j as Job).steps!.some(s => !mapping(s)))) return { doc, diagnostics, usable: false };
     const workflow = value as Workflow;
-    validateWorkflow(workflow, add);
+    validateWorkflow(workflow, add, doc);
     return { doc, workflow, diagnostics, usable: true };
   } catch (error) {
     add('parse', String(error), [], undefined, 'parser');
@@ -280,7 +280,7 @@ export function parseWorkflow(source: string): Parsed {
 }
 
 type Add = (code: string, message: string, path?: Path, node?: Node | null, source?: Diagnostic['source'], severity?: Diagnostic['severity']) => void;
-function validateWorkflow(w: Workflow, add: Add) {
+function validateWorkflow(w: Workflow, add: Add, doc: Document) {
   const jobs = w.jobs;
   const namedKeywords = new Set(['type', 'title', 'description', '$comment', 'pattern', 'properties', 'items', 'additionalProperties', 'required', 'enum', 'minLength', 'maxLength', 'maxItems', 'minimum']);
   const inspectSchema = (value: unknown, path: Path) => {
@@ -372,15 +372,22 @@ function validateWorkflow(w: Workflow, add: Add) {
       const shorthand = Object.hasOwn(step, 'agent');
       const prompt = Object.hasOwn(step, 'prompt');
       const uses = stepAction(step);
-      if (shorthand && !identifier.test(step.agent!)) add('agent', 'agent requires a literal role identifier', [...sp, 'agent']);
+      if (shorthand) add('agent', 'agent shorthand was removed; use agent/run with with.agent', [...sp, 'agent']);
       if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
-      if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
+      if (prompt) add('agent', 'Top-level prompt requires conversation; use with.prompt for agent/run', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
       const command = !!(step.argv?.length || step.run);
+      if (step.onResult?.length || step.onComplete?.length || step.onIncomplete?.length) {
+        if (uses !== 'agent/run') add('completion', 'Completion hooks require agent/run', sp);
+        const output = mapping(step.with?.output) ? step.with.output : undefined;
+        const schema = output && typeof output.schema === 'string' ? w.schemas?.[output.schema] : output?.schema;
+        if (!mapping(schema) || schema.type !== 'object' || !Array.isArray(schema.required) || !schema.required.includes('complete') || !mapping(schema.properties) || !mapping(schema.properties.complete) || schema.properties.complete.type !== 'boolean') add('completion', 'Completion hooks require an object schema with required boolean complete', [...sp, 'with', 'output']);
+      }
       if ((depth > 0 || handlerKinds.some(kind => step[kind]?.length)) && !command && !uses?.startsWith('agent/')) add('handler-action', 'Lifecycle handlers support agent and command steps only', sp);
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {
-        if (uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
+        if (uses) add('command', 'Commands cannot have uses', sp);
+        for (const key of Object.keys(params)) if (!['input', 'output'].includes(key)) add('command', `Unsupported command parameter ${key}`, [...sp, 'with', key]);
         if (step.run && (!step.shell || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
         if (!step.run && step.shell) add('command', 'shell requires run', sp);
         if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
@@ -397,8 +404,11 @@ function validateWorkflow(w: Workflow, add: Add) {
         } else if (/^action\/[A-Za-z_][A-Za-z0-9_-]*$/.test(uses ?? '')) {
           add('host-action', 'Registered action availability and typed schemas require host runtime validation', [...sp, 'uses'], undefined, 'host', 'info');
         } else {
-          if (!/^agent\/[A-Za-z_][A-Za-z0-9_-]*$/.test(uses ?? '')) add('action', 'Expected agent/<name> or a controller action', [...sp, 'uses']);
-          for (const key of Object.keys(params)) if (!['model', 'prompt', 'message', 'workspace', 'output'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          if (uses !== 'agent/run') add('action', 'Expected agent/run or a controller action', [...sp, 'uses']);
+          if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path or agent reference', [...sp, 'with', 'agent']);
+          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
+          if (params.turns != null && (typeof params.turns !== 'number' || !Number.isInteger(params.turns) || params.turns < 1 || params.turns > 2147483647)) add('action', 'Agent turns must be a positive integer no greater than 2147483647', [...sp, 'with', 'turns']);
           if (params.prompt == null && params.message == null) add('action', 'Agent requires prompt or message', [...sp, 'with']);
           if (params.output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
           if (mapping(params.output) && typeof params.output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, params.output.schema)) {

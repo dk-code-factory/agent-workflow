@@ -17,7 +17,10 @@ test('rejected identifier can be corrected and viewer fields remain immutable', 
 });
 test('named callable entries can be renamed and deleted with impact review', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'on: {workflow_call: {inputs: {task: {type: string}}}}\nschemas: {Review: {type: string, enum: ["${{ inputs.task }}"]}}\njobs: {build: {steps: [{uses: agent/claude, with: {prompt: "${{ inputs.task }}", output: {schema: Review}}}]}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: `on: { workflow_call: { inputs: { task: { type: string } } } }
+schemas: { Review: { type: string, enum: [ "\${{ inputs.task }}" ] } }
+jobs: { build: { steps: [ { uses: agent/run, with: { prompt: "\${{ inputs.task }}", output: { schema: Review }, agent: claude.toml } } ] } }
+` }));
   await first.getByText('Callable inputs', { exact: true }).click();
   await first.getByLabel('Identifier: task', { exact: true }).fill('request'); await page.keyboard.press('Enter');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.prompt)).toBe('${{ inputs.request }}');
@@ -32,7 +35,17 @@ test('named callable entries can be renamed and deleted with impact review', asy
 
 test('step rename preserves each job context in a shared named contract', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'schemas: {Review: {type: string, enum: ["${{ steps.local.outputs.text }}"]}}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/claude, with: {prompt: Review, output: {schema: Review}}}\n  second:\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {agent: claude, prompt: Review, with: {output: {schema: Review}}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: `schemas: { Review: { type: string, enum: [ "\${{ steps.local.outputs.text }}" ] } }
+jobs:
+  review:
+    steps:
+      - { id: local, argv: [ echo, local ] }
+      - { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.toml } }
+  second:
+    steps:
+      - { id: local, argv: [ echo, second ] }
+      - { with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run }
+` }));
   await first.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await first.getByRole('button', { name: 'local direct command', exact: true }).first().click();
   const id = first.getByLabel('Step ID', { exact: true });
@@ -52,18 +65,20 @@ test('step rename preserves each job context in a shared named contract', async 
 
 test('step renames update concise local and dependency results and deletion reviews consumers', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'schemas: {Result: {type: string, enum: ["${{ needs.review.steps.analyze.text }}"]}}\njobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review}, {id: finish, agent: claude, prompt: "${{ steps.analyze.text }}"}]}, summarize: {needs: review, steps: [{agent: claude, prompt: "${{ needs.review.steps.analyze.text }}", with: {output: {schema: Result}}}]}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: `schemas: { Result: { type: string, enum: [ "\${{ needs.review.steps.analyze.text }}" ] } }
+jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { agent: claude.toml, prompt: Review } }, { id: finish, uses: agent/run, with: { agent: claude.toml, prompt: "\${{ steps.analyze.text }}" } } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Result }, agent: claude.toml, prompt: "\${{ needs.review.steps.analyze.text }}" }, uses: agent/run } ] } }
+` }));
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await editor.getByRole('button', { name: '1. analyze', exact: true }).click();
   const id = editor.getByLabel('Step ID', { exact: true });
   await id.fill('inspect'); await id.press('Enter');
   const workflow = await page.evaluate(() => (window as any).first.getSnapshot().workflow);
-  expect(workflow.jobs.review.steps[1].prompt).toBe('${{ steps.inspect.text }}');
-  expect(workflow.jobs.summarize.steps[0].prompt).toBe('${{ needs.review.steps.inspect.text }}');
+  expect(workflow.jobs.review.steps[1].with.prompt).toBe('${{ steps.inspect.text }}');
+  expect(workflow.jobs.summarize.steps[0].with.prompt).toBe('${{ needs.review.steps.inspect.text }}');
   expect(workflow.schemas.Result.enum).toEqual(['${{ needs.review.steps.inspect.text }}']);
   await editor.getByRole('button', { name: 'Delete step', exact: true }).click();
-  await expect(editor.getByRole('alertdialog')).toContainText('jobs.summarize.steps.0.prompt');
-  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.prompt');
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.summarize.steps.0.with.prompt');
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.with.prompt');
   await expect(editor.getByRole('alertdialog')).toContainText('schemas.Result.enum.0');
   await editor.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.some((d: any) => d.message.includes('Unknown step "inspect"')))).toBe(true);
@@ -71,16 +86,17 @@ test('step renames update concise local and dependency results and deletion revi
 
 test('YAML next-line whitespace keeps legacy references in rename and deletion review', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
-  const source = String.raw`jobs: {review: {steps: [{id: first, agent: claude, prompt: Review}, {id: consume, agent: claude, prompt: "${'${{'} \Nsteps.first.outputs.text\N }}"}]}}`;
+  const source = String.raw`jobs: { review: { steps: [ { id: first, uses: agent/run, with: { agent: claude.toml, prompt: Review } }, { id: consume, uses: agent/run, with: { agent: claude.toml, prompt: "${'${{'} \u0085steps.first.outputs.text\u0085 }}" } } ] } }
+`;
   await page.evaluate(source => (window as any).first.update({ source }), source);
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await editor.getByRole('button', { name: '1. first', exact: true }).click();
   const id = editor.getByLabel('Step ID', { exact: true });
   await id.fill('renamed'); await id.press('Enter');
-  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.review.steps[1].prompt)).toBe('${{ \u0085steps.renamed.outputs.text\u0085 }}');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.review.steps[1].with.prompt)).toBe('${{ \u0085steps.renamed.outputs.text\u0085 }}');
   await editor.getByRole('button', { name: 'Undo', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe(source);
   await editor.getByRole('button', { name: 'Redo', exact: true }).click();
   await editor.getByRole('button', { name: 'Delete step', exact: true }).click();
-  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.prompt');
+  await expect(editor.getByRole('alertdialog')).toContainText('jobs.review.steps.1.with.prompt');
 });

@@ -68,47 +68,13 @@ func TestImmutablePublicationConcurrentAndInterruptedWriters(t *testing.T) {
 	}
 }
 
-func TestManagedRunnerWorkspaceRecoveryUsesProductionRestore(t *testing.T) {
-	root := t.TempDir()
-	workspace := filepath.Join(root, "child")
-	if err := os.Mkdir(workspace, 0700); err != nil {
-		t.Fatal(err)
-	}
-	l, err := OpenLedger(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	// worker_links are written by the recovery action, not by the provider fake.
-	_, err = l.db.Exec("INSERT INTO worker_links VALUES(?,?,?,?,?,?,?,?)", "prfix_recovered", "engine", "claim", 1, "original", "retained-session", "original-owner", "leaf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := WrapRunner(root, &clirunner.Runner{Workspace: root, Config: clirunner.Config{Agents: map[string]clirunner.Agent{"leaf": {Provider: "claude-cli"}}}})
-	scoped, err := runner.WithWorkerWorkspace("leaf", workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	access, err := scoped.(interface {
-		WorkerAccess(string) (workflows.WorkerAccess, error)
-	}).WorkerAccess("leaf")
-	if err != nil || access.Workspace != workspace {
-		t.Fatal("lost workspace scope", access, err)
-	}
-	req := workflows.SessionRequest{AgentRequest: workflows.AgentRequest{RunID: "engine", ParentWorkerID: "prfix_recovered", AgentID: "leaf"}}
-	// The real CLI compatibility backend refuses session resume before spawning a
-	// process. This proves scoping retained the real wrapper's restoration path.
-	_, err = scoped.RunTurn(context.Background(), req, nil)
-	if err == nil || !strings.Contains(err.Error(), "cannot resume provider sessions") {
-		t.Fatal("production scoped dispatch lost restored session", err)
-	}
-	_, err = l.db.Exec("UPDATE worker_links SET role='different'")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = scoped.RunTurn(context.Background(), req, nil)
-	if err == nil || !strings.Contains(err.Error(), "role binding changed") {
-		t.Fatal("recovery role ownership bypassed", err)
+func TestNativeTaskRejectsProviderAndToolPolicyOverrides(t *testing.T) {
+	def := &workflows.AgentDefinition{Name: "review", Description: "Review", DeveloperInstructions: "Review changes"}
+	for _, agent := range []clirunner.Agent{{Provider: "claude-cli"}, {Provider: "codex-app-server", Tools: []string{}}} {
+		runner := &clirunner.Runner{Config: clirunner.Config{Agents: map[string]clirunner.Agent{"codex": agent}}}
+		if _, err := runner.AdmitNativeTask(def); err == nil {
+			t.Fatal("unsupported runtime policy admitted", agent)
+		}
 	}
 }
 
@@ -120,7 +86,7 @@ func TestCIPollIntervalResolvesConfigurationAndTestOverride(t *testing.T) {
 }
 
 func reviewAdapter() Adapter {
-	return Adapter{Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "read", Role: "leaf", Assignment: "Review only the pinned diff.", Evidence: []string{"original"}}}}}
+	return Adapter{Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "read", Role: "codex", Assignment: "Review only the pinned diff.", Evidence: []string{"original"}}}}}
 }
 
 func TestIndependentReviewerLocalIDsRetainEveryOriginalObligation(t *testing.T) {
@@ -247,7 +213,7 @@ func TestCommitPolicyProviderRequiresAndHandsOffOriginalInstructions(t *testing.
 		t.Run(map[bool]string{false: "empty blocks", true: "accepted handoff"}[completePolicy], func(t *testing.T) {
 			root, provider, req := fixture(t)
 			req.Options["finalizers"] = []any{map[string]any{"skill": "dk-workflows:dk-commit-split", "options": map[string]any{"policy": map[string]any{"skill": "custom:policy", "instructions": "Return policy only"}}}}
-			req.Adapters = map[string]Adapter{"custom:policy": {Identity: "custom:policy", Version: "v1", Kind: "inspection", Cacheable: true, Procedure: [][]Pass{{{ID: "define", Role: "leaf", Assignment: "Define commit instructions only.", Evidence: []string{"original"}}}}}}
+			req.Adapters = map[string]Adapter{"custom:policy": {Identity: "custom:policy", Version: "v1", Kind: "inspection", Cacheable: true, Procedure: [][]Pass{{{ID: "define", Role: "codex", Assignment: "Define commit instructions only.", Evidence: []string{"original"}}}}}}
 			prepared, err := Prepare(context.Background(), root, provider, req)
 			if err != nil {
 				t.Fatal(err)

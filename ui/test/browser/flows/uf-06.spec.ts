@@ -5,7 +5,11 @@ test('empty source has a guided starting point and preserves undo', async ({ pag
   await page.evaluate(() => (window as any).first.update({ source: '' }));
   await first.getByRole('button', { name: 'Create workflow', exact: true }).click();
   await expect(first.getByLabel('Job ID', { exact: true })).toHaveValue('job');
+  const starter = await page.evaluate(() => (window as any).first.getSnapshot());
+  expect(starter.workflow.jobs.job.steps).toEqual([{ id: 'step_1', argv: ['echo', 'Hello'] }]);
   expect(await page.evaluate(() => (window as any).first.getSnapshot().diagnostics.filter((d: any) => d.severity === 'error'))).toEqual([]);
   await first.getByRole('button', { name: 'Undo', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe('');
+  await first.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source)).toBe(starter.source);
 });

@@ -16,6 +16,8 @@ var (
 )
 
 type expressionContext struct {
+	Hook            bool
+	NoShellEvent    bool
 	Literal         bool
 	Failed          map[string]any
 	Error           map[string]any
@@ -257,6 +259,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 	case "secrets":
 		cur = stringMapAny(ctx.Secrets)
 	case "event":
+		if ctx.NoShellEvent {
+			return nil, fmt.Errorf("script hooks receive event JSON on stdin; event interpolation into shell scripts is unsupported")
+		}
 		cur = ctx.Event
 	case "steps":
 		if len(parts) < 2 {

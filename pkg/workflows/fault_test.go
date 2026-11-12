@@ -42,10 +42,10 @@ func (s *faultJournal) Save(ctx context.Context, r *Run) error {
 
 const dependentFaultWorkflow = `jobs:
   edit:
-    steps: [{id: edit, uses: agent/a, with: {prompt: edit}}]
+    steps: [{id: edit, uses: agent/run, with: {prompt: edit, agent: a.toml}}]
   dependent:
     needs: edit
-    steps: [{id: dependent, uses: agent/a, with: {prompt: dependent}}]
+    steps: [{id: dependent, uses: agent/run, with: {prompt: dependent, agent: a.toml}}]
 `
 
 func TestStorageFailureBeforeAdmissionOrAttemptLaunchesNoEffect(t *testing.T) {
@@ -58,7 +58,7 @@ func TestStorageFailureBeforeAdmissionOrAttemptLaunchesNoEffect(t *testing.T) {
 			}))
 			fault := &faultJournal{Journal: s, failAdmission: stage == "admission", failBegin: stage == "attempt"}
 			e.Store = fault
-			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "disk full") {
+			if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "disk full") {
 				t.Fatal("fault ignored", err)
 			}
 			if calls != 0 {
@@ -76,15 +76,15 @@ func TestLostCompletionRequiresExplicitEffectRetry(t *testing.T) {
 	}))
 	fault := &faultJournal{Journal: s, failCompletion: true}
 	e.Store = fault
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || calls != 1 {
 		t.Fatal("dependent admitted after lost completion", calls, err)
 	}
 	fault.failCompletion = false
-	if _, err = e.Resume(ctx, run.ID, nil, false); err == nil || calls != 1 {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil || calls != 1 {
 		t.Fatal("uncertain effect replayed silently", calls, err)
 	}
-	if _, err = e.Resume(ctx, run.ID, nil, true); err != nil || calls != 3 {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true); err != nil || calls != 2 {
 		t.Fatal("explicit retry did not complete", calls, err)
 	}
 }
@@ -97,7 +97,7 @@ func TestLostJobCheckpointRetainsCompletedStepOnRecovery(t *testing.T) {
 	}))
 	fault := &faultJournal{Journal: s, failSaves: true}
 	e.Store = fault
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || calls["edit"] != 1 || calls["dependent"] != 0 {
 		t.Fatal("checkpoint failure did not stop dependents", calls, err)
 	}
@@ -105,7 +105,7 @@ func TestLostJobCheckpointRetainsCompletedStepOnRecovery(t *testing.T) {
 	if err = s.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	result, err := e.Resume(ctx, run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded {
 		t.Fatal(result, err)
 	}
@@ -135,7 +135,7 @@ const repairFaultWorkflow = `jobs:
   implement:
     steps:
       - id: implement
-        uses: agent/a
+        uses: agent/run
         with:
           prompt: IMPLEMENT EXACTLY ONCE
           output:
@@ -145,6 +145,7 @@ const repairFaultWorkflow = `jobs:
               type: object
               required: [ok]
               properties: {ok: {type: boolean}}
+          agent: a.toml
 `
 
 func TestResumeAfterSchemaRepairFailureNeverRepeatsImplementation(t *testing.T) {
@@ -165,7 +166,7 @@ func TestResumeAfterSchemaRepairFailureNeverRepeatsImplementation(t *testing.T) 
 		}
 		return map[string]any{"text": `{"ok":true}`}, nil
 	}))
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || tasks != 1 || repairs != 1 {
 		t.Fatal("unexpected first attempt", tasks, repairs, err)
 	}
@@ -174,7 +175,7 @@ func TestResumeAfterSchemaRepairFailureNeverRepeatsImplementation(t *testing.T) 
 		t.Fatal("implementation result was not checkpointed", attempts, err)
 	}
 	failRepair = false
-	result, err := e.Resume(ctx, run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded {
 		t.Fatal(result, err)
 	}
@@ -200,12 +201,12 @@ func TestLostCompletionAfterRepairReusesBothTaskAndRepair(t *testing.T) {
 	}))
 	fault := &faultJournal{Journal: s, failCompletion: true}
 	e.Store = fault
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || tasks != 1 || repairs != 1 {
 		t.Fatal(tasks, repairs, err)
 	}
 	fault.failCompletion = false
-	result, err := e.Resume(ctx, run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded {
 		t.Fatal(result, err)
 	}

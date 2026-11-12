@@ -46,37 +46,15 @@ func Parse(data []byte) (*Workflow, error) {
 	return &w, nil
 }
 
-// normalizeAgentStep lowers the authoring shorthand to the existing execution
-// contract before role admission, expression evaluation, and durable snapshots.
+// normalizeAgentStep rejects removed authoring forms. Admitted snapshots
+// must already use the canonical interface; resume never converts old runs.
 func normalizeAgentStep(step Step) (Step, error) {
-	if step.Conversation != nil {
-		return step, nil
+	if step.Prompt != nil && step.Conversation == nil {
+		return Step{}, fmt.Errorf("prompt requires conversation; use with.prompt for agent/run")
 	}
-	if step.Agent == nil {
-		if step.Prompt != nil {
-			return Step{}, fmt.Errorf("prompt requires agent; use with.prompt with uses")
-		}
-		return step, nil
+	if strings.HasPrefix(step.Uses, "agent/") && step.Uses != "agent/run" {
+		return Step{}, fmt.Errorf("only agent/run is supported; supply a native definition in with.agent")
 	}
-	if !idPattern.MatchString(*step.Agent) {
-		return Step{}, fmt.Errorf("agent requires a valid role name")
-	}
-	if step.Uses != "" {
-		return Step{}, fmt.Errorf("agent cannot combine with uses")
-	}
-	if step.Prompt != nil {
-		if _, exists := step.With["prompt"]; exists {
-			return Step{}, fmt.Errorf("prompt cannot combine with with.prompt")
-		}
-		parameters := make(map[string]any, len(step.With)+1)
-		for key, value := range step.With {
-			parameters[key] = value
-		}
-		parameters["prompt"] = *step.Prompt
-		step.With = parameters
-	}
-	step.Uses = "agent/" + *step.Agent
-	step.Agent, step.Prompt = nil, nil
 	return step, nil
 }
 
@@ -96,7 +74,7 @@ func checkAgentShorthand(n *yaml.Node) error {
 				return fmt.Errorf("conversation roles must be strings")
 			}
 		}
-		for _, key := range []string{"onError", "onFailure", "finally", "handlerTimeout"} {
+		for _, key := range []string{"onResult", "onComplete", "onIncomplete", "onError", "onFailure", "finally", "handlerTimeout"} {
 			if fields[key] != nil {
 				return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
 			}
@@ -132,20 +110,11 @@ func checkAgentShorthand(n *yaml.Node) error {
 			return fmt.Errorf("%s must be a string", key)
 		}
 	}
-	if fields["agent"] != nil && fields["uses"] != nil {
-		return fmt.Errorf("agent cannot combine with uses")
+	if fields["agent"] != nil {
+		return fmt.Errorf("agent shorthand is unsupported; use agent/run with with.agent")
 	}
-	if fields["prompt"] != nil {
-		if fields["agent"] == nil && fields["conversation"] == nil {
-			return fmt.Errorf("prompt requires agent; use with.prompt with uses")
-		}
-		if with := fields["with"]; with != nil && with.Kind == yaml.MappingNode {
-			for i := 0; i+1 < len(with.Content); i += 2 {
-				if with.Content[i].Value == "prompt" {
-					return fmt.Errorf("prompt cannot combine with with.prompt")
-				}
-			}
-		}
+	if fields["prompt"] != nil && fields["conversation"] == nil {
+		return fmt.Errorf("prompt requires conversation; use with.prompt for agent/run")
 	}
 	return nil
 }

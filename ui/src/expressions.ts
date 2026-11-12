@@ -118,12 +118,12 @@ export function pathJob(path: Path): string | undefined { return path[0] === 'jo
 export function stepPathLength(path: Path): number | undefined {
   if (path[0] !== 'jobs' || path[2] !== 'steps' || typeof path[3] !== 'number') return;
   let length = 4;
-  while (['onError', 'onFailure', 'finally', 'parallel', 'sequence'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
+  while (['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally', 'parallel', 'sequence'].includes(String(path[length])) && typeof path[length + 1] === 'number') length += 2;
   return length;
 }
 export function inHandlerPath(path: Path): boolean {
   const length = stepPathLength(path) ?? 0;
-  for (let at = 4; at < length; at += 2) if (['onError', 'onFailure', 'finally'].includes(String(path[at]))) return true;
+  for (let at = 4; at < length; at += 2) if (['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally'].includes(String(path[at]))) return true;
   return false;
 }
 export function completedSteps(workflow: Workflow, path: Path): Map<string, { step: Step; path: Path }> {
@@ -137,7 +137,7 @@ export function completedSteps(workflow: Workflow, path: Path): Map<string, { st
   let sequence: Step[] = [];
   let current = owner.step;
   for (let at = owner.path.length + 2; at < length; at += 2) {
-    sequence = current[path[at] as 'onError' | 'onFailure' | 'finally'] ?? [];
+    sequence = current[path[at] as 'onResult' | 'onComplete' | 'onIncomplete' | 'onError' | 'onFailure' | 'finally'] ?? [];
     const index = Number(path[at + 1]);
     sequence.slice(0, index).forEach((step, i) => result.set(String(step.id || `step_${i + 1}`), { step, path: [...path.slice(0, at + 1), i] }));
     current = sequence[index] ?? {};
