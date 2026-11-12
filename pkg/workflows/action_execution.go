@@ -152,6 +152,9 @@ func (e *Executor) validateActionRecovery(ctx context.Context, run string, snap 
 	}
 	for _, r := range latest {
 		if err := e.validateRetainedAction(ctx, r); err != nil {
+			if cancellationOnly(err) {
+				return err
+			}
 			return actionFailure(r.Context, err)
 		}
 	}
@@ -193,7 +196,15 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 			result.Error = err.Error()
 		}
 	}()
-	fail := func(err error) (StepExecution, error) { return result, actionFailure(ac, err) }
+	dispatched := false
+	fail := func(err error) (StepExecution, error) {
+		// Interrupted admission is not evidence drift. Once a mutation handler
+		// starts, its canceled response still leaves an uncertain external effect.
+		if !dispatched && cancellationOnly(err) {
+			return result, err
+		}
+		return result, actionFailure(ac, err)
+	}
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
@@ -295,6 +306,7 @@ func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec e
 			return fail(err)
 		}
 	}
+	dispatched = true
 	value, callErr := a.handler(ctx, ac, input)
 	r.Result, err = e.safeActionResult(value)
 	if err == nil && callErr == nil {

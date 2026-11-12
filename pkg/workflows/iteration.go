@@ -61,6 +61,11 @@ func (e *Executor) iterationEvidence(ctx context.Context, req RunRequest) error 
 		return fmt.Errorf("durable IterationJournal unavailable")
 	}
 	if err := j.CheckIteration(ctx); err != nil {
+		// Cancellation stops verification without proving evidence drift.
+		// Independent joined failures still retain the integrity guard below.
+		if cancellationOnly(err) {
+			return err
+		}
 		return fmt.Errorf("%w: %v", ErrActionIntegrity, err)
 	}
 	origin := nativeString(req.Metadata, "origin_run_id")
@@ -69,6 +74,9 @@ func (e *Executor) iterationEvidence(ctx context.Context, req RunRequest) error 
 	}
 	if e.Ready != nil {
 		if err := e.Ready(ctx); err != nil {
+			if cancellationOnly(err) {
+				return err
+			}
 			return fmt.Errorf("%w: %v", operational.ErrUnavailable, err)
 		}
 	}
@@ -601,6 +609,9 @@ func (e *Executor) guardIterationRetry(ctx context.Context, last IterationItemRe
 					generation = fence.generation
 				}
 				if _, err = e.reconcileAction(ctx, j, &r, generation); err != nil {
+					if cancellationOnly(err) {
+						return err
+					}
 					err = fmt.Errorf("%w: %v", ErrActionIntegrity, err)
 
 					return err

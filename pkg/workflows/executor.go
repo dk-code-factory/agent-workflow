@@ -689,6 +689,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	}
 	if e.Ready != nil {
 		if err := e.Ready(ctx); err != nil {
+			if cancellationOnly(err) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: %v", operational.ErrUnavailable, err)
 		}
 	}
