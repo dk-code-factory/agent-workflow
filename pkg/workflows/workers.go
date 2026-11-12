@@ -847,7 +847,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		UsageProvider(string, string) (string, string)
 	}); ok {
 		model := msg.Model
-		if w.Definition != nil && w.Definition.Model != "" {
+		if model == "" && w.Definition != nil && w.Definition.Model != "" {
 			model = w.Definition.Model
 		}
 		usageIdentity.Provider, usageIdentity.Model = source.UsageProvider(w.Role, model)

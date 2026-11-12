@@ -25,6 +25,14 @@ func redactStep(step StepExecution, secrets map[string]string) StepExecution {
 	if step.Lifecycle != nil {
 		lifecycle := *step.Lifecycle
 		lifecycle.OriginalError = Redact(lifecycle.OriginalError, secrets)
+		lifecycle.Candidate, _ = redactValue(lifecycle.Candidate, secrets).(map[string]any)
+		lifecycle.Verification = redactValue(lifecycle.Verification, secrets)
+		if lifecycle.Verifications != nil {
+			lifecycle.Verifications = make([]any, len(step.Lifecycle.Verifications))
+			for i, verdict := range step.Lifecycle.Verifications {
+				lifecycle.Verifications[i] = redactValue(verdict, secrets)
+			}
+		}
 		lifecycle.Handlers = map[string][]StepExecution{}
 		for kind, results := range step.Lifecycle.Handlers {
 			for _, child := range results {

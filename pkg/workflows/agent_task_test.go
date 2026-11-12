@@ -420,6 +420,9 @@ func TestNativeAgentStaleProducerCannotCommitCompletion(t *testing.T) {
 	ctx := context.Background()
 	manager, runID := workerFixture(t, &fakeSession{})
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseProducer := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseProducer()
 	runner := &nativeTaskFixture{respond: func(SessionRequest) (map[string]any, error) {
 		close(entered)
 		<-release
@@ -446,10 +449,16 @@ func TestNativeAgentStaleProducerCannotCommitCompletion(t *testing.T) {
 	if _, err = manager.Store.db.Exec("UPDATE runs SET owner='successor',generation=generation+1 WHERE id=?", runID); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
+	releaseProducer()
 	// Stop joins the provider; the old owner must leave its unresolved evidence.
 	stop()
-	manager.wg.Wait()
+	joined := make(chan struct{})
+	go func() { manager.wg.Wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer did not finish")
+	}
 	retained, err := manager.taskMessage(ctx, worker.ID, message.RequestID)
 	if err != nil {
 		t.Fatal(err)
@@ -521,5 +530,44 @@ func TestNativeAgentAIVerificationRejectsDeclaredCompletion(t *testing.T) {
 	defer fixture.mu.Unlock()
 	if len(fixture.requests) != 2 || fixture.requests[0].ParentWorkerID == fixture.requests[1].ParentWorkerID {
 		t.Fatal("verifier did not own an independent agent", fixture.requests)
+	}
+}
+
+func (f *nativeTaskFixture) UsageProvider(_ string, model string) (string, string) {
+	return "codex-app-server", model
+}
+
+func TestNativeTaskUsageRetainsExplicitModelWithoutUsageEvents(t *testing.T) {
+	e, store, _ := agentTaskFixture(t, `jobs:
+  task:
+    steps:
+      - uses: agent/run
+        with: {agent: reviewer.toml, model: explicit-model, prompt: work}
+`, func(req SessionRequest) (map[string]any, error) {
+		if req.Model != "explicit-model" {
+			t.Errorf("request model: %q", req.Model)
+		}
+		return map[string]any{"text": "done"}, nil
+	})
+	path := filepath.Join(e.WorkspaceDir, "workflows", "reviewer.toml")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := file.WriteString("model = 'definition-model'\n")
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		t.Fatal(writeErr, closeErr)
+	}
+	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.Usage(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Invocations) != 1 || report.Invocations[0].Model != "explicit-model" {
+		t.Fatalf("model attribution: %+v", report.Invocations)
 	}
 }

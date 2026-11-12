@@ -45,20 +45,24 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if !utf8.ValidString(req.RequestID) || !utf8.ValidString(req.Reason) || !utf8.ValidString(req.Evidence) {
 		return zero, fmt.Errorf("failure acknowledgement requires valid UTF-8 request identity, reason, and evidence")
 	}
-	// Terminal mailbox persistence precedes the provider goroutine's final join.
-	m.mu.Lock()
-	done := m.done[req.WorkerID]
-	m.mu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return zero, ctx.Err()
+	// Controller dispositions close the entire worker and must join its producer.
+	// An authoritative task wait acknowledges only its selected terminal message;
+	// a successor may already be queued or running on the same worker.
+	if waitOperation == "" {
+		m.mu.Lock()
+		done := m.done[req.WorkerID]
+		m.mu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
 		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, active := m.active[req.WorkerID]; active {
+	if _, active := m.active[req.WorkerID]; active && waitOperation == "" {
 		return zero, fmt.Errorf("worker is active")
 	}
 	tx, err := m.Store.db.BeginTx(ctx, nil)
@@ -115,18 +119,20 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM messages WHERE worker_id=? AND status IN ('queued','running')", req.WorkerID).Scan(&pending); err != nil {
 		return zero, err
 	}
-	if pending != 0 || worker.Status == RunStatusRunning {
+	if waitOperation == "" && (pending != 0 || worker.Status == RunStatusRunning) {
 		return zero, fmt.Errorf("worker mailbox has unsettled turns")
 	}
-	// These checks share the receipt transaction. Parallel, unrelated workers do
-	// not prevent acknowledgement; every invocation/effect of this worker must settle.
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM invocations WHERE run_id=? AND state!='cleaned' AND json_extract(CAST(record AS TEXT),'$.logical_invocation_id') IN (SELECT id FROM messages WHERE worker_id=?)`, req.RunID, req.WorkerID).Scan(&pending); err != nil {
+	queued := pending
+	// Controller dispositions require every effect of the worker to settle. An
+	// observed task result requires only that message's invocations and effects;
+	// a different turn cannot invalidate its authoritative completion receipt.
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM invocations WHERE run_id=? AND state!='cleaned' AND json_extract(CAST(record AS TEXT),'$.logical_invocation_id') IN (SELECT id FROM messages WHERE worker_id=? AND (?='' OR id=?))`, req.RunID, req.WorkerID, waitOperation, req.MessageID).Scan(&pending); err != nil {
 		return zero, err
 	}
 	if pending != 0 {
 		return zero, fmt.Errorf("%w: worker invocations require reconciliation", process.ErrCleanup)
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tool_calls WHERE run_id=? AND invocation_id IN (SELECT id FROM messages WHERE worker_id=?) AND status IN ('dispatched','uncertain')`, req.RunID, req.WorkerID).Scan(&pending); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tool_calls WHERE run_id=? AND invocation_id IN (SELECT id FROM messages WHERE worker_id=? AND (?='' OR id=?)) AND status IN ('dispatched','uncertain')`, req.RunID, req.WorkerID, waitOperation, req.MessageID).Scan(&pending); err != nil {
 		return zero, err
 	}
 	if pending != 0 {
@@ -142,13 +148,20 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 		return zero, err
 	}
 	var last string
-	if err = tx.QueryRowContext(ctx, "SELECT id FROM messages WHERE worker_id=? ORDER BY sequence DESC LIMIT 1", worker.ID).Scan(&last); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT id FROM messages WHERE worker_id=? AND status!='queued' ORDER BY sequence DESC LIMIT 1", worker.ID).Scan(&last); err != nil {
 		return zero, err
 	}
 	if last == msg.ID && worker.FailureGeneration == msg.Generation && worker.FailureClass == msg.FailureClass {
 		worker.FailureAcknowledgement = &ack
+		if waitOperation != "" && queued != 0 && worker.Status != "closed" {
+			worker.Status = "idle"
+		} else {
+			worker.Status = "closed"
+		}
 	}
-	worker.Status = "closed"
+	if waitOperation == "" {
+		worker.Status = "closed"
+	}
 	raw, err = json.Marshal(worker)
 	if err != nil {
 		return zero, err
@@ -162,6 +175,7 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = tx.Commit(); err != nil {
 		return zero, err
 	}
+	m.notify()
 	return ack, nil
 }
 

@@ -329,7 +329,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			}
 			local.Event = map[string]any{"type": kind, "agent": life.Agent, "result": candidate, "verification": life.Verification, "error": nil, "source": source}
 			if err != nil {
-				local.Event["error"] = map[string]any{"message": err.Error(), "class": classifyFailure(err)}
+				local.Event["error"] = map[string]any{"message": Redact(err.Error(), e.redactions(ec.Secrets)), "class": classifyFailure(err)}
 			}
 			if persistErr := persistSelection(); persistErr != nil {
 				return nil, persistErr
