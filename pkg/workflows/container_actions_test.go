@@ -328,10 +328,16 @@ func TestStructuredEnvCredentialsStayOutOfSnapshotsAndIdentities(t *testing.T) {
 		t.Fatal("credential was not explicitly injected")
 	}
 	var count int
-	for _, table := range []string{"runs", "action_attempts", "invocations", "attempts"} {
-		query := fmt.Sprintf("SELECT count(*) FROM %s WHERE CAST(record AS TEXT) LIKE '%%private-credential-value%%'", table)
+	for _, location := range []struct{ table, column string }{
+		{"runs", "record"},
+		{"runs", "snapshot"},
+		{"action_attempts", "record"},
+		{"invocations", "record"},
+		{"attempts", "record"},
+	} {
+		query := fmt.Sprintf("SELECT count(*) FROM %s WHERE CAST(%s AS TEXT) LIKE '%%private-credential-value%%'", location.table, location.column)
 		if err = store.db.QueryRow(query).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("credential persisted in %s: %d %v", table, count, err)
+			t.Fatalf("credential persisted in %s.%s: %d %v", location.table, location.column, count, err)
 		}
 	}
 	if _, err = e.Resume(t.Context(), run.ID, map[string]string{"token": "rotated-credential"}, false); err != nil {
