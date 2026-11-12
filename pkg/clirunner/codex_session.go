@@ -242,7 +242,11 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 			result.Outputs["provider_status"] = status
 			if status != "completed" {
 				cause, _ := json.Marshal(turn["error"])
-				return result, fmt.Errorf("Codex terminal status %s: %s", status, cause)
+				failure := fmt.Errorf("Codex terminal status %s: %s", status, cause)
+				if workflows.FailureClass(failure) == "execution" {
+					failure = fmt.Errorf("%w: %v", workflows.ErrProviderFailure, failure)
+				}
+				return result, failure
 			}
 			result.Status = workflows.RunStatusSucceeded
 			result.Outputs = map[string]any{"text": text, "response": text, "usage": usage, "provider": "codex-app-server", "provider_status": status, "provider_version": result.ProviderVersion, "session_id": result.SessionID}

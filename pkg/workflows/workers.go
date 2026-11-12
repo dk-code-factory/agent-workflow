@@ -574,6 +574,9 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 		return WorkerMessage{}, err
 	}
 	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return WorkerMessage{}, fmt.Errorf("%w: %v", ErrActionIntegrity, err)
+	}
 	var old []byte
 	err = tx.QueryRowContext(ctx, "SELECT record FROM messages WHERE worker_id=? AND request_id=?", id, requestID).Scan(&old)
 	if err == nil {

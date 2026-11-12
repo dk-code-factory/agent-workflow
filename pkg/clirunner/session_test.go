@@ -115,6 +115,14 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 				_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "background-thread", "turn": map[string]string{"id": "background-turn", "status": "completed"}}})
 				_ = encoder.Encode(map[string]any{"method": "future/event", "params": map[string]any{}})
 				_ = encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "item": map[string]string{"type": "agentMessage", "text": "done"}}})
+				if failure := os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_FAILURE"); failure != "" {
+					message := "ordinary provider rejection"
+					if failure == "authentication" {
+						message = "401 invalid OAuth token"
+					}
+					_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "failed", "error": map[string]string{"message": message}}}})
+					continue
+				}
 				_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": "turn-1", "status": "completed"}}})
 			case "turn/interrupt":
 				_ = os.WriteFile("interrupt-observed", []byte("yes"), 0600)
@@ -260,5 +268,32 @@ func TestNativeCodexDefinitionSettingsAndTypedInput(t *testing.T) {
 		if _, err = runner.AdmitNativeTask(definition); err == nil {
 			t.Fatal("unsupported runtime accepted", role)
 		}
+	}
+}
+
+func TestNativeCodexTerminalFailureClassificationAndPartialResult(t *testing.T) {
+	for _, kind := range []string{"provider", "authentication"} {
+		t.Run(kind, func(t *testing.T) {
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			fake := filepath.Join(root, "fake-codex")
+			script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1\nexport AGENT_WORKFLOW_FAKE_APP_SERVER_FAILURE=" + kind + "\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
+			if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("WORKFLOW_TERMINAL_FIXTURE_KEY", "local-fixture-key")
+			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"codex": {Provider: "codex-app-server", Command: fake, Authentication: Authentication{Mode: "api-key", CredentialEnv: "WORKFLOW_TERMINAL_FIXTURE_KEY"}}}}}
+			result, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "codex", Prompt: "Task"}}, nil)
+			want := "provider_failure"
+			if kind == "authentication" {
+				want = "authentication"
+			}
+			if err == nil || workflows.FailureClass(err) != want || result.Outputs["text"] != "done" || result.SessionID != "thread-1" || result.ProviderStatus != "failed" {
+				t.Fatalf("terminal evidence or classification changed: %+v %v", result, err)
+			}
+		})
 	}
 }

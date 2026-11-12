@@ -365,7 +365,7 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 		return false
 	}
 	switch result.FailureClass {
-	case "provider_failure", "usage_exhausted", "limit", "execution":
+	case "provider_failure", "usage_exhausted", "limit":
 	default:
 		return false
 	}

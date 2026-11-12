@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,7 +60,7 @@ func TestNativeAgentObservedFailureRequiresExactProviderError(t *testing.T) {
         uses: agent/run
         with: {agent: reviewer.toml, prompt: Review}
 `, func(SessionRequest) (map[string]any, error) {
-		return map[string]any{"text": "retained partial work"}, fmt.Errorf("ordinary provider rejection")
+		return map[string]any{"text": "retained partial work"}, fmt.Errorf("%w: ordinary provider rejection", ErrProviderFailure)
 	})
 	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
@@ -80,6 +81,23 @@ func TestNativeAgentObservedFailureRequiresExactProviderError(t *testing.T) {
 	changed.Lifecycle = &StepLifecycle{Handlers: map[string][]StepExecution{"finally": {{Status: RunStatusFailed}}}}
 	if e.observedNativeTaskFailure(context.Background(), step, changed, ec) {
 		t.Fatal("provider receipt hid a finalizer failure")
+	}
+}
+
+func TestNativeAgentStaleOwnerCannotEnqueueOrReadSendReceipt(t *testing.T) {
+	m, request := waitFixture(t)
+	ctx := fenceContext(context.Background(), &Run{ID: request.RunID, Owner: "previous-owner", Generation: 1})
+	if _, err := m.Store.db.Exec("UPDATE runs SET owner=? WHERE id=?", "replacement-owner", request.RunID); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"request", "stale-new-request"} {
+		if _, err := m.Send(ctx, request.RunID, request.WorkerID, operation, "first"); !errors.Is(err, ErrActionIntegrity) {
+			t.Fatal("stale task owner used the mailbox", operation, err)
+		}
+	}
+	messages, err := m.Messages(context.Background(), request.RunID, request.WorkerID)
+	if err != nil || len(messages) != 1 {
+		t.Fatal("stale owner enqueued work", messages, err)
 	}
 }
 

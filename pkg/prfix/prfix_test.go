@@ -407,7 +407,7 @@ func (f *fakeSession) RunTurn(ctx context.Context, req workflows.SessionRequest,
 	if f.failAfterReport != nil {
 		if err := f.failAfterReport(assignment.Occurrence); err != nil {
 			result.Status = workflows.RunStatusFailed
-			return result, err
+			return result, fmt.Errorf("%w: %v", workflows.ErrProviderFailure, err)
 		}
 	}
 	return result, nil
@@ -423,7 +423,7 @@ func executeFixture(t *testing.T, root string, provider interface {
 	provider.replaceWorkerService(nil)
 	// Race-instrumented SQLite snapshots make the full default plan substantially
 	// slower than individual recovery fixtures; keep a deadline below make test's.
-	timeout := 10 * time.Minute
+	timeout := 30 * time.Minute
 	if session.failureTimeout > 0 {
 		timeout = session.failureTimeout
 	}
