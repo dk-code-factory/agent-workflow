@@ -26,9 +26,10 @@ test('author bounded iteration YAML and recover from invalid concurrency, items 
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await yaml.fill(source.replace("'${{ inputs.reviewers }}'", 'invalid'));
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'for-each' && d.path.at(-1) === 'items')).toBe(true);
-  for (const invalid of ['0', '-1', '1.5', '"2"', 'null']) {
+  for (const invalid of ['0', '-1', '1.5', '"2"', 'null', '_2', '_0x2']) {
     await yaml.fill(source.replace('concurrency: 3', `concurrency: ${invalid}`));
     expect((await snapshot(page)).diagnostics.some((d: any) => d.severity === 'error' && d.path.at(-1) === 'concurrency')).toBe(true);
+    expect((await snapshot(page)).source).toContain(`concurrency: ${invalid}`);
   }
   await yaml.fill(source + '    repeat: {max-attempts: 2, until: true}\n');
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'for-each' && d.message.includes('repeat'))).toBe(true);

@@ -81,16 +81,17 @@ test('bounded iteration survives guided edits, export and undo with literal payl
   expect((await snapshot(page)).workflow.jobs.review['for-each'].concurrency).toBe(2);
 });
 
-for (const bound of ['9007199254740993', '9223372036854775807']) {
-  test(`retain exact large iteration bound ${bound} through guided edit, export and history`, async ({ page }) => {
+for (const bound of ['9007199254740993', '9223372036854775807', '!!int 0b10', '!!int 1_0']) {
+  test(`retain iteration bound ${bound} through guided edit, export and history`, async ({ page }) => {
     const source = `jobs:\n  review:\n    uses: workflows/reviewer.yml\n    for-each: {items: [], key: item.id, concurrency: ${bound}}\n`;
     const ui = await open(page, source);
     await job(page, 'review');
     await field(page, 'Name', 'Changed');
     const result = await snapshot(page);
     expect(result.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
-    expect(result.source).toContain(`concurrency: ${bound}`);
-    expect(await downloadText(page)).toContain(`concurrency: ${bound}`);
+    const canonical = bound === '!!int 0b10' ? '!!int 2' : bound === '!!int 1_0' ? '!!int 10' : bound;
+    expect(result.source).toContain(`concurrency: ${canonical}`);
+    expect(await downloadText(page)).toContain(`concurrency: ${canonical}`);
     await ui.getByRole('button', { name: 'Undo', exact: true }).click();
     expect((await snapshot(page)).source).toBe(source);
     await ui.getByRole('button', { name: 'Redo', exact: true }).click();

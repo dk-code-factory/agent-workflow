@@ -44,6 +44,20 @@ function runnerIntegerSpelling(source?: string): bigint | undefined {
   return sign === '-' ? -magnitude : magnitude;
 }
 
+function runnerStrictInteger(node: Node | undefined): bigint | undefined {
+  if (!isScalar(node) || (node.tag ? node.tag !== 'tag:yaml.org,2002:int' : node.type !== 'PLAIN')) return undefined;
+  const source = node.source ?? '';
+  // yaml.v3 only attempts integer resolution for a digit or sign in the first
+  // byte. It then removes underscores, including those after that first byte.
+  // Explicit !!int also permits quoted scalar content, unlike untagged text.
+  if (!/^[+\-0-9]/.test(source)) return undefined;
+  // Its legacy binary/octal fallback also accepts a sign after the prefix.
+  const spelling = source.replaceAll('_', '').replace(/^0([bo])([+-])/, (_match, base: string, sign: string) => `${sign}0${base}`);
+  if (!/^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(spelling)) return undefined;
+  const integer = runnerIntegerSpelling(spelling);
+  return integer !== undefined && integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n ? integer : undefined;
+}
+
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
 function runnerInteger(value: unknown, source?: string): number | undefined {
@@ -219,13 +233,10 @@ export function parseWorkflow(source: string): Parsed {
           }
         } else {
           const node = doc!.getIn(path, true);
-          // YAML core leaves Go's binary integer spelling as a plain string.
-          const integerValue = shape === 'strict-integer' && typeof value === 'string'
-            && isScalar(node) && node.type === 'PLAIN' && !node.tag ? 0 : value;
-          const decoded = runnerInteger(integerValue, isScalar(node) ? node.source : undefined);
-          valid = decoded !== undefined && (shape !== 'strict-integer' || (isScalar(node)
-            && (!node.tag || node.tag === 'tag:yaml.org,2002:int')
-            && /^[+-]?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*)$/.test(node.source?.replaceAll('_', '') ?? '')));
+          const exact = shape === 'strict-integer' ? runnerStrictInteger(isNode(node) ? node : undefined) : undefined;
+          const decoded = shape === 'strict-integer' ? exact === undefined ? undefined : Number(exact)
+            : runnerInteger(value, isScalar(node) ? node.source : undefined);
+          valid = decoded !== undefined;
           if (valid) {
             assign(path, decoded);
             // Canonicalize the parsed integer before future visual edits, so
@@ -234,8 +245,7 @@ export function parseWorkflow(source: string): Parsed {
               // Snapshot numbers may round int64 bounds. Keep their exact
               // integer in the editable YAML tree so unrelated edits/export
               // cannot change an admitted concurrency value.
-              node.value = shape === 'strict-integer' && !Number.isSafeInteger(decoded)
-                ? runnerIntegerSpelling(node.source) ?? decoded : decoded;
+              node.value = exact !== undefined && !Number.isSafeInteger(decoded) ? exact : decoded;
               if (node.tag === 'tag:yaml.org,2002:float') node.minFractionDigits = Math.max(1, node.minFractionDigits ?? 0);
             }
           }

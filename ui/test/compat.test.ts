@@ -161,6 +161,27 @@ describe('Go repeat integer decoding', () => {
 
 
 describe('iteration concurrency integer preservation', () => {
+  const scalarCases = JSON.parse(readFileSync(resolve(root, 'iteration-concurrency-scalars.json'), 'utf8')) as { source: string; value?: string }[];
+  it.each(scalarCases)('matches Go concurrency scalar resolution for $source', ({ source: scalar, value }) => {
+    const source = `jobs: {review: {uses: workflows/child.yml, for-each: {items: [], key: item.id, concurrency: ${scalar}}}}`;
+    const document = new WorkflowDocument({ source });
+    const errors = document.getSnapshot().diagnostics.filter(d => d.severity === 'error');
+    expect(errors.length === 0).toBe(value !== undefined);
+    expect(document.getSnapshot().source).toBe(source);
+    if (value !== undefined) {
+      document.setField(['jobs', 'review', 'name'], 'Changed');
+      const edited = document.getSnapshot();
+      expect(edited.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+      expect(parseDocument(edited.source, { intAsBigInt: true }).getIn(['jobs', 'review', 'for-each', 'concurrency'])).toBe(BigInt(value));
+      document.undo();
+      expect(document.getSnapshot().source).toBe(source);
+      document.redo();
+      expect(document.getSnapshot().source).toBe(edited.source);
+    } else if (document.getSnapshot().stale) {
+      expect(() => document.setField(['jobs', 'review', 'name'], 'Changed')).toThrow();
+      expect(document.getSnapshot().source).toBe(source);
+    }
+  });
   it.each([
     ['9007199254740993', 9007199254740993n],
     ['9223372036854775807', 9223372036854775807n],
