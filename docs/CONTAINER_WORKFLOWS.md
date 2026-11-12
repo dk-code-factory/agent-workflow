@@ -43,8 +43,8 @@ whose platform differs from the admitted image before creating a container.
 `make build` builds both variants
 for development. Releases include and independently verify both variants.
 
-Structured helper recovery and retained helper bundles are described by the
-following stages. Existing typed Go actions remain supported.
+Structured helpers and retained helper bundles use the same owned runtime.
+Existing typed Go actions remain supported.
 
 Deterministic tests use fake Docker HTTP APIs, fake Podman executables and
 private temporary directories. Actual Docker/provider/publication conformance
@@ -95,7 +95,8 @@ called workflow owns that selection, including nested reusable calls.
 After owner loss, cleanup must be verified before another container is created.
 An unfinished shared job that already completed ordinary commands requires a new
 run: completed commands are never replayed to reconstruct transient state.
-Structured helpers with validated checkpoints are added by the next stage.
+Structured helpers can recover through validated durable checkpoints without
+reconstructing transient container state.
 
 In the editor, **Job container image**, **Docker entrypoint** and **Docker
 arguments** support source-preserving edits, export and Undo/Redo. Converting a
@@ -202,3 +203,69 @@ effect, input and both schema forms. Export preserves names and mappings, and
 following steps receive suggestions from structured output schemas. Business
 fields use explicit output paths such as `${{ steps.current.outputs.head }}`;
 dependency references use `${{ needs.capture.steps.current.outputs.head }}`.
+
+
+## Retained workflow-local helper files
+
+```yaml
+jobs:
+  capture:
+    container:
+      image: python-git:local
+      files: [helpers/]
+    steps:
+      - argv: [python3, -B, /actions/helpers/capture.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema: {type: object}
+        output-schema: {type: object}
+      - uses: docker://python-git:local
+        # Omit files to inherit the job bundle, or replace it explicitly:
+        files: [alternate_helpers/]
+        with: {entrypoint: python3, args: '-B /actions/alternate_helpers/report.py'}
+```
+
+`container.files` and Docker-step `files` are engine extensions, resolved relative
+to the owning workflow definition. Only declared regular files and recursive
+directories are captured. Paths normalize without traversal; absolute paths,
+symlinks, special files and conflicting duplicate destinations fail admission.
+Each bundle is bounded to 32 MiB and 4,096 files. Nested Python imports and
+executable bits are preserved (read-only 0444 or executable 0555 in storage).
+A Docker step inherits the job bundle unless it supplies its own replacement;
+`files: []` explicitly replaces it with an empty bundle.
+
+Image-baked helpers require no `files` declaration. Bundled helpers mount at
+`/actions` read-only in every lifecycle phase, including standalone recovery
+containers. Commands, protocol, schemas, effect, resolved runtime policy, immutable
+image, guardian checksum/platform and bundle content digest define the admitted
+implementation contract. Tags and guardian installation paths are not content
+identities. Moving a release can supply the exact same verified guardian binary.
+
+Admission stages and fsyncs helper content before committing a snapshot and
+immutable database manifest/reference. Assets live under the originating run's
+`assets/<origin>/<digest>/` directory; this version does not deduplicate across
+runs. Resume uses that retained bundle even if workspace helpers or YAML change
+or disappear. Missing files, extra files, changed modes, corrupt checksums or
+missing database references block execution and completed checkpoint reuse.
+Owned startup recovery removes marked abandoned staging directories and
+uncommitted bundles while preserving other runs' committed assets.
+
+Schema v11 adds immutable asset manifests and run references under the existing
+exclusive ownership and retained pre-upgrade backup process. Recovery bundles
+include verified referenced assets. Database-only backups include manifests and
+checkpoints but omit helper bytes: portable recovery requires the database plus
+referenced asset files, the retained local image, and the matching guardian.
+Retention journals removal of only the originating run's assets and private
+container state before deleting database references; interrupted removal resumes.
+
+The editor provides **Job helper files (YAML)** and **Docker helper files (YAML)**,
+preserving scalar/mapping images, export, reviewed conversion and Undo/Redo.
+Complete [portable examples](../examples/container-workflows/README.md) include
+nested reusable calls, a capture helper, a simulated mutation, recursive imports,
+all lifecycle phases and explicit credential injection.
+
+Supported workload platforms are Linux amd64 and arm64 on Linux/macOS hosts with
+a compatible local Docker daemon or selected Podman store. Other image platforms
+and unsupported runtime/transport choices fail admission. Actual container and
+provider conformance remains an explicitly selected check; the normal test suite
+uses fake APIs, local Python helpers and disposable SQLite storage.

@@ -9,6 +9,7 @@ export function stepConversion(step: Step, kind: string) {
   const command = kind === 'argv' || kind === 'shell';
   const remove: Path[] = [];
   if (!command && !kind.startsWith('docker://')) for (const key of ['protocol', 'effect', 'input-schema', 'output-schema', 'input', 'env']) if (Object.hasOwn(step, key)) remove.push([key]);
+  if (!kind.startsWith('docker://') && Object.hasOwn(step, 'files')) remove.push(['files']);
   const set: { path: Path; value: unknown }[] = [];
   const conversation = kind === 'conversation';
   for (const key of ['conversation', 'start', 'finishBy', 'maxTurns', 'maxMessages']) if (!conversation && Object.hasOwn(step, key)) remove.push([key]);

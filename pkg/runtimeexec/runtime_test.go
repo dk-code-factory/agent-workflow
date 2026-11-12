@@ -196,3 +196,32 @@ func TestNetworkLaunchingSaveFailureDoesNotStart(t *testing.T) {
 		t.Fatalf("failed launch journal admitted work or blocked proven cleanup: %+v %v", journal.record, err)
 	}
 }
+
+func TestPinPolicyRetainsDefaultContainerIdentity(t *testing.T) {
+	p, err := PinPolicy(t.Context(), Policy{Mode: "container", Image: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		uid = 65532
+	}
+	if gid == 0 {
+		gid = 65532
+	}
+	if p.UID == nil || p.GID == nil || *p.UID != uid || *p.GID != gid {
+		t.Fatalf("effective identity was not pinned: %+v; want %d:%d", p, uid, gid)
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained Policy
+	if err = json.Unmarshal(data, &retained); err != nil {
+		t.Fatal(err)
+	}
+	retained, err = PinPolicy(t.Context(), retained)
+	if err != nil || retained.UID == nil || retained.GID == nil || *retained.UID != uid || *retained.GID != gid {
+		t.Fatal("restored policy changed effective identity", retained, err)
+	}
+}

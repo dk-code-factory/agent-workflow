@@ -234,6 +234,10 @@ func PinPolicy(ctx context.Context, p Policy) (Policy, error) {
 	if err := p.Validate(); err != nil {
 		return p, err
 	}
+	if p.Mode == "container" {
+		uid, gid := containerIdentity(p)
+		p.UID, p.GID = &uid, &gid
+	}
 	if p.NetworkRuntime == "" {
 		return p, nil
 	}

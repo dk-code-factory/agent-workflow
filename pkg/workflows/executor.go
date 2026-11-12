@@ -50,6 +50,7 @@ type RunStore interface {
 
 type Executor struct {
 	ContainerGuardianDirectory string
+	bundleOrigin               string
 	runSecrets                 map[string]string
 	// BeforeFinalize retains execution ownership until supervised workers stop.
 	BeforeFinalize   func(context.Context, string) error
@@ -186,6 +187,10 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	e = &copy
 	req.Secrets = maps.Clone(req.Secrets)
 	e.runSecrets = req.Secrets
+	if req.runID == "" {
+		req.runID = randomID()
+	}
+	e.bundleOrigin = req.runID
 	if err := e.pinExecution(ctx); err != nil {
 		return nil, err
 	}
@@ -208,6 +213,10 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 			return nil, err
 		}
 	}
+	if req.Metadata == nil {
+		req.Metadata = map[string]any{}
+	}
+	req.Metadata["origin_run_id"] = req.runID
 	req.actionContracts = e.actionContracts
 	ref, _ := CanonicalLocalRef(req.Ref)
 	limit := e.MaxParallel
@@ -980,6 +989,12 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 	// A legacy Journal can load input runs without exposing the input extension.
 	if hasInputWait(snap.Definitions) && externalInputJournal(e.Store) == nil {
 		return nil, fmt.Errorf("input/wait requires a durable ExternalInputJournal (%s)", DurableExternalInputV1)
+	}
+	e.bundleOrigin = run.ID
+	if store := invocationStore(e.Store); store != nil {
+		if err = store.verifyRunHelperAssets(ctx, run.ID, snap); err != nil {
+			return nil, err
+		}
 	}
 	e.CommandExecution = snap.Execution
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {

@@ -1,0 +1,9 @@
+name: Portable capture through nested reusable workflows
+jobs:
+  inspect:
+    uses: ./workflows/wrapper.yml
+    with: {repository: /workspace}
+  report:
+    needs: inspect
+    steps:
+      - argv: [echo, '${{ needs.inspect.outputs.head }}']

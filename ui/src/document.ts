@@ -239,6 +239,15 @@ export class WorkflowDocument {
       }
     });
   }
+  setJobHelperFiles(id: string, files: unknown) {
+    this.edit(doc => {
+      const path = ['jobs', id, 'container'];
+      const current = this.snapshot.workflow?.jobs[id]?.container;
+      if (typeof current === 'string') doc.setIn(path, { image: current, files });
+      else if (files === undefined) doc.deleteIn([...path, 'files']);
+      else doc.setIn([...path, 'files'], files);
+    });
+  }
   setContainerProtocol(id: string, index: number, protocol: string) {
     this.edit(doc => {
       const path = ['jobs', id, 'steps', index];

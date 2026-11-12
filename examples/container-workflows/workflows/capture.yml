@@ -1,0 +1,32 @@
+name: Capture repository HEAD
+on:
+  workflow_call:
+    inputs:
+      repository: {type: string, required: true}
+    outputs:
+      head: {value: '${{ jobs.capture.outputs.head }}'}
+schemas:
+  CaptureOutput:
+    type: object
+    properties: {head: {type: string}}
+    required: [head]
+    additionalProperties: false
+jobs:
+  capture:
+    runs-on: local
+    container:
+      image: python-git:local
+      files: [helpers/]
+    outputs: {head: '${{ steps.current.outputs.head }}'}
+    steps:
+      - id: current
+        argv: [python3, -B, /actions/helpers/capture.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema:
+          type: object
+          properties: {repository: {type: string}}
+          required: [repository]
+          additionalProperties: false
+        output-schema: CaptureOutput
+        input: {repository: '${{ inputs.repository }}'}

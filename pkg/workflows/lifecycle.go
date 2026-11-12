@@ -194,6 +194,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.FailureClass = classifyFailure(err)
 		return result, err
 	}
+	if step.Protocol == ContainerActionV1 {
+		return e.executeContainerAction(ctx, step, ec, slots)
+	}
 	journal, durable := e.Store.(Journal)
 	var attempt Attempt
 	if durable {
