@@ -92,6 +92,16 @@ describe('runner compatibility', () => {
     const result = parseWorkflow('jobs:\n  build:\n    surprise: true\n    steps: [{argv: [echo]}]\n');
     expect(result.diagnostics[0]).toMatchObject({ code: 'unknown-field', path: ['jobs', 'build', 'surprise'], location: { line: 3 } });
   });
+  it.each(['[helpers/, config.json]', '[]'])('accepts job helper-file list %s without parser errors', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(result.usable).toBe(true);
+    expect(parseWorkflow(result.doc!.toString()).workflow).toEqual(result.workflow);
+  });
+  it.each(['helpers/', '[true]', '{path: helpers/}'])('rejects invalid job helper-file shape %s', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.some(d => d.source === 'parser' && d.code === 'shape' && d.path.join('.').startsWith('jobs.build.container.files'))).toBe(true);
+  });
 });
 
 

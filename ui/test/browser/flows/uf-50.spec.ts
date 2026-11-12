@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { parse } from 'yaml';
 import { open, snapshot, field, job, downloadText } from './harness';
 
 test('retain job helper paths and replace a Docker sibling bundle with reviewed conversion and undo', async ({ page }) => {
@@ -33,4 +34,10 @@ test('repair helper path traversal and misplaced ordinary-step files', async ({ 
   await ui.getByRole('button', { name: 'YAML', exact: true }).click();
   await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(`jobs: {build: {container: {image: ubuntu, files: [helpers/]}, steps: [{argv: [echo, hello]}]}}`);
   await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow.jobs.build.container.files).toEqual(['helpers/']);
+  expect(parse(await downloadText(page)).jobs.build.container.files).toEqual(['helpers/']);
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(`jobs: {build: {container: {image: ubuntu, files: []}, steps: [{argv: [echo, hello]}]}}`);
+  await expect.poll(async () => (await snapshot(page)).workflow.jobs.build.container.files).toEqual([]);
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(parse(await downloadText(page)).jobs.build.container.files).toEqual([]);
 });

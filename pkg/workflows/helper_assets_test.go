@@ -295,11 +295,11 @@ func TestHelperAssetsPortableRecoveryBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer lock.Close()
 	bundle := filepath.Join(t.TempDir(), "recovery.tar.gz")
 	if err = store.RecoveryBundle(t.Context(), bundle, lock); err != nil {
 		t.Fatal(err)
 	}
-	lock.Close()
 	restoredDir := t.TempDir()
 	file, err := os.Open(bundle)
 	if err != nil {
@@ -336,6 +336,7 @@ func TestHelperAssetsPortableRecoveryBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer owner.Close()
 	// RestoreDatabase supplies quarantine and schema validation, just like the CLI.
 	saved := filepath.Join(restoredDir, "state.db")
 	database := filepath.Join(t.TempDir(), "state.db")
@@ -345,7 +346,6 @@ func TestHelperAssetsPortableRecoveryBundle(t *testing.T) {
 	if _, err = RestoreDatabase(t.Context(), restoredDir, database, owner); err != nil {
 		t.Fatal(err)
 	}
-	owner.Close()
 	restored, err := OpenSQLite(restoredDir)
 	if err != nil {
 		t.Fatal(err)
@@ -593,7 +593,7 @@ func TestBundledStructuredLifecycleChildrenRejectedBeforeExecution(t *testing.T)
 	}
 }
 func TestContainerWorkingDirectoryAppliesToEveryStructuredPhase(t *testing.T) {
-	e, _, d := containerExecutor(t)
+	e, store, d := containerExecutor(t)
 	if err := os.Mkdir(filepath.Join(e.WorkspaceDir, "subdir"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -601,20 +601,55 @@ func TestContainerWorkingDirectoryAppliesToEveryStructuredPhase(t *testing.T) {
   work:
     container: ubuntu
     steps:
-      - argv: [python3, -c, 'import json,sys,os;r=json.load(sys.stdin);p=r["phase"];print(json.dumps({"protocol":"action-v1","phase":p,**({"capabilities":["bindings","execute","validate_checkpoint"],"read_only_phases":["bindings","validate_checkpoint"],"bindings":{"cwd":os.path.basename(os.getcwd())}} if p=="bindings" else {"result":{"output":{"cwd":os.path.basename(os.getcwd())}}} if p=="execute" else {"valid":os.path.basename(os.getcwd())=="subdir"})}))']
+      - argv:
+          - python3
+          - -c
+          - |
+            import json, os, pathlib, sys
+            request = json.load(sys.stdin)
+            phase = request["phase"]
+            if os.path.basename(os.getcwd()) != "subdir":
+                sys.exit("wrong working directory in " + phase)
+            response = {"protocol": "action-v1", "phase": phase}
+            result = {"output": {"cwd": "subdir"}, "evidence": {"cwd": "subdir"}}
+            receipt = pathlib.Path("receipt")
+            if phase == "bindings":
+                response.update(capabilities=["bindings", "execute", "validate_checkpoint", "reconcile"],
+                    read_only_phases=["bindings", "validate_checkpoint", "reconcile"], bindings={"cwd": "subdir"})
+            elif phase == "execute":
+                with receipt.open("x") as file:
+                    file.write("completed")
+                sys.exit("lost response after simulated mutation")
+            elif phase == "reconcile":
+                if receipt.read_text() != "completed":
+                    sys.exit("missing mutation receipt")
+                response.update(outcome="completed", result=result,
+                    proof={"operation_key": request["context"]["operation_key"]})
+            elif phase == "validate_checkpoint":
+                response["valid"] = receipt.read_text() == "completed"
+            else:
+                sys.exit("unsupported phase")
+            print(json.dumps(response))
         working-directory: subdir
         protocol: action-v1
-        effect: read_only
+        effect: external_mutation
         input-schema: {type: object}
         output-schema: {type: object, properties: {cwd: {type: string, enum: [subdir]}}, required: [cwd]}
 `
 	installProtocolWorkflow(t, e, d, &protocolFixture{}, source)
 	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || run == nil {
+		t.Fatalf("expected uncertain mutation after lost response: run=%+v err=%v", run, err)
 	}
 	if _, err = e.Resume(t.Context(), run.ID, nil, false); err != nil {
 		t.Fatal(err)
+	}
+	records, err := store.ActionAttempts(t.Context(), run.ID)
+	if err != nil || len(records) != 1 || records[0].State != "completed" || len(records[0].Reconciliations) != 1 {
+		t.Fatalf("mutation was not reconciled: records=%+v err=%v", records, err)
+	}
+	if _, err = e.Resume(t.Context(), run.ID, nil, false); err != nil {
+		t.Fatal("completed checkpoint working directory", err)
 	}
 }
 

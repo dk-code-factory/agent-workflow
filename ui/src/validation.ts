@@ -170,7 +170,7 @@ export function parseWorkflow(source: string): Parsed {
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
       if (shape === 'container') {
-        if (value != null) checkShape(value, mapping(value) ? { image: 'string' } : 'strict-string', path);
+        if (value != null) checkShape(value, mapping(value) ? { image: 'string', files: ['strict-string'] } : 'strict-string', path);
         return;
       }
       if (shape === 'any') return;
