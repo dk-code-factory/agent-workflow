@@ -95,3 +95,39 @@ ${hooks.map(hook => `        ${hook}:
   await ui.getByRole('button', {name:'Redo', exact:true}).click();
   expect((await snapshot(page)).source).toBe(edited.source);
 });
+
+for (const editor of ['parameters', 'parallel', 'sequence']) {
+  test(`${editor} YAML edits retain exact task and nested handler input`, async ({ page }) => {
+    const task = `- id: native
+  uses: agent/run
+  with:
+    agent: reviewer.toml
+    prompt: Work
+    input: {exact: 9007199254740993, fraction: 0.10000000000000001, exponent: 1.234567890123456789e-20}
+  onError:
+    - uses: agent/run
+      with: {agent: reviewer.toml, prompt: Recover, input: {nested: 9007199254740995}}
+`;
+    const source = `jobs:\n  review:\n    steps:\n` + (editor === 'parameters'
+      ? task.split('\n').filter(Boolean).map(line => `      ${line}\n`).join('')
+      : `      - id: group\n        ${editor}:\n` + task.split('\n').filter(Boolean).map(line => `          ${line}\n`).join(''));
+    const ui = await open(page, source);
+    await step(page, editor === 'parameters' ? 'native agent/run' : `group ${editor} block`);
+    if (editor === 'parameters') await ui.getByText('Advanced parameters', {exact:true}).click();
+    const label = editor === 'parameters' ? 'Parameters (YAML)' : editor === 'parallel' ? 'Parallel branches (YAML)' : 'Sequence steps (YAML)';
+    const control = ui.getByLabel(label, {exact:true});
+    const before = await control.inputValue();
+    for (const token of ['9007199254740993', '0.10000000000000001', '1.234567890123456789e-20']) expect(before).toContain(token);
+    await field(page, label, before.replace('prompt: Work', 'prompt: Revised'));
+    const edited = await snapshot(page);
+    const changed = editor === 'parameters' ? edited.workflow.jobs.review.steps[0] : edited.workflow.jobs.review.steps[0][editor][0];
+    expect(changed.with.prompt).toBe('Revised');
+    for (const token of ['9007199254740993', '0.10000000000000001', '1.234567890123456789e-20', '9007199254740995']) expect(edited.source).toContain(token);
+    expect(edited.diagnostics.filter((d:any) => d.severity === 'error')).toEqual([]);
+    expect(await downloadText(page)).toBe(edited.source);
+    await ui.getByRole('button', {name:'Undo', exact:true}).click();
+    expect((await snapshot(page)).source).toBe(source);
+    await ui.getByRole('button', {name:'Redo', exact:true}).click();
+    expect((await snapshot(page)).source).toBe(edited.source);
+  });
+}

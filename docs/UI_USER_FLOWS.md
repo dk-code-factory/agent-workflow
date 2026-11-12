@@ -801,7 +801,9 @@ sources are the [UI guide](../ui/README.md),
   integers beyond JavaScript's safe range and task inspection after omitted null
   steps. The flow opens every hook editor and changes a native handler's prompt
   while preserving its nested numeric input; unrelated task edits, history and
-  export retain those original numeric tokens. Command conversion reviews the
+  export retain those original numeric tokens. Advanced parameter, parallel
+  branch and sequence YAML editors also display and retain exact task and nested
+  recovery input numbers when only a prompt changes. Command conversion reviews the
   discarded completion hooks, and Undo/Redo and
   exported YAML retain the definition and typed values.
 - **Starting point:** I open a task using `agent/run`.
