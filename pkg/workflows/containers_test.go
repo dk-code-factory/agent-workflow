@@ -129,6 +129,7 @@ type workflowDocker struct {
 	removalStarted        chan struct{}
 	removalGate           chan struct{}
 	removalError          bool
+	createResponseError   bool
 	stallPhase            string
 	stallRelease          chan struct{}
 	stallOnce, stallUsed  bool
@@ -248,6 +249,10 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		d.containers[id] = c
 		d.containers[c.name] = c
+		if d.createResponseError {
+			http.Error(w, "container created but response failed", http.StatusInternalServerError)
+			return
+		}
 		fmt.Fprintf(w, `{"Id":%q}`, id)
 		return
 	}
@@ -657,54 +662,71 @@ func TestSharedContainerCleanupPrecedesJobCompletion(t *testing.T) {
 }
 
 func TestSharedContainerCleanupFailureCancelsQueuedJobsWithoutJournalFence(t *testing.T) {
-	for _, nested := range []bool{false, true} {
-		t.Run(fmt.Sprintf("nested=%t", nested), func(t *testing.T) {
-			e, store, d := containerExecutor(t)
-			d.removalError = true
-			defer func() {
+	for _, mode := range []string{"parent", "sibling", "parent-launch", "sibling-launch", "standalone", "standalone-launch"} {
+		for _, nested := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nested=%t", mode, nested), func(t *testing.T) {
+				e, store, d := containerExecutor(t)
+				d.removalError = true
+				d.createResponseError = strings.HasSuffix(mode, "-launch")
+				defer func() {
+					d.mu.Lock()
+					defer d.mu.Unlock()
+					for _, c := range d.containers {
+						select {
+						case <-c.removed:
+						default:
+							close(c.removed)
+						}
+					}
+				}()
+				if _, err := store.db.Exec(`CREATE TRIGGER reject_uncertain BEFORE UPDATE OF state ON invocations WHEN NEW.state='uncertain' BEGIN SELECT RAISE(ABORT, 'cleanup checkpoint failed'); END`); err != nil {
+					t.Fatal(err)
+				}
+				container, command := "container: ubuntu:24.04, ", "run: echo ready"
+				if strings.HasPrefix(mode, "sibling") || strings.HasPrefix(mode, "standalone") {
+					command = "uses: docker://ubuntu:24.04"
+				}
+				if strings.HasPrefix(mode, "standalone") {
+					container = ""
+				}
+				job := "{" + container + "steps: [{" + command + "}]}\n"
+				jobs := "  first: " + job + "  second: " + job
+				if nested {
+					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs:\n"+jobs)
+					jobs = "  child: {uses: workflows/child.yml}\n"
+				}
+				writeWorkflow(t, e.WorkspaceDir, "test.yml", "jobs:\n"+jobs)
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
+				if err == nil || !strings.Contains(err.Error(), "cleanup checkpoint failed") || run == nil || run.Status != RunStatusNeedsAttention {
+					t.Fatalf("cleanup and journal failure were not retained: run=%+v err=%v", run, err)
+				}
+				if ctx.Err() != nil {
+					t.Fatalf("run required its outer deadline: %v", ctx.Err())
+				}
+				if len(e.Slots) != 0 {
+					t.Fatal("canceled queued job retained capacity")
+				}
+				state := "running"
+				if d.createResponseError {
+					state = "intent"
+				}
+				var pending int
+				if err := store.db.QueryRow("SELECT count(*) FROM invocations WHERE state=?", state).Scan(&pending); err != nil || pending != 1 {
+					t.Fatalf("fixture did not retain the unfenced invocation: state=%s count=%d err=%v", state, pending, err)
+				}
 				d.mu.Lock()
 				defer d.mu.Unlock()
-				for _, c := range d.containers {
-					select {
-					case <-c.removed:
-					default:
-						close(c.removed)
-					}
+				wantExecs := 0
+				if mode == "parent" {
+					wantExecs = 1
 				}
-			}()
-			if _, err := store.db.Exec(`CREATE TRIGGER reject_uncertain BEFORE UPDATE OF state ON invocations WHEN NEW.state='uncertain' BEGIN SELECT RAISE(ABORT, 'cleanup checkpoint failed'); END`); err != nil {
-				t.Fatal(err)
-			}
-			jobs := `  first: {container: ubuntu:24.04, steps: [{run: echo ready}]}
-  second: {container: ubuntu:24.04, steps: [{run: echo ready}]}
-`
-			if nested {
-				writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs:\n"+jobs)
-				jobs = "  child: {uses: workflows/child.yml}\n"
-			}
-			writeWorkflow(t, e.WorkspaceDir, "test.yml", "jobs:\n"+jobs)
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
-			if err == nil || !strings.Contains(err.Error(), "cleanup checkpoint failed") || run == nil || run.Status != RunStatusNeedsAttention {
-				t.Fatalf("cleanup and journal failure were not retained: run=%+v err=%v", run, err)
-			}
-			if ctx.Err() != nil {
-				t.Fatalf("run required its outer deadline: %v", ctx.Err())
-			}
-			if len(e.Slots) != 0 {
-				t.Fatal("canceled queued job retained capacity")
-			}
-			var running int
-			if err := store.db.QueryRow("SELECT count(*) FROM invocations WHERE state='running'").Scan(&running); err != nil || running != 1 {
-				t.Fatalf("fixture did not retain the unfenced invocation: running=%d err=%v", running, err)
-			}
-			d.mu.Lock()
-			defer d.mu.Unlock()
-			if d.creates != 1 || d.executions != 1 {
-				t.Fatalf("queued job executed after unconfirmed cleanup: creates=%d execs=%d", d.creates, d.executions)
-			}
-		})
+				if d.creates != 1 || d.executions != wantExecs {
+					t.Fatalf("queued job executed after unconfirmed cleanup: creates=%d execs=%d", d.creates, d.executions)
+				}
+			})
+		}
 	}
 }
 

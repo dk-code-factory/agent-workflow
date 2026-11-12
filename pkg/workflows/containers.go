@@ -259,6 +259,13 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 
 type jobContainerKey struct{}
 type containerCleanupCancelKey struct{}
+
+func cancelContainerCleanup(ctx context.Context) {
+	if cancel, ok := ctx.Value(containerCleanupCancelKey{}).(context.CancelFunc); ok {
+		cancel()
+	}
+}
+
 type jobContainerScope struct {
 	implementation *ContainerImplementation
 	session        *runtimeexec.ContainerSession
@@ -302,9 +309,7 @@ func (s *jobContainerScope) close(ctx context.Context) error {
 	err := s.closeSession()
 	if err != nil {
 		// Cancel before releasing capacity even if cleanup uncertainty could not be journaled.
-		if cancel, ok := ctx.Value(containerCleanupCancelKey{}).(context.CancelFunc); ok {
-			cancel()
-		}
+		cancelContainerCleanup(ctx)
 	}
 	if s.held {
 		<-s.slots
@@ -406,6 +411,14 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 			return nil, ctx.Err()
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if errors.Is(returned, process.ErrCleanup) {
+			cancelContainerCleanup(ctx)
+		}
+	}()
 	queueTime := time.Since(queued).Milliseconds()
 	var stdout, stderr cappedOutput
 	streams := containerapi.Streams{Stdout: &stdout, Stderr: &stderr}
