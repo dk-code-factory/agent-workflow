@@ -46,7 +46,7 @@ func Parse(data []byte) (*Workflow, error) {
 	return &w, nil
 }
 
-// validateCanonicalAgentStep rejects removed authoring forms. Admitted snapshots
+// normalizeAgentStep rejects removed authoring forms. Admitted snapshots
 // must already use the canonical interface; resume never converts old runs.
 func normalizeAgentStep(step Step) (Step, error) {
 	if step.Prompt != nil && step.Conversation == nil {
