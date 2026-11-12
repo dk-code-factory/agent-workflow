@@ -100,7 +100,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-06.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  The starter has no browser admission errors and Undo restores the empty source.
+- **Coverage:** The empty-source starter contains an explicit command step with no browser admission errors; Undo restores the empty source and Redo restores the exact starter source.
 
 - **Starting point:** The host opens an empty document.
 - **My flow:** I select **Create workflow** → inspect the first job → change
@@ -154,7 +154,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-10.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Real connector gestures create an edge and reject a cycle without adding a dependency to the prerequisite.
+- **Coverage:** Real connector gestures connect two command-only jobs and reject a cycle without adding a dependency to the prerequisite, changing either command, or removing the accepted dependency.
 
 - **Starting point:** My workflow has at least two jobs.
 - **My flow:** I drag from the bottom connector of the prerequisite job to the
@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for canonical native agent tasks, matching runner admission. Definition, prompt, and option edits retain multiline text and unrelated comments. Removed shorthand produces a diagnostic. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for canonical native agent tasks, matching runner admission. Definition, prompt, and option edits retain multiline text and unrelated comments. Undoing the output-contract edit preserves the native definition and other options, and Redo restores the contract. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
 
 - **Starting point:** I add or select an agent or conversation step.
 - **My flow:** For a conversation I select **Conversation** under **Step type**,
@@ -426,7 +426,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-26.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Reordering unnamed steps materializes stable IDs, preserves references, and reverses through Undo.
+- **Coverage:** Reordering and duplicating unnamed command steps materializes stable IDs and preserves the job output reference; two Undo actions restore the exact original source and implicit IDs.
 
 - **Starting point:** I select a step in a sequential job.
 - **My flow:** I select **Move up** or **Move down** → review the step list and
@@ -682,7 +682,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-42.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
+- **Coverage:** The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. Redo restores the same converted command job before another Undo restores the call again. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
 
 - **Starting point:** A job currently calls a reusable workflow, and I want to
   define its steps directly.

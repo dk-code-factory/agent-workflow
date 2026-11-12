@@ -123,6 +123,10 @@ test('configure agent prompt optional settings and output contract', async ({ pa
   await ui.getByLabel('Structured output contract (YAML)', { exact: true }).fill('type: object');
   await ui.getByLabel('Structured output contract (YAML)', { exact: true }).press('Tab');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context', output: { type: 'object' } });
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context' });
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.output)).toEqual({ type: 'object' });
 });
 
 test('inspect and edit concise agent prompts and roles without expanding their YAML form', async ({ page }) => {
