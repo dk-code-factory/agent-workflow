@@ -180,7 +180,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported iteration YAML retains its concurrency bound, literal payloads and item input expressions through guided call edits, export, Undo and Redo.
+- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported iteration YAML retains its exact concurrency bound, including positive int64 values above JavaScript integer precision, literal payloads and item input expressions through guided call/name edits, export, Undo and Redo.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under

@@ -352,7 +352,14 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			if job.FailureClass == "usage_exhausted" {
 				jobErr = fmt.Errorf("%w: %v", ErrUsageExhausted, jobErr)
 			}
-			if req.ordered && job.FailureClass != "provider_failure" && job.FailureClass != "usage_exhausted" {
+			// Structural iteration controllers retain cancellation as a hard
+			// checkpoint guard. Preserve its cause through enclosing reusable
+			// workflows so a clean sibling cancellation cannot override an input
+			// suspension; independent cleanup failures keep their own class.
+			if job.FailureClass == "canceled" && ctx.Err() == context.Canceled {
+				jobErr = fmt.Errorf("job %s: %w", id, context.Canceled)
+			}
+			if req.ordered && job.FailureClass != "provider_failure" && job.FailureClass != "usage_exhausted" && !cancellationOnly(jobErr) {
 				jobErr = fmt.Errorf("%w: %w", errIterationBlocked, jobErr)
 			}
 			if job.FailureClass == "action_integrity" {

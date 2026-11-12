@@ -413,25 +413,26 @@ func TestParallelIterationValidatesAllInputsBeforeChildren(t *testing.T) {
 }
 
 func TestParallelIterationSuspensionJoinsAndPreservesSiblingFailures(t *testing.T) {
-	for _, hardFailure := range []bool{false, true} {
-		t.Run(fmt.Sprint("hard=", hardFailure), func(t *testing.T) {
-			started := make(chan struct{})
-			joined := make(chan struct{})
-			var pendingCalls atomic.Int32
-			e, s := parallelIterationExecutor(t, 2, 2, agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
-				if req.Prompt != "sibling" {
-					pendingCalls.Add(1)
-					return nil, errors.New("unexpected pending dispatch")
-				}
-				close(started)
-				<-ctx.Done()
-				defer close(joined)
-				if hardFailure {
-					return nil, errors.Join(ctx.Err(), process.ErrCleanup)
-				}
-				return nil, ctx.Err()
-			}))
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
+	for _, nested := range []bool{false, true} {
+		for _, hardFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("nested=%t/hard=%t", nested, hardFailure), func(t *testing.T) {
+				started := make(chan struct{})
+				joined := make(chan struct{})
+				var pendingCalls atomic.Int32
+				e, s := parallelIterationExecutor(t, 2, 2, agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
+					if req.Prompt != "sibling" {
+						pendingCalls.Add(1)
+						return nil, errors.New("unexpected pending dispatch")
+					}
+					close(started)
+					<-ctx.Done()
+					defer close(joined)
+					if hardFailure {
+						return nil, errors.Join(ctx.Err(), process.ErrCleanup)
+					}
+					return nil, ctx.Err()
+				}))
+				writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
   workflow_call:
     inputs:
       task: {type: string, required: true}
@@ -449,41 +450,76 @@ jobs:
         uses: agent/reviewer
         with: {prompt: '${{ inputs.task }}'}
 `)
-			wrapper := &executionBoundaryJournal{SQLiteStore: s}
-			wrapper.afterGate = func(ctx context.Context, gate ExternalInputGate) error {
+				if nested {
+					writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
+  workflow_call:
+    inputs:
+      task: {type: string, required: true}
+      ordinal: {type: number}
+      identity: {type: string}
+jobs:
+  question:
+    if: inputs.task == 'gate'
+    steps:
+      - id: question
+        uses: input/wait
+        with: {prompt: 'Continue?', evidence-id: retained}
+  nested:
+    if: inputs.task != 'gate'
+    uses: workflows/leaf.yml
+    for-each:
+      items: [{id: leaf}]
+      key: item.id
+      concurrency: 2
+    with: {task: '${{ inputs.task }}'}
+`)
+					writeWorkflow(t, e.WorkspaceDir, "leaf.yml", `on:
+  workflow_call:
+    inputs:
+      task: {type: string, required: true}
+jobs:
+  work:
+    steps:
+      - uses: agent/reviewer
+        with: {prompt: '${{ inputs.task }}'}
+`)
+				}
+				wrapper := &executionBoundaryJournal{SQLiteStore: s}
+				wrapper.afterGate = func(ctx context.Context, gate ExternalInputGate) error {
+					select {
+					case <-started:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				e.Store = wrapper
+				ctx, _, done := startParallelIteration(t, e, iterationRequest("gate", "sibling", "pending"))
+				result := iterationReceive(t, ctx, done)
 				select {
-				case <-started:
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-joined:
+				default:
+					t.Fatalf("suspended iteration did not join sibling: %+v err=%v", result.run, result.err)
 				}
-			}
-			e.Store = wrapper
-			ctx, _, done := startParallelIteration(t, e, iterationRequest("gate", "sibling", "pending"))
-			result := iterationReceive(t, ctx, done)
-			select {
-			case <-joined:
-			default:
-				t.Fatalf("suspended iteration did not join sibling: %+v err=%v", result.run, result.err)
-			}
-			if pendingCalls.Load() != 0 {
-				t.Fatal("suspension admitted pending work")
-			}
-			job := result.run.Jobs["review"]
-			if job.Items[0].Status != "waiting" || job.Items[1].Status != "interrupted" || job.Items[2].Status != "pending" || job.Complete {
-				t.Fatal(job)
-			}
-			if hardFailure {
-				if result.err == nil || result.run.Status != RunStatusNeedsAttention || job.Status != RunStatusNeedsAttention {
-					t.Fatal("suspension hid sibling cleanup failure", result.run, result.err)
+				if pendingCalls.Load() != 0 {
+					t.Fatal("suspension admitted pending work")
 				}
-			} else if result.err != nil || result.run.Status != RunStatusWaiting || job.Status != RunStatusWaiting {
-				t.Fatal(result.run, result.err)
-			}
-			gate := inputGate(t, s, result.run.ID)
-			if gate.State != "pending" || gate.EvidenceID != "retained" {
-				t.Fatal(gate)
-			}
-		})
+				job := result.run.Jobs["review"]
+				if job.Items[0].Status != "waiting" || job.Items[1].Status != "interrupted" || job.Items[2].Status != "pending" || job.Complete {
+					t.Fatal(job)
+				}
+				if hardFailure {
+					if result.err == nil || result.run.Status != RunStatusNeedsAttention || job.Status != RunStatusNeedsAttention {
+						t.Fatal("suspension hid sibling cleanup failure", result.run, result.err)
+					}
+				} else if result.err != nil || result.run.Status != RunStatusWaiting || job.Status != RunStatusWaiting {
+					t.Fatal(result.run, result.err)
+				}
+				gate := inputGate(t, s, result.run.ID)
+				if gate.State != "pending" || gate.EvidenceID != "retained" {
+					t.Fatal(gate)
+				}
+			})
+		}
 	}
 }

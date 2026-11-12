@@ -36,16 +36,20 @@ export function runnerTimestamp(value: string): boolean {
   return !zone || zone === 'Z' || (Number(zone.slice(1, 3)) <= 24 && Number(zone.slice(4)) <= 60);
 }
 
+function runnerIntegerSpelling(source?: string): bigint | undefined {
+  const match = /^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|[0-9]+)$/.exec(source?.replaceAll('_', '') ?? '');
+  if (!match) return undefined;
+  const [, sign, digits] = match;
+  const magnitude = /^0[0-7]+$/.test(digits) ? BigInt('0o' + digits.slice(1)) : BigInt(digits);
+  return sign === '-' ? -magnitude : magnitude;
+}
+
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
 function runnerInteger(value: unknown, source?: string): number | undefined {
   if (typeof value !== 'number') return undefined;
-  const spelling = source?.replaceAll('_', '') ?? '';
-  const match = /^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|[0-9]+)$/.exec(spelling);
-  if (match) {
-    const [, sign, digits] = match;
-    const magnitude = /^0[0-7]+$/.test(digits) ? BigInt('0o' + digits.slice(1)) : BigInt(digits);
-    const integer = sign === '-' ? -magnitude : magnitude;
+  const integer = runnerIntegerSpelling(source);
+  if (integer !== undefined) {
     if (integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n) return Number(integer);
     // Negative overflow resolves as a float in yaml.v3; Go's int64 conversion
     // produces MinInt64. Positive uint64 values overflow an int and are rejected.
@@ -227,7 +231,11 @@ export function parseWorkflow(source: string): Parsed {
             // Canonicalize the parsed integer before future visual edits, so
             // leading-zero octal and fractional syntax retain runner meaning.
             if (isScalar(node)) {
-              node.value = decoded;
+              // Snapshot numbers may round int64 bounds. Keep their exact
+              // integer in the editable YAML tree so unrelated edits/export
+              // cannot change an admitted concurrency value.
+              node.value = shape === 'strict-integer' && !Number.isSafeInteger(decoded)
+                ? runnerIntegerSpelling(node.source) ?? decoded : decoded;
               if (node.tag === 'tag:yaml.org,2002:float') node.minFractionDigits = Math.max(1, node.minFractionDigits ?? 0);
             }
           }

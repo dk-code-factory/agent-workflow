@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseDocument } from 'yaml';
 import { parseWorkflow } from '../src/validation';
 import { WorkflowDocument } from '../src/document';
 const root = resolve(import.meta.dirname, '../../testdata/ui-compat');
@@ -155,6 +156,30 @@ describe('Go repeat integer decoding', () => {
     expect(document.getSnapshot().workflow!.jobs.TRUE).toEqual(before!.jobs.TRUE);
     expect(document.getSnapshot().workflow!.jobs.test.needs).toEqual(['TRUE']);
     expect(document.getSnapshot().workflow!.name).toBe('01');
+  });
+});
+
+
+describe('iteration concurrency integer preservation', () => {
+  it.each([
+    ['9007199254740993', 9007199254740993n],
+    ['9223372036854775807', 9223372036854775807n],
+    ['0x7fffffffffffffff', 9223372036854775807n],
+    ['0777777777777777777777', 9223372036854775807n],
+    ['0b111111111111111111111111111111111111111111111111111111111111111', 9223372036854775807n],
+    ['!!int 9223372036854775807', 9223372036854775807n],
+  ])('retains exact %s through an unrelated edit and history', (value, expected) => {
+    const source = `jobs: {review: {uses: workflows/child.yml, for-each: {items: [], key: item.id, concurrency: ${value}}}}`;
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    document.setField(['jobs', 'review', 'name'], 'Changed');
+    const edited = document.getSnapshot();
+    expect(edited.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(parseDocument(edited.source, { intAsBigInt: true }).getIn(['jobs', 'review', 'for-each', 'concurrency'])).toBe(expected);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+    document.redo();
+    expect(document.getSnapshot().source).toBe(edited.source);
   });
 });
 
