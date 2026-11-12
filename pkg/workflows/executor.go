@@ -749,7 +749,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	if owner == "" {
 		owner = ec.RunID
 	}
-	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: agentRole(step), Definition: step.Definition, Input: args["input"], Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
+	turns, err := agentTaskTurns(args["turns"])
+	if err != nil {
+		return nil, err
+	}
+	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: agentRole(step), Definition: step.Definition, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
 	if step.Uses != "agent/run" {
 		return nil, fmt.Errorf("only agent/run accepts native definitions")
 	}

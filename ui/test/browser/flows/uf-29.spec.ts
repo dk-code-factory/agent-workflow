@@ -68,7 +68,7 @@ test('author a durable input request, correct validation errors and edit advance
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
 
-test('paste concise agent YAML, diagnose competing declarations and recover the original form', async ({ page }) => {
+test('paste native task YAML, reject removed shorthand and recover canonical form', async ({ page }) => {
   const ui = await open(page);
   await ui.getByRole('button', { name: 'Split', exact: true }).click();
   const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });

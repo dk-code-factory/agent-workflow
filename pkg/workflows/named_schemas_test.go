@@ -99,12 +99,7 @@ func TestNamedSchemasReuseAndInlineEquivalence(t *testing.T) {
 	if err != nil || calls.Load() != 2 || run.Jobs["review"].Steps["second"].Outputs["structured"].(map[string]any)["approved"] != true {
 		t.Fatalf("named execution: %+v %v calls=%d", run, err, calls.Load())
 	}
-	calls.Store(0)
-	writeWorkflow(t, root, "main.yml", strings.ReplaceAll(namedReviewWorkflow, "uses: agent/run\nwith:\n  agent: reviewer.toml\n", "uses: agent/run\nwith:\n  agent: reviewer.toml\n"))
-	run, err = nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
-	if err != nil || calls.Load() != 2 || run.Jobs["review"].Steps["second"].Outputs["structured"].(map[string]any)["approved"] != true {
-		t.Fatalf("concise named execution: %+v %v calls=%d", run, err, calls.Load())
-	}
+
 }
 
 func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {

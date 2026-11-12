@@ -180,7 +180,10 @@ func (r *Runtime) claim(ctx context.Context, p Plan, ac workflows.ActionContext,
 	assignment["report_schema"] = schema
 	assignment["report_limits"] = map[string]int{"bytes": 16 << 20, "collection_entries": maxReportCollection, "aggregate_entries": maxReportEntries, "nesting_levels": maxReportDepth}
 	prompt := string(jsonBytes(assignment))
-	if len(prompt) > 1<<20 || len(checklistPrompt([]byte(prompt), o, o.MaxChecks)) > 1<<20 {
+	if _, err := nativeTaskEnvelope([]byte(prompt), id, 0, o); err != nil {
+		return out, fmt.Errorf("bounded leaf assignment and checklist envelope exceed 1 MiB")
+	}
+	if _, err := nativeTaskEnvelope([]byte(prompt), id, o.MaxChecks, o); err != nil {
 		return out, fmt.Errorf("bounded leaf assignment and checklist envelope exceed 1 MiB")
 	}
 	assignmentPath, e := artifact(r.Root, assignment)
@@ -322,9 +325,6 @@ func parseReport(m workflows.WorkerMessage) (Report, error) {
 		ids[finding.ID] = true
 	}
 	return report, nil
-}
-func checklistPrompt(assignment []byte, o Occurrence, round int) string {
-	return string(jsonBytes(map[string]any{"assignment": json.RawMessage(assignment), "round": round, "checklist": o.Checklist, "instruction": "Verify every item in this same session; finish missing work. Preserve the original analysis and findings. Return complete, every checklist ID with evidence or an unfinished reason, additional findings and blockers. No new analysis/review invocation is authorized."}))
 }
 
 func messageRef(c claimRecord, m workflows.WorkerMessage) string {

@@ -23,6 +23,31 @@ jobs:
       - argv: [ echo, '\${{ needs.build.outputs.result }}' ]
 `;
 describe('document edits', () => {
+  it('reads exact typed input after omitted nulls in steps and nested handlers', () => {
+    const source = `jobs:
+  review:
+    steps:
+      - null
+      - uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: Review
+          input:
+            exact: 9007199254740993
+        onError:
+          - null
+          - uses: agent/run
+            with: {agent: reviewer.toml, prompt: Recover, input: [9007199254740995, null]}
+`;
+    const doc = new WorkflowDocument({ source });
+    expect(doc.getFieldYAML(['jobs', 'review', 'steps', 0, 'with', 'input'])).toContain('9007199254740993');
+    expect(doc.getFieldYAML(['jobs', 'review', 'steps', 0, 'onError', 0, 'with', 'input'])).toContain('9007199254740995');
+    expect(doc.getSnapshot().source).toBe(source);
+    doc.setField(['jobs', 'review', 'steps', 0, 'with', 'prompt'], 'Changed');
+    expect(doc.getFieldYAML(['jobs', 'review', 'steps', 0, 'with', 'input'])).toContain('9007199254740993');
+    expect(doc.getFieldYAML(['jobs', 'review', 'steps', 0, 'onError', 0, 'with', 'input'])).toContain('9007199254740995');
+  });
+
   it('preserves named schemas and references through edits, history and reparsing', () => {
     const original = `# shared contract
 schemas:

@@ -77,6 +77,7 @@ type JobExecution struct {
 type AgentRequest struct {
 	Definition *AgentDefinition
 	Input      any
+	Turns      int
 
 	// SessionOwnerID retains controller-owned provider state across conversation turns.
 	SessionOwnerID string

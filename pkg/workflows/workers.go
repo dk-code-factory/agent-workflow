@@ -43,6 +43,7 @@ type Worker struct {
 	SessionID              string                        `json:"session_id,omitempty"`
 	Tools                  []string                      `json:"tools"`
 	Remaining              int                           `json:"remaining_turns"`
+	TaskTurns              int                           `json:"task_turns,omitempty"`
 	Depth                  int                           `json:"depth"`
 	Error                  string                        `json:"error,omitempty"`
 }
@@ -397,7 +398,7 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			if admissionErr != nil && (existing.ParentID != spec.ParentID || existing.CreatorInvocation != spec.CreatorInvocation) {
 				return Worker{}, fmt.Errorf("stable worker creator identity changed")
 			}
-			if existing.Role != spec.Role || existing.TaskWorkspace != spec.TaskWorkspace || actionHash(existing.Definition) != actionHash(spec.Definition) {
+			if existing.Role != spec.Role || existing.TaskWorkspace != spec.TaskWorkspace || (spec.Definition != nil && spec.Turns != 0 && existing.TaskTurns != spec.Turns) || actionHash(existing.Definition) != actionHash(spec.Definition) {
 				return Worker{}, fmt.Errorf("%w: agent binding changed", ErrActionIntegrity)
 			}
 			return existing, nil
@@ -532,6 +533,9 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 		}
 	}
 	w := Worker{TaskWorkspace: spec.TaskWorkspace, Definition: spec.Definition, Access: access, MaxQueued: policy.MaxQueued, MaxDepth: policy.MaxDepth, TurnDuration: policy.TurnDuration, MaxOutput: policy.MaxOutput, ID: randomID(), RunID: spec.RunID, ParentID: spec.ParentID, Role: spec.Role, Status: "idle", Tools: tools, Remaining: turns, Depth: depth}
+	if spec.Definition != nil {
+		w.TaskTurns = turns
+	}
 	w.ToolGrants = grants
 	w.MaxWorkers = policy.MaxWorkers
 	w.CreatorInvocation = spec.CreatorInvocation
@@ -553,8 +557,11 @@ func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt str
 
 func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string, task AgentRequest) (WorkerMessage, error) {
 	prompt := task.Prompt
-	if requestID == "" || len(requestID) > 128 || len(prompt) > 1<<20 {
+	if requestID == "" || len(requestID) > 128 {
 		return WorkerMessage{}, fmt.Errorf("request_id required (max 128 bytes); prompt limit is 1 MiB")
+	}
+	if _, err := AgentTaskPrompt(prompt, task.Input); err != nil {
+		return WorkerMessage{}, err
 	}
 	w, err := m.Get(ctx, run, id)
 	if err != nil {
@@ -565,8 +572,11 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 		return WorkerMessage{}, err
 	}
 	secrets = m.taskRedactions(run, secrets)
-	encodedTask, _ := json.Marshal([]any{prompt, task.Input, task.Output})
-	if Redact(string(encodedTask), secrets) != string(encodedTask) {
+	containsSecret, err := containsCredential([]any{prompt, task.Input, task.Output}, secrets)
+	if err != nil {
+		return WorkerMessage{}, err
+	}
+	if containsSecret {
 		return WorkerMessage{}, fmt.Errorf("mailbox prompts must use credential references, not secret values")
 	}
 	tx, err := m.Store.db.BeginTx(ctx, nil)

@@ -406,8 +406,9 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
         } else {
           if (uses !== 'agent/run') add('action', 'Expected agent/run or a controller action', [...sp, 'uses']);
           if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path or agent reference', [...sp, 'with', 'agent']);
-          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
+          if (params.turns != null && (typeof params.turns !== 'number' || !Number.isInteger(params.turns) || params.turns < 1 || params.turns > 2147483647)) add('action', 'Agent turns must be a positive integer no greater than 2147483647', [...sp, 'with', 'turns']);
           if (params.prompt == null && params.message == null) add('action', 'Agent requires prompt or message', [...sp, 'with']);
           if (params.output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
           if (mapping(params.output) && typeof params.output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, params.output.schema)) {

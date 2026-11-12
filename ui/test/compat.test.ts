@@ -228,3 +228,11 @@ describe('tagged legacy boolean round trips', () => {
     expect(document.getSnapshot().workflow!.on).toEqual(before!.on);
   });
 });
+
+
+describe('native task turn allowance', () => {
+  it.each([[5, true], [0, false], [-1, false], [1.5, false], ['5', false], [2147483648, false]])('validates literal allowance %s', (turns, valid) => {
+    const parsed = parseWorkflow(JSON.stringify({ jobs: { review: { steps: [{ uses: 'agent/run', with: { agent: 'reviewer.toml', prompt: 'Review', turns } }] } } }));
+    expect(parsed.diagnostics.some(d => d.severity === 'error' && d.path.at(-1) === 'turns')).toBe(!valid);
+  });
+});

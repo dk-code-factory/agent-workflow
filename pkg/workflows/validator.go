@@ -269,7 +269,7 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 		}
 		for key := range step.With {
 			switch key {
-			case "model", "prompt", "message", "workspace", "output", "agent", "input":
+			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns":
 			default:
 				return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
 			}
@@ -286,6 +286,9 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 					return fmt.Errorf("step %s: with.%s must be a string", sid, key)
 				}
 			}
+		}
+		if _, err := agentTaskTurns(step.With["turns"]); err != nil {
+			return fmt.Errorf("step %s: %w", sid, err)
 		}
 		if step.With["prompt"] == nil && step.With["message"] == nil {
 			return fmt.Errorf("step %s requires prompt or message", sid)

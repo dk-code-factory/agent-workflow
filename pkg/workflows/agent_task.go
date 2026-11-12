@@ -25,6 +25,7 @@ type AgentTaskInput struct {
 	Input      any                  `json:"input,omitempty"`
 	Output     *AgentOutputContract `json:"output,omitempty"`
 	Model      string               `json:"model,omitempty"`
+	Turns      int                  `json:"turns,omitempty"`
 	Definition *AgentDefinition     `json:"definition,omitempty"`
 }
 
@@ -68,12 +69,15 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		request.Model = request.Definition.Model
 	}
 	operation := actionHash([]any{coordinate, ec.Attempt.InputFingerprint, request.RepairOnly, ec.Attempt.RepairCount})
-	dispatch := &AgentTaskDispatch{Reference: reference, Operation: operation, Input: AgentTaskInput{Workspace: request.Workspace, Prompt: request.Prompt, Input: request.Input, Output: request.Output, Model: request.Model, Definition: request.Definition}}
-	encoded, encodeErr := json.Marshal(dispatch.Input)
-	if encodeErr != nil {
-		return nil, encodeErr
+	dispatch := &AgentTaskDispatch{Reference: reference, Operation: operation, Input: AgentTaskInput{Workspace: request.Workspace, Prompt: request.Prompt, Input: request.Input, Output: request.Output, Model: request.Model, Turns: request.Turns, Definition: request.Definition}}
+	if _, err := AgentTaskPrompt(request.Prompt, request.Input); err != nil {
+		return nil, err
 	}
-	if Redact(string(encoded), e.redactions(ec.Secrets)) != string(encoded) {
+	containsSecret, err := containsCredential(dispatch.Input, e.redactions(ec.Secrets))
+	if err != nil {
+		return nil, err
+	}
+	if containsSecret {
 		return nil, fmt.Errorf("agent task inputs must use credential references, not secret values")
 	}
 	if ec.Attempt.AgentTask != nil && ec.Attempt.AgentTask.Operation == operation && actionHash(ec.Attempt.AgentTask) != actionHash(dispatch) {
@@ -85,7 +89,7 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	}
 	e.Workers.registerTaskSecrets(owner, e.redactions(ec.Secrets))
 	fence, _ := ctx.Value(fenceKey{}).(executionFence)
-	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: "codex", StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Definition: request.Definition})
+	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: "codex", StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Definition: request.Definition, Turns: request.Turns})
 	if err != nil {
 		return nil, err
 	}
@@ -397,4 +401,33 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 		}
 	}
 	return false
+}
+
+// AgentTaskPrompt bounds the exact prompt sent to the provider, including typed input.
+func AgentTaskPrompt(prompt string, input any) (string, error) {
+	if input != nil {
+		data, err := json.Marshal(input)
+		if err != nil {
+			return "", err
+		}
+		prompt += "\n\nTask input (JSON):\n" + string(data)
+	}
+	if len(prompt) > 1<<20 {
+		return "", fmt.Errorf("prompt including task input exceeds 1 MiB")
+	}
+	return prompt, nil
+}
+
+func agentTaskTurns(value any) (int, error) {
+	if value == nil {
+		return 0, nil
+	}
+	if _, stringValue := value.(string); !stringValue {
+		if number, ok := parseSchemaDecimal(value); ok {
+			if turns, ok := number.boundedInt(); ok && turns > 0 && turns <= 1<<31-1 {
+				return turns, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("with.turns must be a positive integer no greater than 2147483647")
 }

@@ -468,7 +468,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Canonical native task source updates graph labels and inspector fields; removed agent shorthand, misplaced top-level prompts and nonstring prompts produce diagnostics, then source correction restores the canonical task. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -796,12 +796,15 @@ sources are the [UI guide](../ui/README.md),
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
 
-- **Coverage:** Definition and typed input edits preserve all six hook lists and
-  exact integer literals beyond JavaScript's safe integer range;
+- **Coverage:** Definition, bounded turn allowance and typed input edits preserve
+  all six hook lists and exact integer literals beyond JavaScript's safe integer
+  range, including task inspection after omitted null steps. The flow opens the
+  handler section and checks every visible hook editor;
   command conversion reviews the discarded completion hooks, and Undo/Redo and
   exported YAML retain the definition and typed values.
 - **Starting point:** I open a task using `agent/run`.
-- **My flow:** I change its definition path → edit typed task input → inspect its
-  verification, completion, recovery, reporting and finalization lists → export.
+- **My flow:** I change its definition path and optional turn allowance → edit
+  typed task input → inspect its verification, completion, recovery, reporting
+  and finalization lists → export.
 - **What I see:** Task and hook steps remain visible in YAML, with diagnostics
   for removed syntax or a missing boolean completion contract.

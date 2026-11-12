@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, parseDocument, type Document, type Node } from 'yaml';
+import { isMap, isScalar, isSeq, parseDocument, visit, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, hasAgentResult, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
@@ -126,7 +126,24 @@ export class WorkflowDocument {
   private edit(fn: (doc: Document) => void, preserveInspector = false) {
     if (this.readOnly) throw new Error('Viewer is read-only');
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
-    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
+    const doc = this.parsed.doc.clone();
+    // Typed input is opaque JSON data. Restore its exact source nodes before
+    // serializing an unrelated edit; the semantic preview uses JS numbers.
+    const sourceKey = (node: Node) => `${isMap(node) ? 'map' : isSeq(node) ? 'sequence' : 'scalar'}:${node.range?.join(',')}`;
+    const exact = new Map<string, Node>();
+    visit(parseDocument(this.snapshot.source, { intAsBigInt: true }), (_key, node) => {
+      if ((isMap(node) || isSeq(node) || isScalar(node)) && node.range) exact.set(sourceKey(node), node);
+    });
+    visit(doc, (_key, node) => {
+      if (isMap(node) && node.get('uses') === 'agent/run') {
+        const input = node.getIn(['with', 'input'], true);
+        if ((isMap(input) || isSeq(input) || isScalar(input)) && input.range) {
+          const original = exact.get(sourceKey(input));
+          if (original) node.setIn(['with', 'input'], original.clone());
+        }
+      }
+    });
+    fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
   }
   private writeField(doc: Document, path: Path, value: unknown) {
     if (value === undefined) { doc.deleteIn(path); return; }
@@ -156,7 +173,16 @@ export class WorkflowDocument {
     const node = this.parsed.doc?.getIn(path, true);
     if (!node || (!isMap(node) && !isSeq(node) && !isScalar(node))) return '';
     const fragment: Document = parseDocument(this.snapshot.source, { intAsBigInt: true });
-    fragment.contents = (fragment.getIn(path, true) as Node).clone() as Node;
+    // Semantic parsing omits null entries from typed sequences. Source ranges
+    // still identify the original node, even when its sequence index shifted.
+    let original: Node | undefined;
+    visit(fragment, (_key, candidate) => {
+      if ((isMap(candidate) || isSeq(candidate) || isScalar(candidate)) && candidate.range?.[0] === node.range?.[0]) {
+        original = candidate; return visit.BREAK;
+      }
+    });
+    if (!original) return '';
+    fragment.contents = original.clone() as Node;
     return fragment.toString({ lineWidth: 0 }).trimEnd();
   }
   moveArgument(path: Path, from: number, to?: number) {

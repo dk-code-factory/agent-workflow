@@ -26,6 +26,7 @@ jobs:
         continue-on-error: true
         with:
           agent: prfix.toml
+          turns: 5
           prompt: ${{ steps.prepare.outputs.prompt }}
           input: ${{ steps.prepare.outputs.task_input }}
           output: {format: json, repair-attempts: 0, schema: report}

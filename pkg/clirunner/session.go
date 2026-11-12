@@ -2,7 +2,6 @@ package clirunner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -113,11 +112,10 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 	}
 	if req.Input != nil {
-		data, encodeErr := json.Marshal(req.Input)
-		if encodeErr != nil {
-			return workflows.SessionResult{}, encodeErr
+		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)
+		if err != nil {
+			return workflows.SessionResult{}, err
 		}
-		req.Prompt += "\n\nTask input (JSON):\n" + string(data)
 	}
 	agent.Execution.runID = req.RunID
 	agent.Execution.invocationID = req.InvocationID

@@ -5,6 +5,13 @@ exactly one TOML file. Paths resolve from the workflow that owns the step.
 Admission captures the file bytes and effective settings; resume uses that
 snapshot even if the file changes.
 
+The optional positive integer literal `with.turns` narrows the initial agent's total turn
+allowance, up to the configured runtime limit. It cannot change an existing
+agent reference's original allowance or replenish turns on continuation or
+recovery. Omit it to use the runtime limit. The editor exposes this as **Agent
+turn allowance**. The prompt, including structured-output instructions and the
+JSON-encoded typed input, must fit the mailbox's 1 MiB limit.
+
 ```yaml
 - id: review
   uses: agent/run

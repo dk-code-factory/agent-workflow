@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -88,15 +87,7 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 		adapters[k] = a
 	}
 	p := Plan{Version: Version, LogicalRun: req.Run, Identity: id, Instructions: req.Instructions, Options: req.Options, Upstream: req.Upstream, Adapters: adapters, MaintainOther: req.MaintainOther, Authorizations: req.Authorizations, Groups: map[string][][]string{}, Sources: map[string]string{}, ConfigPath: req.ConfigPath}
-	// Retain the original five-turn allowance in the admitted runtime snapshot.
-	taskConfig := req.Config
-	taskConfig.Agents = maps.Clone(req.Config.Agents)
-	codexRuntime := taskConfig.Agents["codex"]
-	if codexRuntime.Limits.MaxTurns == 0 || codexRuntime.Limits.MaxTurns > 5 {
-		codexRuntime.Limits.MaxTurns = 5
-	}
-	taskConfig.Agents["codex"] = codexRuntime
-	p.Roles, e = json.Marshal(taskConfig)
+	p.Roles, e = json.Marshal(req.Config)
 	if e != nil {
 		return Prepared{}, e
 	}

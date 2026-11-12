@@ -474,7 +474,7 @@ func TestNativeTaskLostCompletionReusesAuthoritativeTurn(t *testing.T) {
     steps:
       - id: task
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: work}
+        with: {agent: reviewer.toml, prompt: work, turns: 2}
 `, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "original"}, nil })
 	e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
 	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
@@ -485,6 +485,10 @@ func TestNativeTaskLostCompletionReusesAuthoritativeTurn(t *testing.T) {
 	resumed, err := e.Resume(context.Background(), run.ID, nil, true)
 	if err != nil || resumed.Status != RunStatusSucceeded {
 		t.Fatal(resumed, err)
+	}
+	workers, loadErr := e.Workers.List(context.Background(), run.ID)
+	if loadErr != nil || len(workers) != 1 || workers[0].TaskTurns != 2 || workers[0].Remaining != 1 {
+		t.Fatal("resume changed original task allowance", workers, loadErr)
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()

@@ -226,3 +226,21 @@ func redactAttempt(a Attempt, secrets map[string]string) Attempt {
 func (s redactedStore) RecordAttempt(ctx context.Context, a Attempt) error {
 	return s.Journal.RecordAttempt(ctx, redactAttempt(a, s.secrets))
 }
+
+// Compare decoded values so JSON escaping cannot conceal credential literals.
+func containsCredential(value any, secrets map[string]string) (bool, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false, err
+	}
+	var decoded any
+	if err = decodeJSONWithNumbers(encoded, &decoded); err != nil {
+		return false, err
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return false, err
+	}
+	safe, err := json.Marshal(redactValue(decoded, secrets))
+	return string(canonical) != string(safe), err
+}

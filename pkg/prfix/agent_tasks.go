@@ -30,18 +30,15 @@ func (r *Runtime) taskPrepare(ctx context.Context, p Plan, in ActionInput) (Acti
 	out := claimOutput(c)
 	out.Invoke = true
 	out.Agent = c.Worker
-	out.Prompt = "Perform the supplied PR task under its retained assignment. Return the original JSON report with completion and every checklist item."
-	out.TaskInput = map[string]any{"claim": c.ID, "round": in.Round, "assignment": json.RawMessage(assignment)}
+	o, err := p.Occurrence(c.Occurrence)
+	if err != nil {
+		return output(), err
+	}
+	out.Prompt, out.TaskInput = nativeTaskInput(assignment, c.ID, in.Round, o)
 	if in.Round > 0 {
 		if !strings.HasPrefix(c.Worker, "agent_") {
 			return output(), fmt.Errorf("original pipeline agent binding is unavailable")
 		}
-		o, err := p.Occurrence(c.Occurrence)
-		if err != nil {
-			return output(), err
-		}
-		out.TaskInput["checklist"] = o.Checklist
-		out.Prompt = "Verify every checklist item in this same session and finish missing work. Preserve the original analysis, findings and budgets. Return the original JSON report."
 	}
 	return out, nil
 }
@@ -92,4 +89,20 @@ func (r *Runtime) taskResult(ctx context.Context, p Plan, ac workflows.ActionCon
 	out := claimOutput(c)
 	out.Settled = true
 	return out, nil
+}
+
+func nativeTaskInput(assignment []byte, claim string, round int, occurrence Occurrence) (string, map[string]any) {
+	prompt := "Perform the supplied PR task under its retained assignment. Return the original JSON report with completion and every checklist item."
+	input := map[string]any{"claim": claim, "round": round, "assignment": json.RawMessage(assignment)}
+	if round > 0 {
+		prompt = "Verify every checklist item in this same session and finish missing work. Preserve the original analysis, findings and budgets. Return the original JSON report."
+		input["checklist"] = occurrence.Checklist
+	}
+	return prompt, input
+}
+
+func nativeTaskEnvelope(assignment []byte, claim string, round int, occurrence Occurrence) (string, error) {
+	prompt, input := nativeTaskInput(assignment, claim, round, occurrence)
+	contract := workflows.AgentOutputContract{Format: "json", Schema: map[string]any{"type": "object", "required": []any{"complete"}, "properties": map[string]any{"complete": map[string]any{"type": "boolean"}}}}
+	return workflows.AgentTaskPrompt(prompt+"\n\n"+contract.Instruction(), input)
 }
