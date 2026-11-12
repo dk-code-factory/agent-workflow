@@ -84,7 +84,7 @@ const schema: Shape = {
     name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
-    'for-each': { items: 'any', key: 'string' },
+    'for-each': { items: 'any', key: 'string', concurrency: 'strict-integer' },
     steps: [stepShape],
   } },
 };
@@ -317,6 +317,7 @@ function validateWorkflow(w: Workflow, add: Add) {
     if (job.repeat && (!Number.isInteger(job.repeat['max-attempts']) || job.repeat['max-attempts'] < 1 || job.repeat['max-attempts'] > 100 || !job.repeat.until?.trim())) add('repeat', 'Repeat requires max-attempts 1–100 and until', [...p, 'repeat']);
     const each = job['for-each'];
     if (each) {
+      if (each.concurrency !== undefined && (!Number.isInteger(each.concurrency) || each.concurrency < 1)) add('for-each', 'for-each.concurrency must be a positive integer', [...p, 'for-each', 'concurrency']);
       if (!job.uses || job.repeat || !each.key?.trim()) add('for-each', 'for-each requires a reusable workflow and key, and cannot combine with repeat', [...p, 'for-each']);
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');

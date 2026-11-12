@@ -174,6 +174,17 @@ func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
 		}
 	}
 	if n.Kind == yaml.MappingNode {
+		if t == reflect.TypeOf(ForEach{}) {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if n.Content[i].Value == "concurrency" {
+					value := n.Content[i+1]
+					var count int
+					if value.Tag != "!!int" || value.Decode(&count) != nil || count < 1 {
+						return fmt.Errorf("for-each.concurrency must be a positive integer")
+					}
+				}
+			}
+		}
 		if t == reflect.TypeOf(Step{}) {
 			if err := checkAgentShorthand(n); err != nil {
 				return fmt.Errorf("step at line %d: %w", n.Line, err)
