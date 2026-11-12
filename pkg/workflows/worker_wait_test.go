@@ -257,10 +257,125 @@ func TestWorkerWaitRejectsStaleOwnersAndForeignMessages(t *testing.T) {
 	if _, err = m.WaitMessage(fenceContext(context.Background(), &stale), req); !errors.Is(err, ErrActionIntegrity) {
 		t.Fatal(err)
 	}
+	other, err := m.Spawn(context.Background(), WorkerSpec{RunID: req.RunID, Role: "reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := m.Send(context.Background(), req.RunID, other.ID, "other", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := req
+	foreign.MessageID = message.ID
+	if _, err = m.WaitMessage(fenceContext(context.Background(), run), foreign); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("message from another worker accepted: %v", err)
+	}
 	if err = m.Store.BeginFinalization(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = m.WaitMessage(context.Background(), req); !errors.Is(err, ErrActionIntegrity) {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerWaitRejectsForeignExecutionFence(t *testing.T) {
+	for _, finalizing := range []bool{false, true} {
+		t.Run(fmt.Sprint(finalizing), func(t *testing.T) {
+			m, req := waitFixture(t)
+			ctx := context.Background()
+			run, snapshot, err := m.Store.Load(ctx, req.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := *run
+			foreign.ID = newID()
+			foreign.OriginID = foreign.ID
+			foreign.Owner = "foreign-owner"
+			if err = m.Store.Admit(ctx, &foreign, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if finalizing {
+				if err = m.Store.BeginFinalization(ctx, &foreign); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = m.observeWait(fenceContext(ctx, &foreign), req); !errors.Is(err, ErrActionIntegrity) {
+				t.Fatalf("foreign execution authorized wait: %v", err)
+			}
+			var count int
+			if err = m.Store.db.QueryRow("SELECT count(*) FROM worker_waits WHERE run_id=?", req.RunID).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("rejected wait left durable registration: %d %v", count, err)
+			}
+			if record, err := m.observeWait(fenceContext(ctx, run), req); err != nil || record.Status != "pending" {
+				t.Fatalf("current execution rejected: %+v %v", record, err)
+			}
+		})
+	}
+}
+
+func TestWorkerWaitRecoveredInterruptionRetainsExpiredDeadline(t *testing.T) {
+	m, req := waitFixture(t)
+	ctx := context.Background()
+	worker, err := m.Get(ctx, req.RunID, req.WorkerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Status = RunStatusRunning
+	if err = m.saveWorker(ctx, worker); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := m.Messages(ctx, req.RunID, req.WorkerID)
+	if err != nil || len(messages) != 1 {
+		t.Fatal(messages, err)
+	}
+	message := messages[0]
+	message.Status = RunStatusRunning
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Store.db.Exec("UPDATE messages SET status=?,record=? WHERE id=?", message.Status, raw, message.ID); err != nil {
+		t.Fatal(err)
+	}
+	req.Deadline = time.Now().Add(time.Second)
+	registered, err := m.observeWait(ctx, req)
+	if err != nil || registered.Status != "pending" {
+		t.Fatal(registered, err)
+	}
+	dir := m.Store.Dir
+	if err = m.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenSQLite(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	other := &WorkerManager{Store: reopened, Factory: m.Factory, Slots: m.Slots}
+	if err = other.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(time.Until(registered.Deadline))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-time.After(5 * time.Second):
+		t.Fatal("original wait deadline did not arrive")
+	}
+	if err = other.Resume(ctx, req.RunID, req.WorkerID); err != nil {
+		t.Fatal(err)
+	}
+	messages, err = other.Messages(ctx, req.RunID, req.WorkerID)
+	if err != nil || len(messages) != 1 || messages[0].Status != "interrupted" || !messages[0].FinishedAt.IsZero() {
+		t.Fatal("recovery did not preserve timestamp-free interruption", messages, err)
+	}
+	extended := req
+	extended.Deadline = time.Now().Add(time.Hour)
+	if _, err = other.WaitMessage(ctx, extended); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("late recovery completed expired wait: %v", err)
+	}
+	retained, err := other.observeWait(ctx, req)
+	if err != nil || retained.Status != "timed_out" || !retained.Deadline.Equal(registered.Deadline) {
+		t.Fatal("recovery changed original deadline", retained, err)
 	}
 }

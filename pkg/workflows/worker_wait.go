@@ -95,6 +95,9 @@ func (m *WorkerManager) observeWait(ctx context.Context, req WorkerWaitRequest) 
 	if err = checkFence(ctx, tx); err != nil {
 		return record, fmt.Errorf("%w: %v", ErrActionIntegrity, err)
 	}
+	if fence, ok := ctx.Value(fenceKey{}).(executionFence); ok && fence.id != req.RunID {
+		return record, fmt.Errorf("%w: wait run does not match execution owner", ErrActionIntegrity)
+	}
 	if err = checkEffectAdmission(ctx, tx, req.RunID); err != nil {
 		return record, err
 	}
@@ -141,7 +144,11 @@ func (m *WorkerManager) observeWait(ctx context.Context, req WorkerWaitRequest) 
 		// completion notification or the waiter's completion acknowledgement is lost.
 		switch message.Status {
 		case RunStatusSucceeded, RunStatusFailed, "interrupted", RunStatusCanceled:
-			if !message.FinishedAt.IsZero() && message.FinishedAt.After(record.Deadline) {
+			finishedAt := message.FinishedAt
+			if finishedAt.IsZero() {
+				finishedAt = time.Now()
+			}
+			if finishedAt.After(record.Deadline) {
 				record.Status = "timed_out"
 			} else {
 				record.Status, record.Result = "completed", &message
