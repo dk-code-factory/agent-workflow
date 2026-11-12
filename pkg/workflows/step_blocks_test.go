@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -351,33 +353,35 @@ func TestStepBlocksSnapshotDetachesNestedState(t *testing.T) {
 func TestStepBlocksRejectUnserializableSnapshotBeforeStartingBranches(t *testing.T) {
 	for _, value := range []string{".nan", ".inf", "-.inf"} {
 		t.Run(value, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 			root := t.TempDir()
 			writeWorkflow(t, root, "main.yml", `on:
   workflow_call:
     inputs:
       unused: {type: number, default: `+value+`}
-      task: {type: string, default: Review}
 jobs:
   review:
     steps:
       - id: branches
         parallel:
-          - uses: agent/run
-            with: {agent: a.toml, prompt: '${{ inputs.task }}'}
-          - uses: agent/run
-            with: {agent: a.toml, prompt: independent}
+          - argv: [mkdir, branch-started]
+          - argv: [mkdir, other-branch-started]
 `)
-			var calls atomic.Int32
-			e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
-				calls.Add(1)
-				return map[string]any{"text": req.Prompt}, nil
-			})})
-			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
-			if err == nil || !strings.Contains(err.Error(), "unsupported value") || calls.Load() != 0 {
-				t.Fatalf("snapshot failure did not stop dispatch: run=%+v err=%v calls=%d", run, err, calls.Load())
+			// Keep this caller non-durable so workflow admission does not reject
+			// the value before the parallel branch snapshot is exercised.
+			e := Executor{WorkspaceDir: root}
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || !strings.Contains(err.Error(), "parallel branch snapshot") {
+				t.Fatalf("snapshot failure did not stop dispatch: run=%+v err=%v", run, err)
 			}
-			if run != nil && run.Status == RunStatusSucceeded {
+			if run == nil || run.Status != RunStatusFailed || run.Jobs["review"].Steps["branches"].Status != RunStatusFailed {
 				t.Fatalf("snapshot failure was not recorded: %+v", run)
+			}
+			for _, marker := range []string{"branch-started", "other-branch-started"} {
+				if _, err := os.Stat(filepath.Join(root, marker)); !os.IsNotExist(err) {
+					t.Fatalf("branch dispatched before snapshot failure: %s: %v", marker, err)
+				}
 			}
 		})
 	}
