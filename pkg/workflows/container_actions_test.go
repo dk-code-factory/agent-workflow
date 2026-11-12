@@ -36,6 +36,12 @@ type protocolFixture struct {
 	receipts                                           map[string]bool
 	requests                                           []map[string]any
 	env                                                []string
+	calls                                              []protocolHookCall
+}
+
+type protocolHookCall struct {
+	phase, operationKey string
+	env                 []string
 }
 
 func (f *protocolFixture) call(argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
@@ -59,6 +65,7 @@ func (f *protocolFixture) call(argv []string, input []byte, env []string) ([]byt
 		return nil, []byte(fmt.Sprintf("missing context in %s", input)), 1, true
 	}
 	key := ac["operation_key"].(string)
+	f.calls = append(f.calls, protocolHookCall{phase: phase, operationKey: key, env: append([]string(nil), env...)})
 	result := map[string]any{"output": map[string]any{"head": "ready"}, "evidence": map[string]any{"head": "ready"}}
 	switch phase {
 	case "bindings":
@@ -323,11 +330,27 @@ func TestStructuredEnvCredentialsStayOutOfSnapshotsAndIdentities(t *testing.T) {
 	}
 	f.mu.Lock()
 	env := strings.Join(f.env, "\n")
+	resumeStart := len(f.calls)
+	expectedTokens := map[string]string{}
+	for _, call := range f.calls {
+		expectedTokens[call.operationKey] = "rotated-credential"
+	}
 	f.mu.Unlock()
 	if !strings.Contains(env, "TOKEN=private-credential-value") {
 		t.Fatal("credential was not explicitly injected")
 	}
-	var count int
+	assertStructuredCredentialsNotStored(t, store, "private-credential-value")
+	if _, err = e.Resume(t.Context(), run.ID, map[string]string{"token": "rotated-credential"}, false); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	assertResumedHookCredentials(t, f.calls[resumeStart:], expectedTokens)
+	f.mu.Unlock()
+	assertStructuredCredentialsNotStored(t, store, "private-credential-value", "rotated-credential")
+}
+
+func assertStructuredCredentialsNotStored(t *testing.T, store *SQLiteStore, values ...string) {
+	t.Helper()
 	for _, location := range []struct{ table, column string }{
 		{"runs", "record"},
 		{"runs", "snapshot"},
@@ -335,13 +358,48 @@ func TestStructuredEnvCredentialsStayOutOfSnapshotsAndIdentities(t *testing.T) {
 		{"invocations", "record"},
 		{"attempts", "record"},
 	} {
-		query := fmt.Sprintf("SELECT count(*) FROM %s WHERE CAST(%s AS TEXT) LIKE '%%private-credential-value%%'", location.table, location.column)
-		if err = store.db.QueryRow(query).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("credential persisted in %s.%s: %d %v", location.table, location.column, count, err)
+		query := fmt.Sprintf("SELECT count(*) FROM %s WHERE CAST(%s AS TEXT) LIKE ?", location.table, location.column)
+		for _, value := range values {
+			var count int
+			if err := store.db.QueryRow(query, "%"+value+"%").Scan(&count); err != nil || count != 0 {
+				t.Errorf("credential persisted in %s.%s: %d %v", location.table, location.column, count, err)
+			}
 		}
 	}
-	if _, err = e.Resume(t.Context(), run.ID, map[string]string{"token": "rotated-credential"}, false); err != nil {
-		t.Fatal(err)
+}
+
+func assertResumedHookCredentials(t *testing.T, calls []protocolHookCall, expectedTokens map[string]string) {
+	t.Helper()
+	if len(expectedTokens) == 0 {
+		t.Error("no original helper operations recorded")
+	}
+	seen := map[string]map[string]bool{}
+	for _, call := range calls {
+		want, ok := expectedTokens[call.operationKey]
+		if !ok {
+			t.Errorf("unexpected resumed operation %s", call.operationKey)
+			continue
+		}
+		var tokens []string
+		for _, assignment := range call.env {
+			if strings.HasPrefix(assignment, "TOKEN=") {
+				tokens = append(tokens, strings.TrimPrefix(assignment, "TOKEN="))
+			}
+		}
+		if len(tokens) != 1 || tokens[0] != want {
+			t.Errorf("%s hook for %s received TOKEN=%q, want %q", call.phase, call.operationKey, tokens, want)
+		}
+		if seen[call.operationKey] == nil {
+			seen[call.operationKey] = map[string]bool{}
+		}
+		seen[call.operationKey][call.phase] = true
+	}
+	for operation := range expectedTokens {
+		for _, phase := range []string{"bindings", "validate_checkpoint"} {
+			if !seen[operation][phase] {
+				t.Errorf("resumed operation %s did not receive a %s hook", operation, phase)
+			}
+		}
 	}
 }
 
@@ -393,14 +451,39 @@ func TestNestedStructuredCallsRetainDistinctOperationsAndCredentialAliases(t *te
 	if records[0].Context.OperationKey == records[1].Context.OperationKey || records[0].Context.CredentialRefs == records[1].Context.CredentialRefs {
 		t.Fatal("reusable invocations or credential aliases collapsed")
 	}
-	if _, err = e.Resume(t.Context(), run.ID, map[string]string{"alpha": "rotated-alpha", "beta": "rotated-beta"}, false); err != nil {
+	rotated := map[string]string{"alpha": "rotated-alpha", "beta": "rotated-beta"}
+	expectedTokens := map[string]string{}
+	seenAliases := map[string]bool{}
+	for _, record := range records {
+		var references map[string]string
+		if err := json.Unmarshal([]byte(record.Context.CredentialRefs), &references); err != nil {
+			t.Fatal(err)
+		}
+		alias := references["TOKEN"]
+		value, ok := rotated[alias]
+		if !ok || len(references) != 1 {
+			t.Fatalf("unexpected retained credential aliases: %v", references)
+		}
+		expectedTokens[record.Context.OperationKey] = value
+		seenAliases[alias] = true
+	}
+	if len(seenAliases) != 2 {
+		t.Fatalf("nested helpers did not retain both root aliases: %v", seenAliases)
+	}
+	f.mu.Lock()
+	resumeStart := len(f.calls)
+	f.mu.Unlock()
+	assertStructuredCredentialsNotStored(t, store, "same-credential")
+	if _, err = e.Resume(t.Context(), run.ID, rotated, false); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	assertResumedHookCredentials(t, f.calls[resumeStart:], expectedTokens)
 	if f.execute != 2 || f.validations != 2 {
 		t.Fatalf("execute=%d validation=%d", f.execute, f.validations)
 	}
+	assertStructuredCredentialsNotStored(t, store, "same-credential", "rotated-alpha", "rotated-beta")
 }
 
 func TestStructuredProtocolWorksOnStandaloneDockerSteps(t *testing.T) {
