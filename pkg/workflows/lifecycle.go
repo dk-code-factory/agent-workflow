@@ -302,7 +302,10 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			}
 		}
 		handlerEC.Failed = map[string]any{"id": step.ID, "uses": step.Uses, "prompt": Redact(prompt, e.redactions(ec.Secrets))}
-		handlerEC.Error = map[string]any{"message": Redact(life.OriginalError, e.redactions(ec.Secrets)), "class": life.OriginalClass}
+		// Legacy error expressions describe the original task snapshot. The
+		// lifecycle may also retain a later verification error for audit, but
+		// that must not change completed handler inputs when replaying them.
+		handlerEC.Error = map[string]any{"message": Redact(result.Error, e.redactions(ec.Secrets)), "class": result.FailureClass}
 		run := func(kind string, list []Step) (map[string]any, error) {
 			if len(list) == 0 {
 				return nil, nil
