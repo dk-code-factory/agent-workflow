@@ -715,7 +715,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-44.spec.ts)
 
-- **Coverage:** The native task starts without `codex` in the host catalog and asserts a distinct agent warning alongside the missing-workflow warning. Editing its definition preserves the prompt and does not clear the runtime warning; adding `codex` to the host catalog clears only that warning. Correcting the reusable workflow then clears the remaining warning.
+- **Coverage:** The native task starts without `codex` in the host catalog and asserts a distinct agent warning alongside the missing-workflow warning. Editing its definition preserves the canonical action, prompt, typed input and turn allowance through Undo/Redo and does not clear the runtime warning; adding `codex` to the host catalog clears only that warning. Correcting the reusable workflow then clears the remaining warning.
 
 - **Starting point:** The host supplies catalogs, and diagnostics say a
   referenced agent or workflow is unavailable.
@@ -726,9 +726,10 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** The native runtime warning clears when the host catalog
   includes `codex`; changing a definition alone leaves that warning visible.
   The workflow warning clears when its reference matches the catalog.
-  Both **Action target** and **Step type** keep parameters when changing agents
-  and review incompatible changes as described in UF-21. Catalog membership
-  does not verify provider authentication or resolve the reusable file.
+  Editing **Agent definition or reference** keeps the task's other parameters.
+  **Action target** and **Step type** change the step kind and review incompatible
+  changes as described in UF-21. Catalog membership does not verify provider
+  authentication or resolve the reusable file.
 
 ### UF-45 — Author a workflow using the keyboard
 
