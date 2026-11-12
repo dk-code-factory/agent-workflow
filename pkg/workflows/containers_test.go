@@ -777,6 +777,9 @@ func TestContainerGuardianFailureBlocksHandlersAndContinuation(t *testing.T) {
 			if err == nil || run == nil || run.Status != RunStatusNeedsAttention {
 				t.Fatalf("guardian failure was not hard: run=%+v err=%v", run, err)
 			}
+			if got := run.Jobs["build"].Steps["unsafe"].Error; strings.Count(got, "container guardian exited with code 125") != 1 {
+				t.Fatalf("guardian failure diagnostic was duplicated or missing: %s", got)
+			}
 			for _, name := range []string{"handler-ran", "next-ran"} {
 				if _, err := os.Stat(filepath.Join(e.WorkspaceDir, name)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("unsafe continuation %s: %v", name, err)

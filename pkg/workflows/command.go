@@ -101,7 +101,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	if len(env) > 0 {
+	if len(env) > 0 && e.CommandExecution.Mode != "container" {
 		cmd.Env = append(os.Environ(), env...)
 	}
 	dir := step.WorkingDirectory

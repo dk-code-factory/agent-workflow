@@ -30,7 +30,30 @@ jobs: {build: {container: ubuntu:24.04, steps: [{id: helper, argv: [helper]}, {i
   expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual(helper);
   await job(page);
   await ui.getByRole('button', { name: '2. read', exact: true }).click();
-  await expect(ui.locator('.aw-inspector-content > datalist option[value="${{ steps.helper.head }}"]')).toHaveCount(1);
+  await expect(ui.locator('.aw-inspector-content > datalist option[value="${{ steps.helper.outputs.head }}"]')).toHaveCount(1);
+});
+
+test('wire a helper output into another job through the result picker', async ({ page }) => {
+  const source = `schemas: {Output: {type: object, properties: {head: {type: string}}}}
+jobs: {build: {container: ubuntu:24.04, steps: [{id: helper, argv: [helper], protocol: action-v1, effect: read_only, input-schema: {type: object}, output-schema: Output}]}, consume: {steps: [{id: read, argv: [echo, '']}]}}`;
+  const ui = await open(page, source); await job(page, 'consume');
+  await ui.getByRole('button', { name: '1. read', exact: true }).click();
+  const before = (await snapshot(page)).source;
+  await ui.getByRole('button', { name: 'Use job result in Argument 1', exact: true }).click();
+  const picker = ui.getByRole('dialog', { name: 'Use job result', exact: true });
+  await picker.getByLabel('Result source', { exact: true }).selectOption('result');
+  await expect(picker.locator('datalist option').filter({ hasText: /^outputs\.head$/ })).toHaveCount(1);
+  await picker.getByLabel('Result field', { exact: true }).fill('outputs.head');
+  await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
+  await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('${{ needs.build.steps.helper.outputs.head }}');
+  expect((await snapshot(page)).source).toBe(before);
+  await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
+  const consumer = (await snapshot(page)).workflow.jobs.consume;
+  expect(consumer.needs).toEqual(['build']);
+  expect(consumer.steps[0].argv[1]).toBe('${{ needs.build.steps.helper.outputs.head }}');
+  expect(parse(await downloadText(page)).jobs.consume.steps[0].argv[1]).toBe('${{ needs.build.steps.helper.outputs.head }}');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
 });
 
 for (const handler of ['onError', 'onFailure', 'finally']) {

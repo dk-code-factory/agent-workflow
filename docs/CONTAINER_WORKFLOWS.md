@@ -193,4 +193,6 @@ Environment declarations never interpolate credentials into the pinned command.
 
 The editor's **Helper protocol and environment** section supports protocol,
 effect, input and both schema forms. Export preserves names and mappings, and
-following steps receive suggestions from structured output schemas.
+following steps receive suggestions from structured output schemas. Business
+fields use explicit output paths such as `${{ steps.current.outputs.head }}`;
+dependency references use `${{ needs.capture.steps.current.outputs.head }}`.

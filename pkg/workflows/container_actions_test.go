@@ -114,6 +114,30 @@ func installProtocolWorkflow(t *testing.T, e *Executor, d *workflowDocker, f *pr
 		t.Fatal(err)
 	}
 }
+
+func TestStructuredHelperOutputReferencesAcrossScopes(t *testing.T) {
+	e, _, d := containerExecutor(t)
+	f := &protocolFixture{binding: "resource-a"}
+	source := structuredWorkflow + `      - id: local
+        argv: [echo, '${{ steps.current.outputs.head }}']
+  consumer:
+    needs: capture
+    steps:
+      - id: read
+        argv: [echo, '${{ needs.capture.steps.current.outputs.head }}']
+`
+	installProtocolWorkflow(t, e, d, f, source)
+	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, consumer := range []struct{ job, step string }{{"capture", "local"}, {"consumer", "read"}} {
+		if got := run.Jobs[consumer.job].Steps[consumer.step].Outputs["stdout"]; got != "ready\n" {
+			t.Fatalf("%s.%s could not consume the helper output: %q", consumer.job, consumer.step, got)
+		}
+	}
+}
+
 func TestStructuredHelperCompletedRecoveryUsesOwnedValidationAndBindings(t *testing.T) {
 	e, store, d := containerExecutor(t)
 	f := &protocolFixture{binding: "resource-a"}

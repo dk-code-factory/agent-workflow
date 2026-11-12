@@ -30,7 +30,7 @@ export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, p
       if (result.length >= limit) return;
     }
   };
-  visit(schema);
+  visit(schema, step.protocol === 'action-v1' ? 'outputs' : '');
   return result;
 }
 export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path, prefix = ''): string[] {

@@ -465,9 +465,6 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 	env, _ := ctx.Value(commandEnvKey{}).([]string)
 	code, queueTime, err := e.runContainerIO(ctx, step, argv, env, containerapi.Streams{Stdout: &stdout, Stderr: &stderr}, slots)
 	out = map[string]any{"stdout": stdout.String(), "stderr": stderr.String(), "exit_code": code, "queue_time_ms": queueTime}
-	if code == 125 {
-		return out, errors.Join(err, fmt.Errorf("%w: container guardian exited with code %d", process.ErrCleanup, code))
-	}
 	if errors.Is(err, process.ErrCleanup) {
 		return out, err
 	}
