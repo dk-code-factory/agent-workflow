@@ -205,6 +205,7 @@ func nativeTestExecutor(t *testing.T, e *Executor) *Executor {
 		saved = func(context.Context, string) error { return nil }
 	}
 	nativeFixtureFinalizers.Store(m, saved)
+	t.Cleanup(func() { nativeFixtureFinalizers.Delete(m) })
 	e.BeforeFinalize = func(c context.Context, id string) error {
 		if err := m.StopRun(c, id); err != nil {
 			return err
@@ -313,4 +314,18 @@ func editNativeWorkflow(t *testing.T, source string, edit func(*Workflow)) strin
 	}
 	edit(w)
 	return nativeWorkflowSource(t, w)
+}
+
+func TestNativeFixtureReleasesFinalizerRegistry(t *testing.T) {
+	var manager *WorkerManager
+	t.Run("fixture", func(t *testing.T) {
+		executor, _ := durableExecutor(t, "jobs: {task: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work}}]}}", nil)
+		manager = executor.Workers
+		if _, ok := nativeFixtureFinalizers.Load(manager); !ok {
+			t.Fatal("fixture finalizer was not registered")
+		}
+	})
+	if _, ok := nativeFixtureFinalizers.Load(manager); ok {
+		t.Fatal("completed fixture remains in finalizer registry")
+	}
 }
