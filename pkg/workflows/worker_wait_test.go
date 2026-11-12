@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,8 +115,16 @@ func TestWorkerWaitCancellationAndStoppedProducer(t *testing.T) {
 	if err := m.Interrupt(context.Background(), req.RunID, req.WorkerID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.WaitMessage(context.Background(), req); err == nil {
-		t.Fatal("closed producer left pending")
+	worker, err := m.Get(context.Background(), req.RunID, req.WorkerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Error = "fixture producer setup failed"
+	if err := m.saveWorker(context.Background(), worker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.WaitMessage(context.Background(), req); err == nil || !strings.Contains(err.Error(), worker.Error) {
+		t.Fatal("closed producer did not retain its failure", err)
 	}
 	msgs, err := m.Messages(context.Background(), req.RunID, req.WorkerID)
 	if err != nil || len(msgs) != 1 {

@@ -21,6 +21,7 @@ type workerWait struct {
 	MessageID string         `json:"message_id"`
 	Deadline  time.Time      `json:"deadline"`
 	Status    string         `json:"status"`
+	Error     string         `json:"error,omitempty"`
 	Result    *WorkerMessage `json:"result,omitempty"`
 }
 
@@ -66,7 +67,7 @@ func (m *WorkerManager) WaitMessage(ctx context.Context, req WorkerWaitRequest) 
 		case "timed_out":
 			return WorkerMessage{}, context.DeadlineExceeded
 		case "stopped":
-			return WorkerMessage{}, fmt.Errorf("worker %s stopped with unresolved message %s", req.WorkerID, req.MessageID)
+			return WorkerMessage{}, fmt.Errorf("worker %s stopped with unresolved message %s: %s", req.WorkerID, req.MessageID, record.Error)
 		}
 		if timer == nil {
 			timer = time.NewTimer(time.Until(record.Deadline))
@@ -149,6 +150,7 @@ func (m *WorkerManager) observeWait(ctx context.Context, req WorkerWaitRequest) 
 				record.Status = "timed_out"
 			} else if worker.Status == "closed" || worker.Status == RunStatusNeedsAttention || (worker.Status == "idle" && worker.Remaining == 0) {
 				record.Status = "stopped"
+				record.Error = worker.Error
 			}
 		}
 	}
