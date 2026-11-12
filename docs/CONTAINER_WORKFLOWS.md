@@ -101,3 +101,104 @@ In the editor, **Job container image**, **Docker entrypoint** and **Docker
 arguments** support source-preserving edits, export and Undo/Redo. Converting a
 job into a reusable call reviews removal of its container. Docker image changes
 retain command overrides; conversion to another step kind reviews their removal.
+
+## Structured helpers
+
+A command in a job container, or a Docker step, can opt into the engine's durable
+JSON lifecycle:
+
+```yaml
+schemas:
+  CaptureOutput:
+    type: object
+    properties: {head: {type: string}}
+    required: [head]
+    additionalProperties: false
+jobs:
+  capture:
+    container: ghcr.io/example/python-tools:local
+    steps:
+      - id: current
+        argv: [python3, /opt/helpers/capture.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema:
+          type: object
+          properties: {repository: {type: string}}
+          required: [repository]
+          additionalProperties: false
+        output-schema: CaptureOutput
+        input: {repository: "."}
+        env: {TOKEN: '${{ secrets.token }}'}
+```
+
+Both schema fields require an object schema, either inline or a name in the
+owning workflow's `schemas` map. Names remain names in admitted definitions.
+Unsupported schema keywords are rejected. Effects are explicitly `read_only`
+or `external_mutation`. Omitted business `input` defaults to `{}`. Business data
+renders once, preserving JSON numbers, arrays, objects, booleans, null and literal
+expression-looking strings supplied by a whole expression. Commands and container
+settings are static; structured commands cannot interpolate inputs or secrets.
+Structured helpers cannot own or appear inside ordinary command lifecycle
+handlers.
+
+The engine sends exactly one JSON request on stdin. The helper writes exactly one
+JSON response on stdout and diagnostics on stderr. Requests and responses are
+limited to 1 MiB each; diagnostics are limited to 4 MiB. Extra documents, unknown
+response fields, wrong versions/phases, oversized streams and nonzero exits fail
+the phase. The configured timeout applies to each phase (default five minutes).
+Recovery requests include input, bindings and the retained result within the same
+1 MiB limit. The engine checks that combined budget before execution and durable
+completion, reserving space for future ownership metadata. Oversized results fail
+without releasing an admitted mutation for replay; recovery still requires
+authoritative reconciliation. Keep bindings and results compact or use references
+to application-owned evidence.
+
+Every request has `protocol: "action-v1"`, `phase`, the original action `context`,
+the current `runtime_owner` (run ID and generation), and schema-validated `input`.
+Checkpoint phases also receive `checkpoint: {bindings, result}`. The context
+contains stable operation key, original run/job/step/iteration, attempt identity
+and generation. Current runtime ownership stays separate on recovery.
+
+Responses always repeat `protocol` and `phase`. The phase contracts are:
+
+| Phase | Response fields | Application behavior |
+| --- | --- | --- |
+| `bindings` | `capabilities`, `read_only_phases`, `bindings` | Read-only capture of stable resource bindings |
+| `execute` | `result: {output, evidence?, receipt?}` | Perform the declared operation |
+| `validate_checkpoint` | `valid: true` | Read-only verification of retained output/evidence/receipts |
+| `reconcile` | `outcome`, `proof`, and `result` when completed | Read-only observation of an uncertain mutation |
+
+Bindings must advertise `bindings`, `execute`, and `validate_checkpoint` in
+`capabilities`, and `bindings`/`validate_checkpoint` in `read_only_phases`.
+Mutation helpers must also advertise read-only `reconcile`. Reconciliation returns
+`completed`, `no_effect`, or `unknown`; completed/no-effect outcomes need non-null
+proof. Unknown observations are journaled and block another mutation attempt.
+A valid JSON response alone does not prove that an external effect completed.
+
+Helpers use the existing action journal: admission precedes execution, validated
+completion precedes dependents, and all retained checkpoints are validated before
+successful job/reusable-child shortcuts. Repeated/reusable calls retain distinct
+logical operation identities. Lost responses or completion commits reconcile
+without blindly replaying effects. Fully completed runs acquire a separate owned
+validation execution before launching any verification container.
+
+Execution phases can use the shared job container. Binding, validation and
+reconciliation phases use independent containers with the same admitted image,
+command and policy. All phases have invocation records, current ownership,
+capacity, deadlines and verified cleanup. Do not use transient `/tmp` or `/state`
+as durable evidence: receipts and bindings belong to application-owned resources.
+
+`env` is an explicit mapping on command/Docker steps. Ordinary command values may
+render expressions; structured helper values are static strings or a direct
+`${{ secrets.NAME }}` reference. Declare/forward credentials through the existing
+reusable-workflow secret interface. Only symbolic credential aliases are retained;
+values resolve for the current execution and remain outside snapshots, contracts
+and identity fingerprints. Existing redaction applies to results and diagnostics.
+Environment declarations never interpolate credentials into the pinned command.
+
+The editor's **Helper protocol and environment** section supports protocol,
+effect, input and both schema forms. Export preserves names and mappings, and
+following steps receive suggestions from structured output schemas. Business
+fields use explicit output paths such as `${{ steps.current.outputs.head }}`;
+dependency references use `${{ needs.capture.steps.current.outputs.head }}`.

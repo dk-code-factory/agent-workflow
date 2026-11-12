@@ -1,6 +1,8 @@
 export type Path = (string | number)[];
 export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
+ protocol?: string; effect?: string; input?: Mapping; env?: Record<string, string>;
+ 'input-schema'?: Mapping | string; 'output-schema'?: Mapping | string;
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;

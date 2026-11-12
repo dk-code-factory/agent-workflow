@@ -148,6 +148,9 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
 		}
 		seen[sid] = true
+		if err := validateContainerProtocol(w, id, step); err != nil {
+			return fmt.Errorf("job %s step %s: %w", id, sid, err)
+		}
 		if isStepBlock(step) {
 			if err := validateStepBlock(step); err != nil {
 				return fmt.Errorf("step %s: %w", sid, err)

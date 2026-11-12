@@ -396,67 +396,75 @@ func containerWorkingDirectory(dir string) string {
 	}
 	return filepath.ToSlash(filepath.Join("/workspace", dir))
 }
-func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv []string, slots chan struct{}) (out map[string]any, returned error) {
+func (e *Executor) runContainerIO(ctx context.Context, step Step, argv, env []string, streams containerapi.Streams, slots chan struct{}) (code int, queueTime int64, returned error) {
 	scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope)
 	queued := time.Now()
 	if scope != nil {
 		if err := scope.acquire(ctx); err != nil {
-			return nil, err
+			return -1, queueTime, err
 		}
 	} else {
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return -1, queueTime, ctx.Err()
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return -1, queueTime, err
 	}
 	defer func() {
+		if code == 125 {
+			returned = errors.Join(returned, fmt.Errorf("%w: container guardian exited with code %d", process.ErrCleanup, code))
+		}
 		if errors.Is(returned, process.ErrCleanup) {
 			cancelContainerCleanup(ctx)
 		}
 	}()
-	queueTime := time.Since(queued).Milliseconds()
-	var stdout, stderr cappedOutput
-	streams := containerapi.Streams{Stdout: &stdout, Stderr: &stderr}
-	var code int
+	queueTime = time.Since(queued).Milliseconds()
 	var err error
 	if isDockerStep(step) {
 		p := step.ContainerImplementation
 		if p == nil {
-			return nil, fmt.Errorf("Docker step was not admitted")
-		}
-		argv, err = dockerCommand(step, p.Image)
-		if err != nil {
-			return nil, err
+			return -1, queueTime, fmt.Errorf("Docker step was not admitted")
 		}
 		o, err := e.launchOptions(ctx, p, argv)
 		if err != nil {
-			return nil, err
+			return -1, queueTime, err
 		}
 		o.WorkingDir = containerWorkingDirectory(step.WorkingDirectory)
+		o.Env = env
 		session, err := runtimeexec.LaunchContainer(ctx, o)
 		if err != nil {
-			return nil, err
+			return -1, queueTime, err
 		}
 		defer func() { returned = errors.Join(returned, session.Close()) }()
 		code, err = session.Run(ctx, streams)
 	} else {
 		if scope == nil {
-			return nil, fmt.Errorf("shared container scope unavailable")
+			return -1, queueTime, fmt.Errorf("shared container scope unavailable")
 		}
 		if err := scope.start(ctx); err != nil {
+			return -1, queueTime, err
+		}
+		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, Env: env, WorkingDir: containerWorkingDirectory(step.WorkingDirectory)}, streams)
+	}
+
+	return code, queueTime, err
+}
+func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv []string, slots chan struct{}) (out map[string]any, returned error) {
+	if isDockerStep(step) {
+		var err error
+		argv, err = dockerCommand(step, step.ContainerImplementation.Image)
+		if err != nil {
 			return nil, err
 		}
-		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, WorkingDir: containerWorkingDirectory(step.WorkingDirectory)}, streams)
 	}
+	var stdout, stderr cappedOutput
+	env, _ := ctx.Value(commandEnvKey{}).([]string)
+	code, queueTime, err := e.runContainerIO(ctx, step, argv, env, containerapi.Streams{Stdout: &stdout, Stderr: &stderr}, slots)
 	out = map[string]any{"stdout": stdout.String(), "stderr": stderr.String(), "exit_code": code, "queue_time_ms": queueTime}
-	if code == 125 {
-		return out, errors.Join(err, fmt.Errorf("%w: container guardian exited with code %d", process.ErrCleanup, code))
-	}
 	if errors.Is(err, process.ErrCleanup) {
 		return out, err
 	}

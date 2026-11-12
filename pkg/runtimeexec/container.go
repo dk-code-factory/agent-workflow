@@ -29,6 +29,8 @@ type ContainerOptions struct {
 	Bridge                 bool
 	CredentialFile         string
 	CredentialEnv          string
+	// Environment contains explicit workload assignments, separate from the host runtime environment.
+	Environment []string
 }
 
 func RuntimePath(policy Policy) (string, error) {
@@ -199,6 +201,9 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 	}
 	if options.CredentialFile != "" {
 		args = append(args, "--env", "AGENT_WORKFLOW_AUTH_FILE=/state/auth.json")
+	}
+	for _, assignment := range options.Environment {
+		args = append(args, "--env", assignment)
 	}
 	child := append([]string(nil), cmd.Args...)
 	if options.Bridge {

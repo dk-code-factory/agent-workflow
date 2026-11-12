@@ -12,13 +12,15 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
+const ContainerActionV1 = "action-v1"
+const StructuredContainersV1 = "structured-containers-v1"
 const RegisteredGoActionsV1 = "registered-go-actions-v1"
 
 // Capabilities reports library contracts, independently of configured actions.
 const OrderedDynamicIterationV1 = "ordered-dynamic-iteration-v1"
 
 func Capabilities() []string {
-	return []string{GitHubContainersV1, RegisteredGoActionsV1, OrderedDynamicIterationV1, DurableExternalInputV1}
+	return []string{StructuredContainersV1, GitHubContainersV1, RegisteredGoActionsV1, OrderedDynamicIterationV1, DurableExternalInputV1}
 }
 
 type ActionEffect string
@@ -31,14 +33,15 @@ const (
 // ActionContext identifies a physical attempt and a stable logical operation.
 // OperationKey is unchanged by resume, reconciliation, or a new attempt.
 type ActionContext struct {
-	RunID        string `json:"run_id"`
-	JobID        string `json:"job_id"`
-	StepID       string `json:"step_id"`
-	Iteration    int    `json:"iteration"`
-	AttemptID    string `json:"attempt_id"`
-	Attempt      int    `json:"attempt"`
-	Generation   int64  `json:"generation"`
-	OperationKey string `json:"operation_key"`
+	CredentialRefs string `json:"credential_refs,omitempty"`
+	RunID          string `json:"run_id"`
+	JobID          string `json:"job_id"`
+	StepID         string `json:"step_id"`
+	Iteration      int    `json:"iteration"`
+	AttemptID      string `json:"attempt_id"`
+	Attempt        int    `json:"attempt"`
+	Generation     int64  `json:"generation"`
+	OperationKey   string `json:"operation_key"`
 }
 
 type ActionResult[O any] struct {
@@ -98,6 +101,7 @@ type registeredAction struct {
 	contract      ActionContract
 	input, output *jsonschema.Resolved
 	bindings      func(context.Context, ActionContext, json.RawMessage) (json.RawMessage, error)
+	recovery      func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) error
 	handler       func(context.Context, ActionContext, json.RawMessage) (ActionValue, error)
 	validate      func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) error
 	reconcile     func(context.Context, ActionContext, json.RawMessage, json.RawMessage, ActionValue) (actionReconciliation, error)
@@ -137,8 +141,7 @@ func RegisterAction[I, O any](r *ActionRegistry, name string, spec ActionSpec[I,
 	if err != nil {
 		return fmt.Errorf("action %s output: %w", name, err)
 	}
-	a := &registeredAction{contract: ActionContract{Name: name, Implementation: spec.Implementation, Effect: spec.Effect, InputSchema: in, OutputSchema: out}, input: ir, output: or}
-	a.contract.Fingerprint = actionHash(a.contract)
+	a := &registeredAction{contract: buildActionContract(name, spec.Implementation, spec.Effect, in, out), input: ir, output: or}
 	decode := func(input, bindings json.RawMessage, result ActionValue) (cp ActionCheckpoint[I, O], err error) {
 		err = json.Unmarshal(input, &cp.Input)
 		cp.Bindings = append(json.RawMessage(nil), bindings...)
@@ -254,6 +257,9 @@ func (e *Executor) configureActions(all map[string]*Workflow) error {
 				e.actionContracts[name] = a.contract
 			}
 		}
+	}
+	if err := e.configureContainerActions(all); err != nil {
+		return err
 	}
 	return nil
 }

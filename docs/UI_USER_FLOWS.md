@@ -799,3 +799,13 @@ sources are the [UI guide](../ui/README.md),
 - **Starting point:** A local job has commands or Docker steps.
 - **My flow:** I select the job and edit **Job container image**, then select a Docker step and set **Docker entrypoint** and **Docker arguments**. I review validation and export YAML.
 - **What I see:** Job commands share one container. Docker steps run in separate sibling containers with their own private state. Reusable calls select their containers in the called definition. Shared job containers support sequential commands and sequence blocks; waits, providers and parallel blocks require another job.
+
+### UF-49 — Configure structured container helpers
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-49.spec.ts)
+
+- **Coverage:** Protocol/effect controls and YAML fields preserve inline input schemas, named output schemas, nested business objects and arrays and explicit secret references. Export and Undo retain the nested values and schema authoring forms. Removing the protocol reviews discarded contract fields, cancellation keeps the helper intact and one Undo restores it. Following commands receive schema-derived helper suggestions using explicit `outputs` paths. The job-result picker previews and applies the same helper field path through a dependency, with export and Undo preservation. Missing schema names and interpolated executable commands diagnose and clear after source repair. Structured helpers inside ordinary onError, onFailure and finally handlers are diagnosed before execution.
+
+- **Starting point:** A command has a job container, or a step uses a Docker image.
+- **My flow:** I open **Helper protocol and environment**, choose **action-v1**, select an explicit effect, enter both object schemas and business input, then set environment references if needed.
+- **What I see:** Structured business input stays separate from executable commands and Docker arguments. Schema fields accept a mapping or a workflow-local name. The engine validates input/output and recovers checkpoints through the action journal. Ordinary commands retain stdout/stderr/exit-code results.

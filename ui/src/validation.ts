@@ -73,6 +73,7 @@ const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
+ protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
   conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
@@ -399,6 +400,19 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
       if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
+      if (step.protocol) {
+        if (depth > 0 || handlerKinds.some(kind => step[kind]?.length) || step.handlerTimeout) add('protocol', 'Structured helpers cannot own or appear inside ordinary lifecycle handlers', [...sp, 'protocol']);
+        if (step.protocol !== 'action-v1') add('protocol', 'Unsupported container protocol', [...sp, 'protocol']);
+        if (!job.container && !docker) add('protocol', 'action-v1 requires a job container or Docker step', [...sp, 'protocol']);
+        if (!['read_only', 'external_mutation'].includes(step.effect ?? '')) add('protocol', 'Structured helpers require an explicit effect', [...sp, 'effect']);
+        for (const key of ['input-schema', 'output-schema'] as const) {
+          const raw = step[key], declaration = typeof raw === 'string' ? w.schemas?.[raw] : raw;
+          if (!mapping(declaration) || declaration.type !== 'object') add('schema', 'Structured helpers require an object schema or a known workflow-local name', [...sp, key]);
+          else inspectSchema(declaration, [...sp, key]);
+        }
+        for (const text of [...(step.argv ?? []), step.run, step.shell, step['working-directory']]) if (typeof text === 'string' && text.includes('${{')) add('protocol', 'Structured executable commands and settings must be static; use input for business data', sp);
+        for (const [key,value] of Object.entries(step.env ?? {})) if (value.includes('${{') && !/^\s*\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}\s*$/.test(value)) add('protocol', 'Structured env expressions must reference one secret directly', [...sp, 'env', key]);
+      } else if (['effect', 'input', 'input-schema', 'output-schema'].some(key => step[key] !== undefined)) add('protocol', 'Structured fields require protocol: action-v1', sp);
       const command = !!(step.argv?.length || step.run);
       if ((depth > 0 || handlerKinds.some(kind => step[kind]?.length)) && !command && !uses?.startsWith('agent/')) add('handler-action', 'Lifecycle handlers support agent and command steps only', sp);
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };

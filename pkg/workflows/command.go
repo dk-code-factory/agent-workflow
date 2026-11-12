@@ -13,6 +13,8 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
+type commandEnvKey struct{}
+
 const MaxCommandOutput = 16 << 20
 
 type cappedOutput struct {
@@ -32,6 +34,11 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
+	env, err := renderCommandEnv(step.Env, ec)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, commandEnvKey{}, env)
 	argv := make([]string, 0, len(step.Argv))
 	for _, a := range step.Argv {
 		v, err := renderString(a, ec)
@@ -94,6 +101,9 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if len(env) > 0 && e.CommandExecution.Mode != "container" {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir
@@ -113,7 +123,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
 			return nil, err
 		}
-		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
+		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir, Environment: env})
 	} else {
 		cleanup, superviseErr = runtimeexec.SupervisePolicy(ctx, cmd, e.CommandExecution)
 	}
@@ -129,7 +139,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 			return nil, err
 		}
 	}
-	err := cmd.Run()
+	err = cmd.Run()
 	code := -1
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
