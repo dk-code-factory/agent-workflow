@@ -295,6 +295,29 @@ func (s *jobContainerScope) close() error {
 	}
 	return err
 }
+func (s *jobContainerScope) waitForRunning(ctx context.Context) error {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		object, exists, err := containerapi.VerifyOwned(ctx, s.session.Runtime, s.session.Owner)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("shared container disappeared during startup")
+		}
+		if object.Running {
+			return nil
+		}
+		select {
+		case <-s.drained:
+			return fmt.Errorf("shared container exited before becoming ready")
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 func (e *Executor) launchOptions(ctx context.Context, p *ContainerImplementation, argv []string) (runtimeexec.LaunchOptions, error) {
 	b, ok := runtimeexec.BindingFrom(ctx)
 	if !ok {
@@ -380,6 +403,9 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 			scope.drained = make(chan struct{})
 			go func() { defer close(scope.drained); _ = a.Copy(containerapi.Streams{}); _ = a.Close() }()
 			if err = session.Runtime.Start(parent, session.Owner.ID); err != nil {
+				return nil, err
+			}
+			if err = scope.waitForRunning(parent); err != nil {
 				return nil, err
 			}
 			if err = session.Invocation.Save(parent, "running"); err != nil {

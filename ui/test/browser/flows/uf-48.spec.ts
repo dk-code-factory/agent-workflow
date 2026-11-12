@@ -32,6 +32,32 @@ test('malformed Docker argument quotes and escapes diagnose and clear after repa
   }
 });
 
+test('mapping container image edits preserve comments, anchors and quoted scalars', async ({ page }) => {
+  const source = `jobs:
+  build:
+    container: &build_image # container note
+      # Explain the image choice
+      image: "ubuntu:24.04" # pinned release
+    steps:
+      - {id: shared, run: echo ready}
+`;
+  const ui = await open(page, source);
+  await job(page);
+  await field(page, 'Job container image', 'ubuntu:22.04');
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.build.container.image).toBe('ubuntu:22.04');
+  expect(edited.source).toContain('&build_image');
+  expect(edited.source).toContain('# container note');
+  expect(edited.source).toContain('# Explain the image choice');
+  expect(edited.source).toContain('image: "ubuntu:22.04" # pinned release');
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toBe(edited.source);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+});
+
 test('unsupported shared job constructs remain visible and can be repaired', async ({ page }) => {
   const source = `jobs: {build: {container: {image: 'ubuntu:24.04'}, steps: [{uses: input/wait, with: {prompt: Wait, evidence-id: review}}]}}`;
   const ui = await open(page, source);

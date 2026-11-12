@@ -83,6 +83,7 @@ type fakeContainer struct {
 	running                bool
 	started, done, removed chan struct{}
 	code                   int
+	startDelayInspections  int
 	mu                     sync.Mutex
 }
 type fakeExec struct {
@@ -94,16 +95,17 @@ type fakeExec struct {
 	code    int
 }
 type workflowDocker struct {
-	t                   *testing.T
-	mu                  sync.Mutex
-	containers          map[string]*fakeContainer
-	execs               map[string]*fakeExec
-	root, workspace     string
-	creates, executions int
-	removalStarted      chan struct{}
-	removalGate         chan struct{}
-	stallPhase          string
-	stallRelease        chan struct{}
+	t                     *testing.T
+	mu                    sync.Mutex
+	containers            map[string]*fakeContainer
+	execs                 map[string]*fakeExec
+	root, workspace       string
+	creates, executions   int
+	removalStarted        chan struct{}
+	removalGate           chan struct{}
+	stallPhase            string
+	stallRelease          chan struct{}
+	startDelayInspections int
 }
 
 func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, dir string) ([]byte, []byte, int) {
@@ -207,7 +209,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		if err := os.Mkdir(dir, 0700); err != nil {
 			d.t.Error(err)
 		}
-		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{})}
+		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
 		d.containers[id] = c
 		d.containers[c.name] = c
 		fmt.Fprintf(w, `{"Id":%q}`, id)
@@ -277,10 +279,18 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 	case "json":
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		select {
+		case <-c.started:
+			if c.startDelayInspections > 0 {
+				c.startDelayInspections--
+				c.running = c.startDelayInspections == 0
+			}
+		default:
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": c.id, "Name": "/" + c.name, "Config": map[string]any{"Labels": c.labels}, "State": map[string]any{"Running": c.running}})
 	case "start":
 		c.mu.Lock()
-		c.running = true
+		c.running = c.startDelayInspections == 0
 		c.mu.Unlock()
 		close(c.started)
 		w.WriteHeader(204)
@@ -321,6 +331,13 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 		}
 	case "exec":
+		c.mu.Lock()
+		running := c.running
+		c.mu.Unlock()
+		if !running {
+			http.Error(w, `{"message":"container is not running"}`, http.StatusConflict)
+			return
+		}
 		var q struct {
 			Cmd        []string
 			WorkingDir string
@@ -589,10 +606,13 @@ func TestContainerGuardianFailureBlocksHandlersAndContinuation(t *testing.T) {
 }
 
 func TestSharedContainerStartupRespectsCommandDeadline(t *testing.T) {
-	for _, phase := range []string{"create", "attach", "start"} {
+	for _, phase := range []string{"create", "attach", "start", "running"} {
 		t.Run(phase, func(t *testing.T) {
 			e, _, d := containerExecutor(t)
 			d.stallPhase, d.stallRelease = phase, make(chan struct{})
+			if phase == "running" {
+				d.startDelayInspections = -1
+			}
 			defer close(d.stallRelease)
 			writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs: {build: {container: ubuntu:24.04, steps: [{id: first, timeout: 100ms, run: echo ready}]}}`)
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -614,6 +634,26 @@ func TestSharedContainerStartupRespectsCommandDeadline(t *testing.T) {
 				t.Fatal("startup failure leaked container")
 			}
 		})
+	}
+}
+
+func TestSharedContainerWaitsForRunningBeforeFirstExec(t *testing.T) {
+	e, _, d := containerExecutor(t)
+	d.startDelayInspections = 2
+	writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs: {build: {container: ubuntu:24.04, steps: [{id: first, timeout: 3s, run: echo ready}]}}`)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
+	if err != nil || run == nil || run.Jobs["build"].Steps["first"].Outputs["stdout"] != "ready\n" {
+		t.Fatalf("exec raced parent readiness: run=%+v err=%v", run, err)
+	}
+	if len(e.Slots) != 0 {
+		t.Fatal("capacity lease leaked")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.containers) != 0 || d.creates != 1 || d.executions != 1 {
+		t.Fatalf("unexpected container lifecycle: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
 	}
 }
 

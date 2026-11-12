@@ -345,7 +345,7 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
           const discarded = (reusable ? ['steps', 'container'] : ['uses', 'with', 'secrets']).filter(key => populated(job[key]));
           if (confirmConversion(discarded)) store.setJobKind(selection.job!, reusable);
         })}><option value="steps">Sequential steps</option><option value="reusable">Reusable workflow</option></select></label>
-        {!job.uses && <Field path={[...path, 'container']} label="Job container image" value={typeof job.container === 'string' ? job.container : job.container?.image} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'container'], value ? typeof job.container === 'string' ? value : { ...job.container, image: value } : undefined))} />}
+        {!job.uses && <Field path={[...path, 'container']} label="Job container image" value={typeof job.container === 'string' ? job.container : job.container?.image} readOnly={disabled} onApply={value => applyEdit(() => store.setField(value && typeof job.container !== 'string' ? [...path, 'container', 'image'] : [...path, 'container'], value || undefined))} />}
         {job.uses && field('Reusable workflow', 'uses')}
         {job.uses && <CallFields key={job.uses} store={store} job={selection.job!} suggestionsID={suggestionsID} />}
         <NamedFields suggestionsID={suggestionsID} requestDelete={requestEntryDelete} store={store} path={[...path, 'outputs']} kind="jobOutputs" title="Job outputs" /><details><summary>Advanced output YAML</summary>{advanced('outputs', 'Job outputs (YAML)')}</details>
