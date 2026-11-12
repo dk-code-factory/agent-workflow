@@ -125,7 +125,19 @@ func TestNativeOrderedVerificationReplayPreservesCandidateEvent(t *testing.T) {
 
 type interruptRecoveryChildJournal struct {
 	*SQLiteStore
+	boundary    string
 	interrupted bool
+}
+
+func (s *interruptRecoveryChildJournal) RecordAttempt(ctx context.Context, attempt Attempt) error {
+	if err := s.SQLiteStore.RecordAttempt(ctx, attempt); err != nil {
+		return err
+	}
+	if s.boundary == "replacement_verified" && attempt.StepID == "task" && attempt.Phase == "lifecycle_task_completed" && attempt.Result.Lifecycle != nil && attempt.Result.Lifecycle.Verification != nil {
+		s.interrupted = true
+		return errors.New("simulated interruption after replacement verification")
+	}
+	return nil
 }
 
 func (s *interruptRecoveryChildJournal) Complete(ctx context.Context, attempt Attempt, result StepExecution) error {
@@ -135,7 +147,7 @@ func (s *interruptRecoveryChildJournal) Complete(ctx context.Context, attempt At
 	if err := s.SQLiteStore.Complete(ctx, attempt, result); err != nil {
 		return err
 	}
-	if attempt.StepID == "task/onError/recover" {
+	if s.boundary != "replacement_verified" && attempt.StepID == "task/onError/recover" {
 		s.interrupted = true
 		return errors.New("simulated interruption after recovery child receipt")
 	}
@@ -144,10 +156,11 @@ func (s *interruptRecoveryChildJournal) Complete(ctx context.Context, attempt At
 
 func TestNativeOrderedRecoveryReplayPreservesOriginalErrorContext(t *testing.T) {
 	for _, taskFailed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("task_failed_%t", taskFailed), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			source := `jobs:
+		for _, boundary := range []string{"recovery_completed", "replacement_verified"} {
+			t.Run(fmt.Sprintf("task_failed_%t/%s", taskFailed, boundary), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				source := `jobs:
   task:
     steps:
       - id: task
@@ -172,69 +185,82 @@ func TestNativeOrderedRecoveryReplayPreservesOriginalErrorContext(t *testing.T) 
     uses: workflows/child.yml
     for-each: {items: [], key: item.id}
 `
-			verifications := 0
-			e, store, fixture := agentTaskFixture(t, source, func(req SessionRequest) (map[string]any, error) {
-				switch {
-				case strings.HasPrefix(req.Prompt, "work"):
-					if taskFailed {
-						return nil, errors.New("primary failed")
+				verifications := 0
+				e, store, fixture := agentTaskFixture(t, source, func(req SessionRequest) (map[string]any, error) {
+					switch {
+					case strings.HasPrefix(req.Prompt, "work"):
+						if taskFailed {
+							return nil, errors.New("primary failed")
+						}
+					case strings.HasPrefix(req.Prompt, "verify"):
+						verifications++
+						if !taskFailed && verifications == 1 {
+							return nil, errors.New("verification failed")
+						}
+					case strings.HasPrefix(req.Prompt, "recover|"):
+						event, ok := req.Input.(map[string]any)
+						if !ok || event["verification"] != nil {
+							return nil, fmt.Errorf("recovery observed a future verdict: %v", req.Input)
+						}
+						if taskFailed == strings.HasPrefix(req.Prompt, "recover||") {
+							return nil, fmt.Errorf("recovery lost original task error context: %s", req.Prompt)
+						}
+						if taskFailed && !strings.Contains(req.Prompt, "primary failed") {
+							return nil, fmt.Errorf("recovery lost primary failure: %s", req.Prompt)
+						}
 					}
-				case strings.HasPrefix(req.Prompt, "verify"):
-					verifications++
-					if !taskFailed && verifications == 1 {
-						return nil, errors.New("verification failed")
-					}
-				case strings.HasPrefix(req.Prompt, "recover|"):
-					if taskFailed == strings.HasPrefix(req.Prompt, "recover||") {
-						return nil, fmt.Errorf("recovery lost original task error context: %s", req.Prompt)
-					}
-					if taskFailed && !strings.Contains(req.Prompt, "primary failed") {
-						return nil, fmt.Errorf("recovery lost primary failure: %s", req.Prompt)
+					return map[string]any{"text": `{"complete":true}`}, nil
+				})
+				writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{argv: [true]}]}}\n")
+				fault := &interruptRecoveryChildJournal{SQLiteStore: store, boundary: boundary}
+				e.Store = fault
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				if err == nil || run == nil || !fault.interrupted {
+					t.Fatalf("recovery receipt boundary not interrupted: run=%+v err=%v", run, err)
+				}
+				attempts, err := store.Attempts(ctx, run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var owner, recovery Attempt
+				for _, attempt := range attempts {
+					switch attempt.StepID {
+					case "task":
+						owner = attempt
+					case "task/onError/recover":
+						recovery = attempt
 					}
 				}
-				return map[string]any{"text": `{"complete":true}`}, nil
+				if owner.Phase != "lifecycle_task_completed" || owner.Result.Lifecycle == nil || owner.Result.Lifecycle.OriginalError == "" || recovery.Phase != "lifecycle_completed" || recovery.InputFingerprint == "" {
+					t.Fatalf("missing retained recovery boundary: owner=%+v recovery=%+v", owner, recovery)
+				}
+				// Stop a second owner at the late boundary as well. Reusing completed
+				// children must reconstruct the same event before and after verification.
+				repeated := &interruptRecoveryChildJournal{SQLiteStore: store, boundary: "replacement_verified"}
+				e.Store = repeated
+				resumed, err := e.Resume(ctx, run.ID, nil, true)
+				if err == nil || resumed == nil || !repeated.interrupted {
+					t.Fatalf("repeated recovery did not reach replacement verdict: run=%+v err=%v", resumed, err)
+				}
+				e.Store = store
+				resumed, err = e.Resume(ctx, run.ID, nil, true)
+				if err != nil || resumed == nil || resumed.Status != RunStatusSucceeded {
+					t.Fatalf("completed recovery could not resume: run=%+v err=%v", resumed, err)
+				}
+				result := resumed.Jobs["task"].Steps["task"]
+				if result.Outputs["complete"] != true || len(result.Lifecycle.Verifications) != 1 || !result.Lifecycle.Deadline.Equal(owner.Result.Lifecycle.Deadline) || result.Lifecycle.OriginalError != owner.Result.Lifecycle.OriginalError {
+					t.Fatalf("recovery replay changed original evidence: %+v", result)
+				}
+				fixture.mu.Lock()
+				defer fixture.mu.Unlock()
+				want := 4
+				if taskFailed {
+					want = 3
+				}
+				if len(fixture.requests) != want {
+					t.Fatalf("recovery replay duplicated provider turns: got %d want %d", len(fixture.requests), want)
+				}
 			})
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{argv: [true]}]}}\n")
-			fault := &interruptRecoveryChildJournal{SQLiteStore: store}
-			e.Store = fault
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
-			if err == nil || run == nil || !fault.interrupted {
-				t.Fatalf("recovery receipt boundary not interrupted: run=%+v err=%v", run, err)
-			}
-			attempts, err := store.Attempts(ctx, run.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var owner, recovery Attempt
-			for _, attempt := range attempts {
-				switch attempt.StepID {
-				case "task":
-					owner = attempt
-				case "task/onError/recover":
-					recovery = attempt
-				}
-			}
-			if owner.Phase != "lifecycle_task_completed" || owner.Result.Lifecycle == nil || owner.Result.Lifecycle.OriginalError == "" || recovery.Phase != "lifecycle_completed" || recovery.InputFingerprint == "" {
-				t.Fatalf("missing retained recovery boundary: owner=%+v recovery=%+v", owner, recovery)
-			}
-			e.Store = store
-			resumed, err := e.Resume(ctx, run.ID, nil, true)
-			if err != nil || resumed == nil || resumed.Status != RunStatusSucceeded {
-				t.Fatalf("completed recovery could not resume: run=%+v err=%v", resumed, err)
-			}
-			result := resumed.Jobs["task"].Steps["task"]
-			if result.Outputs["complete"] != true || !result.Lifecycle.Deadline.Equal(owner.Result.Lifecycle.Deadline) || result.Lifecycle.OriginalError != owner.Result.Lifecycle.OriginalError {
-				t.Fatalf("recovery replay changed original evidence: %+v", result)
-			}
-			fixture.mu.Lock()
-			defer fixture.mu.Unlock()
-			want := 4
-			if taskFailed {
-				want = 3
-			}
-			if len(fixture.requests) != want {
-				t.Fatalf("recovery replay duplicated provider turns: got %d want %d", len(fixture.requests), want)
-			}
-		})
+		}
 	}
 }
