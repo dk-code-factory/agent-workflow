@@ -243,6 +243,10 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 			return nil, err
 		}
 		policy.Image = i.ID
+		policy, err = runtimeexec.PinPolicy(ctx, policy)
+		if err != nil {
+			return nil, err
+		}
 		return &ContainerImplementation{ContractVersion: 1, Selection: s, Image: i, Guardian: g, Policy: policy}, nil
 	}
 	for ref, w := range all {

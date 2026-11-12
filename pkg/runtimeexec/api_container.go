@@ -40,6 +40,23 @@ type LaunchOptions struct {
 	EngineState            string
 }
 
+func containerIdentity(p Policy) (int, int) {
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		uid = 65532
+	}
+	if gid == 0 {
+		gid = 65532
+	}
+	if p.UID != nil {
+		uid = *p.UID
+	}
+	if p.GID != nil {
+		gid = *p.GID
+	}
+	return uid, gid
+}
+
 func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (containerapi.CreateRequest, error) {
 	if err := o.Policy.Validate(); err != nil {
 		return containerapi.CreateRequest{}, err
@@ -53,19 +70,7 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 	if o.Guardian.Platform != o.Image.OS+"/"+o.Image.Architecture {
 		return containerapi.CreateRequest{}, fmt.Errorf("guardian platform %q does not match admitted image platform %s/%s", o.Guardian.Platform, o.Image.OS, o.Image.Architecture)
 	}
-	uid, gid := os.Getuid(), os.Getgid()
-	if uid == 0 {
-		uid = 65532
-	}
-	if gid == 0 {
-		gid = 65532
-	}
-	if o.Policy.UID != nil {
-		uid = *o.Policy.UID
-	}
-	if o.Policy.GID != nil {
-		gid = *o.Policy.GID
-	}
+	uid, gid := containerIdentity(o.Policy)
 	q := containerapi.CreateRequest{Name: owner.Name, Image: o.Image.ID, User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), WorkingDir: "/workspace", Labels: owner.Labels, Entrypoint: []string{MountedGuardian}, Command: append([]string{"__container_workload_guardian_v1", "/engine-lifetime/lease", owner.Labels["agent-workflow.token"], "--"}, o.Command...), KeepID: o.Selection.Transport == containerapi.PodmanCLI && o.Selection.Endpoint == "", Env: []string{"HOME=/state/home", "TMPDIR=/tmp", "AGENT_WORKFLOW_WORKSPACE_WRITABLE=" + strconv.FormatBool(o.Policy.Writable)}}
 	if o.WorkingDir != "" {
 		q.WorkingDir = o.WorkingDir

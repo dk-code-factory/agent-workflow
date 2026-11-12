@@ -457,6 +457,15 @@ func (s *SQLiteStore) verifyRunHelperAssets(ctx context.Context, run string, sna
 		if !bytes.Equal(raw, expected) {
 			return fmt.Errorf("retained helper asset reference changed")
 		}
+		// Reusable children admit the same frozen closure and must retain its references too.
+		var missing string
+		err := s.db.QueryRowContext(ctx, `SELECT r.id FROM runs r WHERE (r.id=? OR r.origin_id=?) AND NOT EXISTS (SELECT 1 FROM run_helper_assets a WHERE a.run_id=r.id AND a.asset_origin=? AND a.asset_id=?) LIMIT 1`, run, run, bundle.OriginID, bundle.ID).Scan(&missing)
+		if err == nil {
+			return fmt.Errorf("retained helper asset reference missing for run %s", missing)
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
 		if err := s.VerifyHelperBundle(bundle); err != nil {
 			return err
 		}
@@ -541,10 +550,7 @@ func containerStateOrigin(origin, fallback string) string {
 func (e *Executor) pinHelperBundles(ctx context.Context, all map[string]*Workflow) error {
 	store := invocationStore(e.Store)
 	for ref, w := range all {
-		resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
-		if err != nil {
-			return err
-		}
+		var err error
 		capture := func(declarations []string, p *ContainerImplementation) error {
 			if p == nil {
 				return fmt.Errorf("helper files require an admitted container")
@@ -554,6 +560,10 @@ func (e *Executor) pinHelperBundles(ctx context.Context, all map[string]*Workflo
 			}
 			if p.Bundle != nil {
 				return store.VerifyHelperBundle(p.Bundle)
+			}
+			resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
+			if err != nil {
+				return err
 			}
 			bundle, err := store.CaptureHelperBundle(ctx, e.bundleOrigin, filepath.Dir(resolved.Path), declarations)
 			if err != nil {

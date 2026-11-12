@@ -2,6 +2,7 @@ package containerapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -9,9 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPodmanCLILifecycleAndWorkloadExitStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
@@ -61,60 +65,74 @@ else:
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	selection.Identity, err = runtime.Identity(t.Context())
+	selection.Identity, err = runtime.Identity(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := runtime.ResolveImage(t.Context(), "local-tag")
+	image, err := runtime.ResolveImage(ctx, "local-tag")
 	if err != nil {
 		t.Fatal(err)
 	}
 	owner := Owner{Selection: &selection, Name: "fixture", Labels: map[string]string{"owned": "yes"}}
-	id, err := runtime.Create(t.Context(), CreateRequest{Name: owner.Name, Image: image.ID, User: "1000:1000", PrivatePaths: []string{"/workspace/.agent-workflow"}, Labels: owner.Labels, Mounts: []Mount{{Source: root, Target: "/actions", ReadOnly: true}}, Entrypoint: []string{"tool"}, Command: []string{"", "a b"}})
+	id, err := runtime.Create(ctx, CreateRequest{Name: owner.Name, Image: image.ID, User: "1000:1000", PrivatePaths: []string{"/workspace/.agent-workflow"}, Labels: owner.Labels, Mounts: []Mount{{Source: root, Target: "/actions", ReadOnly: true}}, Entrypoint: []string{"tool"}, Command: []string{"", "a b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	owner.ID = id
-	a, err := runtime.Attach(t.Context(), id)
+	a, err := runtime.Attach(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer a.Close()
 	var out, logs bytes.Buffer
 	done := make(chan error, 1)
 	go func() { done <- a.Copy(Streams{Stdin: strings.NewReader("request"), Stdout: &out, Stderr: &logs}) }()
-	if err = runtime.Start(t.Context(), id); err != nil {
+	if err = runtime.Start(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if err = <-done; err != nil {
-		t.Fatal("workload exit became transport failure", err)
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal("workload exit became transport failure", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("attached workload did not complete", ctx.Err())
 	}
-	code, err := runtime.Wait(t.Context(), id)
+	code, err := runtime.Wait(ctx, id)
 	if err != nil || code != 7 || out.String() != "output:request\n" || logs.String() != "diagnostic\n" {
 		t.Fatal(code, err, out.String(), logs.String())
 	}
-	execID, err := runtime.ExecCreate(t.Context(), id, ExecRequest{Command: []string{"tool", ""}, WorkingDir: "/workspace", Env: []string{"EXPLICIT=value"}})
+	execID, err := runtime.ExecCreate(ctx, id, ExecRequest{Command: []string{"tool", ""}, WorkingDir: "/workspace", Env: []string{"EXPLICIT=value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := runtime.ExecInspect(t.Context(), execID)
+	status, err := runtime.ExecInspect(ctx, execID)
 	if err != nil || !status.Running {
 		t.Fatal(status, err)
 	}
-	attached, err := runtime.ExecAttach(t.Context(), execID)
+	attached, err := runtime.ExecAttach(ctx, execID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = attached.Copy(Streams{Stdout: io.Discard, Stderr: io.Discard}); err != nil {
-		t.Fatal(err)
+	defer attached.Close()
+	execDone := make(chan error, 1)
+	go func() { execDone <- attached.Copy(Streams{Stdout: io.Discard, Stderr: io.Discard}) }()
+	select {
+	case err = <-execDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("attached exec did not complete", ctx.Err())
 	}
-	status, err = runtime.ExecInspect(t.Context(), execID)
+	status, err = runtime.ExecInspect(ctx, execID)
 	if err != nil || status.Running || status.ExitCode != 7 || status.ContainerID != id {
 		t.Fatal(status, err)
 	}
-	if err = Remove(t.Context(), owner); err != nil {
+	if err = Remove(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists, err := runtime.Inspect(t.Context(), owner.Name); err != nil || exists {
+	if _, exists, err := runtime.Inspect(ctx, owner.Name); err != nil || exists {
 		t.Fatal(exists, err)
 	}
 	calls, err := os.ReadFile(filepath.Join(root, "calls.jsonl"))

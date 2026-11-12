@@ -79,14 +79,14 @@ func TestHelperBundleCaptureBoundsPathsAndIntegrity(t *testing.T) {
 	if err = store.VerifyHelperBundle(b); err == nil {
 		t.Fatal("changed retained mode accepted")
 	}
-	if err = os.WriteFile(file, []byte("CORRUPTED BYTES\n"), 0644); err != nil {
+	if err = os.WriteFile(file, bytes.Repeat([]byte("x"), len("import common\n")), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.Chmod(file, 0555); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.VerifyHelperBundle(b); err == nil {
-		t.Fatal("changed retained content accepted")
+	if err = store.VerifyHelperBundle(b); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatal("changed retained content did not reach checksum verification", err)
 	}
 
 }
@@ -117,7 +117,7 @@ func helperBundleWorkflow() string {
 	return strings.Replace(structuredWorkflow, "container: ubuntu:24.04", "container: {image: 'ubuntu:24.04', files: [helpers/]}", 1)
 }
 func TestRetainedHelpersSurviveSourceDeletionAndRejectCorruption(t *testing.T) {
-	for _, condition := range []string{"retained", "corrupted", "missing"} {
+	for _, condition := range []string{"retained", "dangling-source", "outside-source", "corrupted", "missing"} {
 		t.Run(condition, func(t *testing.T) {
 			e, store, d := containerExecutor(t)
 			f := &protocolFixture{binding: "stable"}
@@ -139,10 +139,33 @@ func TestRetainedHelpersSurviveSourceDeletionAndRejectCorruption(t *testing.T) {
 			if err = os.RemoveAll(filepath.Join(e.WorkspaceDir, "workflows")); err != nil {
 				t.Fatal(err)
 			}
+			if condition == "dangling-source" || condition == "outside-source" {
+				target := filepath.Join(t.TempDir(), "changed.yml")
+				if condition == "outside-source" {
+					putHelper(t, filepath.Dir(target), filepath.Base(target), "not the admitted workflow", 0644)
+				}
+				if err = os.MkdirAll(filepath.Join(e.WorkspaceDir, "workflows"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Symlink(target, filepath.Join(e.WorkspaceDir, "workflows/test.yml")); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if condition == "corrupted" {
-				p, _ := store.HelperBundlePath(b)
-				os.Chmod(filepath.Join(p, "helpers/main.py"), 0644)
-				os.WriteFile(filepath.Join(p, "helpers/main.py"), []byte("tampered helper"), 0644)
+				p, err := store.HelperBundlePath(b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(p, "helpers/main.py")
+				if err = os.Chmod(file, 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(file, []byte("tampered helper"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Chmod(file, 0555); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if condition == "missing" {
 				path, _ := store.bundleDirectory(b)
@@ -151,12 +174,15 @@ func TestRetainedHelpersSurviveSourceDeletionAndRejectCorruption(t *testing.T) {
 				}
 			}
 			_, err = e.Resume(t.Context(), run.ID, nil, false)
-			if condition != "retained" {
+			if condition == "corrupted" || condition == "missing" {
 				if err == nil {
 					t.Fatal("reused corrupted completed checkpoint")
 				}
 				if f.validations != 0 {
 					t.Fatal("started validation before asset verification")
+				}
+				if condition == "corrupted" && !strings.Contains(err.Error(), "checksum mismatch") {
+					t.Fatal("corrupted resume did not reach checksum verification", err)
 				}
 			} else if err != nil {
 				t.Fatal(err)
@@ -368,7 +394,7 @@ func TestHelperAssetMigrationKeepsPreUpgradeBackup(t *testing.T) {
 	}
 }
 func TestBundledNestedCaptureExampleUsesRetainedPythonImports(t *testing.T) {
-	e, store, _ := containerExecutor(t)
+	e, store, d := containerExecutor(t)
 	sourceDir := filepath.Join("..", "..", "examples", "container-workflows", "workflows")
 	err := filepath.WalkDir(sourceDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -414,6 +440,32 @@ func TestBundledNestedCaptureExampleUsesRetainedPythonImports(t *testing.T) {
 	_, snap, _ := store.Load(t.Context(), run.ID)
 	if len(helperBundles(snap.Definitions)) != 1 {
 		t.Fatal("nested helper references lost")
+	}
+	var child string
+	if err = store.db.QueryRowContext(t.Context(), `SELECT id FROM runs WHERE origin_id=? AND json_extract(CAST(record AS TEXT), '$.workflow_ref')='workflows/capture.yml'`, run.ID).Scan(&child); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.db.ExecContext(t.Context(), "DELETE FROM run_helper_assets WHERE run_id=?", child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := deleted.RowsAffected(); err != nil || n != 1 {
+		t.Fatal("did not remove the deepest child's asset reference", n, err)
+	}
+	var rootReferences int
+	if err = store.db.QueryRowContext(t.Context(), "SELECT count(*) FROM run_helper_assets WHERE run_id=?", run.ID).Scan(&rootReferences); err != nil || rootReferences != 1 {
+		t.Fatal("origin reference changed", rootReferences, err)
+	}
+	d.mu.Lock()
+	executions := d.executions
+	d.mu.Unlock()
+	if _, err = e.Resume(t.Context(), run.ID, nil, false); err == nil || !strings.Contains(err.Error(), "reference missing for run "+child) {
+		t.Fatal("missing child reference did not block completed checkpoint reuse", err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.executions != executions {
+		t.Fatal("started validation before checking child references")
 	}
 }
 
@@ -563,5 +615,42 @@ func TestContainerWorkingDirectoryAppliesToEveryStructuredPhase(t *testing.T) {
 	}
 	if _, err = e.Resume(t.Context(), run.ID, nil, false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStructuredContainerAdmissionPinsEffectiveIdentity(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "explicit"}[explicit], func(t *testing.T) {
+			e, store, d := containerExecutor(t)
+			uid, gid := os.Getuid(), os.Getgid()
+			if uid == 0 {
+				uid = 65532
+			}
+			if gid == 0 {
+				gid = 65532
+			}
+			if explicit {
+				uid, gid = 12345, 23456
+				e.CommandExecution = runtimeexec.Policy{Mode: "container", Image: "ubuntu:24.04", UID: &uid, GID: &gid}
+			}
+			installProtocolWorkflow(t, e, d, &protocolFixture{binding: "stable"}, structuredWorkflow)
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, snap, err := store.Load(t.Context(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := snap.Definitions[run.WorkflowRef].Jobs["capture"].Container.Implementation.Policy
+			if policy.UID == nil || policy.GID == nil || *policy.UID != uid || *policy.GID != gid {
+				t.Fatalf("effective identity was not retained: %+v; want %d:%d", policy, uid, gid)
+			}
+			otherUID, otherGID := uid+1, gid+1
+			e.CommandExecution = runtimeexec.Policy{Mode: "container", Image: "ubuntu:24.04", UID: &otherUID, GID: &otherGID}
+			if _, err = e.Resume(t.Context(), run.ID, nil, false); err != nil {
+				t.Fatal("current identity changed the admitted contract", err)
+			}
+		})
 	}
 }
