@@ -35,6 +35,9 @@ type WorkerFailureRequest struct {
 // cleanup, storage, integrity, cancellation, and authorization failures retain
 // the existing finalization barrier.
 func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailureRequest) (WorkerFailureAcknowledgement, error) {
+	return m.acknowledgeFailure(ctx, req, "")
+}
+func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailureRequest, waitOperation string) (WorkerFailureAcknowledgement, error) {
 	var zero WorkerFailureAcknowledgement
 	if strings.TrimSpace(req.RequestID) == "" || len(req.RequestID) > 128 || strings.TrimSpace(req.Reason) == "" || len(req.Reason) > 4096 || strings.TrimSpace(req.Evidence) == "" || len(req.Evidence) > 4096 {
 		return zero, fmt.Errorf("failure acknowledgement requires bounded request identity, reason, and evidence")
@@ -63,8 +66,18 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 		return zero, err
 	}
 	defer tx.Rollback()
-	if err = checkEffectAdmission(ctx, tx, req.RunID); err != nil {
-		return zero, err
+	if waitOperation == "" {
+		if err = checkEffectAdmission(ctx, tx, req.RunID); err != nil {
+			return zero, err
+		}
+	} else {
+		var observed int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM worker_waits WHERE run_id=? AND operation_id=? AND json_extract(CAST(record AS TEXT),'$.status')='completed' AND json_extract(CAST(record AS TEXT),'$.message_id')=?`, req.RunID, waitOperation, req.MessageID).Scan(&observed); err != nil {
+			return zero, err
+		}
+		if observed != 1 {
+			return zero, fmt.Errorf("task error has no authoritative wait receipt")
+		}
 	}
 	var allowed int
 	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.owner=? AND r.generation=? AND r.status='running' AND e.finalizing=0`, req.RunID, req.Owner, req.Generation).Scan(&allowed)
@@ -89,7 +102,7 @@ func (m *WorkerManager) AcknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = decodeJSONWithNumbers(raw, &msg); err != nil {
 		return zero, err
 	}
-	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || msg.UnsafeFailureClass != "" || !acknowledgeableFailure(msg.FailureClass) {
+	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || (msg.UnsafeFailureClass != "" && !(waitOperation != "" && msg.UnsafeFailureClass == "canceled" && msg.FailureClass != "canceled")) || !acknowledgeableFailure(msg.FailureClass) {
 		return zero, fmt.Errorf("native failure is not a settled ordinary failure in this execution")
 	}
 	if prior := msg.FailureAcknowledgement; prior != nil {

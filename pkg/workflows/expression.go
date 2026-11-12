@@ -16,6 +16,7 @@ var (
 )
 
 type expressionContext struct {
+	Hook            bool
 	Literal         bool
 	Failed          map[string]any
 	Error           map[string]any

@@ -32,10 +32,10 @@ make build
 
 Flags precede the workflow reference. `--workspace DIR` selects a workspace
 containing `agents.yml` and `workflows/`. `--config FILE` selects a configuration
-relative to that workspace. Existing workflow syntax and successful `text`,
-`response`, and `usage` outputs remain supported. New run/result and event
-records carry a version; provider terminal status, version, and queue timing are
-recorded without changing those legacy outputs.
+relative to that workspace. Agent tasks use the canonical `agent/run` interface;
+the former `agent:` shorthand and `agent/<role>` actions are rejected. Successful
+`text`, `response`, structured results and `usage` outputs remain available.
+Provider terminal status, version and queue timing are also recorded.
 
 `run` starts a workspace controller when necessary, admits the request durably,
 and waits for its result. Disconnecting the client or reaching its `--timeout`
@@ -398,22 +398,27 @@ jobs:
   review:
     steps:
       - id: decision
-        agent: reviewer
-        prompt: Review the change.
+        uses: agent/run
         with:
+          agent: reviewer.toml
+          prompt: Review the change.
           output:
             format: json
             schema:
               type: object
               properties: {approved: {type: boolean}}
               required: [approved]
-      - agent: reporter
-        prompt: 'Approved: ${{ steps.decision.approved }}'
+      - uses: agent/run
+        with:
+          agent: reporter.toml
+          prompt: 'Approved: ${{ steps.decision.approved }}'
   publish:
     needs: [review]
     steps:
-      - agent: reporter
-        prompt: 'Review: ${{ needs.review.steps.decision.text }}'
+      - uses: agent/run
+        with:
+          agent: reporter.toml
+          prompt: 'Review: ${{ needs.review.steps.decision.text }}'
 ```
 
 `steps.<id>.<field>` reads a field from the validated structured object, including
@@ -534,46 +539,37 @@ completion recovers a lost parent/item checkpoint without repeating its work.
 Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
 Legacy JSON stores cannot execute iteration workflows.
 
-### Concise YAML agent steps
+### Native agent tasks
 
-Inside a job, `agent: ROLE` and top-level `prompt` offer an alternative to
-`uses: agent/ROLE` and `with.prompt`:
+Use `agent/run` with a native Codex TOML definition. Paths resolve relative to
+this workflow; the configured `codex` runtime must use `codex-app-server`.
 
 ```yaml
 jobs:
   review:
     steps:
       - id: review
-        agent: reviewer
-        prompt: |
-          Review the change for correctness and missing tests.
-          Task: ${{ inputs.task }}
+        uses: agent/run
         with:
-          model: sonnet
+          agent: ../.codex/agents/reviewer.toml
+          prompt: Review the change.
+          input: {focus: correctness}
           output:
             format: json
+            repair-attempts: 0
             schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
 ```
 
-Declare the `reviewer` role in `agents.yml` as usual. The role name is a literal
-identifier; both `agent` and `prompt` must be YAML strings. Quote date-like
-prompts such as `prompt: "2026-11-06"` so YAML treats them as strings. The other
-supported task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
-An `agent` step may instead use the existing `with.prompt` or `with.message`
-form when top-level `prompt` is absent. Top-level `prompt` requires `agent` or
-`conversation`.
-Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
-even when their values match. Nonempty command fields cannot combine with an
-agent call; empty or null command fields remain inactive in either authoring form.
+Definitions support `name`, `description`, `developer_instructions`, `model`, and
+`model_reasoning_effort`. Admission captures the definition and effective runtime
+settings. An explicit definition creates an independent agent; use
+`${{ steps.review.outputs.agent }}` as another task's `with.agent` to continue
+its session. Identity survives retries and execution generations.
 
-The shorthand resolves to the existing agent operation before admission. Role
-permissions, `${{ ... }}` interpolation, literal input data, structured-output
-validation and repair, step/job outputs, and durable recovery follow the same
-rules. For example, the result remains available at
-`${{ steps.review.outputs.structured.approved }}`. Jobs, dependencies, reusable
-workflow calls, and legacy `uses` steps retain their existing syntax. Admitted
-runs retain their resolved definition even when the source YAML changes later.
-The YAML editor preserves and edits either authoring form.
+See [agent tasks and event hooks](docs/AGENT_TASKS.md) for the supported TOML
+subset, typed inputs, completion verification, six ordered hook lists, and
+recovery rules. Quote date-like prompts such as `"2026-11-06"`. Removed forms
+`agent: ROLE` and `uses: agent/ROLE` are rejected.
 
 Structured output uses native schemas on session backends and strict-object
 contracts on current CLI backends, followed by engine validation.
@@ -602,12 +598,14 @@ schemas:
 jobs:
   review:
     steps:
-      - uses: agent/reviewer
+      - uses: agent/run
         with:
+          agent: reviewer.toml
           prompt: Review the change.
           output: {format: json, schema: Review, repair-attempts: 0}
-      - uses: agent/reviewer
+      - uses: agent/run
         with:
+          agent: reviewer.toml
           prompt: Review the tests.
           output: {schema: Review}
 ```
@@ -641,11 +639,12 @@ admission remains a host check.
 
 [develop.yml](workflows/develop.yml) runs planning, bounded implementation/test/
 review cycles through [develop-iteration.yml](workflows/develop-iteration.yml),
-final checks and two final reviews, and GitHub publication. It uses separate `planner`, `builder`, `reviewer_claude`, and `reviewer_codex`
-roles; choose their backends explicitly in your configuration. The example
-configuration gives the builder write access and the reviewers read-only/plan
-permissions. Managed SDK/container policies are available when stronger isolation
-is required.
+final checks and two final reviews, and GitHub publication. Its native Codex
+definitions separate planning, implementation, correctness review and security
+review instructions. All tasks use the configured `codex` runtime and its shared
+security policy. To run the implementation example, deliberately configure that
+runtime with `sandbox: workspace-write`; the default configuration is read-only.
+Definition instructions do not establish separate sandbox permissions.
 
 Enable publication only for a deliberate allowlisted repository:
 
@@ -848,8 +847,8 @@ and Chromium checks as PRs and main pushes.
 
 Live tests and publication pilots are separate from deterministic tests and
 require explicit budgets and a disposable repository.
-Shared hosting, Windows runtime support, cron/webhook dispatch, native-definition
-import, automatic conflict resolution, and automatic merge remain outside scope.
+Shared hosting, Windows runtime support, cron/webhook dispatch, non-Codex native agent
+definitions, automatic conflict resolution, and automatic merge remain outside scope.
 
 The original schema/expression/output foundations came from PicoClaw; see
 [NOTICE](NOTICE) and [LICENSE](LICENSE). Runtime bindings and orchestration are

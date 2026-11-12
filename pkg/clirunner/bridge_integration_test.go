@@ -141,7 +141,7 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	if err = os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(root, "workflows", "usage.yml"), []byte("jobs: {x: {steps: [{uses: agent/reviewer, with: {prompt: SDK_OK}}]}}"), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(root, "workflows", "usage.yml"), []byte("jobs: {x: {steps: [{uses: agent/run, with: {prompt: SDK_OK, agent: reviewer.toml}}]}}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))

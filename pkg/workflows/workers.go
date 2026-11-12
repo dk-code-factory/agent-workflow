@@ -21,6 +21,9 @@ type WorkerAccess struct {
 }
 
 type Worker struct {
+	TaskWorkspace          string                        `json:"task_workspace,omitempty"`
+	Definition             *AgentDefinition              `json:"agent_definition,omitempty"`
+	SessionOwnerID         string                        `json:"session_owner_id,omitempty"`
 	FailureAcknowledgement *WorkerFailureAcknowledgement `json:"failure_acknowledgement,omitempty"`
 	MaxWorkers             int                           `json:"max_workers"`
 	CreatorInvocation      string                        `json:"creator_invocation,omitempty"`
@@ -44,6 +47,11 @@ type Worker struct {
 	Error                  string                        `json:"error,omitempty"`
 }
 type WorkerMessage struct {
+	TaskAttemptID          string                        `json:"task_attempt_id,omitempty"`
+	Input                  any                           `json:"input,omitempty"`
+	Output                 *AgentOutputContract          `json:"output,omitempty"`
+	Model                  string                        `json:"model,omitempty"`
+	RepairOnly             bool                          `json:"repair_only,omitempty"`
 	FailureAcknowledgement *WorkerFailureAcknowledgement `json:"failure_acknowledgement,omitempty"`
 	Generation             int64                         `json:"execution_generation,omitempty"`
 	FailureClass           string                        `json:"failure_class,omitempty"`
@@ -62,10 +70,12 @@ type WorkerMessage struct {
 	FinishedAt             time.Time                     `json:"finished_at,omitempty"`
 }
 type WorkerSpec struct {
-	Owner             string          `json:"-"`
-	CreatorInvocation string          `json:"-"`
-	Boundary          *ToolInvocation `json:"-"`
-	ToolGrants        []ToolGrant     `json:"mcp_grants,omitempty"`
+	TaskWorkspace     string           `json:"-"`
+	Definition        *AgentDefinition `json:"-"`
+	Owner             string           `json:"-"`
+	CreatorInvocation string           `json:"-"`
+	Boundary          *ToolInvocation  `json:"-"`
+	ToolGrants        []ToolGrant      `json:"mcp_grants,omitempty"`
 	// StableID is controller-only and never accepted from a provider wire frame.
 	StableID string   `json:"-"`
 	RunID    string   `json:"run_id"`
@@ -91,6 +101,7 @@ func DefaultWorkerLimits() WorkerLimits {
 // the requested tool subset. It must reject policies the backend cannot enforce.
 type WorkerFactory func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error)
 type WorkerManager struct {
+	taskSecrets    map[string]map[string]string
 	AdmissionReady func(context.Context) error
 	Store          *SQLiteStore
 	Factory        WorkerFactory
@@ -184,6 +195,29 @@ func (m *WorkerManager) saveWorker(ctx context.Context, w Worker) error {
 	}
 	return err
 }
+
+// Producer failures obey the same owner fence as progress and completion.
+func (m *WorkerManager) saveWorkerOwned(ctx context.Context, w Worker) error {
+	tx, err := m.Store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	b, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE workers SET status=?,record=? WHERE id=?", w.Status, b, w.ID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err == nil {
+		m.notifyWaiters()
+	}
+	return err
+}
 func (m *WorkerManager) Get(ctx context.Context, run, id string) (Worker, error) {
 	var b []byte
 	var w Worker
@@ -250,7 +284,7 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 	if err != nil {
 		return Worker{}, err
 	}
-	parentWorkspace := ""
+	parentWorkspace := spec.TaskWorkspace
 	var parentPolicy *Worker
 	if spec.Boundary != nil {
 		parentWorkspace = spec.Boundary.Access.Workspace
@@ -275,7 +309,19 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 	if !caps.Sessions || !caps.Resume {
 		return Worker{}, fmt.Errorf("role backend does not support durable sessions")
 	}
-	if !caps.ManagedPolicy {
+	if spec.Definition != nil {
+		validator, ok := runner.(NativeTaskRunner)
+		if !ok {
+			return Worker{}, fmt.Errorf("native agent tasks require an admitted Codex runtime")
+		}
+		admitted, err := validator.AdmitNativeTask(spec.Definition)
+		if err != nil {
+			return Worker{}, err
+		}
+		if actionHash(admitted) != actionHash(spec.Definition) {
+			return Worker{}, fmt.Errorf("%w: effective native agent settings changed", ErrActionIntegrity)
+		}
+	} else if !caps.ManagedPolicy {
 		return Worker{}, fmt.Errorf("role backend cannot enforce engine-owned worker policy")
 	}
 	access := WorkerAccess{Writable: true}
@@ -350,6 +396,9 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			}
 			if admissionErr != nil && (existing.ParentID != spec.ParentID || existing.CreatorInvocation != spec.CreatorInvocation) {
 				return Worker{}, fmt.Errorf("stable worker creator identity changed")
+			}
+			if existing.Role != spec.Role || existing.TaskWorkspace != spec.TaskWorkspace || actionHash(existing.Definition) != actionHash(spec.Definition) {
+				return Worker{}, fmt.Errorf("%w: agent binding changed", ErrActionIntegrity)
 			}
 			return existing, nil
 		}
@@ -482,7 +531,7 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			return Worker{}, err
 		}
 	}
-	w := Worker{Access: access, MaxQueued: policy.MaxQueued, MaxDepth: policy.MaxDepth, TurnDuration: policy.TurnDuration, MaxOutput: policy.MaxOutput, ID: randomID(), RunID: spec.RunID, ParentID: spec.ParentID, Role: spec.Role, Status: "idle", Tools: tools, Remaining: turns, Depth: depth}
+	w := Worker{TaskWorkspace: spec.TaskWorkspace, Definition: spec.Definition, Access: access, MaxQueued: policy.MaxQueued, MaxDepth: policy.MaxDepth, TurnDuration: policy.TurnDuration, MaxOutput: policy.MaxOutput, ID: randomID(), RunID: spec.RunID, ParentID: spec.ParentID, Role: spec.Role, Status: "idle", Tools: tools, Remaining: turns, Depth: depth}
 	w.ToolGrants = grants
 	w.MaxWorkers = policy.MaxWorkers
 	w.CreatorInvocation = spec.CreatorInvocation
@@ -499,6 +548,11 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 	return w, tx.Commit()
 }
 func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt string) (WorkerMessage, error) {
+	return m.sendTask(ctx, run, id, requestID, AgentRequest{Prompt: prompt})
+}
+
+func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string, task AgentRequest) (WorkerMessage, error) {
+	prompt := task.Prompt
 	if requestID == "" || len(requestID) > 128 || len(prompt) > 1<<20 {
 		return WorkerMessage{}, fmt.Errorf("request_id required (max 128 bytes); prompt limit is 1 MiB")
 	}
@@ -510,7 +564,9 @@ func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt str
 	if err != nil {
 		return WorkerMessage{}, err
 	}
-	if Redact(prompt, secrets) != prompt {
+	secrets = m.taskRedactions(run, secrets)
+	encodedTask, _ := json.Marshal([]any{prompt, task.Input, task.Output})
+	if Redact(string(encodedTask), secrets) != string(encodedTask) {
 		return WorkerMessage{}, fmt.Errorf("mailbox prompts must use credential references, not secret values")
 	}
 	tx, err := m.Store.db.BeginTx(ctx, nil)
@@ -525,7 +581,7 @@ func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt str
 		if err = decodeJSONWithNumbers(old, &msg); err != nil {
 			return msg, err
 		}
-		if msg.Prompt != prompt {
+		if msg.Prompt != prompt || actionHash([]any{msg.Input, msg.Output, msg.Model, msg.RepairOnly}) != actionHash([]any{task.Input, task.Output, task.Model, task.RepairOnly}) {
 			return msg, fmt.Errorf("request_id reused with different content")
 		}
 		return msg, nil
@@ -564,7 +620,7 @@ func (m *WorkerManager) Send(ctx context.Context, run, id, requestID, prompt str
 	if err = tx.QueryRowContext(ctx, "SELECT coalesce(max(sequence),0)+1 FROM messages WHERE worker_id=?", id).Scan(&sequence); err != nil {
 		return WorkerMessage{}, err
 	}
-	msg := WorkerMessage{ID: randomID(), WorkerID: id, RequestID: requestID, Sequence: sequence, Status: RunStatusQueued, Prompt: prompt, EnqueuedAt: time.Now().UTC()}
+	msg := WorkerMessage{TaskAttemptID: task.InvocationID, Input: task.Input, Output: task.Output, Model: task.Model, RepairOnly: task.RepairOnly, ID: randomID(), WorkerID: id, RequestID: requestID, Sequence: sequence, Status: RunStatusQueued, Prompt: prompt, EnqueuedAt: time.Now().UTC()}
 	b, _ := json.Marshal(msg)
 	if _, err = tx.ExecContext(ctx, "INSERT INTO messages VALUES(?,?,?,?,?,?)", msg.ID, id, requestID, sequence, msg.Status, b); err != nil {
 		return msg, err
@@ -700,8 +756,12 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	msg.Generation = origin.Generation
+	if w.Definition != nil {
+		ctx = fenceContext(ctx, origin)
+	}
 	w.FailureAcknowledgement = nil
 	runner, _, secrets, err := m.Factory(ctx, w.RunID, w.Role, w.Tools)
+	secrets = m.taskRedactions(w.RunID, secrets)
 	if err == nil && w.Access.Workspace != "" {
 		runner, err = scopeWorker(runner, w.Role, w.Access.Workspace)
 	}
@@ -710,7 +770,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		w.Error = Redact(err.Error(), secrets)
 		w.FailureClass = classifyFailure(err)
 		w.FailureGeneration = origin.Generation
-		_ = m.saveWorker(context.WithoutCancel(ctx), w)
+		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
 		return
 	}
 	tx, err := m.Store.db.BeginTx(ctx, nil)
@@ -732,7 +792,11 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		w.Status = RunStatusNeedsAttention
 		w.FailureAcknowledgement = nil
 		w.Error = "worker turn budget exhausted"
-		_ = m.saveWorker(context.WithoutCancel(ctx), w)
+		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
+		return
+	}
+	if err = checkFence(ctx, tx); err != nil {
+		tx.Rollback()
 		return
 	}
 	if err = checkEffectAdmission(ctx, tx, w.RunID); err != nil {
@@ -774,12 +838,16 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		journalErr = errors.Join(journalErr, err)
 	}
 	expectedSession := w.SessionID
-	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Prompt: msg.Prompt}
-	usageIdentity := UsageIdentity{ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
+	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
+	usageIdentity := UsageIdentity{TaskAttemptID: msg.TaskAttemptID, ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
 	if source, ok := runner.(interface {
 		UsageProvider(string, string) (string, string)
 	}); ok {
-		usageIdentity.Provider, usageIdentity.Model = source.UsageProvider(w.Role, "")
+		model := msg.Model
+		if w.Definition != nil && w.Definition.Model != "" {
+			model = w.Definition.Model
+		}
+		usageIdentity.Provider, usageIdentity.Model = source.UsageProvider(w.Role, model)
 	}
 	if err := m.Store.BeginUsage(ctx, usageIdentity); err != nil {
 		journalErr = workerPersistenceError(err)
@@ -828,6 +896,11 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			return
 		}
 		defer tx.Rollback()
+		if err = checkFence(eventCtx, tx); err != nil {
+			progressErr = fmt.Errorf("%w: %v", ErrActionIntegrity, err)
+			cancelTurn()
+			return
+		}
 		var b []byte
 		var current Worker
 		if err = tx.QueryRowContext(eventCtx, "SELECT record FROM workers WHERE id=?", w.ID).Scan(&b); err == nil {
@@ -894,7 +967,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		msg.Status = RunStatusFailed
 		msg.Error = Redact(fmt.Sprint(turnErr), secrets)
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && (w.Definition == nil || turnErr == nil || cancellationOnly(turnErr) || onlyError(turnErr, context.DeadlineExceeded)) {
 		msg.Status = "interrupted"
 		msg.Error = ctx.Err().Error()
 	}
@@ -905,6 +978,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	defer tx.Rollback()
+	if err = checkFence(context.WithoutCancel(ctx), tx); err != nil {
+		return
+	}
 	var current Worker
 	if err = tx.QueryRow("SELECT record FROM workers WHERE id=?", w.ID).Scan(&b); err != nil {
 		return
@@ -946,16 +1022,39 @@ func (m *WorkerManager) Interrupt(ctx context.Context, run, id string, closeWork
 			cancel()
 		}
 	}
-	w, err := m.Get(ctx, run, id)
+	if !closeWorker {
+		_, err := m.Get(ctx, run, id)
+		return err
+	}
+	tx, err := m.Store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if closeWorker {
-		w.Status = "closed"
-		if err = m.saveWorker(ctx, w); err != nil {
-			return err
-		}
+	defer tx.Rollback()
+	if err = checkFence(ctx, tx); err != nil {
+		return err
 	}
+	var raw []byte
+	var worker Worker
+	if err = tx.QueryRowContext(ctx, "SELECT record FROM workers WHERE id=? AND run_id=?", id, run).Scan(&raw); err != nil {
+		return err
+	}
+	if err = decodeJSONWithNumbers(raw, &worker); err != nil {
+		return err
+	}
+	worker.Status = "closed"
+	raw, err = json.Marshal(worker)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE workers SET status='closed',record=? WHERE id=?", raw, id); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	m.notifyWaiters()
+
 	return nil
 }
 func (m *WorkerManager) CancelRun(ctx context.Context, run string) error {

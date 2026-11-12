@@ -394,7 +394,7 @@ func TestUnacceptedInspectionCannotWeakenRetainedReplyObligation(t *testing.T) {
 	root, provider, req := fixture(t)
 	provider.ev.Comments = []map[string]any{{"id": float64(9), "body": "Please reply when verified.", "user": map[string]any{"login": "author"}}}
 	req.Options["tasks"] = []any{map[string]any{"skill": "dk-workflows:dk-pr-feedback-read"}, map[string]any{"skill": "custom:optional-inspection", "required": false}, map[string]any{"skill": "dk-workflows:dk-pr-feedback-reply"}}
-	req.Adapters = map[string]Adapter{"custom:optional-inspection": {Identity: "custom:optional-inspection", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "inspect", Role: "leaf", Assignment: "Inspect current discussion.", Evidence: []string{"original"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:optional-inspection": {Identity: "custom:optional-inspection", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "inspect", Role: "codex", Assignment: "Inspect current discussion.", Evidence: []string{"original"}}}}}}
 	prepared, err := Prepare(context.Background(), root, provider, req)
 	if err != nil {
 		t.Fatal(err)

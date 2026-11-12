@@ -19,7 +19,7 @@ func durableExecutor(t *testing.T, source string, runner AgentRunner) (*Executor
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return &Executor{WorkspaceDir: root, Agents: runner, Store: store}, store
+	return nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner, Store: store}), store
 }
 
 func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
@@ -29,11 +29,11 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
   build:
     steps:
       - id: edit
-        uses: agent/builder
-        with: {prompt: edit}
+        uses: agent/run
+        with: {prompt: edit, agent: builder.toml}
       - id: check
-        uses: agent/builder
-        with: {prompt: check}
+        uses: agent/run
+        with: {prompt: check, agent: builder.toml}
 `, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		if req.Prompt == "check" && calls.Load() == 2 {
@@ -41,7 +41,7 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
 		}
 		return map[string]any{"text": req.Prompt}, nil
 	}))
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("expected failure")
 	}
@@ -54,14 +54,14 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
 	}
 	// Change the on-disk workflow; only the original snapshot may be resumed.
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", "jobs: {}")
-	_, err = e.Resume(ctx, run.ID, nil, false)
+	_, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err == nil {
 		t.Fatal("silently repeated failed effect")
 	}
 	if calls.Load() != 2 {
 		t.Fatal("unguarded effect executed")
 	}
-	run, err = e.Resume(ctx, run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +85,11 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
 
 func TestRecoveryDoesNotReplayRunningAttempt(t *testing.T) {
 	ctx := context.Background()
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{id: edit, uses: agent/a, with: {prompt: hi}}]}}", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{id: edit, uses: agent/run, with: {prompt: hi, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		t.Fatal("uncertain effect repeated")
 		return nil, nil
 	}))
-	run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRecoveryDoesNotReplayRunningAttempt(t *testing.T) {
 	if saved.Status != RunStatusNeedsAttention {
 		t.Fatal(saved.Status)
 	}
-	if _, err = e.Resume(ctx, run.ID, nil, false); err == nil {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil {
 		t.Fatal("missing explicit retry guard")
 	}
 }
@@ -115,7 +115,7 @@ func TestRecoveryDoesNotReplayRunningAttempt(t *testing.T) {
 func TestSQLiteDuplicateAdmissionAndTransition(t *testing.T) {
 	ctx := context.Background()
 	e, s := durableExecutor(t, "jobs: {x: {steps: [{argv: [true]}]}}", nil)
-	run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +142,10 @@ func TestSQLiteDuplicateAdmissionAndTransition(t *testing.T) {
 func TestSecretRedactionAndResumeReferences(t *testing.T) {
 	ctx := context.Background()
 	secret := "private\"token\n"
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/a, with: {prompt: hi}}]}}", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": secret, "response": secret}, nil
 	}))
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": secret}, SecretRefs: map[string]string{"token": "TEST_TOKEN"}})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": secret}, SecretRefs: map[string]string{"token": "TEST_TOKEN"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestCommandArgvRepeatAndFailureOutputs(t *testing.T) {
         argv: [printf, '%s', 'attempt=${{ iteration.number }}']
 `
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", source)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,12 +207,12 @@ func TestCommandArgvRepeatAndFailureOutputs(t *testing.T) {
 		t.Fatalf("bad repeat %+v", job)
 	}
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", strings.Replace(source, "iteration.number == 3", "iteration.number == 4", 1))
-	run, err = e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err = nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || len(run.Jobs["retry"].Iterations) != 3 {
 		t.Fatal("exhaustion did not fail")
 	}
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs: {x: {steps: [{id: fail, shell: sh, run: 'echo stdout; echo stderr >&2; exit 7'}]}}`)
-	run, err = e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err = nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("command failure ignored")
 	}
@@ -227,10 +227,11 @@ func TestStructuredRepairDoesNotRepeatTaskPrompt(t *testing.T) {
 	e, _ := durableExecutor(t, `jobs:
   x:
     steps:
-      - uses: agent/a
+      - uses: agent/run
         with:
           prompt: 'IMPLEMENT A SECRET FEATURE'
           output: {format: json, schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}
+          agent: a.toml
 `, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 		calls++
 		if calls == 1 {
@@ -241,7 +242,7 @@ func TestStructuredRepairDoesNotRepeatTaskPrompt(t *testing.T) {
 		}
 		return map[string]any{"text": `{"ok":true}`}, nil
 	}))
-	if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil {
+	if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -249,13 +250,13 @@ func TestStructuredRepairDoesNotRepeatTaskPrompt(t *testing.T) {
 func TestResumeRequiresSecretsAgain(t *testing.T) {
 	ctx := context.Background()
 	e, s := durableExecutor(t, "jobs: {x: {steps: [{argv: [false]}]}}", nil)
-	r, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"key": "value"}})
+	r, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"key": "value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Status = RunStatusNeedsAttention
 	_ = s.Save(ctx, r)
-	if _, err = e.Resume(ctx, r.ID, nil, true); err == nil {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, true); err == nil {
 		t.Fatal("resume allowed without secret")
 	}
 }
@@ -283,11 +284,11 @@ func TestRedactionPreservesControlFields(t *testing.T) {
 }
 
 func TestCredentialLiteralsRejectAdmissionWithoutChangingMeaning(t *testing.T) {
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/a, with: {prompt: super-secret-value}}]}}", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: super-secret-value, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		t.Fatal("secret literal admitted")
 		return nil, nil
 	}))
-	_, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"key": "super-secret-value"}})
+	_, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"key": "super-secret-value"}})
 	if err == nil {
 		t.Fatal("credential literal persisted")
 	}
@@ -302,14 +303,15 @@ func TestNativeStructuredOutputRetainsTextMeaning(t *testing.T) {
   x:
     steps:
       - id: native
-        uses: agent/a
+        uses: agent/run
         with:
           prompt: reply
           output: {format: json, repair-attempts: 0, schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}
+          agent: a.toml
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": "Native structured output is attached", "response": "Native structured output is attached", "structured": map[string]any{"ok": true}}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}

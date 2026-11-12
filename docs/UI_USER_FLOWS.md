@@ -20,7 +20,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-01.spec.ts)
 
-- **Coverage:** Selection reveals long YAML definitions without moving focus, in both editor and viewer.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Selection reveals long YAML definitions without moving focus, in both editor and viewer.
 
 - **Starting point:** The host opens a workflow in the editor.
 - **My flow:** I read the workflow name → inspect the job cards and dependency
@@ -33,7 +33,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-02.spec.ts)
 
-- **Coverage:** View switches preserve source and reveal the selected job when YAML opens.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  View switches preserve source and reveal the selected job when YAML opens.
 
 - **Starting point:** A workflow is open.
 - **My flow:** I choose **Visual**, **YAML**, or **Split** in the toolbar.
@@ -45,7 +45,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-03.spec.ts)
 
-- **Coverage:** Job metadata, step names/IDs, prompts, direct and shell commands,
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Job metadata, step names/IDs, prompts, direct and shell commands,
   duplicate names across jobs, document order, result counts, clearing and no results.
   Pointer, Tab, arrow, Enter/Space and Escape navigation cover collapsed/offscreen
   steps, YAML reveal, viewer mode, scrollable narrow layouts and independent instances.
@@ -72,7 +72,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-04.spec.ts)
 
-- **Coverage:** Collapse, zoom, fit, auto layout, and dragging preserve workflow source; drag positions reach host layout storage.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Collapse, zoom, fit, auto layout, and dragging preserve workflow source; drag positions reach host layout storage.
 
 - **Starting point:** I am viewing the graph.
 - **My flow:** I pan or zoom → drag job cards → collapse or expand cards → use
@@ -85,7 +85,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-05.spec.ts)
 
-- **Coverage:** Narrow drawers isolate hidden content and keep YAML usable in a short container.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Narrow drawers isolate hidden content and keep YAML usable in a short container.
 
 - **Starting point:** The editor is embedded in a narrow space.
 - **My flow:** I use **palette**, **canvas**, and **inspector** to switch panels
@@ -100,7 +100,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-06.spec.ts)
 
-- **Coverage:** The starter has no browser admission errors and Undo restores the empty source.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  The starter has no browser admission errors and Undo restores the empty source.
 
 - **Starting point:** The host opens an empty document.
 - **My flow:** I select **Create workflow** → inspect the first job → change
@@ -113,7 +113,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-07.spec.ts)
 
-- **Coverage:** Name, both trigger toggles, and the advanced trigger mapping update the definition.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Name, both trigger toggles, and the advanced trigger mapping update the definition.
 
 - **Starting point:** An editable workflow is open.
 - **My flow:** I select **Workflow properties** → edit **Name** → enable or
@@ -125,7 +125,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-08.spec.ts)
 
-- **Coverage:** Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls. Boolean, numeric, and literal string defaults keep their types; object defaults use field YAML, and defaults have no result-binding control.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls. Boolean, numeric, and literal string defaults keep their types; object defaults use field YAML, and defaults have no result-binding control.
 
 - **Starting point:** I have enabled **workflow_call** in Workflow properties.
 - **My flow:** I open **Callable inputs**, **Callable secrets**, or **Callable
@@ -142,7 +142,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-09.spec.ts)
 
-- **Coverage:** Job creation assigns unique IDs and stores the edited name and runner.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Job creation assigns unique IDs and stores the edited name and runner.
 
 - **Starting point:** I have a usable, editable workflow.
 - **My flow:** I select **Add job** → edit **Job ID**, **Name**, and, if needed,
@@ -154,7 +154,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-10.spec.ts)
 
-- **Coverage:** Real connector gestures create an edge and reject a cycle without adding a dependency to the prerequisite.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Real connector gestures create an edge and reject a cycle without adding a dependency to the prerequisite.
 
 - **Starting point:** My workflow has at least two jobs.
 - **My flow:** I drag from the bottom connector of the prerequisite job to the
@@ -168,7 +168,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-11.spec.ts)
 
-- **Coverage:** Unchecking a prerequisite removes both its structural dependency and graph edge.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Unchecking a prerequisite removes both its structural dependency and graph edge.
 
 - **Starting point:** A job depends on another job.
 - **My flow:** I select the dependent job → uncheck the prerequisite in
@@ -180,7 +180,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-12.spec.ts)
 
-- **Coverage:** Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported ordered iteration YAML retains its literal payloads and item input expressions through guided call edits.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Cancelling the steps-discard confirmation preserves the source and selected kind; confirmed reusable conversion stores inputs and secrets and supports Undo. Catalog metadata supplies named typed fields and displays omitted defaults without storing them. Expression bindings, object YAML, unknown input and secret bindings with comments, and inherited secrets survive guided edits until explicit replacement. Imported ordered iteration YAML retains its literal payloads and item input expressions through guided call edits.
 
 - **Starting point:** I want a job to invoke a reusable workflow.
 - **My flow:** If the host provides a catalog, I choose an entry under
@@ -201,7 +201,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-13.spec.ts)
 
-- **Coverage:** Imported null values recover through guided controls; repeat configuration can be added and removed.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Imported null values recover through guided controls; repeat configuration can be added and removed.
 
 - **Starting point:** A job is selected.
 - **My flow:** I open **Repeat** → enter **Maximum attempts** and **Until** →
@@ -213,7 +213,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-14.spec.ts)
 
-- **Coverage:** Named output fields and advanced output mappings update the job definition.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Named output fields and advanced output mappings update the job definition.
 
 - **Starting point:** A job is selected.
 - **My flow:** I open **Job outputs** → select **Add output** → edit its
@@ -228,7 +228,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-15.spec.ts)
 
-- **Coverage:** Command and conversation templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call. Conversation templates supply declared participants, a finisher, and bounded call/message/time settings.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Command and conversation templates append unique explicit IDs and stay disabled without a sequential job, including after confirming replacement of steps by a reusable call. Conversation templates supply declared participants, a finisher, and bounded call/message/time settings.
 
 - **Starting point:** I have selected a job with sequential steps.
 - **My flow:** I choose a step template from **Add to workflow**, using
@@ -241,7 +241,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-16.spec.ts)
 
-- **Coverage:** Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for both legacy and concise agent forms, matching runner admission. Concise `agent`/`prompt` imports show the same agent controls and graph labels; prompt, role, and option edits retain their original YAML form, multiline text, and unrelated comments. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for canonical native agent tasks, matching runner admission. Definition, prompt, and option edits retain multiline text and unrelated comments. Removed shorthand produces a diagnostic. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
 
 - **Starting point:** I add or select an agent or conversation step.
 - **My flow:** For a conversation I select **Conversation** under **Step type**,
@@ -254,13 +254,13 @@ fields. Escape discards an uncommitted field edit.
   `Review` declaration. Definitions and references remain in exported YAML.
 - **What I see:** The step definition and graph label update. If the host
   supplies an agent catalog, an unavailable agent produces a warning. Output
-  contracts may still require host validation before execution. Imported concise `agent: ROLE` and top-level `prompt` steps retain that spelling when I edit their agent controls.
+  contracts may still require host validation before execution. Native `agent/run` tasks retain their definition reference and typed parameters while I edit their agent controls.
 
 ### UF-17 — Configure a direct command
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-17.spec.ts)
 
-- **Coverage:** Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Narrow setup waits for the inspector heading focus that completes the responsive transition before typing, and verifies the executable in both its control and stored source before argument operations. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Executable and argument rows, working directories, timeouts, and direct-command labels reflect form edits. Keyboard addition, reordering, removal, narrow inspector layouts, and advanced array editing preserve spaces, quotes, and empty arguments. Narrow setup waits for the inspector heading focus that completes the responsive transition before typing, and verifies the executable in both its control and stored source before argument operations. Rejected executable drafts remain visible and block Save until discarded; viewer controls remain disabled.
 
 - **Starting point:** I add **Direct command** or choose it under Step type.
 - **My flow:** I enter **Executable**, edit each argument row, and use **Add
@@ -275,7 +275,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-18.spec.ts)
 
-- **Coverage:** Shell, command, working directory, and timeout are stored through guided controls.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Shell, command, working directory, and timeout are stored through guided controls.
 
 - **Starting point:** I add **Shell command** or choose it under Step type.
 - **My flow:** I set **Shell** and write **Command** → optionally set **Working
@@ -287,7 +287,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-19.spec.ts)
 
-- **Coverage:** Parameterized cases confirm discarding the starter command, author all five controller actions, and inspect each configured parameter.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Parameterized cases confirm discarding the starter command, author all five controller actions, and inspect each configured parameter.
 
 - **Starting point:** I have selected a sequential job.
 - **My flow:** I choose an action template → fill in its inspector fields →
@@ -309,7 +309,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-20.spec.ts)
 
-- **Coverage:** Host fields and the custom prompt renderer update the appended action parameters. Registered `action/<name>` forms edit bindings while preserving nested custom evidence parameters; browser validation reports that registration and typed schemas require the host runtime.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Host fields and the custom prompt renderer update the appended action parameters. Registered `action/<name>` forms edit bindings while preserving nested custom evidence parameters; browser validation reports that registration and typed schemas require the host runtime.
 
 - **Starting point:** The host provides custom action choices and forms.
 - **My flow:** I add the action from the palette or select its Step type →
@@ -321,7 +321,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Native agent definition edits preserve prompts and options; command conversion names discarded task fields, cancellation preserves source, and Undo restores the task.
 
 - **Starting point:** A step already has command or action settings.
 - **My flow:** I select a different **Step type** → review any confirmation
@@ -341,7 +341,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-22.spec.ts)
 
-- **Coverage:** Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. A fallback prompt that traverses outputs beneath a scalar error field shows its complete invalid path in a diagnostic; correcting the reference clears it. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Job and step conditions and error flags update the definition and graph indicators. Step handler controls author fallback, reporting, nested finalization, and a shared timeout; a focused prompt edit and export retain those lists, Undo restores the configured task, and an excessive timeout produces a diagnostic. YAML completion inside a nested fallback offers the redacted failed-task fields and inserts the selected prompt reference. A fallback prompt that traverses outputs beneath a scalar error field shows its complete invalid path in a diagnostic; correcting the reference clears it. Renaming an outer producer updates named schemas used by fallback and finalization, preserves a sibling's shadowed references through a separate schema, and survives export and Undo; deletion discloses those schema references before confirmation. A rename captured by a preceding handler sibling is rejected without changing source; correcting the ID preserves prompt and named-schema producers through export and Undo. Copying a parallel block skips generated producer IDs matching direct or nested handler siblings, preserves inherited prompt and named-schema references and local shadowing, and survives export and Undo; a structural block inside fallback is diagnosed.
 
 - **Starting point:** I have selected a job or step.
 - **My flow:** I enter **Condition** and optionally check **Continue on error**.
@@ -378,7 +378,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-23.spec.ts)
 
-- **Coverage:** Expression insertion replaces selected text and restores focus and a collapsed cursor immediately after the inserted reference, with animation frames paused, including replacement by the same expression; the next typed character stays before the preserved suffix. YAML completion offers preceding steps and property hints exclude literal fields. Concise agent prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; workflow search opens the consumer prompt in the large dependency graph before checking its bounded picker, and typing a YAML path still finds a later producer's field beyond that initial list.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Expression insertion replaces selected text and restores focus and a collapsed cursor immediately after the inserted reference, with animation frames paused, including replacement by the same expression; the next typed character stays before the preserved suffix. YAML completion offers preceding steps and property hints exclude literal fields. Native agent task prompts insert local fields from a named output schema and named dependency results; the current step is excluded from local suggestions. Command producers retain their explicit stdout output suggestion without an unavailable concise text suggestion. Entering a forward result reference with a symbol field shows its scope diagnostic; quoting the same text as a literal clears that diagnostic. Escaped-quote comparison operands and wrapped conditions containing quoted closing braces retain their forward-reference diagnostic; removing the condition's reference clears it. Shared schemas keep root and dependency inspector lists at 200 suggestions; workflow search opens the consumer prompt in the large dependency graph before checking its bounded picker, and typing a YAML path still finds a later producer's field beyond that initial list.
 
 - **Starting point:** I am editing a field that supports expressions.
 - **My flow:** I use field suggestions, choose **Insert expression…** in a
@@ -398,7 +398,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-24.spec.ts)
 
-- **Coverage:** Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update concise local and cross-job references, including named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo. Deleting a producer lists local and dependent consuming paths and leaves an unknown-step diagnostic after confirmation. YAML next-line whitespace around a legacy output reference preserves rename tracking, deletion impact and exact source restoration through Undo.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Conflicting IDs can be corrected; callable renames rewrite prompt references and named-schema enum expressions together. Deletion impact review includes the named declaration's field path, and confirmed deletion reports its missing input reference. Step renames update concise local and cross-job references, including named contracts; a declaration shared by other jobs is copied for the renamed job, preserving the other consumers and atomic undo/redo. Deleting a producer lists local and dependent consuming paths and leaves an unknown-step diagnostic after confirmation. YAML next-line whitespace around a legacy output reference preserves rename tracking, deletion impact and exact source restoration through Undo.
 
 - **Starting point:** I select a job, step, callable interface entry, or job output.
 - **My flow:** I edit **Job ID**, **Step ID**, or the entry's **Identifier** →
@@ -414,7 +414,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-25.spec.ts)
 
-- **Coverage:** Job and step copies have unique identifiers and each duplication is undoable.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Job and step copies have unique identifiers and each duplication is undoable.
 
 - **Starting point:** A job or step is selected.
 - **My flow:** I select **Duplicate job** or **Duplicate step** → inspect the
@@ -426,7 +426,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-26.spec.ts)
 
-- **Coverage:** Reordering unnamed steps materializes stable IDs, preserves references, and reverses through Undo.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Reordering unnamed steps materializes stable IDs, preserves references, and reverses through Undo.
 
 - **Starting point:** I select a step in a sequential job.
 - **My flow:** I select **Move up** or **Move down** → review the step list and
@@ -439,7 +439,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-27.spec.ts)
 
-- **Coverage:** Deletion exposes structural impacts and consumed named-schema paths for local step references; Cancel preserves source and a host replacement invalidates a pending confirmation. Confirmed producer deletion reports the remaining named-contract reference, and Undo restores its source.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Deletion exposes structural impacts and consumed named-schema paths for local step references; Cancel preserves source and a host replacement invalidates a pending confirmation. Confirmed producer deletion reports the remaining named-contract reference, and Undo restores its source.
 
 - **Starting point:** I select the item and its delete control.
 - **My flow:** I read the confirmation and affected document paths → choose
@@ -453,7 +453,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-28.spec.ts)
 
-- **Coverage:** YAML and form changes share Undo and Redo while subsequent typing stays at the restored cursor.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  YAML and form changes share Undo and Redo while subsequent typing stays at the restored cursor.
 
 - **Starting point:** I have changed the document through forms, the graph, or YAML.
 - **My flow:** I select **Undo** or **Redo**, or use **Mod-Z** and
@@ -468,7 +468,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-29.spec.ts)
 
-- **Coverage:** Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Pasting source updates the graph and retains comments and unfamiliar fields. Ordered `for-each` YAML accepts list expressions and literal payloads, diagnoses nonarray items and repeat conflicts, and recovers after correction. Durable `input/wait` YAML preserves JSON payloads and answer expressions, diagnoses missing evidence IDs and empty prompts, and supports correcting requests through the existing advanced parameter editor. Concise agent source updates graph labels and inspector fields, diagnoses competing `uses` or prompt declarations and nonstring prompts, and recovers after source correction. Plain timestamp prompts receive the runner's string diagnostic; quoting the date clears it and retains the text.
 
 - **Starting point:** I choose YAML or Split mode in an editable document.
 - **My flow:** I type or paste YAML into **Workflow YAML** → inspect the graph,
@@ -476,13 +476,13 @@ fields. Escape discards an uncommitted field edit.
 - **What I see:** Usable source updates the visual representation. Comments
   and unfamiliar fields remain available in the source; visual edits may
   normalize formatting. Pasting source replaces text I select, rather than
-  opening a file-import dialog. I can paste concise `agent: ROLE` steps with a top-level multiline `prompt` and optional `with` settings; competing `uses` or `with.prompt` declarations produce field diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
+  opening a file-import dialog. I can paste `uses: agent/run` tasks with `with.agent` pointing to a native Codex TOML definition, `with.prompt`, and typed `with.input` data. Removed `agent:` shorthand and `agent/ROLE` actions produce diagnostics. Reusable jobs accept `for-each.items` as an array or a whole array expression and a required `key` expression. I correct diagnostics if I combine `for-each` with `repeat` or use it on a step job. For a durable question I use `input/wait`, supply `with.prompt` and `with.evidence-id`, and optionally add a JSON payload. I can edit the request through Advanced parameters and reference `steps.<id>.outputs.answer` in later steps. The host owns durable answer delivery and execution.
 
 ### UF-30 — Search and replace in YAML
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-30.spec.ts)
 
-- **Coverage:** Search and replacement work in narrow light and dark containers with visible labels and focus restoration.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Search and replacement work in narrow light and dark containers with visible labels and focus restoration.
 
 - **Starting point:** The YAML pane is visible and focused.
 - **My flow:** I press **Mod-F** → enter my search → navigate matches → use the
@@ -494,7 +494,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-31.spec.ts)
 
-- **Coverage:** Diagnostic buttons support mouse, Enter, and Space activation in Visual, Split, and YAML modes at desktop and narrow widths. They reveal inspector fields, expand cards and collapsed controls, or focus YAML ranges with CRLF normalization, including an exact EOF caret assertion for stale parser errors. Job-output reference diagnostics focus the consuming Output value while identifier diagnostics at the same path focus its Identifier. Host diagnostics also reveal guided command arguments and typed callable defaults. Long diagnostic identifiers use bounded visible labels while retaining full paths and working navigation. Whole-job configuration diagnostics use YAML instead of Job ID in Visual and Split modes; scalar action diagnostics still focus Action target, and identifier problems focus Job ID. Unsupported fields use YAML; narrow inspector-to-YAML fallback waits until the source pane becomes interactive before selecting and focusing the range, including repeated activation; unavailable locations explain the problem without moving selection; failed pointer navigation keeps the diagnostic focused for keyboard reactivation even when restoring a formerly focused inspector. Navigation preserves document state, save failures, inspector selection for unavailable fields, and independent editors, works for viewers, and protects active or rejected inspector drafts until completion or explicit discard; pending-edit cases select the starting step through its inspector link to keep canvas motion outside the recovery assertions. The invalid-command recovery setup selects its job and stable inspector step link before opening Advanced command YAML, avoiding a moving canvas hit target. Correcting the invalid command array clears browser errors; rejected host validation appears in diagnostics. The registered-action recovery case selects its job through the palette and its step through the inspector link to avoid initial canvas-selection timing; correcting the invalid name still clears browser errors and exposes the host registration/schema check without requiring agent parameters.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Diagnostic buttons support mouse, Enter, and Space activation in Visual, Split, and YAML modes at desktop and narrow widths. They reveal inspector fields, expand cards and collapsed controls, or focus YAML ranges with CRLF normalization, including an exact EOF caret assertion for stale parser errors. Job-output reference diagnostics focus the consuming Output value while identifier diagnostics at the same path focus its Identifier. Host diagnostics also reveal guided command arguments and typed callable defaults. Long diagnostic identifiers use bounded visible labels while retaining full paths and working navigation. Whole-job configuration diagnostics use YAML instead of Job ID in Visual and Split modes; scalar action diagnostics still focus Action target, and identifier problems focus Job ID. Unsupported fields use YAML; narrow inspector-to-YAML fallback waits until the source pane becomes interactive before selecting and focusing the range, including repeated activation; unavailable locations explain the problem without moving selection; failed pointer navigation keeps the diagnostic focused for keyboard reactivation even when restoring a formerly focused inspector. Navigation preserves document state, save failures, inspector selection for unavailable fields, and independent editors, works for viewers, and protects active or rejected inspector drafts until completion or explicit discard; pending-edit cases select the starting step through its inspector link to keep canvas motion outside the recovery assertions. The invalid-command recovery setup selects its job and stable inspector step link before opening Advanced command YAML, avoiding a moving canvas hit target. Correcting the invalid command array clears browser errors; rejected host validation appears in diagnostics. The registered-action recovery case selects its job through the palette and its step through the inspector link to avoid initial canvas-selection timing; correcting the invalid name still clears browser errors and exposes the host registration/schema check without requiring agent parameters.
 
 - **Starting point:** The diagnostics area reports warnings or errors.
 - **My flow:** I expand diagnostics → read the message, document path, source,
@@ -508,7 +508,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-32.spec.ts)
 
-- **Coverage:** Host replacement with malformed YAML first preserves pending fields for confirmation; Use incoming discards them before stale editing resumes. Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Host replacement with malformed YAML first preserves pending fields for confirmation; Use incoming discards them before stale editing resumes. Malformed source retains its last preview until a YAML repair; stale previews discard unapplied property drafts before editing resumes.
 
 - **Starting point:** My source becomes malformed or structurally unusable.
 - **My flow:** I read **Stale preview — fix the YAML structure to resume visual
@@ -523,7 +523,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-33.spec.ts)
 
-- **Coverage:** Correction, Escape, and Discard edit recover rejected YAML and identifier drafts; recovery alone never invokes saving.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Correction, Escape, and Discard edit recover rejected YAML and identifier drafts; recovery alone never invokes saving.
 
 - **Starting point:** A structured YAML field or identifier rejects my edit.
 - **My flow:** I read the error → correct the value and apply it again, or press
@@ -537,7 +537,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Hidden-rejection cases choose the starting step through palette job navigation and the inspector link, keeping initial canvas timing outside the save and focus assertions. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Hidden-rejection cases choose the starting step through palette job navigation and the inspector link, keeping initial canvas timing outside the save and focus assertions. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
@@ -550,7 +550,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-35.spec.ts)
 
-- **Coverage:** Downloads preserve original source bytes and include malformed drafts. Exporting a changed draft leaves host persistence status unsaved; saving that draft through the host can mark it saved.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Downloads preserve original source bytes and include malformed drafts. Exporting a changed draft leaves host persistence status unsaved; saving that draft through the host can mark it saved.
 
 - **Starting point:** A workflow or draft is open in the editor or viewer.
 - **My flow:** I select **Export YAML** → receive `workflow.yml` through my
@@ -563,7 +563,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-36.spec.ts)
 
-- **Coverage:** Viewer inspection and expansion remain available while source and mutation controls are read-only.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Viewer inspection and expansion remain available while source and mutation controls are read-only.
 
 - **Starting point:** The host opens the workflow in the **Viewer**.
 - **My flow:** I navigate jobs and steps → inspect properties → switch views
@@ -575,7 +575,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-37.spec.ts)
 
-- **Coverage:** All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Invalid-source setup uses the YAML editor’s select-all command and verifies the complete replacement before switching; returning to a cached example verifies its edited export and original example filename. Reset confirmation, cancellation, example isolation, retained layout, and theme activation are exercised. Reload disposal is checked against the unreset Parallel draft in its own example, with empty source history after reload. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  All four examples export unchanged source. Switching retains valid and invalid YAML, selection, rejected inspector fields, undo/redo, and example-named downloads. Invalid-source setup uses the YAML editor’s select-all command and verifies the complete replacement before switching; returning to a cached example verifies its edited export and original example filename. Reset confirmation, cancellation, example isolation, retained layout, and theme activation are exercised. Reload disposal is checked against the unreset Parallel draft in its own example, with empty source history after reload. A zoomed canvas keeps its actual displayed transform after detachment, and the selected job remains selected in its inspector and card without reselection.
 
 - **Starting point:** I open the development playground.
 - **My flow:** I choose an **Example** (`classify`, `parallel-review`, `develop`,
@@ -594,7 +594,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-38.spec.ts)
 
-- **Coverage:** Two review jobs remain independent while both feed the summary through dependency checkboxes. Local parallel blocks import without admission errors, expose branch YAML editing and the correct block type, and omit unsupported block-level continuation. Nested sequence references survive editing; duplication allocates unique descendant IDs and rewrites internal references. Named contracts consumed inside a copied block receive their own declaration when they reference copied descendants, while original consumers retain the original contract; Undo and Redo restore the complete duplication transaction. Cancelling conversion preserves the block. Joined nested results appear in a following prompt's expression picker, and Undo restores each source transaction. Adding a parallel block from the palette supplies two independently identified command branches.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Two review jobs remain independent while both feed the summary through dependency checkboxes. Local parallel blocks import without admission errors, expose branch YAML editing and the correct block type, and omit unsupported block-level continuation. Nested sequence references survive editing; duplication allocates unique descendant IDs and rewrites internal references. Named contracts consumed inside a copied block receive their own declaration when they reference copied descendants, while original consumers retain the original contract; Undo and Redo restore the complete duplication transaction. Cancelling conversion preserves the block. Joined nested results appear in a following prompt's expression picker, and Undo restores each source transaction. Adding a parallel block from the palette supplies two independently identified command branches.
 
 - **Starting point:** I want two independent reviews and a final summary.
 - **My flow:** I add jobs named `review_a`, `review_b`, and `summarize` → add
@@ -619,7 +619,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-39.spec.ts)
 
-- **Coverage:** Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed. Named step result wiring offers nested fields from a named output schema, previews and inserts that path into an agent shorthand prompt, adds the dependency, leaves producer outputs undeclared, restores focus, and reverses the complete transaction with one Undo. A large named schema shows at most 200 result-field suggestions; typing a later field narrows that list, and the resulting wiring still previews, applies and reverses with one Undo.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Apply, Cancel, and Escape close the native picker before restoring field focus; a stale-preview Apply keeps the dialog and its error visible. The append scenario explicitly positions the caret after Cancel. A declared producer output becomes an expression option for a dependent summary prompt. Guided wiring previews the declaration, dependency, and inserted expression without changing source; Cancel preserves source and one Undo restores a confirmed transaction exactly. Existing outputs are reused and a host source change rejects a stale preview until refreshed. Named step result wiring offers nested fields from a named output schema, previews and inserts that path into an agent task prompt, adds the dependency, leaves producer outputs undeclared, restores focus, and reverses the complete transaction with one Undo. A large named schema shows at most 200 result-field suggestions; typing a later field narrows that list, and the resulting wiring still previews, applies and reverses with one Undo.
 
 - **Starting point:** My `review` job contains an agent step with ID `analyze`,
   and a `summarize` job needs its result.
@@ -649,7 +649,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-40.spec.ts)
 
-- **Coverage:** Only preceding command outputs appear in the prompt picker; reordering preserves the reference for manual review.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Only preceding command outputs appear in the prompt picker; reordering preserves the reference for manual review.
 
 - **Starting point:** A sequential job has a direct command with ID `collect`
   followed by an agent step.
@@ -666,7 +666,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-41.spec.ts)
 
-- **Coverage:** Replacing advanced parameters updates both the stored mapping and guided prompt/model fields, with visible replacement guidance. Numeric custom-action fields store numbers, while guided text and number edits preserve unrelated parameters and their comments. Overflowing numeric drafts block Save and preserve the previous value until corrected or discarded with Escape.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Replacing advanced parameters updates both the stored mapping and guided prompt/model fields, with visible replacement guidance. Numeric custom-action fields store numbers, while guided text and number edits preserve unrelated parameters and their comments. Overflowing numeric drafts block Save and preserve the previous value until corrected or discarded with Escape.
 
 - **Starting point:** A selected action needs parameters that its guided fields
   do not expose, or I want to edit several parameters together.
@@ -682,7 +682,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-42.spec.ts)
 
-- **Coverage:** The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
 
 - **Starting point:** A job currently calls a reusable workflow, and I want to
   define its steps directly.
@@ -700,7 +700,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-43.spec.ts)
 
-- **Coverage:** Deleting a referenced step reports its consuming path and contextual repair guidance; activating the diagnostic focuses the remaining prompt, and repairing it clears the error. Recognized needs references to an existing producer missing from Dependencies produce one advisory per consuming field and producer, including repeated references in a prompt. Activating it reveals the consumer’s Dependencies without editing; explicitly checking the producer adds the edge and clears the warning. Viewers focus an enabled Dependencies navigation wrapper on pointer or keyboard activation while its checkboxes remain disabled.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Deleting a referenced step reports its consuming path and contextual repair guidance; activating the diagnostic focuses the remaining prompt, and repairing it clears the error. Recognized needs references to an existing producer missing from Dependencies produce one advisory per consuming field and producer, including repeated references in a prompt. Activating it reveals the consumer’s Dependencies without editing; explicitly checking the producer adds the edge and clears the warning. Viewers focus an enabled Dependencies navigation wrapper on pointer or keyboard activation while its checkboxes remain disabled.
 
 - **Starting point:** I confirmed deletion of a referenced job, step, input,
   secret, or output, and diagnostics now identify remaining references.
@@ -715,7 +715,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-44.spec.ts)
 
-- **Coverage:** Correcting agent references through both Action target and Step type keeps the prompt; correcting a workflow reference clears the remaining catalog warning.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Correcting agent references through both Action target and Step type keeps the prompt; correcting a workflow reference clears the remaining catalog warning.
 
 - **Starting point:** The host supplies catalogs, and diagnostics say a
   referenced agent or workflow is unavailable.
@@ -731,7 +731,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-45.spec.ts)
 
-- **Coverage:** Keyboard job navigation, field commits, and dependency toggles author a workflow; deletion traps focus and Escape restores the originating button.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Keyboard job navigation, field commits, and dependency toggles author a workflow; deletion traps focus and Escape restores the originating button.
 
 - **Starting point:** I am in an editable workflow and prefer keyboard controls.
 - **My flow:** I use Tab and Shift-Tab to reach the palette's job buttons →
@@ -747,7 +747,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-46.spec.ts)
 
-- **Coverage:** A focused name edit preserves unrelated comments, metadata, prompt text, and mapping order in the export.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  A focused name edit preserves unrelated comments, metadata, prompt text, and mapping order in the export.
 
 - **Starting point:** The host opens an existing workflow containing comments,
   multiline prompts, or fields without dedicated form controls.
@@ -763,7 +763,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-47.spec.ts)
 
-- **Coverage:** Visible collapse/expand transitions retain clean and pending custom DOM with unchanged source and no whole-step serialization for large supported metadata; subsequent metadata and prompt edits invalidate reuse, and clearing a raw buffer reconciles the deferred content. Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Explicit handle requests can reload the last supplied source after saving or stage it while protected; unchanged React initial props are filtered at the component boundary. Successful handle resolution clears obsolete discard errors, including an intermediate Keep local choice whose synchronous host callback resets the sole raw buffer, reports fresh text, and restages the identical incoming source before React renders. The fresh DOM, source, revision, history, candidate, protection, and unrelated save error are retained; a newer UI discard failure with identical error text from that callback remains visible. Clicked UI Keep local also preserves newer nested UI failures with identical or different messages, after verifying the nested discard and retained candidate; successful nested acceptance clears old errors and accepts source once. Guided result preview/apply preserves a pending raw sibling buffer while wiring the output and dependency as one source edit. Keep local preserves drafts; Use incoming and imperative acceptance discard unapplied text without committing it, with source Undo recovery. Controlled React echoes and repeated props do not reopen notices after observed policy/theme updates complete. Participating raw renderers report buffered text without source edits; Keep local retains the focused buffer, while both replacement entrypoints discard before blur and create one undoable source edit. Raw and built-in contributions aggregate; sibling/catalog/theme updates, saves, identity replacement, obsolete callbacks, destruction, independent editors, and viewer guards are exercised. Throwing custom discard callbacks retain source, candidate, raw protection, and rejected built-in drafts. Keep local clears the obsolete discard error while preserving buffers and unrelated save errors. A newer host source sent from custom discard remains pending without accepting the older capture or adding history. At desktop and narrow widths, a fresh raw buffer reported during the final discard notification keeps its original DOM, source, candidate, and history; a second explicit keyboard acceptance discards it once and source Undo restores the prior source. Pointer acceptance also preserves fresh blur-committing raw text, focus, DOM identity, cleanup count, source, candidate, and history when acceptance is deferred; Keep local retains focus, including a synchronous nested host choice that clears the candidate during discard notification; fresh local protection still prevents blur commits. A second explicit pointer acceptance (after restaging for the nested Keep local case) discards once, restores toolbar focus, and allows source Undo. Keyboard Keep local restores toolbar focus normally, but honors a fresh raw control focused/reported by its synchronous host callback without committing text or changing source/history. A notice staged after a delete dialog opens is excluded from native focus and the accessibility tree; Tab stays in the modal, and closing it restores operable source choices without changing the staged source or history. Anonymous-step YAML reordering, whole-step edits, and undo invalidate callbacks before cleanup so drafts cannot apply to a different step. At desktop and narrow widths, diagnostic navigation gives control-specific completion/discard guidance. The navigation cases wait for the responsive layout, focus the raw editor, and assert registered local protection before activating diagnostics, so they exercise a reported draft rather than racing drawer initialization. Pointer and keyboard activation preserve reported raw buffers and source/history until an incoming-source choice; Keep local retains them, Use incoming discards them, and navigation then reaches the other step without adding a source edit.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Visible collapse/expand transitions retain clean and pending custom DOM with unchanged source and no whole-step serialization for large supported metadata; subsequent metadata and prompt edits invalidate reuse, and clearing a raw buffer reconciles the deferred content. Clean editors and viewers accept source immediately. Conflicting replacements preserve local source and rejected fields until a choice; the latest candidate is used. Explicit handle requests can reload the last supplied source after saving or stage it while protected; unchanged React initial props are filtered at the component boundary. Successful handle resolution clears obsolete discard errors, including an intermediate Keep local choice whose synchronous host callback resets the sole raw buffer, reports fresh text, and restages the identical incoming source before React renders. The fresh DOM, source, revision, history, candidate, protection, and unrelated save error are retained; a newer UI discard failure with identical error text from that callback remains visible. Clicked UI Keep local also preserves newer nested UI failures with identical or different messages, after verifying the nested discard and retained candidate; successful nested acceptance clears old errors and accepts source once. Guided result preview/apply preserves a pending raw sibling buffer while wiring the output and dependency as one source edit. Keep local preserves drafts; Use incoming and imperative acceptance discard unapplied text without committing it, with source Undo recovery. Controlled React echoes and repeated props do not reopen notices after observed policy/theme updates complete. Participating raw renderers report buffered text without source edits; Keep local retains the focused buffer, while both replacement entrypoints discard before blur and create one undoable source edit. Raw and built-in contributions aggregate; sibling/catalog/theme updates, saves, identity replacement, obsolete callbacks, destruction, independent editors, and viewer guards are exercised. Throwing custom discard callbacks retain source, candidate, raw protection, and rejected built-in drafts. Keep local clears the obsolete discard error while preserving buffers and unrelated save errors. A newer host source sent from custom discard remains pending without accepting the older capture or adding history. At desktop and narrow widths, a fresh raw buffer reported during the final discard notification keeps its original DOM, source, candidate, and history; a second explicit keyboard acceptance discards it once and source Undo restores the prior source. Pointer acceptance also preserves fresh blur-committing raw text, focus, DOM identity, cleanup count, source, candidate, and history when acceptance is deferred; Keep local retains focus, including a synchronous nested host choice that clears the candidate during discard notification; fresh local protection still prevents blur commits. A second explicit pointer acceptance (after restaging for the nested Keep local case) discards once, restores toolbar focus, and allows source Undo. Keyboard Keep local restores toolbar focus normally, but honors a fresh raw control focused/reported by its synchronous host callback without committing text or changing source/history. A notice staged after a delete dialog opens is excluded from native focus and the accessibility tree; Tab stays in the modal, and closing it restores operable source choices without changing the staged source or history. Anonymous-step YAML reordering, whole-step edits, and undo invalidate callbacks before cleanup so drafts cannot apply to a different step. At desktop and narrow widths, diagnostic navigation gives control-specific completion/discard guidance. The navigation cases wait for the responsive layout, focus the raw editor, and assert registered local protection before activating diagnostics, so they exercise a reported draft rather than racing drawer initialization. Pointer and keyboard activation preserve reported raw buffers and source/history until an incoming-source choice; Keep local retains them, Use incoming discards them, and navigation then reaches the other step without adding a source edit.
 
 - **Starting point:** The host sends a different definition to the same editor.
 - **My flow:** I read the incoming-source notice → select **Keep local** to retain
@@ -788,3 +788,16 @@ sources are the [UI guide](../ui/README.md),
 [YAML editor](../ui/src/source.tsx), and
 [playground](../ui/playground.ts). Related interaction coverage lives in the
 [browser tests](../ui/test/browser/).
+
+### UF-48 — Configure a native agent task and its event hooks
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
+
+- **Coverage:** Definition and typed input edits preserve all six hook lists;
+  command conversion reviews the discarded completion hooks, and Undo/Redo and
+  exported YAML retain the definition and typed values.
+- **Starting point:** I open a task using `agent/run`.
+- **My flow:** I change its definition path → edit typed task input → inspect its
+  verification, completion, recovery, reporting and finalization lists → export.
+- **What I see:** Task and hook steps remain visible in YAML, with diagnostics
+  for removed syntax or a missing boolean completion contract.

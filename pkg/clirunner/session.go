@@ -2,6 +2,7 @@ package clirunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -101,6 +102,22 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	agent, ok := r.Config.Agents[req.AgentID]
 	if !ok {
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
+	}
+	if req.Definition != nil {
+		if _, err := r.AdmitNativeTask(req.Definition); err != nil {
+			return workflows.SessionResult{}, err
+		}
+		agent.InstructionText += "\n\n" + req.Definition.DeveloperInstructions
+		if req.Definition.Model != "" {
+			agent.Model = req.Definition.Model
+		}
+	}
+	if req.Input != nil {
+		data, encodeErr := json.Marshal(req.Input)
+		if encodeErr != nil {
+			return workflows.SessionResult{}, encodeErr
+		}
+		req.Prompt += "\n\nTask input (JSON):\n" + string(data)
 	}
 	agent.Execution.runID = req.RunID
 	agent.Execution.invocationID = req.InvocationID
@@ -409,4 +426,21 @@ func (r *Runner) WithWorkerWorkspace(role, workspace string) (workflows.SessionR
 	a.Workspace = target
 	cfg.Agents[role] = a
 	return &Runner{Config: cfg, Workspace: r.Workspace}, nil
+}
+
+// AdmitNativeTask resolves behavior against the admitted codex runtime. It does
+// not add managed tools, repair support, authentication or execution authority.
+func (r *Runner) AdmitNativeTask(definition *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
+	role, ok := r.Config.Agents["codex"]
+	if !ok || role.Provider != "codex-app-server" {
+		return nil, fmt.Errorf("agent/run requires codex runtime provider codex-app-server")
+	}
+	if role.Tools != nil || len(role.MCPGrants) > 0 {
+		return nil, fmt.Errorf("Codex managed tool subsets are not certified")
+	}
+	result := *definition
+	if result.Model == "" {
+		result.Model = role.Model
+	}
+	return &result, nil
 }

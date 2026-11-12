@@ -26,7 +26,9 @@ test('deletion shows impact, confirms and removes structural dependencies', asyn
 
 test('step deletion reviews named-schema references before leaving repair diagnostics', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'schemas: {Review: {type: string, enum: ["${{ steps.local.outputs.text }}"]}}\njobs: {review: {steps: [{id: local, argv: [echo, local]}, {agent: claude, prompt: Review, with: {output: {schema: Review}}}]}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: `schemas: { Review: { type: string, enum: [ "\${{ steps.local.outputs.text }}" ] } }
+jobs: { review: { steps: [ { id: local, argv: [ echo, local ] }, { with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run } ] } }
+` }));
   await first.getByRole('button', { name: 'local direct command', exact: true }).click();
   await first.getByRole('button', { name: 'Delete step', exact: true }).click();
   await expect(first.getByRole('alertdialog')).toContainText('schemas.Review.enum.0');

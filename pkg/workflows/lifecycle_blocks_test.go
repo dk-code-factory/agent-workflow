@@ -23,20 +23,18 @@ jobs:
       - id: joined
         parallel:
           - sequence:
-              - {id: seed, agent: a, prompt: seed}
+              - {id: seed, uses: agent/run, with: {agent: a.toml, prompt: seed}}
               - id: work
-                agent: primary
-                prompt: '${{ steps.seed.text }}'
-                with: {output: {schema: Result}}
+                with: {output: {schema: Result}, agent: primary.toml, prompt: '${{ steps.seed.text }}'}
                 onError:
                   - id: backup
-                    agent: backup
-                    prompt: 'fallback ${{ failed.prompt }}'
-                    with: {output: {schema: Result}}
+                    with: {output: {schema: Result}, agent: backup.toml, prompt: 'fallback ${{ failed.prompt }}'}
+                    uses: agent/run
                 finally:
-                  - {agent: a, prompt: cleanup}
-          - {id: sibling, agent: a, prompt: sibling}
-      - {id: after, agent: a, prompt: '${{ steps.work.text }}'}
+                  - {uses: agent/run, with: {agent: a.toml, prompt: cleanup}}
+                uses: agent/run
+          - {id: sibling, uses: agent/run, with: {agent: a.toml, prompt: sibling}}
+      - {id: after, uses: agent/run, with: {agent: a.toml, prompt: '${{ steps.work.text }}'}}
 `
 
 func TestLifecycleBlocksRecoveryCapacityAndReplay(t *testing.T) {
@@ -69,7 +67,7 @@ func TestLifecycleBlocksRecoveryCapacityAndReplay(t *testing.T) {
 			}))
 			e.Slots = make(chan struct{}, capacity)
 			e.Store = &blockCompletionFault{SQLiteStore: store, failID: "joined"}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run.FailureClass != "storage" {
 				t.Fatalf("lost join: %+v %v", run, err)
 			}
@@ -81,7 +79,7 @@ func TestLifecycleBlocksRecoveryCapacityAndReplay(t *testing.T) {
 				t.Fatalf("recovery/capacity: %v peak=%d slots=%d", calls, peak.Load(), len(e.Slots))
 			}
 			e.Store = store
-			run, err = e.Resume(ctx, run.ID, nil, false)
+			run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if err != nil || run.Status != RunStatusSucceeded || run.Jobs["x"].Steps["after"].Outputs["text"] != "recovered" {
 				t.Fatalf("resume: %+v %v", run, err)
 			}
@@ -102,12 +100,14 @@ func TestLifecycleBlocksCancellationSkipsHandlerEffects(t *testing.T) {
     steps:
       - parallel:
           - id: work
-            agent: a
-            prompt: wait
-            onError: [{agent: a, prompt: forbidden}]
-            finally: [{agent: a, prompt: forbidden}]
-          - {agent: a, prompt: fail}
-      - {agent: a, prompt: forbidden}
+            onError: [{uses: agent/run, with: {agent: a.toml, prompt: forbidden}}]
+            finally: [{uses: agent/run, with: {agent: a.toml, prompt: forbidden}}]
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: wait
+          - {uses: agent/run, with: {agent: a.toml, prompt: fail}}
+      - {uses: agent/run, with: {agent: a.toml, prompt: forbidden}}
 `
 	e, _ := durableExecutor(t, source, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
 		switch r.Prompt {
@@ -128,7 +128,7 @@ func TestLifecycleBlocksCancellationSkipsHandlerEffects(t *testing.T) {
 		}
 	}))
 	e.Slots = make(chan struct{}, 2)
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || !strings.Contains(err.Error(), "branch failed") || forbidden.Load() != 0 || len(e.Slots) != 0 {
 		t.Fatalf("cancellation admitted effects: %+v %v forbidden=%d", run, err, forbidden.Load())
 	}
@@ -141,7 +141,7 @@ func TestLifecycleBlocksCancellationSkipsHandlerEffects(t *testing.T) {
 func TestLifecycleBlocksAdmissionAndReferenceScope(t *testing.T) {
 	for _, hook := range []string{"onError", "onFailure", "finally"} {
 		t.Run(hook, func(t *testing.T) {
-			leaf := Step{Uses: "agent/a", With: map[string]any{"prompt": "work"}}
+			leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.toml", "prompt": "work"}}
 			block := Step{Parallel: []Step{leaf}}
 			switch hook {
 			case "onError":
@@ -194,7 +194,7 @@ func TestLifecycleBlocksDoNotReplayUncertainHandlerUnderTerminalOwner(t *testing
 		return map[string]any{"text": "seed", "structured": map[string]any{"value": "seed"}}, nil
 	}))
 	e.Store = &blockCompletionFault{SQLiteStore: store, failID: "work/onError/backup"}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status == RunStatusSucceeded || calls.Load() != 1 {
 		t.Fatalf("lost handler receipt: %+v %v calls=%d", run, err, calls.Load())
 	}
@@ -213,7 +213,7 @@ func TestLifecycleBlocksDoNotReplayUncertainHandlerUnderTerminalOwner(t *testing
 	}
 	e.Store = store
 	for _, retry := range []bool{false, true} {
-		_, err = e.Resume(ctx, run.ID, nil, retry)
+		_, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, retry)
 		if err == nil || !strings.Contains(err.Error(), "lost checkpoint write") || calls.Load() != 1 {
 			t.Fatalf("terminal owner replayed uncertain handler retry=%v: %v calls=%d", retry, err, calls.Load())
 		}

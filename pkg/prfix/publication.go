@@ -1110,56 +1110,29 @@ func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.Actio
 		out.Settled = err == nil
 		return "completed", out, err
 	}
-	if name == "worker_recover" || name == "worker_adopt" {
-		l, c, e := r.record(ctx, p, in)
-		if e != nil {
-			return "unknown", out, e
+
+	if name == "task_result" {
+		l, c, err := r.record(ctx, p, in)
+		if err != nil {
+			return "unknown", out, err
 		}
 		defer l.Close()
-		worker := in.Worker
-		if name == "worker_recover" {
-			worker = "prfix_" + digest([]any{p.LogicalRun, c.ID, in.Round, ac.OperationKey})[:32]
-		}
-		var engine, claim string
-		var round int
-		e = l.db.QueryRowContext(ctx, "SELECT engine,claim,round FROM worker_links WHERE id=?", worker).Scan(&engine, &claim, &round)
-		if errors.Is(e, sql.ErrNoRows) {
+		if c.Worker != in.Agent {
 			return "no_effect", out, nil
 		}
-		if e != nil {
-			return "unknown", out, e
+		message, err := r.message(ctx, c, in.Round)
+		if err != nil {
+			return "unknown", out, err
 		}
-		if engine != c.Engine || claim != c.ID || round != in.Round {
-			return "unknown", out, fmt.Errorf("recovery identity mismatch")
-		}
-		_, e = r.Workers.Get(ctx, engine, worker)
-		if errors.Is(e, sql.ErrNoRows) {
-			return "no_effect", out, nil
-		}
-		if e != nil {
-			return "unknown", out, e
-		}
-		if name == "worker_adopt" {
-			adopted := c.Worker
-			if in.Round > 0 {
-				e = l.db.QueryRowContext(ctx, "SELECT worker FROM worker_rounds WHERE run=? AND claim=? AND round=?", p.LogicalRun, c.ID, in.Round).Scan(&adopted)
-				if errors.Is(e, sql.ErrNoRows) {
-					return "no_effect", out, nil
-				}
-				if e != nil {
-					return "unknown", out, e
-				}
-			}
-			if adopted != worker {
-				return "no_effect", out, nil
-			}
+		if message.Status == workflows.RunStatusRunning || message.Status == workflows.RunStatusQueued {
+			return "unknown", out, fmt.Errorf("task result is unsettled")
 		}
 		out = claimOutput(c)
-		out.Worker = worker
+		out.Agent = c.Worker
+		out.Settled = true
 		return "completed", out, nil
 	}
-
-	if name == "worker_spawn" || name == "worker_send" || name == "finish" || name == "commit" {
+	if name == "finish" || name == "commit" {
 		l, c, e := r.record(ctx, p, in)
 		if e != nil {
 			return "unknown", out, e
@@ -1167,22 +1140,6 @@ func (r *Runtime) reconcile(ctx context.Context, name string, ac workflows.Actio
 		defer l.Close()
 		out = claimOutput(c)
 		switch name {
-		case "worker_spawn":
-			_, e = r.Workers.Get(ctx, c.Engine, c.Worker)
-			if errors.Is(e, sql.ErrNoRows) {
-				return "no_effect", out, nil
-			}
-			if e == nil {
-				return "completed", out, nil
-			}
-		case "worker_send":
-			_, e = r.message(ctx, c, in.Round)
-			if errors.Is(e, sql.ErrNoRows) {
-				return "no_effect", out, nil
-			}
-			if e == nil {
-				return "completed", out, nil
-			}
 		case "finish":
 			var status string
 			e = l.db.QueryRowContext(ctx, "SELECT status FROM submissions WHERE run=? AND claim=? AND round=?", p.LogicalRun, c.ID, in.Round).Scan(&status)

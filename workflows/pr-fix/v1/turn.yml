@@ -1,4 +1,4 @@
-name: PR fix retained native turn and explicit session recovery v1
+name: PR fix retained pipeline agent turn v1
 on:
   workflow_call:
     inputs:
@@ -7,30 +7,48 @@ on:
       round: {type: number, default: 0}
     outputs:
       settled: {value: '${{ jobs.turn.outputs.settled }}'}
+schemas:
+  report:
+    type: object
+    required: [complete]
+    properties:
+      complete: {type: boolean}
 jobs:
   turn:
     outputs:
-      settled: ${{ steps.state.outputs.settled }}
+      settled: ${{ steps.result.outputs.settled }}
     steps:
-      - id: send
-        uses: action/prfix_worker_send
+      - id: prepare
+        uses: action/prfix_task_prepare
         with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}'}
-      - id: recover
-        if: ${{ steps.send.outputs.deferred }}
-        uses: action/prfix_worker_recover
-        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}'}
-      - id: adopt
-        if: ${{ steps.send.outputs.deferred }}
-        uses: action/prfix_worker_adopt
-        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}', worker: '${{ steps.recover.outputs.worker }}'}
-      - id: resend
-        if: ${{ steps.send.outputs.deferred }}
-        uses: action/prfix_worker_send
-        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}'}
-      - id: wait
-        if: ${{ steps.resend.outputs.deferred != true }}
-        uses: action/prfix_worker_wait
-        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}'}
-      - id: state
-        uses: action/prfix_turn_state
-        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}'}
+      - id: task
+        uses: agent/run
+        continue-on-error: true
+        with:
+          agent: prfix.toml
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          input: ${{ steps.prepare.outputs.task_input }}
+          output: {format: json, repair-attempts: 0, schema: report}
+        onResult:
+          - id: verify_envelope
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); r=e["result"]; checks=r.get("checklist", []); verified=bool(checks) and all(c.get("status")=="completed" and c.get("evidence") for c in checks); print(json.dumps({"complete": bool(r["complete"] and verified), "feedback": {"checklist_verification_required": not verified}}))']
+        onComplete:
+          - id: accepted
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); assert e["verification"]["complete"]; print("Agent envelope accepted; application evidence validation follows.", file=sys.stderr)']
+        onIncomplete:
+          - id: checklist_feedback
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); print(json.dumps({"feedback": "Application checklist policy selects the next explicitly bounded same-session turn.", "verification": e["verification"]}))']
+            with: {output: {format: json, repair-attempts: 0}}
+        onError:
+          - id: recovery_feedback
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); print(json.dumps({"feedback": "Retain the original error and require application retry disposition.", "error": e["error"]}))']
+            with: {output: {format: json, repair-attempts: 0}}
+        onFailure:
+          - id: report_error
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); print(json.dumps(e["error"]), file=sys.stderr)']
+        finally:
+          - id: finish_turn
+            argv: [python3, -c, 'import json,sys; e=json.load(sys.stdin); print("Agent turn hooks finished.", file=sys.stderr)']
+      - id: result
+        uses: action/prfix_task_result
+        with: {plan: '${{ inputs.plan }}', claim: '${{ inputs.claim }}', round: '${{ inputs.round }}', agent: '${{ steps.task.outputs.agent }}'}

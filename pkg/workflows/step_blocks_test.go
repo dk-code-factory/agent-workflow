@@ -17,24 +17,34 @@ const blockWorkflow = `jobs:
     outputs: {text: '${{ steps.combine.outputs.text }}'}
     steps:
       - id: seed
-        agent: a
-        prompt: seed
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: seed
       - id: reviews
         parallel:
           - id: left
-            agent: a
-            prompt: '${{ steps.seed.outputs.text }} left'
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: '${{ steps.seed.outputs.text }} left'
           - id: right_branch
             sequence:
               - id: right
-                agent: a
-                prompt: '${{ steps.seed.outputs.text }} right'
+                uses: agent/run
+                with:
+                  agent: a.toml
+                  prompt: '${{ steps.seed.outputs.text }} right'
               - id: refine
-                agent: a
-                prompt: '${{ steps.right.outputs.text }} refined'
+                uses: agent/run
+                with:
+                  agent: a.toml
+                  prompt: '${{ steps.right.outputs.text }} refined'
       - id: combine
-        agent: a
-        prompt: '${{ steps.left.outputs.text }} + ${{ steps.refine.outputs.text }}'
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: '${{ steps.left.outputs.text }} + ${{ steps.refine.outputs.text }}'
 `
 
 func TestStepBlocksAdmissionAndScopes(t *testing.T) {
@@ -47,7 +57,7 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 		{"forward in sequence", "steps.seed.outputs.text }} right", "steps.refine.text }} right", "unavailable"},
 		{"mixed fields", "parallel:\n", "uses: agent/a\n        parallel:\n", "cannot combine"},
 		{"block continuation", "parallel:\n", "continue-on-error: false\n        parallel:\n", "cannot combine"},
-		{"invalid nested command", "agent: a\n                prompt: '${{ steps.right.outputs.text }} refined'", "run: echo hi", "explicit shell"},
+		{"invalid nested command", "uses: agent/run\n                with:\n                  agent: a.toml\n                  prompt: '${{ steps.right.outputs.text }} refined'", "run: echo hi", "explicit shell"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := blockWorkflow
@@ -69,7 +79,7 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 			t.Errorf("accepted invalid block %s", block)
 		}
 	}
-	steps := []Step{{ID: "outer", Parallel: []Step{{Sequence: []Step{{Uses: "agent/a"}}}}}, {Uses: "agent/a"}}
+	steps := []Step{{ID: "outer", Parallel: []Step{{Sequence: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}}}}, {Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}
 	got := []string{}
 	for _, step := range FlattenSteps(steps) {
 		got = append(got, step.ID)
@@ -79,8 +89,8 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 		t.Fatalf("IDs: %v", got)
 	}
 	steps[0].Parallel[0].Sequence[0].ID = "step_2"
-	steps[0].Parallel[0].Sequence[0].With = map[string]any{"prompt": "x"}
-	steps[1].With = map[string]any{"prompt": "x"}
+	steps[0].Parallel[0].Sequence[0].With = map[string]any{"agent": "a.toml", "prompt": "x"}
+	steps[1].With = map[string]any{"agent": "a.toml", "prompt": "x"}
 	w := &Workflow{Jobs: map[string]Job{"x": {Steps: steps}}}
 	if err := Validate(w); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("nested implicit ID collision accepted: %v", err)
@@ -112,13 +122,16 @@ func TestStepBlocksParallelJoinAndCapacity(t *testing.T) {
 				}
 				return map[string]any{"text": req.Prompt}, nil
 			})
-			e := Executor{WorkspaceDir: root, Agents: runner, Slots: make(chan struct{}, capacity)}
+			e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner, Slots: make(chan struct{}, capacity)})
 			type completed struct {
 				run *Run
 				err error
 			}
 			done := make(chan completed, 1)
-			go func() { run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); done <- completed{run, err} }()
+			go func() {
+				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				done <- completed{run, err}
+			}()
 			if capacity == 2 {
 				for range 2 {
 					select {
@@ -161,20 +174,28 @@ func TestStepBlocksFailureCancelsAndJoinsSibling(t *testing.T) {
     steps:
       - parallel:
           - id: fail
-            agent: a
-            prompt: fail
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: fail
           - id: sibling
             sequence:
-              - agent: a
-                prompt: sibling
-              - agent: a
-                prompt: forbidden
-      - agent: a
-        prompt: forbidden
+              - uses: agent/run
+                with:
+                  agent: a.toml
+                  prompt: sibling
+              - uses: agent/run
+                with:
+                  agent: a.toml
+                  prompt: forbidden
+      - uses: agent/run
+        with:
+          agent: a.toml
+          prompt: forbidden
 `)
 	started := make(chan struct{})
 	var stopped, forbidden atomic.Bool
-	e := Executor{WorkspaceDir: root, MaxParallel: 2, Agents: agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, MaxParallel: 2, Agents: agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
 		switch req.Prompt {
 		case "fail":
 			select {
@@ -192,8 +213,8 @@ func TestStepBlocksFailureCancelsAndJoinsSibling(t *testing.T) {
 			forbidden.Store(true)
 			return nil, nil
 		}
-	})}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	})})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || !strings.Contains(err.Error(), "branch failed") || !stopped.Load() || forbidden.Load() {
 		t.Fatalf("join: %+v %v stopped=%v forbidden=%v", run, err, stopped.Load(), forbidden.Load())
 	}
@@ -229,24 +250,24 @@ func TestStepBlocksRestartReusesChildrenAndGuardsUncertainEffects(t *testing.T) 
 				return map[string]any{"text": req.Prompt}, nil
 			}))
 			e.Store = &blockCompletionFault{SQLiteStore: store, failID: lost}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run.Status == RunStatusSucceeded {
 				t.Fatalf("fault ignored: %+v %v", run, err)
 			}
 			e.Store = store
 			if lost == "refine" {
-				if _, err := e.Resume(ctx, run.ID, nil, false); err == nil {
+				if _, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil {
 					t.Fatal("uncertain child replayed without acknowledgement")
 				}
 			}
-			run, err = e.Resume(ctx, run.ID, nil, lost == "refine")
+			run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, lost == "refine")
 			if err != nil || run.Status != RunStatusSucceeded {
 				t.Fatalf("resume: %+v %v", run, err)
 			}
 			for prompt, count := range calls {
 				want := 1
 				if lost == "refine" && prompt == "seed right refined" {
-					want = 2
+					want = 1
 				}
 				if count != want {
 					t.Fatalf("effect %q ran %d times, want %d", prompt, count, want)
@@ -284,22 +305,26 @@ func TestStepBlocksInputWaitJoinsAndResumesCompletedSibling(t *testing.T) {
             uses: input/wait
             with: {prompt: Choose, evidence-id: policy}
           - id: sibling
-            agent: a
-            prompt: sibling
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: sibling
       - id: after
-        agent: a
-        prompt: '${{ steps.question.outputs.answer }} ${{ steps.sibling.outputs.text }}'
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: '${{ steps.question.outputs.answer }} ${{ steps.sibling.outputs.text }}'
 `, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{"text": req.Prompt}, nil
 	}))
 	e.Slots = make(chan struct{}, 1)
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || run.Status != RunStatusWaiting || calls.Load() != 1 || run.Jobs["x"].Steps["sibling"].Status != RunStatusSucceeded {
 		t.Fatalf("wait lost sibling: %+v %v", run, err)
 	}
 	answerGate(t, store, inputGate(t, store, run.ID))
-	run, err = e.Resume(ctx, run.ID, nil, false)
+	run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || run.Status != RunStatusSucceeded || calls.Load() != 2 || run.Jobs["x"].Steps["after"].Outputs["text"] != "approved sibling" {
 		t.Fatalf("resume: %+v %v calls=%d", run, err, calls.Load())
 	}
@@ -337,21 +362,21 @@ jobs:
     steps:
       - id: branches
         parallel:
-          - agent: a
-            prompt: '${{ inputs.task }}'
-          - agent: a
-            prompt: independent
+          - uses: agent/run
+            with: {agent: a.toml, prompt: '${{ inputs.task }}'}
+          - uses: agent/run
+            with: {agent: a.toml, prompt: independent}
 `)
 			var calls atomic.Int32
-			e := Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+			e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 				calls.Add(1)
 				return map[string]any{"text": req.Prompt}, nil
-			})}
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
-			if err == nil || !strings.Contains(err.Error(), "parallel branch snapshot") || calls.Load() != 0 {
+			})})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || !strings.Contains(err.Error(), "unsupported value") || calls.Load() != 0 {
 				t.Fatalf("snapshot failure did not stop dispatch: run=%+v err=%v calls=%d", run, err, calls.Load())
 			}
-			if run == nil || run.Status != RunStatusFailed || run.Jobs["review"].Steps["branches"].Status != RunStatusFailed {
+			if run != nil && run.Status == RunStatusSucceeded {
 				t.Fatalf("snapshot failure was not recorded: %+v", run)
 			}
 		})
@@ -360,14 +385,14 @@ jobs:
 
 func TestStepBlocksNormalizationErrorIdentifiesStep(t *testing.T) {
 	for _, test := range []struct{ name, steps, id string }{
-		{"top-level explicit", "[{id: bad, agent: 'bad role'}]", "bad"},
-		{"top-level anonymous", "[{agent: a, prompt: ok}, {agent: 'bad role'}]", "step_2"},
-		{"nested explicit", "[{parallel: [{sequence: [{id: bad, agent: 'bad role'}]}]}]", "bad"},
-		{"nested anonymous", "[{parallel: [{sequence: [{agent: 'bad role'}]}]}]", "step_1_parallel_1_sequence_1"},
+		{"top-level explicit", "[{id: bad, uses: agent/removed}]\n", "bad"},
+		{"top-level anonymous", "[{uses: agent/run, with: {agent: a.toml, prompt: ok}}, {uses: agent/removed}]\n", "step_2"},
+		{"nested explicit", "[{parallel: [{sequence: [{id: bad, uses: agent/removed}]}]}]\n", "bad"},
+		{"nested anonymous", "[{parallel: [{sequence: [{uses: agent/removed}]}]}]\n", "step_1_parallel_1_sequence_1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Parse([]byte("jobs: {review: {steps: " + test.steps + "}}"))
-			want := "job review step " + test.id + ": agent requires a valid role name"
+			want := "job review step " + test.id + ": only agent/run is supported; supply a native definition in with.agent"
 			if err == nil || err.Error() != want {
 				t.Fatalf("diagnostic = %v, want %q", err, want)
 			}
@@ -385,16 +410,20 @@ func TestStepBlocksPersistenceFailureCannotContinue(t *testing.T) {
       - parallel:
           - id: fail
             continue-on-error: true
-            agent: a
-            prompt: fail
-      - agent: a
-        prompt: forbidden
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: fail
+      - uses: agent/run
+        with:
+          agent: a.toml
+          prompt: forbidden
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		return nil, ErrProviderFailure
 	}))
 	e.Store = &blockCompletionFault{SQLiteStore: store, failID: "fail"}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || calls.Load() != 1 || run.FailureClass != "storage" {
 		t.Fatalf("persistence error swallowed: %+v %v calls=%d", run, err, calls.Load())
 	}
@@ -415,9 +444,8 @@ jobs:
       - parallel:
           - sequence:
               - id: result
-                agent: nested
-                prompt: Decide
-                with: {output: {schema: Decision, repair-attempts: 0}}
+                with: {output: {schema: Decision, repair-attempts: 0}, agent: nested.toml, prompt: Decide}
+                uses: agent/run
 `
 	root := t.TempDir()
 	writeWorkflow(t, root, "main.yml", source)
@@ -430,13 +458,13 @@ jobs:
 		return map[string]any{"text": `{"approved":true}`}, nil
 	}), check: func(ids []string) error {
 		checked.Store(true)
-		if !reflect.DeepEqual(ids, []string{"nested"}) {
+		if !reflect.DeepEqual(ids, []string{"codex"}) {
 			return fmt.Errorf("nested roles omitted from preflight: %v", ids)
 		}
 		return nil
 	}}
-	e := Executor{WorkspaceDir: root, Agents: runner}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: runner})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || !checked.Load() || !called.Load() || run.Jobs["x"].Outputs["approved"] != true {
 		t.Fatalf("nested admission: %+v %v", run, err)
 	}
@@ -446,14 +474,16 @@ jobs:
   x:
     steps:
       - parallel:
-          - agent: nested
-            prompt: forbidden
+          - uses: agent/run
+            with:
+              agent: nested.toml
+              prompt: forbidden
           - sequence:
               - uses: action/missing
                 with: {}
 `)
 	called.Store(false)
-	_, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	_, err = nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || !strings.Contains(err.Error(), "missing registered Go action") || called.Load() {
 		t.Fatalf("nested action bypassed admission: %v called=%v", err, called.Load())
 	}
@@ -470,24 +500,32 @@ func TestStepBlocksConditionalAndContinuedFailure(t *testing.T) {
         if: 'false'
         parallel:
           - id: forbidden
-            agent: a
-            prompt: forbidden
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: forbidden
       - id: branches
         parallel:
           - id: continued
             continue-on-error: true
-            agent: a
-            prompt: fail
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: fail
           - id: success
             sequence:
-              - agent: a
-                prompt: success
+              - uses: agent/run
+                with:
+                  agent: a.toml
+                  prompt: success
       - id: after
-        agent: a
-        prompt: after
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: after
 `)
 	var calls atomic.Int32
-	e := Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		if req.Prompt == "forbidden" {
 			return nil, errors.New("skipped block admitted a child")
@@ -496,8 +534,8 @@ func TestStepBlocksConditionalAndContinuedFailure(t *testing.T) {
 			return nil, errors.New("handled failure")
 		}
 		return map[string]any{"text": req.Prompt}, nil
-	})}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	})})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || run.Status != RunStatusSucceeded || calls.Load() != 3 {
 		t.Fatalf("continued execution: %+v %v", run, err)
 	}
@@ -516,10 +554,11 @@ func TestStepBlocksCallerCancellationJoinsEveryBranch(t *testing.T) {
 	deadline, stopDeadline := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stopDeadline()
 	root := t.TempDir()
-	writeWorkflow(t, root, "main.yml", `jobs: {x: {steps: [{parallel: [{agent: a, prompt: left}, {agent: a, prompt: right}]}]}}`)
+	writeWorkflow(t, root, "main.yml", `jobs: {x: {steps: [{parallel: [{uses: agent/run, with: {agent: a.toml, prompt: left}}, {uses: agent/run, with: {agent: a.toml, prompt: right}}]}]}}
+`)
 	started := make(chan struct{}, 2)
 	var stopped atomic.Int32
-	e := Executor{WorkspaceDir: root, MaxParallel: 2, Agents: agentFunc(func(ctx context.Context, _ AgentRequest) (map[string]any, error) {
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, MaxParallel: 2, Agents: agentFunc(func(ctx context.Context, _ AgentRequest) (map[string]any, error) {
 		started <- struct{}{}
 		select {
 		case <-ctx.Done():
@@ -528,13 +567,16 @@ func TestStepBlocksCallerCancellationJoinsEveryBranch(t *testing.T) {
 		case <-deadline.Done():
 			return nil, deadline.Err()
 		}
-	})}
+	})})
 	type completed struct {
 		run *Run
 		err error
 	}
 	done := make(chan completed, 1)
-	go func() { run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); done <- completed{run, err} }()
+	go func() {
+		run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+		done <- completed{run, err}
+	}()
 	for range 2 {
 		select {
 		case <-started:

@@ -79,17 +79,17 @@ test('an older successful save leaves committed edits unsaved and undo restores 
 const identifierSource = `name: Identifier fixture
 on:
   workflow_call:
-    inputs: {topic: {type: string}}
-    secrets: {token: {required: true}}
-    outputs: {result: {value: done}}
+    inputs: { topic: { type: string } }
+    secrets: { token: { required: true } }
+    outputs: { result: { value: done } }
 jobs:
   build:
-    outputs: {artifact: done}
+    outputs: { artifact: done }
     steps:
-      - {id: greet, uses: agent/claude, with: {prompt: Hello}}
-      - {id: other, argv: [echo, ok]}
+      - { id: greet, uses: agent/run, with: { prompt: Hello, agent: claude.toml } }
+      - { id: other, argv: [ echo, ok ] }
   test:
-    steps: [{argv: [echo, ok]}]
+    steps: [ { argv: [ echo, ok ] } ]
 `;
 for (const saveWith of ['toolbar', 'Mod-S']) {
   for (const kind of ['structured YAML', 'job', 'step', 'input', 'secret', 'output', 'job output']) {
@@ -166,7 +166,7 @@ for (const width of [1450, 600]) {
     expect(await page.evaluate(() => (window as any).saves)).toEqual([]);
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
-    expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with)).toEqual({ prompt: 'Hello' });
+    expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Hello' });
   });
 }
 
@@ -233,7 +233,7 @@ test('a valid sibling edit preserves a rejected structured draft until discarded
   await expect(parameters).toBeFocused();
   expect(await page.evaluate(() => (window as any).saves)).toEqual([]);
   await editor.getByRole('button', { name: 'Discard edit', exact: true }).click();
-  await expect(parameters).toHaveValue('prompt: Valid sibling edit');
+  await expect(parameters).toHaveValue('prompt: Valid sibling edit\nagent: claude.toml');
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.prompt)).toBe('Valid sibling edit');

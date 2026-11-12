@@ -34,8 +34,10 @@ jobs:
           Task: ${{ inputs.task }}
         with:
           output: {schema: Decision}
-      - agent: reporter
-        prompt: 'Decision: ${{ steps.solution.approved }}; ${{ steps.solution.summary }}'
+      - uses: agent/run
+        with:
+          agent: reporter.toml
+          prompt: 'Decision: ${{ steps.solution.approved }}; ${{ steps.solution.summary }}'
 ```
 
 Declare the roles in the host's agent configuration as for ordinary agent

@@ -191,7 +191,7 @@ func TestRequiredHookResourcesStayFreshWithinSameCycle(t *testing.T) {
 	if err := os.WriteFile(resource, []byte("first policy"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Resources: []string{resource}, Procedure: [][]Pass{{{ID: "hook", Role: "leaf", Assignment: "Check the hook-only policy.", Evidence: []string{"original"}}}}}
+	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Resources: []string{resource}, Procedure: [][]Pass{{{ID: "hook", Role: "codex", Assignment: "Check the hook-only policy.", Evidence: []string{"original"}}}}}
 	req.Adapters = map[string]Adapter{hook.Identity: hook, "custom:review": reviewAdapter()}
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}}
 	configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{"before_cycle": []any{map[string]any{"skill": hook.Identity}}}}}})

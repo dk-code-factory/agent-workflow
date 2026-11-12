@@ -16,7 +16,7 @@ describe('advisory reference dependencies', () => {
   ])('$name', ({ needs, prompt, condition, warnings, errors }) => {
     const result = parseWorkflow(JSON.stringify({ jobs: {
       producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
-      consumer: { needs, if: condition, steps: [{ uses: 'agent/claude', with: { prompt } }] },
+      consumer: { needs, if: condition, steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt}}] },
     } }));
     const advisory = result.diagnostics.filter(d => d.code === 'expression-dependency');
     expect(advisory).toHaveLength(warnings);
@@ -31,7 +31,7 @@ describe('advisory reference dependencies', () => {
     const result = parseWorkflow(JSON.stringify({ jobs: {
       first: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
       second: { outputs: { text: 'world' }, steps: [{ argv: ['echo'] }] },
-      consumer: { if: format === 'wrapped' ? '${{ ' + condition + ' }}' : condition, steps: [{ uses: 'agent/claude', with: { prompt: expression.repeat(200) } }] },
+      consumer: { if: format === 'wrapped' ? '${{ ' + condition + ' }}' : condition, steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: expression.repeat(200)}}] },
     } }));
     const warnings = result.diagnostics.filter(d => d.code === 'expression-dependency');
     expect(warnings).toHaveLength(4);
@@ -62,7 +62,7 @@ describe('advisory reference dependencies', () => {
   it('normalizes dependencies a bounded number of times for repeated references', () => {
     const source = JSON.stringify({ jobs: {
       producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
-      consumer: { needs: Array(100).fill('producer'), steps: [{ uses: 'agent/claude', with: { prompt: '${{ needs.producer.outputs.text }}'.repeat(200) } }] },
+      consumer: { needs: Array(100).fill('producer'), steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ needs.producer.outputs.text }}'.repeat(200)}}] },
     } });
     const trim = String.prototype.trim;
     let normalizations = 0;
@@ -97,7 +97,8 @@ describe('runner compatibility', () => {
 
 describe('Go scalar string decoding', () => {
   it('decodes legacy boolean spelling for typed flags without changing raw parameters', () => {
-    const result = parseWorkflow('jobs: {test: {continue-on-error: "no", steps: [{uses: agent/claude, continue-on-error: YES, with: {prompt: off}}]}}');
+    const result = parseWorkflow(`jobs: { test: { continue-on-error: "no", steps: [ { uses: agent/run, continue-on-error: YES, with: { prompt: off, agent: claude.toml } } ] } }
+`);
     expect(result.diagnostics).toEqual([]);
     expect(result.workflow!.jobs.test['continue-on-error']).toBe(false);
     expect(result.workflow!.jobs.test.steps![0]['continue-on-error']).toBe(true);
@@ -192,14 +193,17 @@ describe('Go null collection decoding', () => {
     expect(document.getSnapshot().workflow!.jobs.test.steps).toHaveLength(1);
   });
   it('does not reinterpret null values inside untyped action parameters', () => {
-    const result = parseWorkflow('jobs: {test: {steps: [{uses: agent/claude, with: {prompt: [one, null, two]}}]}}');
+    const result = parseWorkflow(`jobs: { test: { steps: [ { uses: agent/run, with: { prompt: [ one, null, two ], agent: claude.toml } } ] } }
+`);
     expect(result.workflow!.jobs.test.steps![0].with!.prompt).toEqual(['one', null, 'two']);
   });
 });
 
 describe('typed null scalar decoding', () => {
   it('returns Go zero values with accurate types and preserves runtime meaning through edits', () => {
-    const source = 'name: null\njobs: {build: {needs: null, continue-on-error: null, outputs: {result: null}, repeat: null, steps: [{id: null, run: null, uses: agent/claude, with: {prompt: ok}}]}}';
+    const source = `name: null
+jobs: { build: { needs: null, continue-on-error: null, outputs: { result: null }, repeat: null, steps: [ { id: null, run: null, uses: agent/run, with: { prompt: ok, agent: claude.toml } } ] } }
+`;
     const document = new WorkflowDocument({ source });
     const workflow = document.getSnapshot().workflow!;
     expect(workflow.name).toBe(''); expect(workflow.jobs.build.needs).toEqual([]);

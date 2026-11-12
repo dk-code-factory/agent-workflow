@@ -11,14 +11,16 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
-func hasLifecycle(step Step) bool { return len(step.OnError)+len(step.OnFailure)+len(step.Finally) > 0 }
+func hasLifecycle(step Step) bool {
+	return len(step.OnResult)+len(step.OnComplete)+len(step.OnIncomplete)+len(step.OnError)+len(step.OnFailure)+len(step.Finally) > 0
+}
 
 // Handler lists have local IDs; effect IDs include their full handler ancestry.
 func lifecycleSteps(steps []Step) []Step {
 	var out []Step
 	for _, step := range steps {
 		out = append(out, step)
-		for _, children := range [][]Step{step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
+		for _, children := range [][]Step{step.OnResult, step.OnComplete, step.OnIncomplete, step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
 			out = append(out, lifecycleSteps(children)...)
 		}
 	}
@@ -30,7 +32,7 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 		return fmt.Errorf("handler nesting exceeds 8")
 	}
 	for _, step := range steps {
-		if step.Conversation != nil && (depth > 0 || step.OnError != nil || step.OnFailure != nil || step.Finally != nil || step.HandlerTimeout != "") {
+		if step.Conversation != nil && (depth > 0 || hasLifecycle(step) || step.HandlerTimeout != "") {
 			return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
 		}
 		if isStepBlock(step) {
@@ -50,7 +52,7 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 			}
 		}
 		if depth > 0 || hasLifecycle(step) {
-			if !(strings.HasPrefix(step.Uses, "agent/") || step.Agent != nil || len(step.Argv) > 0 || step.Run != "") {
+			if !(strings.HasPrefix(step.Uses, "agent/") || len(step.Argv) > 0 || step.Run != "") {
 				return fmt.Errorf("lifecycle handlers support agent and command steps only")
 			}
 		}
@@ -60,7 +62,7 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 				return fmt.Errorf("handlerTimeout requires handlers and a duration greater than zero and at most 5m")
 			}
 		}
-		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+		for _, list := range [][]Step{step.OnResult, step.OnComplete, step.OnIncomplete, step.OnError, step.OnFailure, step.Finally} {
 			if err := validateLifecycleShape(list, depth+1, count); err != nil {
 				return err
 			}
@@ -137,10 +139,17 @@ func lifecycleAttempts(ctx context.Context, store RunStore, run string) ([]Attem
 // whose parent had not yet published its final receipt when execution stopped.
 func restoreLifecycleHandlers(step Step, life *StepLifecycle, attempts map[string]Attempt) error {
 	var unsafe error
+	for id, a := range attempts {
+		if strings.HasPrefix(id, step.ID+"/") && (a.Phase == "lifecycle_task_completed" || a.Phase == "lifecycle_completed") {
+			if failure := lifecycleError(a.Result); hardExecutionFailure(failure) {
+				unsafe = errors.Join(unsafe, failure)
+			}
+		}
+	}
 	for _, hook := range []struct {
 		kind string
 		list []Step
-	}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+	}{{"onResult", step.OnResult}, {"onComplete", step.OnComplete}, {"onIncomplete", step.OnIncomplete}, {"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
 		for i, child := range hook.list {
 			sid := stepID(child, i)
 			child.ID = step.ID + "/" + hook.kind + "/" + sid
@@ -228,7 +237,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			if step.HandlerTimeout != "" {
 				bound, _ = time.ParseDuration(step.HandlerTimeout)
 			}
-			result.Lifecycle = &StepLifecycle{OriginalError: result.Error, OriginalClass: result.FailureClass, Deadline: time.Now().UTC().Add(bound), Handlers: map[string][]StepExecution{}, Skipped: map[string]string{}}
+			result.Lifecycle = &StepLifecycle{Candidate: cloneJSONMap(result.Outputs), Agent: nativeString(result.Outputs, "agent"), OriginalError: result.Error, OriginalClass: result.FailureClass, Deadline: time.Now().UTC().Add(bound), Handlers: map[string][]StepExecution{}, Skipped: map[string]string{}}
 			if durable {
 				attempt.Phase = "lifecycle_task_completed"
 				attempt.Result = result
@@ -268,6 +277,18 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		hctx, cancel := context.WithDeadline(ctx, life.Deadline)
 		defer cancel()
 		handlerEC := ec
+		handlerEC.Hook = true
+		ordinals := map[string]int{}
+		persistSelection := func() error {
+			if !durable {
+				return nil
+			}
+			attempt.Result.Lifecycle = life
+			if err := journal.RecordAttempt(context.WithoutCancel(ctx), attempt); err != nil {
+				return errors.Join(errStepPersistence, err)
+			}
+			return nil
+		}
 		prompt := ""
 		for _, field := range []string{"prompt", "message"} {
 			if value, renderErr := renderValue(step.With[field], ec); renderErr == nil {
@@ -296,7 +317,23 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 				}
 				return nil, nil
 			}
+			ordinals[kind]++
 			local := handlerEC
+			source := any(ec.Event)
+			if ec.Hook {
+				source = ec.Event["source"]
+			}
+			candidate := result.Outputs["structured"]
+			if candidate == nil {
+				candidate = result.Outputs["text"]
+			}
+			local.Event = map[string]any{"type": kind, "agent": life.Agent, "result": candidate, "verification": life.Verification, "error": nil, "source": source}
+			if err != nil {
+				local.Event["error"] = map[string]any{"message": err.Error(), "class": classifyFailure(err)}
+			}
+			if persistErr := persistSelection(); persistErr != nil {
+				return nil, persistErr
+			}
 			local.Steps = map[string]StepExecution{}
 			for id, r := range ec.Steps {
 				local.Steps[id] = r
@@ -306,6 +343,23 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			for i, childStep := range list {
 				sid := stepID(childStep, i)
 				childStep.ID = step.ID + "/" + kind + "/" + sid
+				if kind == "onResult" {
+					childStep.ID = fmt.Sprintf("%s/onResult/candidate_%d/%s", step.ID, ordinals[kind], sid)
+				}
+				if childStep.With == nil {
+					childStep.With = map[string]any{}
+				} else {
+					childStep.With = cloneJSONMap(childStep.With)
+				}
+				if childStep.Uses == "agent/run" && childStep.With["input"] == nil {
+					childStep.With["input"] = "${{ event }}"
+				}
+				if childStep.Uses == "agent/run" && (kind == "onError" || kind == "onIncomplete") && childStep.With["output"] == nil && step.With["output"] != nil {
+					childStep.With["output"] = cloneJSONValue(step.With["output"])
+				}
+				if kind == "onResult" && childStep.With["output"] == nil {
+					childStep.With["output"] = verdictOutput()
+				}
 				childResult, childErr := e.executeLifecycleStep(hctx, childStep, local, slots, retry, true)
 				childResult.ID = sid
 				life.Handlers[kind] = append(life.Handlers[kind], childResult)
@@ -322,22 +376,127 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			}
 			return replacement, nil
 		}
+
+		verificationOrdinal := 0
+		verify := func() error {
+			if !completionAware(step) {
+				return nil
+			}
+			candidateComplete, verifyErr := completionValue(result.Outputs)
+			if verifyErr != nil {
+				return verifyErr
+			}
+			verdict := map[string]any{"structured": map[string]any{"complete": true}}
+			if len(step.OnResult) > 0 {
+				verdict, verifyErr = run("onResult", step.OnResult)
+				if verifyErr != nil {
+					return verifyErr
+				}
+				if verdict == nil {
+					return fmt.Errorf("onResult produced no successful verification verdict")
+				}
+			}
+			accepted, verifyErr := completionValue(verdict)
+			if verifyErr != nil {
+				return fmt.Errorf("onResult: %w", verifyErr)
+			}
+			life.Verification = cloneJSONValue(verdict["structured"])
+			verificationOrdinal++
+			if verificationOrdinal <= len(life.Verifications) {
+				if actionHash(life.Verifications[verificationOrdinal-1]) != actionHash(life.Verification) {
+					return fmt.Errorf("%w: retained verification verdict changed", ErrActionIntegrity)
+				}
+			} else {
+				life.Verifications = append(life.Verifications, life.Verification)
+			}
+			result.Outputs["complete"] = candidateComplete && accepted
+			return persistSelection()
+		}
+		replacementCandidate := func(kind string, list []Step) map[string]any {
+			var candidate map[string]any
+			for i, receipt := range life.Handlers[kind] {
+				if i < len(list) && list[i].Uses == "agent/run" && receipt.Status == RunStatusSucceeded {
+					candidate = receipt.Outputs
+				}
+			}
+			return candidate
+		}
+		incomplete := func() error {
+			if !completionAware(step) || result.Outputs["complete"] != false {
+				return nil
+			}
+			_, incompleteErr := run("onIncomplete", step.OnIncomplete)
+			if incompleteErr != nil {
+				return incompleteErr
+			}
+			replacement := replacementCandidate("onIncomplete", step.OnIncomplete)
+			if replacement == nil {
+				return nil
+			}
+			if err := validateLifecycleReplacement(step, replacement, ec); err != nil {
+				return err
+			}
+			result.Outputs = cloneJSONMap(replacement)
+			if life.Agent != "" {
+				result.Outputs["agent"] = life.Agent
+			}
+			return verify()
+		}
+		if err == nil {
+			err = verify()
+		}
+		incompleteRan := false
+		if err == nil && completionAware(step) && result.Outputs["complete"] == false {
+			incompleteRan = true
+			err = incomplete()
+		}
+		if err != nil && life.OriginalError == "" {
+			life.OriginalError = err.Error()
+			life.OriginalClass = classifyFailure(err)
+		}
 		if err != nil && len(step.OnError) > 0 {
+			if life.OriginalError == "" {
+				life.OriginalError = err.Error()
+				life.OriginalClass = classifyFailure(err)
+			}
 			replacement, fallbackErr := run("onError", step.OnError)
+			if step.Uses == "agent/run" {
+				replacement = replacementCandidate("onError", step.OnError)
+			}
 			if fallbackErr == nil && replacement != nil && life.Skipped["onError"] == "" {
 				fallbackErr = validateLifecycleReplacement(step, replacement, ec)
 				if fallbackErr == nil {
-					result.Outputs = replacement
-					result.Status = RunStatusSucceeded
-					result.Error = ""
-					result.FailureClass = ""
+					result.Outputs = cloneJSONMap(replacement)
+					if life.Agent != "" {
+						result.Outputs["agent"] = life.Agent
+					}
+					originalErr := err
 					err = nil
+					fallbackErr = verify()
+					if fallbackErr == nil && !incompleteRan {
+						incompleteRan = true
+						fallbackErr = incomplete()
+					}
+					if fallbackErr == nil {
+						fallbackErr = e.settleAgentTask(ctx, ec, life)
+					}
+					if fallbackErr == nil {
+						result.Status = RunStatusSucceeded
+						result.Error = ""
+						result.FailureClass = ""
+					} else {
+						err = originalErr
+					}
 				}
 			}
 			if fallbackErr != nil {
 				err = errors.Join(err, fallbackErr)
 			}
 		}
+		if err == nil && completionAware(step) && result.Outputs["complete"] == true {
+			_, err = run("onComplete", step.OnComplete)
+		}
+
 		if err != nil {
 			_, observerErr := run("onFailure", step.OnFailure)
 			err = errors.Join(err, observerErr)
@@ -388,7 +547,7 @@ func validateLifecycleReplacement(step Step, outputs map[string]any, ec expressi
 
 func expandLifecycleOutputs(w *Workflow, steps []Step) error {
 	for i, step := range steps {
-		if strings.HasPrefix(step.Uses, "agent/") || step.Conversation != nil {
+		if strings.HasPrefix(step.Uses, "agent/") || step.Conversation != nil || step.With["output"] != nil {
 			output, err := resolveNamedOutput(w, step.With["output"])
 			if err != nil {
 				return err
@@ -397,7 +556,7 @@ func expandLifecycleOutputs(w *Workflow, steps []Step) error {
 				steps[i].With["output"] = output
 			}
 		}
-		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
+		for _, list := range [][]Step{step.OnResult, step.OnComplete, step.OnIncomplete, step.OnError, step.OnFailure, step.Finally, step.Parallel, step.Sequence} {
 			if err := expandLifecycleOutputs(w, list); err != nil {
 				return err
 			}

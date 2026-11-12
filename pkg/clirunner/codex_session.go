@@ -162,6 +162,9 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		emit(workflows.ProviderEvent{Type: "session", SessionID: result.SessionID})
 	}
 	turn := map[string]any{"threadId": result.SessionID, "input": []any{map[string]any{"type": "text", "text": req.Prompt}}}
+	if req.Definition != nil && req.Definition.ReasoningEffort != "" {
+		turn["effort"] = req.Definition.ReasoningEffort
+	}
 	if req.Output != nil {
 		turn["outputSchema"] = req.Output.Schema
 	}

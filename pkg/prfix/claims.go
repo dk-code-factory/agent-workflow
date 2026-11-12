@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -239,12 +238,11 @@ func (r *Runtime) claim(ctx context.Context, p Plan, ac workflows.ActionContext,
 				return e
 			}
 		}
-		worker := "prfix_" + digest([]string{p.LogicalRun, id})[:32]
+		worker := ""
 		_, e = tx.ExecContext(ctx, "INSERT INTO claims(run,id,occurrence,fingerprint,cycle,engine,worker,state,snapshot,assignment,payload,operation) VALUES(?,?,?,?,?,?,?,'claimed',?,?,?,?)", p.LogicalRun, id, o.ID, fp, in.Cycle, engine, worker, snapshot, assignmentPath, in.Payload, ac.OperationKey)
 		out = output()
 		out.Claim = id
 		out.Invoke = true
-		out.Worker = worker
 		out.Prompt = prompt
 		return e
 	})
@@ -253,7 +251,7 @@ func (r *Runtime) claim(ctx context.Context, p Plan, ac workflows.ActionContext,
 func claimOutput(c claimRecord) ActionOutput {
 	out := output()
 	out.Claim = c.ID
-	out.Worker = c.Worker
+	out.Agent = c.Worker
 	out.Invoke = c.State == "claimed"
 	out.Recheck = c.State == "recheck"
 	out.Settled = c.State == "complete" || c.State == "optional"
@@ -272,136 +270,27 @@ func (r *Runtime) record(ctx context.Context, p Plan, in ActionInput) (*Ledger, 
 	}
 	return l, c, nil
 }
-func (r *Runtime) workerSpawn(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
-	l, c, e := r.record(ctx, p, in)
-	if e != nil {
-		return output(), e
-	}
-	defer l.Close()
-	if r.Workers == nil {
-		return output(), fmt.Errorf("managed workers unavailable")
-	}
-	o, e := p.Occurrence(c.Occurrence)
-	if e != nil {
-		return output(), e
-	}
-	w, e := r.Workers.Spawn(ctx, workflows.WorkerSpec{RunID: c.Engine, Role: o.Pass.Role, StableID: c.Worker, Turns: 5, Tools: nil})
-	out := claimOutput(c)
-	out.Worker = w.ID
-	return out, e
-}
-func messageRequest(c claimRecord, round int) string {
-	return "prfix_" + digest([]any{c.ID, round})[:48]
-}
-func (r *Runtime) workerSend(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
-	l, c, e := r.record(ctx, p, in)
-	if e != nil {
-		return output(), e
-	}
-	defer l.Close()
-	if r.Workers == nil {
-		return output(), fmt.Errorf("managed workers unavailable")
-	}
-	if c.State == "complete" || c.State == "optional" {
-		return claimOutput(c), nil
-	}
-	if in.Round > 0 && (c.State != "recheck" || in.Round != c.Checks) {
-		return output(), fmt.Errorf("checklist round is not the retained pending round")
-	}
-	b, e := os.ReadFile(c.Assignment)
-	if e != nil {
-		return output(), e
-	}
-	prompt := string(b)
-	if in.Round > 0 {
-		o, _ := p.Occurrence(c.Occurrence)
-		prompt = checklistPrompt(b, o, in.Round)
-	}
-	worker, e := r.roundWorker(ctx, c, in.Round)
-	if e != nil {
-		return output(), e
-	}
-	w, e := r.Workers.Get(ctx, c.Engine, worker)
-	if e != nil {
-		return output(), e
-	}
-	existing, existingErr := r.message(ctx, c, in.Round)
-	if w.Status == "closed" || w.Status == workflows.RunStatusNeedsAttention {
-		if errors.Is(existingErr, sql.ErrNoRows) || existingErr == nil && resumableNative(existing) {
-			out := claimOutput(c)
-			out.Deferred = true
-			return out, nil
-		}
-	}
-	_, e = r.Workers.Send(ctx, c.Engine, worker, messageRequest(c, in.Round), prompt)
-	return claimOutput(c), e
-}
 func (r *Runtime) message(ctx context.Context, c claimRecord, round int) (workflows.WorkerMessage, error) {
 	if r.Workers == nil {
-		return workflows.WorkerMessage{}, fmt.Errorf("managed workers unavailable")
+		return workflows.WorkerMessage{}, fmt.Errorf("managed agent tasks unavailable")
 	}
-	worker, e := r.roundWorker(ctx, c, round)
-	if e != nil {
-		return workflows.WorkerMessage{}, e
+	messages, err := r.Workers.Messages(ctx, c.Engine, c.Worker)
+	if err != nil {
+		return workflows.WorkerMessage{}, err
 	}
-	messages, e := r.Workers.Messages(ctx, c.Engine, worker)
-	if e != nil {
-		return workflows.WorkerMessage{}, e
-	}
-	for _, m := range messages {
-		if m.RequestID == messageRequest(c, round) {
-			return m, nil
+	var selected workflows.WorkerMessage
+	for _, message := range messages {
+		input, ok := message.Input.(map[string]any)
+		if ok && input["claim"] == c.ID && fmt.Sprint(input["round"]) == fmt.Sprint(round) && message.Sequence > selected.Sequence {
+			selected = message
 		}
 	}
-	return workflows.WorkerMessage{}, sql.ErrNoRows
+	if selected.ID == "" {
+		return selected, sql.ErrNoRows
+	}
+	return selected, nil
 }
-func (r *Runtime) workerWait(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
-	l, c, e := r.record(ctx, p, in)
-	if e != nil {
-		return output(), e
-	}
-	l.Close()
-	if c.State == "complete" || c.State == "optional" {
-		return claimOutput(c), nil
-	}
-	interval := r.PollInterval
-	if interval <= 0 {
-		interval = 250 * time.Millisecond
-	}
-	for {
-		worker, e := r.roundWorker(ctx, c, in.Round)
-		if e != nil {
-			return output(), e
-		}
-		w, e := r.Workers.Get(ctx, c.Engine, worker)
-		if e != nil {
-			return output(), e
-		}
-		// Observe the producer before its mailbox: ordinary native failures
-		// persist the terminal message before changing worker status.
-		m, e := r.message(ctx, c, in.Round)
-		if e != nil {
-			return output(), e
-		}
-		switch m.Status {
-		case "interrupted", workflows.RunStatusSucceeded, workflows.RunStatusFailed, workflows.RunStatusCanceled, workflows.RunStatusNeedsAttention:
-			return claimOutput(c), nil
-		}
-		if w.Status == "closed" || w.Status == workflows.RunStatusNeedsAttention {
-			// Setup can fail before the core dequeues the message. Preserve that
-			// unresolved mailbox and surface the stopped producer instead of
-			// waiting for a terminal message it can no longer produce.
-			return output(), fmt.Errorf("native worker stopped with unresolved message (%s): %s", w.FailureClass, w.Error)
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return output(), ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
+
 func parseReport(m workflows.WorkerMessage) (Report, error) {
 	var report Report
 	text, _ := m.Result.Outputs["text"].(string)

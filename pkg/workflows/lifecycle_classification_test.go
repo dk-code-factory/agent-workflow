@@ -11,10 +11,10 @@ import (
 
 func TestLifecycleRestartPreservesRedactedOrdinaryClasses(t *testing.T) {
 	for _, tc := range []struct{ class, message, secret string }{
-		{"authentication", "authentication failed", "authentication"},
+		{"authentication", "authentication failed private-auth-token", "private-auth-token"},
 		{"integration", "conflict occurred", "conflict"},
 		{"schema", "structured output invalid", "structured output"},
-		{"limit", "limit reached", "limit"},
+		{"limit", "limit reached private-limit-token", "private-limit-token"},
 		{"command", "command failed", "command failed"},
 	} {
 		for _, phase := range []string{"lifecycle_task_completed", "lifecycle_completed"} {
@@ -26,14 +26,20 @@ func TestLifecycleRestartPreservesRedactedOrdinaryClasses(t *testing.T) {
   task:
     steps:
       - id: work
-        agent: primary
-        prompt: original
         onFailure:
-          - agent: observer
-            prompt: report
+          - uses: agent/run
+            with:
+              agent: observer.toml
+              prompt: report
         finally:
-          - agent: cleanup
-            prompt: cleanup
+          - uses: agent/run
+            with:
+              agent: cleanup.toml
+              prompt: cleanup
+        uses: agent/run
+        with:
+          agent: primary.toml
+          prompt: original
 `, agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
 						calls = append(calls, request.AgentID)
 						if reportingFails && request.AgentID == "observer" {
@@ -42,7 +48,7 @@ func TestLifecycleRestartPreservesRedactedOrdinaryClasses(t *testing.T) {
 						return map[string]any{"text": "done"}, nil
 					}))
 					secrets := map[string]string{"token": tc.secret}
-					run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: secrets})
+					run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: secrets})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -63,7 +69,7 @@ func TestLifecycleRestartPreservesRedactedOrdinaryClasses(t *testing.T) {
 					if err := store.Recover(ctx); err != nil {
 						t.Fatal(err)
 					}
-					resumed, err := e.Resume(ctx, run.ID, secrets, false)
+					resumed, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, secrets, false)
 					if err == nil || resumed == nil || resumed.Status != RunStatusFailed {
 						t.Fatalf("lost terminal failure: run=%+v err=%v", resumed, err)
 					}

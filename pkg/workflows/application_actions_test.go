@@ -95,12 +95,12 @@ func TestRegisteredActionContracts(t *testing.T) {
 		t.Fatal("accepted invalid nested Go field")
 	}
 	e, s := durableExecutor(t, actionSource, nil)
-	if _, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "missing registered Go action") {
+	if _, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "missing registered Go action") {
 		t.Fatal(err)
 	}
 	registerTestAction(t, e, spec)
 	e.Store = FileStore{Dir: t.TempDir()}
-	if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil {
+	if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil {
 		t.Fatal("accepted nondurable store")
 	}
 	runs, _ := s.List(context.Background())
@@ -116,7 +116,7 @@ func TestRegisteredActionSchemasAndOutputs(t *testing.T) {
 			e, _ := durableExecutor(t, strings.Replace(actionSource, "{value: hello}", with, 1), nil)
 			var calls atomic.Int32
 			registerTestAction(t, e, readSpec(&calls))
-			if _, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); err == nil || calls.Load() != 0 {
+			if _, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"}); err == nil || calls.Load() != 0 {
 				t.Fatal("bad input invoked", err)
 			}
 		})
@@ -127,7 +127,7 @@ func TestRegisteredActionSchemasAndOutputs(t *testing.T) {
 `, nil)
 	var calls atomic.Int32
 	registerTestAction(t, e, readSpec(&calls))
-	r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestRegisteredActionSchemasAndOutputs(t *testing.T) {
 	if len(records) != 2 || len(snap.ActionContracts) != 1 || snap.ActionContracts["capture"].Fingerprint == "" || records[0].State != "completed" {
 		t.Fatal("missing provenance", records, snap)
 	}
-	if _, err = e.Resume(ctx, r.ID, nil, false); err != nil || calls.Load() != 2 {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, false); err != nil || calls.Load() != 2 {
 		t.Fatal("replayed successful checkpoint", err)
 	}
 }
@@ -155,7 +155,7 @@ func TestRegisteredActionDriftBlocksAllSuccessfulShortcuts(t *testing.T) {
 			var calls atomic.Int32
 			spec := readSpec(&calls)
 			registerTestAction(t, e, spec)
-			r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil {
 				t.Fatal("expected later failure")
 			}
@@ -190,7 +190,7 @@ func TestRegisteredActionDriftBlocksAllSuccessfulShortcuts(t *testing.T) {
 				}
 			}
 			registerTestAction(t, e, spec)
-			_, err = e.Resume(ctx, r.ID, nil, true)
+			_, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, true)
 			if !errors.Is(err, ErrActionIntegrity) || calls.Load() != 1 {
 				t.Fatal("reused drifted action", calls.Load(), err)
 			}
@@ -231,7 +231,7 @@ func TestRegisteredActionDurabilityBarriers(t *testing.T) {
 			var calls atomic.Int32
 			registerTestAction(t, e, readSpec(&calls))
 			e.Store = faultActionJournal{ActionJournal: s, admission: stage == "admission", completion: stage == "completion"}
-			r, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			r, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			want := int32(0)
 			if stage == "completion" {
 				want = 1
@@ -286,12 +286,12 @@ func TestRegisteredMutationReceiptReconciliation(t *testing.T) {
 				}
 			}
 			registerTestAction(t, e, spec)
-			r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil {
 				t.Fatal("expected uncertainty")
 			}
 			// Explicit resume can reconcile without granting permission to replay.
-			r, err = e.Resume(ctx, r.ID, nil, false)
+			r, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, false)
 			want := int32(1)
 			if outcome == "no_effect" {
 				want = 2
@@ -304,7 +304,7 @@ func TestRegisteredMutationReceiptReconciliation(t *testing.T) {
 				if !errors.Is(err, ErrActionIntegrity) || r.Status != RunStatusNeedsAttention {
 					t.Fatal("unknown mutation admitted", r, err)
 				}
-				if _, err = e.Resume(ctx, r.ID, nil, true); !errors.Is(err, ErrActionIntegrity) {
+				if _, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, true); !errors.Is(err, ErrActionIntegrity) {
 					t.Fatal("retry flag overrode uncertainty", err)
 				}
 			}
@@ -331,7 +331,7 @@ func TestRegisteredReadOnlyLostCompletionAndRestart(t *testing.T) {
 	var calls atomic.Int32
 	registerTestAction(t, e, readSpec(&calls))
 	e.Store = faultActionJournal{ActionJournal: s, completion: true}
-	r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("completion should fail")
 	}
@@ -348,7 +348,7 @@ func TestRegisteredReadOnlyLostCompletionAndRestart(t *testing.T) {
 	if err = reopened.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	r, err = e.Resume(ctx, r.ID, nil, false)
+	r, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, false)
 	if err != nil || calls.Load() != 2 || r.Status != RunStatusSucceeded {
 		t.Fatal("read-only did not rerun", r, err)
 	}
@@ -381,7 +381,7 @@ jobs:
 		return validator(ctx, ac, cp)
 	}
 	registerTestAction(t, e, spec)
-	r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || calls.Load() != 2 {
 		t.Fatal(r, err)
 	}
@@ -394,7 +394,7 @@ jobs:
 	if err = s.Complete(ctx, a, StepExecution{ID: "step_1", Status: RunStatusSucceeded}); err != nil {
 		t.Fatal(err)
 	}
-	r, err = e.Resume(ctx, r.ID, nil, true)
+	r, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, true)
 	if err != nil || r.Status != RunStatusSucceeded || calls.Load() != 2 || validations.Load() < 2 {
 		t.Fatal("child/repeat shortcut bypassed validation", r, err, calls.Load(), validations.Load())
 	}
@@ -403,7 +403,7 @@ jobs:
 		return errors.New("child evidence gone")
 	}
 	registerTestAction(t, e, spec)
-	if _, err = e.Resume(ctx, r.ID, nil, false); !errors.Is(err, ErrActionIntegrity) {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, false); !errors.Is(err, ErrActionIntegrity) {
 		t.Fatal("successful origin skipped child evidence", err)
 	}
 }
@@ -413,7 +413,7 @@ func TestActionCredentialHandlingAndFencing(t *testing.T) {
 	e, s := durableExecutor(t, strings.Replace(actionSource, "value: hello", "value: '${{ secrets.token }}'", 1), nil)
 	var calls atomic.Int32
 	registerTestAction(t, e, readSpec(&calls))
-	r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "secret-value"}})
+	r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "secret-value"}})
 	if err == nil || calls.Load() != 0 {
 		t.Fatal("credential identity admitted", r, err)
 	}
@@ -427,7 +427,7 @@ func TestActionCredentialHandlingAndFencing(t *testing.T) {
 		return ActionResult[actionOutput]{Output: actionOutput{"secret-value"}, Receipt: json.RawMessage(`{"token":"secret-value"}`)}, nil
 	}
 	registerTestAction(t, e, spec)
-	r, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "secret-value"}})
+	r, err = nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "secret-value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,7 @@ func TestRegisteredActionSerializedOutputValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.ApplicationActions = r
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || !strings.Contains(err.Error(), "value") {
 		t.Fatal("serialized output accepted", err)
 	}
@@ -522,12 +522,12 @@ func TestRegisteredMutationLostCompletionCommit(t *testing.T) {
 	}
 	registerTestAction(t, e, spec)
 	e.Store = faultActionJournal{ActionJournal: s, completion: true}
-	r, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	r, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("completion commit should fail")
 	}
 	e.Store = s
-	r, err = e.Resume(ctx, r.ID, nil, true)
+	r, err = nativeTestExecutor(t, e).Resume(ctx, r.ID, nil, true)
 	if err != nil || calls.Load() != 1 || r.Status != RunStatusSucceeded {
 		t.Fatal("lost completion repeated mutation", r, err, calls.Load())
 	}

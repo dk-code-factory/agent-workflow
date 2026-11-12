@@ -43,10 +43,10 @@ func TestExternalInputGateCrashProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &Executor{WorkspaceDir: root, Store: s}
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Store: s})
 	registerTestAction(t, e, crashCheckpointSpec(t, root))
 	e.Store = &executionBoundaryJournal{SQLiteStore: s, afterGate: func(context.Context, ExternalInputGate) error { os.Exit(73); return nil }}
-	_, err = e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	_, err = nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	t.Fatalf("gate crash boundary not reached: %v", err)
 }
 
@@ -148,9 +148,9 @@ func TestExternalInputGateCrashSameChild(t *testing.T) {
 						if guard != "missing" {
 							answerGate(t, s, gate)
 						}
-						e := &Executor{WorkspaceDir: root, Store: s}
+						e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Store: s})
 						registerTestAction(t, e, crashCheckpointSpec(t, root))
-						run, err := e.Resume(context.Background(), origin, nil, retry)
+						run, err := nativeTestExecutor(t, e).Resume(context.Background(), origin, nil, retry)
 						if guard != "none" {
 							if err == nil {
 								t.Fatalf("unsafe gate snapshot resumed: %+v", run)
@@ -183,7 +183,7 @@ func TestExternalInputGateCrashSameChild(t *testing.T) {
 								t.Fatalf("first repeat replaced: %+v %v", gates, err)
 							}
 							answerGate(t, s, gates[1])
-							run, err = e.Resume(context.Background(), origin, nil, false)
+							run, err = nativeTestExecutor(t, e).Resume(context.Background(), origin, nil, false)
 						}
 						if err != nil || run.Status != RunStatusSucceeded {
 							t.Fatalf("completion: %+v %v", run, err)

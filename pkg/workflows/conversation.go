@@ -87,7 +87,7 @@ func validateConversationStep(w *Workflow, step Step) error {
 			return fmt.Errorf("conversation timeout must be positive and at most 24h")
 		}
 	}
-	if step.Agent != nil || step.Uses != "" || len(step.Argv) != 0 || step.Run != "" || step.Shell != "" || step.WorkingDirectory != "" || step.Context != (RunContext{}) || isStepBlock(step) {
+	if step.Uses != "" || len(step.Argv) != 0 || step.Run != "" || step.Shell != "" || step.WorkingDirectory != "" || step.Context != (RunContext{}) || isStepBlock(step) {
 		return fmt.Errorf("conversation cannot combine with another operation or context")
 	}
 	for key := range step.With {

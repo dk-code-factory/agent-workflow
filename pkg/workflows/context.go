@@ -28,6 +28,10 @@ type Delivery struct {
 }
 
 type StepLifecycle struct {
+	Verifications []any                      `json:"verifications,omitempty"`
+	Candidate     map[string]any             `json:"candidate,omitempty"`
+	Verification  any                        `json:"verification,omitempty"`
+	Agent         string                     `json:"agent,omitempty"`
 	OriginalError string                     `json:"original_error,omitempty"`
 	OriginalClass string                     `json:"original_class,omitempty"`
 	Deadline      time.Time                  `json:"deadline"`
@@ -71,6 +75,9 @@ type JobExecution struct {
 }
 
 type AgentRequest struct {
+	Definition *AgentDefinition
+	Input      any
+
 	// SessionOwnerID retains controller-owned provider state across conversation turns.
 	SessionOwnerID string
 	ObserveUsage   func(UsageUpdate) error
@@ -156,4 +163,11 @@ type SessionResult struct {
 type SessionRunner interface {
 	Capabilities(string) (ProviderCapabilities, error)
 	RunTurn(context.Context, SessionRequest, func(ProviderEvent)) (SessionResult, error)
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	return cloneJSONValue(value).(map[string]any)
 }

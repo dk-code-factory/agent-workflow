@@ -160,6 +160,11 @@ func TestBrokerDurableDeduplicationRedactionAndUncertainEffects(t *testing.T) {
 
 type nestedToolRunner struct{}
 
+func (*nestedToolRunner) AdmitNativeTask(d *AgentDefinition) (*AgentDefinition, error) {
+	c := *d
+	return &c, nil
+}
+
 func (*nestedToolRunner) Capabilities(string) (ProviderCapabilities, error) {
 	return ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true}, nil
 }
@@ -213,7 +218,7 @@ func (*nestedToolRunner) RunTurn(ctx context.Context, req SessionRequest, _ func
 
 func TestWorkflowToChildToGrandchildAtCapacityOne(t *testing.T) {
 	runner := &nestedToolRunner{}
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/parent, with: {prompt: root}}]}}", runner)
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: root, agent: parent.toml}}]}}\n", runner)
 	pool := &Capacity{Slots: make(chan struct{}, 1)}
 	e.Slots = pool.Slots
 	e.Capacity = pool
@@ -237,13 +242,15 @@ func TestWorkflowToChildToGrandchildAtCapacityOne(t *testing.T) {
 	}
 	e.BindTools = binder
 	workers.BindTools = binder
+	e.Workers = workers
+	e.Agents = nativeFixtureRunner{runner}
 	e.BeforeFinalize = workers.StopRun
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	done := make(chan struct{})
 	go func() { defer close(done); workers.Serve(ctx) }()
 	defer func() { cancel(); <-done }()
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatalf("nested workflow failed: %+v %v", run, err)
 	}
@@ -251,7 +258,7 @@ func TestWorkflowToChildToGrandchildAtCapacityOne(t *testing.T) {
 		t.Fatal(run)
 	}
 	children, err := workers.List(context.Background(), run.ID)
-	if err != nil || len(children) != 2 {
+	if err != nil || len(children) != 3 {
 		t.Fatal(children, err)
 	}
 	if len(pool.Slots) != 0 || pool.Suspended() != 0 {
@@ -261,9 +268,14 @@ func TestWorkflowToChildToGrandchildAtCapacityOne(t *testing.T) {
 	if usageErr != nil || usage.Summary.Invocations != 3 {
 		t.Fatal("nested worker turns missing from originating usage", usage, usageErr)
 	}
-	var remaining int
-	if err = store.db.QueryRow("SELECT remaining FROM invocation_grants WHERE run_id=?", run.ID).Scan(&remaining); err != nil || remaining != 5 {
-		t.Fatal("parent grant reserved incorrectly", remaining, err)
+	var parent *Worker
+	for i := range children {
+		if children[i].Definition != nil {
+			parent = &children[i]
+		}
+	}
+	if parent == nil || parent.Remaining != workers.Limits.MaxTurns-4 {
+		t.Fatal("native parent turn and child reservation were not charged once", parent)
 	}
 }
 

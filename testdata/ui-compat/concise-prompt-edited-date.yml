@@ -1,1 +1,1 @@
-jobs: { review: { steps: [ { agent: claude, prompt: "2026-11-06" } ] } }
+jobs: {review: {steps: [{uses: agent/run, with: {agent: claude.toml, prompt: "2026-11-06"}}]}}

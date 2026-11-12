@@ -23,6 +23,23 @@ func (a *publicPauseAgent) RunAgent(context.Context, workflows.AgentRequest) (ma
 	return map[string]any{}, nil
 }
 
+func (a *publicPauseAgent) AdmitNativeTask(d *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
+	c := *d
+	return &c, nil
+}
+func (a *publicPauseAgent) Capabilities(string) (workflows.ProviderCapabilities, error) {
+	return workflows.ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true}, nil
+}
+func (a *publicPauseAgent) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	id := q.SessionID
+	if id == "" {
+		id = "fixture-" + q.ParentWorkerID
+	}
+	emit(workflows.ProviderEvent{Type: "session", SessionID: id})
+	out, err := a.RunAgent(ctx, q.AgentRequest)
+	return workflows.SessionResult{SessionID: id, Status: workflows.RunStatusSucceeded, Outputs: out}, err
+}
+
 // This implementation can use only exported types and methods. Static
 // embedding intentionally hides unrelated SQLite extensions from Executor.
 type publicPauseJournal struct {
@@ -80,7 +97,8 @@ func testExternalInputPublicDenialContract(t *testing.T, canceled bool) {
 			if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			source := `jobs: {x: {steps: [{id: before, uses: agent/a, with: {prompt: before}}, {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}, {id: after, uses: agent/a, with: {prompt: after}}]}}`
+			source := `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}, {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}]}}
+`
 			if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte(source), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -115,9 +133,24 @@ func testExternalInputPublicDenialContract(t *testing.T, canceled bool) {
 			if !errors.Is(marker, workflows.ErrExternalInput) {
 				t.Fatal("public control marker lost conflict compatibility")
 			}
+			if err := os.WriteFile(filepath.Join(root, "workflows", "a.toml"), []byte("name='a'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			journal := &publicPauseJournal{ExternalInputJournal: sqlite, sqlite: sqlite, denial: denial, canceled: canceled}
 			agent := &publicPauseAgent{}
 			executor := &workflows.Executor{WorkspaceDir: root, Store: journal, Agents: agent}
+			manager := &workflows.WorkerManager{Store: sqlite, Factory: func(context.Context, string, string, []string) (workflows.SessionRunner, []string, map[string]string, error) {
+				return agent, nil, nil, nil
+			}}
+			if err := manager.Init(ctx); err != nil {
+				t.Fatal(err)
+			}
+			serveCtx, stop := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); manager.Serve(serveCtx) }()
+			defer func() { stop(); <-workerDone }()
+			executor.Workers = manager
+			executor.BeforeFinalize = manager.StopRun
 			run, err := executor.Run(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != workflows.RunStatusWaiting || agent.calls.Load() != 1 {
 				t.Fatal(run, err)

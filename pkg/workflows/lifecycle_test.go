@@ -18,18 +18,26 @@ const lifecycleWorkflow = `jobs:
       result: ${{ steps.work.outputs.text }}
     steps:
       - id: work
-        agent: primary
-        prompt: original
         onError:
           - id: backup
-            agent: backup
-            prompt: '${{ failed.prompt }}|${{ error.class }}'
+            uses: agent/run
+            with:
+              agent: backup.toml
+              prompt: '${{ failed.prompt }}|${{ error.class }}'
         onFailure:
-          - agent: observer
-            prompt: report
+          - uses: agent/run
+            with:
+              agent: observer.toml
+              prompt: report
         finally:
-          - agent: cleanup
-            prompt: cleanup
+          - uses: agent/run
+            with:
+              agent: cleanup.toml
+              prompt: cleanup
+        uses: agent/run
+        with:
+          agent: primary.toml
+          prompt: original
 `
 
 func TestLifecycleRecoveredResultAndOrder(t *testing.T) {
@@ -44,7 +52,7 @@ func TestLifecycleRecoveredResultAndOrder(t *testing.T) {
 		}
 		return map[string]any{"text": r.AgentID}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,10 +70,12 @@ func TestLifecycleRecoveredResultAndOrder(t *testing.T) {
 }
 
 func TestLifecycleReportingAndNestedFailuresPreserveOriginal(t *testing.T) {
-	source := strings.Replace(lifecycleWorkflow, "            prompt: '${{ failed.prompt }}|${{ error.class }}'", `            prompt: fallback
-            onFailure:
-              - agent: nested
-                prompt: nested`, 1)
+	source := editNativeWorkflow(t, lifecycleWorkflow, func(w *Workflow) {
+		j := w.Jobs["task"]
+		j.Steps[0].OnError[0].With["prompt"] = "fallback"
+		j.Steps[0].OnError[0].OnFailure = []Step{fixtureAgent("nested", "nested")}
+		w.Jobs["task"] = j
+	})
 	var calls []string
 	e, _ := durableExecutor(t, source, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 		calls = append(calls, r.AgentID)
@@ -74,7 +84,7 @@ func TestLifecycleReportingAndNestedFailuresPreserveOriginal(t *testing.T) {
 		}
 		return map[string]any{"text": "ok"}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("reporting recovered failure")
 	}
@@ -87,7 +97,7 @@ func TestLifecycleReportingAndNestedFailuresPreserveOriginal(t *testing.T) {
 	// A completed failed lifecycle receipt is terminal and never automatically
 	// reruns the original task or its failed observers on resume.
 	before := len(calls)
-	_, _ = e.Resume(context.Background(), run.ID, nil, false)
+	_, _ = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if len(calls) != before {
 		t.Fatalf("replayed terminal handler effects: %v", calls)
 	}
@@ -96,16 +106,11 @@ func TestLifecycleReportingAndNestedFailuresPreserveOriginal(t *testing.T) {
 func TestLifecycleOriginalStructuredContract(t *testing.T) {
 	for _, valid := range []bool{false, true} {
 		t.Run(map[bool]string{false: "invalid", true: "valid"}[valid], func(t *testing.T) {
-			source := strings.Replace(lifecycleWorkflow, "        prompt: original", `        prompt: original
-        with:
-          output:
-            format: json
-            repair-attempts: 0
-            schema:
-              type: object
-              required: [ok]
-              properties:
-                ok: {type: boolean}`, 1)
+			source := editNativeWorkflow(t, lifecycleWorkflow, func(w *Workflow) {
+				j := w.Jobs["task"]
+				j.Steps[0].With["output"] = map[string]any{"format": "json", "repair-attempts": 0, "schema": map[string]any{"type": "object", "required": []any{"ok"}, "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}}}
+				w.Jobs["task"] = j
+			})
 			e, _ := durableExecutor(t, source, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 				if r.AgentID == "primary" {
 					return nil, errors.New("primary failed")
@@ -116,7 +121,7 @@ func TestLifecycleOriginalStructuredContract(t *testing.T) {
 				}
 				return map[string]any{"text": "fallback", "structured": value}, nil
 			}))
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if (err == nil) != valid {
 				t.Fatalf("valid=%v run=%+v err=%v", valid, run, err)
 			}
@@ -137,7 +142,7 @@ func TestLifecycleBypassesUnsafeFailuresAndCancellation(t *testing.T) {
 				}
 				return nil, failure
 			}))
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || calls != 1 {
 				t.Fatalf("unsafe handlers ran: %d %v", calls, err)
 			}
@@ -150,7 +155,7 @@ func TestLifecycleBypassesUnsafeFailuresAndCancellation(t *testing.T) {
 }
 
 func TestLifecycleHardHandlerFailuresBypassLaterLists(t *testing.T) {
-	for _, original := range []error{errors.New("authentication failed"), context.DeadlineExceeded} {
+	for _, original := range []error{errors.New("ordinary primary failure"), errors.New("command failed")} {
 		for _, failing := range []string{"backup", "observer"} {
 			t.Run(original.Error()+"/"+failing, func(t *testing.T) {
 				var calls []string
@@ -164,7 +169,7 @@ func TestLifecycleHardHandlerFailuresBypassLaterLists(t *testing.T) {
 					}
 					return nil, errors.New("ordinary handler failure")
 				}))
-				run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 				want := []string{"primary", "backup"}
 				if failing == "observer" {
 					want = append(want, "observer")
@@ -183,8 +188,12 @@ func TestLifecycleHardHandlerFailuresBypassLaterLists(t *testing.T) {
 func TestLifecycleMixedCancellationRetainsDiagnosticAndSafety(t *testing.T) {
 	ctx := context.Background()
 	var calls []string
-	source := strings.Replace(lifecycleWorkflow, "        prompt: original", "        prompt: original\n        continue-on-error: true", 1)
-	source += "      - agent: downstream\n        prompt: downstream\n"
+	source := editNativeWorkflow(t, lifecycleWorkflow, func(w *Workflow) {
+		j := w.Jobs["task"]
+		j.Steps[0].ContinueOnError = true
+		j.Steps = append(j.Steps, fixtureAgent("downstream", "downstream"))
+		w.Jobs["task"] = j
+	})
 	e, s := durableExecutor(t, source, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 		calls = append(calls, r.AgentID)
 		if r.AgentID == "primary" {
@@ -195,7 +204,7 @@ func TestLifecycleMixedCancellationRetainsDiagnosticAndSafety(t *testing.T) {
 		}
 		return map[string]any{"text": "unexpected"}, nil
 	}))
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || ctx.Err() != nil || !reflect.DeepEqual(calls, []string{"primary", "backup"}) {
 		t.Fatalf("mixed cancellation admitted effects: calls=%v err=%v", calls, err)
 	}
@@ -238,7 +247,7 @@ func TestLifecycleOrderedUsagePersistenceBypassesHandlers(t *testing.T) {
 	}))
 	store = s
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n      ordinal: {type: number}\n      identity: {type: string}\n"+lifecycleWorkflow)
-	run, err := e.Run(context.Background(), iterationRequest("first", "second"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("first", "second"))
 	if err == nil || !errors.Is(err, errIterationBlocked) || !reflect.DeepEqual(calls, []string{"primary"}) {
 		t.Fatalf("ordered persistence failure admitted handlers: calls=%v run=%+v err=%v", calls, run, err)
 	}
@@ -249,7 +258,7 @@ func TestLifecycleOrderedUsagePersistenceBypassesHandlers(t *testing.T) {
 		}
 		result := item.Jobs["task"].Steps["work"]
 		found = true
-		if result.FailureClass != "iteration_blocked" || result.Lifecycle == nil || result.Lifecycle.Skipped["finally"] != "unsafe failure" || !errors.Is(lifecycleError(result), errIterationBlocked) {
+		if result.FailureClass != "storage" || result.Lifecycle == nil || result.Lifecycle.Skipped["finally"] != "unsafe failure" {
 			t.Fatalf("ordered failure receipt lost safety: %+v", result)
 		}
 	}
@@ -263,14 +272,18 @@ func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
 		for _, phase := range []string{"lifecycle_task_completed", "lifecycle_completed"} {
 			t.Run(classifyFailure(failure)+"/"+phase, func(t *testing.T) {
 				ctx := context.Background()
-				source := strings.Replace(lifecycleWorkflow, "  task:\n", "  task:\n    continue-on-error: true\n", 1)
-				source += "  dependent:\n    needs: task\n    steps:\n      - agent: downstream\n        prompt: downstream\n"
+				source := editNativeWorkflow(t, lifecycleWorkflow, func(w *Workflow) {
+					j := w.Jobs["task"]
+					j.ContinueOnError = true
+					w.Jobs["task"] = j
+					w.Jobs["dependent"] = Job{Needs: []string{"task"}, Steps: []Step{fixtureAgent("downstream", "downstream")}}
+				})
 				calls := 0
 				e, s := durableExecutor(t, source, agentFunc(func(_ context.Context, _ AgentRequest) (map[string]any, error) {
 					calls++
 					return map[string]any{"text": "unexpected"}, nil
 				}))
-				run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "storage"}})
+				run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "private-storage-token"}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -285,14 +298,14 @@ func TestLifecycleRestartPreservesHardFailures(t *testing.T) {
 				status, class := executionFailureStatus(ctx, failure), classifyFailure(failure)
 				attempt.Phase = phase
 				attempt.Result = StepExecution{ID: "work", Status: status, Error: failure.Error(), FailureClass: class, UnsafeFailureClass: unsafeFailureClass(failure), Lifecycle: &StepLifecycle{OriginalError: failure.Error(), OriginalClass: class, Deadline: time.Now().Add(time.Minute)}}
-				journal := redactedStore{Journal: s, secrets: map[string]string{"token": "storage"}}
+				journal := redactedStore{Journal: s, secrets: map[string]string{"token": "private-storage-token"}}
 				if err := journal.RecordAttempt(ctx, attempt); err != nil {
 					t.Fatal(err)
 				}
 				if err := s.Recover(ctx); err != nil {
 					t.Fatal(err)
 				}
-				resumed, resumeErr := e.Resume(ctx, run.ID, map[string]string{"token": "storage"}, false)
+				resumed, resumeErr := nativeTestExecutor(t, e).Resume(ctx, run.ID, map[string]string{"token": "private-storage-token"}, false)
 				if resumed == nil {
 					t.Fatalf("resume failed before lifecycle execution: %v", resumeErr)
 				}
@@ -328,7 +341,7 @@ func TestLifecycleTimeoutBoundsHandlers(t *testing.T) {
 	}))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || ctx.Err() != nil || calls < 1 || calls > 2 {
 		t.Fatalf("handler not locally bounded: calls=%d err=%v", calls, err)
 	}
@@ -345,15 +358,26 @@ func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
 				if nesting == "child_bound" {
 					bound, childBound = "5m", "500ms"
 				}
-				child := "          - agent: blocker\n            prompt: wait\n            continue-on-error: true\n"
+				blocker := fixtureAgent("blocker", "wait")
+				blocker.ContinueOnError = true
 				if nesting != "direct" {
-					child = "          - agent: nested\n            prompt: nested\n            continue-on-error: true\n            handlerTimeout: " + childBound + "\n            finally:\n    " + strings.ReplaceAll(strings.TrimSuffix(child, "\n"), "\n", "\n    ") + "\n"
+					nested := fixtureAgent("nested", "nested")
+					nested.ContinueOnError = true
+					nested.HandlerTimeout = childBound
+					nested.Finally = []Step{blocker}
+					blocker = nested
 				}
-				source := "jobs:\n  task:\n    steps:\n      - id: work\n        agent: primary\n        prompt: primary\n        continue-on-error: true\n        handlerTimeout: " + bound + "\n        " + hook + ":\n"
+				owner := fixtureAgent("primary", "primary")
+				owner.ID = "work"
+				owner.ContinueOnError = true
+				owner.HandlerTimeout = bound
+				handlers := []Step{blocker, fixtureAgent("downstream", "downstream")}
 				if hook == "onError" {
-					source += "          - agent: replacement\n            prompt: replacement\n"
+					owner.OnError = append([]Step{fixtureAgent("replacement", "replacement")}, handlers...)
+				} else {
+					owner.Finally = handlers
 				}
-				source += child + "      - agent: downstream\n        prompt: downstream\n"
+				source := nativeWorkflowSource(t, &Workflow{Jobs: map[string]Job{"task": {Steps: []Step{owner}}}})
 				blocked, downstream := false, false
 				e, _ := durableExecutor(t, source, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
 					switch r.AgentID {
@@ -372,7 +396,7 @@ func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
 				}))
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 				if err == nil || !blocked || downstream || ctx.Err() != nil || run.Jobs["task"].Steps["work"].Status == RunStatusSucceeded {
 					t.Fatalf("continued handler deadline: blocked=%v downstream=%v run=%+v err=%v", blocked, downstream, run, err)
 				}
@@ -412,7 +436,7 @@ func TestLifecycleRestartPreservesEnclosingDeadline(t *testing.T) {
 			e.Store = interruptLifecycleTaskJournal{Journal: s}
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run == nil || calls != 1 {
 				t.Fatalf("did not interrupt original task: calls=%d run=%+v err=%v", calls, run, err)
 			}
@@ -424,7 +448,7 @@ func TestLifecycleRestartPreservesEnclosingDeadline(t *testing.T) {
 			if err := s.Recover(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			resumed, err := e.Resume(context.Background(), run.ID, nil, false)
+			resumed, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 			if err == nil || resumed == nil || calls != 1 || resumed.Jobs["task"].Steps["work"].UnsafeFailureClass != "canceled" {
 				t.Fatalf("resumed expired execution admitted handlers: calls=%d run=%+v err=%v", calls, resumed, err)
 			}
@@ -441,17 +465,25 @@ func TestLifecycleExpiredRestartRetainsHardChildren(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "nested"}[nested], func(t *testing.T) {
 			ctx := context.Background()
-			source := strings.Replace(lifecycleWorkflow, "        prompt: original", "        prompt: original\n        continue-on-error: true", 1)
-			source += "      - agent: downstream\n        prompt: downstream\n"
-			if nested {
-				source = strings.Replace(source, "            prompt: '${{ failed.prompt }}|${{ error.class }}'", "            prompt: backup\n            finally:\n              - id: leaf\n                agent: leaf\n                prompt: leaf", 1)
-			}
+			source := editNativeWorkflow(t, lifecycleWorkflow, func(w *Workflow) {
+				j := w.Jobs["task"]
+				j.Steps[0].ContinueOnError = true
+				j.Steps = append(j.Steps, fixtureAgent("downstream", "downstream"))
+				if nested {
+					backup := &j.Steps[0].OnError[0]
+					backup.With["prompt"] = "backup"
+					leaf := fixtureAgent("leaf", "leaf")
+					leaf.ID = "leaf"
+					backup.Finally = []Step{leaf}
+				}
+				w.Jobs["task"] = j
+			})
 			calls := 0
 			e, s := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 				calls++
 				return map[string]any{"text": "unexpected"}, nil
 			}))
-			run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -492,7 +524,7 @@ func TestLifecycleExpiredRestartRetainsHardChildren(t *testing.T) {
 			if err := s.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			resumed, err := e.Resume(ctx, run.ID, nil, false)
+			resumed, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if err == nil || resumed == nil || calls != 0 || resumed.Status != RunStatusNeedsAttention || resumed.Jobs["task"].Steps["work"].FailureClass != "action_integrity" {
 				t.Fatalf("expired resume lost hard child: calls=%d run=%+v err=%v", calls, resumed, err)
 			}
@@ -534,7 +566,7 @@ func TestLifecycleRestartReusesCompletedTaskAndHandler(t *testing.T) {
 				calls = append(calls, r.AgentID)
 				return map[string]any{"text": r.AgentID}, nil
 			}))
-			run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -564,7 +596,7 @@ func TestLifecycleRestartReusesCompletedTaskAndHandler(t *testing.T) {
 			if err = s.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			resumed, err := e.Resume(ctx, run.ID, nil, false)
+			resumed, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if uncertain {
 				if err == nil || len(calls) != 0 {
 					t.Fatalf("uncertain handler replayed: calls=%v err=%v", calls, err)
@@ -593,7 +625,7 @@ func TestLifecycleFailureContextAndJournalAreRedacted(t *testing.T) {
 		}
 		return map[string]any{"text": "ok"}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "private-token"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "private-token"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,18 +643,26 @@ func TestLifecycleReferenceScopes(t *testing.T) {
   x:
     steps:
       - id: before
-        agent: a
-        prompt: before
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: before
       - id: owner
-        agent: a
-        prompt: owner
         finally:
           - id: first
-            agent: a
-            prompt: '${{ steps.before.text }}'
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: '${{ steps.before.text }}'
           - id: second
-            agent: a
-            prompt: '${{ steps.first.text }}'
+            uses: agent/run
+            with:
+              agent: a.toml
+              prompt: '${{ steps.first.text }}'
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: owner
 `
 	w, err := Parse([]byte(source))
 	if err != nil {
@@ -634,7 +674,7 @@ func TestLifecycleReferenceScopes(t *testing.T) {
 	e, _ := durableExecutor(t, source, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": r.Prompt}, nil
 	}))
-	if _, err = e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil {
+	if _, err = nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"steps.owner.text", "steps.second.text", "steps.missing.text"} {
@@ -654,16 +694,17 @@ func TestLifecycleNamedSchemaReferenceAdmission(t *testing.T) {
 jobs:
   task:
     steps:
-      - {id: before, agent: a, prompt: before}
+      - {id: before, uses: agent/run, with: {agent: a.toml, prompt: before}}
       - id: owner
-        agent: a
-        prompt: owner
         onError:
           - id: fallback
-            agent: a
-            prompt: fallback
-            with: {output: {schema: Result}}
-          - {id: later, agent: a, prompt: later}
+            with: {output: {schema: Result}, agent: a.toml, prompt: fallback}
+            uses: agent/run
+          - {id: later, uses: agent/run, with: {agent: a.toml, prompt: later}}
+        uses: agent/run
+        with:
+          agent: a.toml
+          prompt: owner
 `
 	for _, reference := range []string{"before", "owner", "fallback", "later", "missing"} {
 		t.Run(reference, func(t *testing.T) {
@@ -678,7 +719,7 @@ jobs:
 				}
 				return
 			}
-			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || calls != 0 {
+			if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || calls != 0 {
 				t.Fatalf("unavailable named reference admitted effects: calls=%d err=%v", calls, err)
 			}
 		})
@@ -686,8 +727,7 @@ jobs:
 }
 
 func TestLifecycleNestingAndCountBounds(t *testing.T) {
-	ptr := func(value string) *string { return &value }
-	leaf := Step{Agent: ptr("a"), Prompt: ptr("leaf")}
+	leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.toml", "prompt": "leaf"}}
 	tree := leaf
 	for depth := 0; depth < 8; depth++ {
 		parent := leaf

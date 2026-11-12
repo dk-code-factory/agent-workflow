@@ -1,7 +1,9 @@
 # YAML step failure handlers
 
-Agent and command steps may declare ordered `onError`, `onFailure`, and `finally`
-step lists. These fields are supported at step scope only; workflow and job
+Native agent tasks support ordered `onResult`, `onComplete`, `onIncomplete`,
+`onError`, `onFailure`, and `finally` step lists. Command steps support the three
+error/finalization lists. See [agent tasks](AGENT_TASKS.md) for typed hook events
+and completion verification. These fields are supported at step scope only; workflow and job
 hooks are rejected. Handler children can themselves declare handlers. Registered
 application actions, controller actions, and `input/wait` cannot own or appear
 inside handlers: their reconciliation and suspension protocols remain separate.
@@ -20,8 +22,10 @@ jobs:
       text: ${{ steps.review.outputs.text }}
     steps:
       - id: review
-        agent: reviewer
-        prompt: Review the change.
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: Review the change.
         handlerTimeout: 30s
         onError:
           - id: backup
@@ -34,9 +38,11 @@ jobs:
           - argv: [echo, review finished]
 ```
 
-After an ordinary task failure, `onError` runs once. Its last successfully executed
-child supplies the original step's replacement outputs; a list containing only
-skipped children does not recover. An agent's replacement must include a
+After an ordinary task failure, `onError` runs once. For native tasks, only an
+explicit successful AI child can supply a replacement candidate; command
+feedback remains in lifecycle records. For command owners, the last successful
+child supplies replacement outputs. A list containing only skipped children does
+not recover. An agent's replacement must include a
 `structured` value satisfying the original declared JSON output schema, if any.
 The original step ID exposes replacement results to downstream consumers.
 
