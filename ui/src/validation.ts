@@ -73,7 +73,7 @@ const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
- files: ['strict-string'], protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
+ files: ['string'], protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
   conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
@@ -170,17 +170,19 @@ export function parseWorkflow(source: string): Parsed {
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
       if (shape === 'container') {
-        if (value != null) checkShape(value, mapping(value) ? { image: 'string', files: ['strict-string'] } : 'strict-string', path);
+        if (value != null) checkShape(value, mapping(value) ? { image: 'string', files: ['string'] } : 'strict-string', path);
         return;
       }
       if (shape === 'any') return;
       if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
         // remain absent; other mappings become editable empty collections.
-        const pointer = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
+        const preserveNull = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
           || (path[0] === 'jobs' && path.length === 3 && ['repeat', 'for-each'].includes(String(path[2])))
-          || (path[0] === 'on' && path[1] === 'event' && path.length === 3 && ['actor', 'subject'].includes(String(path[2])));
-        if (!path.length || pointer) return;
+          || (path[0] === 'on' && path[1] === 'event' && path.length === 3 && ['actor', 'subject'].includes(String(path[2])))
+          // Docker files: null inherits the job bundle, while [] replaces it.
+          || (Array.isArray(shape) && path.at(-1) === 'files');
+        if (!path.length || preserveNull) return;
         value = shape === 'string' ? '' : shape === 'boolean' ? false : shape === 'integer' ? 0
           : shape === 'list' || Array.isArray(shape) ? [] : {};
         assign(path, value);
@@ -344,7 +346,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       const image = typeof job.container === 'string' ? job.container : job.container?.image;
       if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
       if (mapping(job.container)) for (const key of Object.keys(job.container)) if (!['image', 'files'].includes(key)) add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
-      if (mapping(job.container) && job.container.files !== undefined) validateFiles(job.container.files, [...p, 'container', 'files']);
+      if (mapping(job.container) && job.container.files != null) validateFiles(job.container.files, [...p, 'container', 'files']);
       if (job.uses) add('container', 'Reusable calls cannot declare a container', [...p, 'container']);
     }
     const needs = dependencies(job);
@@ -369,7 +371,7 @@ function validateWorkflow(w: Workflow, add: Add) {
       seen.add(sid);
       const kind = blockKind(step);
       const docker = step.uses?.startsWith('docker://');
-      if (step.files !== undefined) { validateFiles(step.files, [...sp, 'files']); if (!docker) add('files', 'Step files require a Docker step; use container.files for job helpers', [...sp, 'files']); }
+      if (step.files != null) { validateFiles(step.files, [...sp, 'files']); if (!docker) add('files', 'Step files require a Docker step; use container.files for job helpers', [...sp, 'files']); }
       if (job.container && (step.parallel || step.conversation || stepAction(step) && !docker)) add('container', 'Shared containers support sequential commands, Docker steps and sequence blocks only', sp);
       if (kind) {
         if (depth > 0) add('handler-action', 'Structural blocks cannot appear inside lifecycle handlers', sp);

@@ -41,3 +41,17 @@ test('repair helper path traversal and misplaced ordinary-step files', async ({ 
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   expect(parse(await downloadText(page)).jobs.build.container.files).toEqual([]);
 });
+
+test('visual edits preserve inherited null bundles and runner scalar filenames through export', async ({ page }) => {
+  await open(page, `jobs: {build: {container: {image: ubuntu, files: [123, true, 01]}, steps: [{id: inherited, uses: docker://ubuntu, files: null}, {id: omitted, uses: docker://ubuntu}, {id: empty, uses: docker://ubuntu, files: []}, {id: replaced, uses: docker://ubuntu, files: [FALSE, 0xA]}]}}`);
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await job(page);
+  await field(page, 'Name', 'Keep helper declarations');
+  const updated = (await snapshot(page)).workflow.jobs.build;
+  expect(updated.name).toBe('Keep helper declarations');
+  expect(updated.container.files).toEqual(['123', 'true', '01']);
+  expect(updated.steps.map((step: any) => step.files)).toEqual([null, undefined, [], ['FALSE', '0xA']]);
+  const exported = parse(await downloadText(page)).jobs.build;
+  expect(exported.container.files).toEqual(['123', 'true', '01']);
+  expect(exported.steps.map((step: any) => step.files)).toEqual([null, undefined, [], ['FALSE', '0xA']]);
+});
