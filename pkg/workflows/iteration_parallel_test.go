@@ -28,8 +28,7 @@ func parallelIterationExecutor(t *testing.T, concurrency, capacity int, runner A
 	return e, s
 }
 
-// Every asynchronous test owns cancellation and joins its run on all assertion
-// paths; no callback can outlive its disposable workspace/store cleanup.
+// Test cleanup cancels the run and waits for completion or a timeout.
 func startParallelIteration(t *testing.T, e *Executor, req RunRequest) (context.Context, context.CancelFunc, <-chan parallelIterationResult) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
