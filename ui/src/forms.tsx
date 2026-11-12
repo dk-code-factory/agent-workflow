@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { controllerParameters, dependencies, effectiveStepID, stepAction } from './validation';
+import { controllerParameters, dependencies, effectiveStepID, normalizeStringScalar, stepAction } from './validation';
 import { blockKind } from './step-tree';
 import { isScalar, isSeq, parseDocument, stringify } from 'yaml';
 import type { WorkflowDocument } from './document';
@@ -139,12 +139,7 @@ export function StructuredField({ store, path, label, replacement = false, strin
     const doc = parseDocument(text);
     if (doc.errors.length) throw new Error(doc.errors[0].message);
     if (stringItems && isSeq(doc.contents)) for (const item of doc.contents.items) {
-      if (isScalar(item) && item.value != null && typeof item.value !== 'string') {
-        item.value = item.tag === 'tag:yaml.org,2002:binary' && item.value instanceof Uint8Array
-          ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(item.value)
-          : item.source ?? String(item.value);
-        if (item.tag) item.tag = 'tag:yaml.org,2002:str';
-      }
+      if (isScalar(item) && item.value != null) normalizeStringScalar(item);
     }
     const data = doc.toJS({ maxAliasCount: 0 });
     if (onApply) onApply(text.trim() ? data : undefined); else store.setField(path, text.trim() ? data : undefined);

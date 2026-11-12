@@ -17,8 +17,15 @@ test('retain job helper paths and replace a Docker sibling bundle with reviewed 
   expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual([]);
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual(['alternate/']);
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('files'); await dialog.dismiss(); });
-  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  const [conversionMessage] = await Promise.all([
+    page.waitForEvent('dialog', { timeout: 5000 }).then(async dialog => {
+      const message = dialog.message();
+      await dialog.dismiss();
+      return message;
+    }),
+    ui.getByLabel('Step type', { exact: true }).selectOption('argv'),
+  ]);
+  expect(conversionMessage).toContain('files');
   expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual(['alternate/']);
   page.once('dialog', dialog => dialog.accept());
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
@@ -83,4 +90,26 @@ test('helper-file controls preserve entered scalar filenames and inheritance thr
   exported = parse(await downloadText(page)).jobs.build;
   expect(Object.hasOwn(exported.steps[0], 'files')).toBe(false);
   expect(exported.container.files).toEqual(spelling);
+});
+
+test('imported binary helper paths remain editable through export and undo', async ({ page }) => {
+  const paths = '[!!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]';
+  const source = `jobs: {build: {container: {image: ubuntu, files: ${paths}}, steps: [{id: sibling, uses: docker://ubuntu, files: ${paths}}]}}`;
+  const ui = await open(page, source);
+  const expected = ['helper.py', 'hélp.py', '\uFEFFhelper.py'];
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await job(page);
+  await field(page, 'Name', 'Imported helper bundle');
+  expect((await snapshot(page)).workflow.jobs.build.container.files).toEqual(expected);
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].files).toEqual(expected);
+  let exported = parse(await downloadText(page)).jobs.build;
+  expect(exported.container.files).toEqual(expected);
+  expect(exported.steps[0].files).toEqual(expected);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await field(page, 'Job container image', 'ubuntu:24.04');
+  exported = parse(await downloadText(page)).jobs.build;
+  expect(exported.container.files).toEqual(expected);
+  expect(exported.steps[0].files).toEqual(expected);
 });

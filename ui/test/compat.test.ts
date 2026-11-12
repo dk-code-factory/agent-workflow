@@ -103,12 +103,12 @@ describe('runner compatibility', () => {
     expect(result.diagnostics.some(d => d.source === 'parser' && d.code === 'shape' && d.path.join('.').startsWith('jobs.build.container.files'))).toBe(true);
   });
   it.each(['container', 'step'])('preserves runner scalar filenames in %s files through visual edits', location => {
-    const files = '[123, true, FALSE, 01, 0xA, 1.0, 2024-01-01, !!int 010]';
+    const files = '[123, true, FALSE, 01, 0xA, 1.0, 2024-01-01, !!int 010, !!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]';
     const source = location === 'container'
       ? `jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`
       : `jobs: {build: {steps: [{uses: docker://ubuntu, files: ${files}}]}}`;
     const document = new WorkflowDocument({ source });
-    const expected = ['123', 'true', 'FALSE', '01', '0xA', '1.0', '2024-01-01', '010'];
+    const expected = ['123', 'true', 'FALSE', '01', '0xA', '1.0', '2024-01-01', '010', 'helper.py', 'hélp.py', '\uFEFFhelper.py'];
     const paths = () => location === 'container'
       ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
       : document.getSnapshot().workflow!.jobs.build.steps![0].files;
@@ -119,6 +119,22 @@ describe('runner compatibility', () => {
     expect(document.getSnapshot().diagnostics).toEqual([]);
     expect(paths()).toEqual(expected);
     expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+  });
+  it.each(['container', 'step'])('retains invalid UTF-8 source for repair in %s files', location => {
+    const source = location === 'container'
+      ? 'jobs: {build: {container: {image: ubuntu, files: [!!binary /w==]}, steps: [{argv: [echo]}]}}'
+      : 'jobs: {build: {steps: [{uses: docker://ubuntu, files: [!!binary /w==]}]}}';
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().stale).toBe(true);
+    expect(document.getSnapshot().diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(true);
+    document.setSource(source.replace('/w==', 'aGVscGVyLnB5'));
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    const files = location === 'container'
+      ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
+      : document.getSnapshot().workflow!.jobs.build.steps![0].files;
+    expect(files).toEqual(['helper.py']);
   });
   it.each([
     { declaration: '', expected: undefined },

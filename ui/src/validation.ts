@@ -1,4 +1,4 @@
-import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
+import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node, type Scalar } from 'yaml';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isConciseStepReference, isExpressionPath, references } from './expressions';
 import { blockKind, containingStep, stepEntries } from './step-tree';
 import type { Diagnostic, Job, Mapping, Path, Step, Workflow } from './types';
@@ -19,6 +19,17 @@ export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(s
 export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'conversation') || !!stepAction(step)?.startsWith('agent/');
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export function normalizeStringScalar(node: Scalar): string {
+  const value = node.value;
+  const text = typeof value === 'string' ? value
+    : node.tag === 'tag:yaml.org,2002:binary' && value instanceof Uint8Array
+      ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(value)
+      : node.source ?? String(value);
+  node.value = text;
+  if (typeof value !== 'string' && node.tag) node.tag = 'tag:yaml.org,2002:str';
+  return text;
+}
 
 function validContainerArgs(text: string): boolean {
   let quote = '', escaped = false;
@@ -158,14 +169,9 @@ export function parseWorkflow(source: string): Parsed {
     };
     const scalarString = (item: unknown, path: Path) => {
       const node = doc!.getIn(path, true);
-      const text = typeof item === 'string' ? item : isScalar(node) ? node.source ?? String(item) : String(item);
       // Subsequent visual edits serialize this tree. Keep string semantics even
       // for YAML booleans/numbers whose canonical spelling differs (TRUE, 01).
-      if (isScalar(node) && item != null) {
-        node.value = text;
-        if (typeof item !== 'string' && node.tag) node.tag = 'tag:yaml.org,2002:str';
-      }
-      return text;
+      return isScalar(node) && item != null ? normalizeStringScalar(node) : String(item);
     };
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
@@ -217,7 +223,7 @@ export function parseWorkflow(source: string): Parsed {
             assign(path, normalized);
           }
         } else if (shape === 'string') {
-          valid = ['string', 'number', 'boolean'].includes(typeof value);
+          valid = ['string', 'number', 'boolean'].includes(typeof value) || value instanceof Uint8Array;
           if (valid) assign(path, scalarString(value, path));
         } else if (shape === 'boolean') {
           const legacy = typeof value === 'string' && ['y', 'Y', 'yes', 'Yes', 'YES', 'on', 'On', 'ON', 'n', 'N', 'no', 'No', 'NO', 'off', 'Off', 'OFF'].includes(value);

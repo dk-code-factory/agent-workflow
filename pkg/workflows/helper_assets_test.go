@@ -405,6 +405,11 @@ func TestHelperAssetMigrationKeepsPreUpgradeBackup(t *testing.T) {
 	}
 }
 func TestBundledNestedCaptureExampleUsesRetainedPythonImports(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	t.Setenv("GIT_TEMPLATE_DIR", t.TempDir())
 	e, store, d := containerExecutor(t)
 	sourceDir := filepath.Join("..", "..", "examples", "container-workflows", "workflows")
 	err := filepath.WalkDir(sourceDir, func(path string, entry os.DirEntry, err error) error {
