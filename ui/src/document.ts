@@ -155,7 +155,7 @@ export class WorkflowDocument {
   getFieldYAML(path: Path): string {
     const node = this.parsed.doc?.getIn(path, true);
     if (!node || (!isMap(node) && !isSeq(node) && !isScalar(node))) return '';
-    const fragment = parseDocument(this.snapshot.source, { intAsBigInt: true });
+    const fragment: Document = parseDocument(this.snapshot.source, { intAsBigInt: true });
     fragment.contents = (fragment.getIn(path, true) as Node).clone() as Node;
     return fragment.toString({ lineWidth: 0 }).trimEnd();
   }
