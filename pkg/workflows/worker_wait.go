@@ -41,7 +41,8 @@ func (m *WorkerManager) waitNotification() <-chan struct{} {
 }
 
 // WaitMessage holds no CapacityLease, container, or provider process. Pending
-// waits retain one bounded workflow controller reservation and one goroutine.
+// waits occupy the caller goroutine; pipeline integration must retain its bounded
+// workflow controller reservation.
 // Subscribe before observing durable state so completion before or during
 // subscription cannot be lost. Serve's shared sweep repairs missed wakeups.
 func (m *WorkerManager) WaitMessage(ctx context.Context, req WorkerWaitRequest) (WorkerMessage, error) {

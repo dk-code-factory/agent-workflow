@@ -2,11 +2,11 @@ package workflows
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -25,38 +25,103 @@ func waitFixture(t *testing.T) (*WorkerManager, WorkerWaitRequest) {
 	return m, WorkerWaitRequest{RunID: run, WorkerID: w.ID, MessageID: msg.ID, OperationID: "job/step/1", Deadline: time.Now().Add(5 * time.Second)}
 }
 
+type messageWaitOutcome struct {
+	message WorkerMessage
+	err     error
+}
+
+// startMessageWait returns only after the caller has subscribed and committed a
+// pending registration. No provider has to run to establish that barrier.
+func startMessageWait(t *testing.T, m *WorkerManager, req WorkerWaitRequest) (<-chan messageWaitOutcome, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	outcome := make(chan messageWaitOutcome, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		message, err := m.WaitMessage(ctx, req)
+		outcome <- messageWaitOutcome{message, err}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("message waiter did not stop")
+		}
+	})
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		var raw []byte
+		err := m.Store.db.QueryRow("SELECT record FROM worker_waits WHERE run_id=? AND operation_id=?", req.RunID, req.OperationID).Scan(&raw)
+		if err == nil {
+			var record workerWait
+			if err := json.Unmarshal(raw, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != "pending" {
+				t.Fatalf("wait was not pending at registration: %+v", record)
+			}
+			return outcome, cancel
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal(err)
+		}
+		select {
+		case result := <-outcome:
+			t.Fatalf("wait exited before pending registration: %+v", result)
+		case <-timeout.C:
+			t.Fatal("wait did not register")
+		case <-tick.C:
+		}
+	}
+}
+
+func awaitMessageWait(t *testing.T, outcome <-chan messageWaitOutcome) messageWaitOutcome {
+	t.Helper()
+	select {
+	case result := <-outcome:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("message wait did not finish")
+		return messageWaitOutcome{}
+	}
+}
+
 func TestWorkerWaitCapacityOneAndConcurrentExactMessages(t *testing.T) {
 	m, req := waitFixture(t)
 	next, err := m.Send(context.Background(), req.RunID, req.WorkerID, "second", "second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveWorkers(t, m)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			request := req
-			request.OperationID = fmt.Sprint(i)
-			if i%2 == 1 {
-				request.MessageID = next.ID
-			}
-			msg, err := m.WaitMessage(ctx, request)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			if msg.ID != request.MessageID || msg.Status != RunStatusSucceeded {
-				t.Errorf("wrong outcome: %+v", msg)
-			}
-		}(i)
+	waits := make([]<-chan messageWaitOutcome, 8)
+	for i := range waits {
+		request := req
+		request.OperationID = fmt.Sprint(i)
+		if i%2 == 1 {
+			request.MessageID = next.ID
+		}
+		waits[i], _ = startMessageWait(t, m, request)
 	}
-	wg.Wait()
 	if len(m.Slots) != 0 {
-		t.Fatal("wait retained execution capacity")
+		t.Fatal("pending waits retained execution capacity")
+	}
+	serveWorkers(t, m)
+	for i, outcome := range waits {
+		result := awaitMessageWait(t, outcome)
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		want := req.MessageID
+		if i%2 == 1 {
+			want = next.ID
+		}
+		if result.message.ID != want || result.message.Status != RunStatusSucceeded {
+			t.Errorf("wrong outcome: %+v", result.message)
+		}
 	}
 }
 
@@ -96,21 +161,26 @@ func TestWorkerWaitRestartRetainsDeadlineAndBinding(t *testing.T) {
 	if err != nil || len(msgs) != 1 || msgs[0].Status != RunStatusQueued {
 		t.Fatal(msgs, err)
 	}
-	req.MessageID = "foreign"
-	if _, err = m.WaitMessage(context.Background(), req); err == nil {
+	next, err := m.Send(context.Background(), req.RunID, req.WorkerID, "second", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.MessageID = next.ID
+	if _, err = m.WaitMessage(context.Background(), req); !errors.Is(err, ErrActionIntegrity) {
 		t.Fatal("changed binding accepted")
 	}
 }
 
 func TestWorkerWaitCancellationAndStoppedProducer(t *testing.T) {
 	m, req := waitFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	if _, err := m.observeWait(ctx, req); err != nil {
-		t.Fatal(err)
-	}
+	outcome, cancel := startMessageWait(t, m, req)
 	cancel()
-	if _, err := m.WaitMessage(ctx, req); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
+	if result := awaitMessageWait(t, outcome); !errors.Is(result.err, context.Canceled) {
+		t.Fatal(result.err)
+	}
+	retained, err := m.observeWait(context.Background(), req)
+	if err != nil || retained.Status != "pending" || !retained.Deadline.Equal(req.Deadline) {
+		t.Fatal("cancellation changed durable wait evidence", retained, err)
 	}
 	if err := m.Interrupt(context.Background(), req.RunID, req.WorkerID, true); err != nil {
 		t.Fatal(err)
@@ -140,22 +210,26 @@ func TestWorkerWaitTerminalBeforeSubscribeLostNotificationAndCompletion(t *testi
 			// repairs a missed notification after an externally committed receipt.
 			m.Slots <- struct{}{}
 			serveWorkers(t, m)
-			if _, err := m.observeWait(context.Background(), req); err != nil {
-				t.Fatal(err)
-			}
 			complete := func() {
 				msg := WorkerMessage{ID: req.MessageID, WorkerID: req.WorkerID, Status: RunStatusSucceeded, Result: SessionResult{Status: RunStatusSucceeded, Outputs: map[string]any{"text": "retained"}}}
 				raw, _ := json.Marshal(msg)
 				if _, err := m.Store.db.Exec("UPDATE messages SET status=?,record=? WHERE id=?", msg.Status, raw, msg.ID); err != nil {
-					t.Error(err)
+					t.Fatal(err)
 				}
 			}
-			if before {
-				complete()
-			} else {
-				time.AfterFunc(30*time.Millisecond, complete)
+			var outcome <-chan messageWaitOutcome
+			if !before {
+				outcome, _ = startMessageWait(t, m, req)
 			}
-			msg, err := m.WaitMessage(context.Background(), req)
+			complete()
+			var msg WorkerMessage
+			var err error
+			if before {
+				msg, err = m.WaitMessage(context.Background(), req)
+			} else {
+				result := awaitMessageWait(t, outcome)
+				msg, err = result.message, result.err
+			}
 			if err != nil || msg.Result.Outputs["text"] != "retained" {
 				t.Fatal(msg, err)
 			}
