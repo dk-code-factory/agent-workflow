@@ -258,6 +258,7 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 }
 
 type jobContainerKey struct{}
+type containerCleanupCancelKey struct{}
 type jobContainerScope struct {
 	implementation *ContainerImplementation
 	session        *runtimeexec.ContainerSession
@@ -269,13 +270,16 @@ type jobContainerScope struct {
 }
 
 func (s *jobContainerScope) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.held {
 		return nil
 	}
 	select {
 	case s.slots <- struct{}{}:
 		s.held = true
-		return nil
+		return ctx.Err()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -294,8 +298,14 @@ func (s *jobContainerScope) closeSession() error {
 	}
 	return err
 }
-func (s *jobContainerScope) close() error {
+func (s *jobContainerScope) close(ctx context.Context) error {
 	err := s.closeSession()
+	if err != nil {
+		// Cancel before releasing capacity even if cleanup uncertainty could not be journaled.
+		if cancel, ok := ctx.Value(containerCleanupCancelKey{}).(context.CancelFunc); ok {
+			cancel()
+		}
+	}
 	if s.held {
 		<-s.slots
 		s.held = false

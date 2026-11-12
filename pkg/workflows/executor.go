@@ -282,6 +282,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	req.runID = run.ID
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if depth == 0 {
+		ctx = context.WithValue(ctx, containerCleanupCancelKey{}, cancel)
+	}
 	type completion struct {
 		id     string
 		result JobExecution
@@ -664,7 +667,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		scope := &jobContainerScope{implementation: job.Container.Implementation, slots: slots, executor: e}
 		ctx = context.WithValue(ctx, jobContainerKey{}, scope)
 		defer func() {
-			if err := scope.close(); err != nil {
+			if err := scope.close(ctx); err != nil {
 				out = fail(errors.Join(err, errors.New(out.Error)))
 			}
 		}()
