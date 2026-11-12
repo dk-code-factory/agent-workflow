@@ -13,8 +13,8 @@ on:
             findings:
                 value: |
                     Tests: ${{ jobs.test.outputs.stderr }}
-                    Claude: ${{ jobs.review_one.outputs.findings }}
-                    Codex: ${{ jobs.review_two.outputs.findings }}
+                    Correctness: ${{ jobs.review_one.outputs.findings }}
+                    Security: ${{ jobs.review_two.outputs.findings }}
 jobs:
     implement:
         outputs:

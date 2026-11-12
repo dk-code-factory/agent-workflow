@@ -29,11 +29,15 @@ jobs:
         handlerTimeout: 30s
         onError:
           - id: backup
-            agent: backupReviewer
-            prompt: '${{ failed.prompt }} Failure: ${{ error.message }}'
+            uses: agent/run
+            with:
+              agent: backup-reviewer.toml
+              prompt: '${{ failed.prompt }} Failure: ${{ error.message }}'
         onFailure:
-          - agent: reporter
-            prompt: 'Review failed: ${{ error.class }}'
+          - uses: agent/run
+            with:
+              agent: reporter.toml
+              prompt: 'Review failed: ${{ error.class }}'
         finally:
           - argv: [echo, review finished]
 ```
