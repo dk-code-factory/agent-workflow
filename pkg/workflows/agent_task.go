@@ -365,7 +365,7 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 		return false
 	}
 	switch result.FailureClass {
-	case "provider_failure", "usage_exhausted", "limit":
+	case "provider_failure", "usage_exhausted", "limit", "execution":
 	default:
 		return false
 	}
@@ -392,7 +392,7 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 	}
 	for _, message := range messages {
 		ack := message.FailureAcknowledgement
-		if message.TaskAttemptID == result.AttemptID && message.Status == RunStatusFailed && message.UnsafeFailureClass == "" && ack != nil && ack.MessageID == message.ID && ack.Generation == message.Generation && ack.RequestID != "" {
+		if message.TaskAttemptID == result.AttemptID && message.Status == RunStatusFailed && message.FailureClass == result.FailureClass && message.Error == result.Error && message.UnsafeFailureClass == "" && ack != nil && ack.MessageID == message.ID && ack.Generation == message.Generation && ack.RequestID != "" {
 			return true
 		}
 	}

@@ -51,6 +51,38 @@ func TestNativeAgentTaskRejectsSecretsBeforeRetainingDispatch(t *testing.T) {
 	}
 }
 
+func TestNativeAgentObservedFailureRequiresExactProviderError(t *testing.T) {
+	e, _, _ := agentTaskFixture(t, `jobs:
+  review:
+    steps:
+      - id: review
+        uses: agent/run
+        with: {agent: reviewer.toml, prompt: Review}
+`, func(SessionRequest) (map[string]any, error) {
+		return map[string]any{"text": "retained partial work"}, fmt.Errorf("ordinary provider rejection")
+	})
+	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	if err == nil {
+		t.Fatal("failed provider turn became success")
+	}
+	result := run.Jobs["review"].Steps["review"]
+	ec := expressionContext{RunID: run.ID}
+	step := Step{Uses: "agent/run"}
+	if !e.observedNativeTaskFailure(context.Background(), step, result, ec) {
+		t.Fatal("exact observed provider failure was not eligible for explicit continuation")
+	}
+	changed := result
+	changed.Error = "unrelated controller guard failure"
+	if e.observedNativeTaskFailure(context.Background(), step, changed, ec) {
+		t.Fatal("provider receipt authorized an unrelated guard failure")
+	}
+	changed = result
+	changed.Lifecycle = &StepLifecycle{Handlers: map[string][]StepExecution{"finally": {{Status: RunStatusFailed}}}}
+	if e.observedNativeTaskFailure(context.Background(), step, changed, ec) {
+		t.Fatal("provider receipt hid a finalizer failure")
+	}
+}
+
 type nativeTaskFixture struct {
 	mu       sync.Mutex
 	requests []SessionRequest
