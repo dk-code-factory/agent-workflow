@@ -9,6 +9,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if err := e.pinContainers(ctx, all); err != nil {
+		return err
+	}
 	if err := e.preflightConversations(all); err != nil {
 		return err
 	}
@@ -41,6 +44,9 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 	if e.CommandExecution.Mode == "container" {
 		for _, workflow := range all {
 			for _, job := range workflow.Jobs {
+				if job.Container != nil {
+					continue
+				}
 				for _, step := range lifecycleSteps(job.Steps) {
 					if len(step.Argv) > 0 || step.Run != "" {
 						return e.preflightWithContainer(ctx, all)

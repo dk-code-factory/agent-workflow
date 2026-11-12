@@ -43,11 +43,61 @@ whose platform differs from the admitted image before creating a container.
 `make build` builds both variants
 for development. Releases include and independently verify both variants.
 
-The following stages add GitHub-style job-container/Docker-step authoring,
-structured helper recovery and retained helper bundles. The runtime foundation
-alone does not enable that YAML syntax. Reusable-workflow calls and the existing
-typed Go action API are unchanged by this stage.
+Structured helper recovery and retained helper bundles are described by the
+following stages. Existing typed Go actions remain supported.
 
 Deterministic tests use fake Docker HTTP APIs, fake Podman executables and
 private temporary directories. Actual Docker/provider/publication conformance
 is separate and opt-in.
+
+## Shared job containers and Docker steps
+
+```yaml
+jobs:
+  build:
+    runs-on: local
+    container:
+      image: ubuntu:24.04
+    steps:
+      - run: echo ready > /tmp/build-status
+      - run: cat /tmp/build-status
+      - uses: docker://ubuntu:24.04
+        with:
+          entrypoint: /bin/sh
+          args: '-c "echo separate container"'
+```
+
+`container: ubuntu:24.04` is equivalent to the image mapping above. Admission
+resolves locally available tags to immutable image content IDs and retains the
+selected endpoint, daemon, platform and guardian. Execution never pulls images.
+`runs-on` supports `local` only; `ubuntu-latest` is explicitly unsupported.
+
+Commands share a lazily created job container through each job iteration. `run`
+defaults to `sh` inside that container; explicit shells are respected. A Docker
+step uses a sibling container, the same permitted workspace mount, and separate
+private state and `/tmp`. Image ENTRYPOINT and CMD are preserved unless
+`with.entrypoint` replaces the executable or `with.args` replaces CMD. Arguments
+support single/double quotes and backslash escaping, preserving empty arguments
+and whitespace, with no variable expansion, command substitution or globbing.
+Docker overrides and image selections are static.
+
+The first runnable command acquires one capacity slot for the job. Sequential
+execs and sibling steps reuse it. Every exec is recorded before effects and runs
+under its own descendant supervisor and heartbeat. Cancellation stops that
+command's heartbeat; unconfirmed cleanup blocks later execution. Job teardown
+verifies container absence before terminal job completion and releases capacity.
+
+Shared job containers initially support sequential command/Docker steps and
+sequence blocks. Parallel blocks, waits, providers and other action targets must
+use a separate job. A reusable-call job cannot also declare a container: the
+called workflow owns that selection, including nested reusable calls.
+
+After owner loss, cleanup must be verified before another container is created.
+An unfinished shared job that already completed ordinary commands requires a new
+run: completed commands are never replayed to reconstruct transient state.
+Structured helpers with validated checkpoints are added by the next stage.
+
+In the editor, **Job container image**, **Docker entrypoint** and **Docker
+arguments** support source-preserving edits, export and Undo/Redo. Converting a
+job into a reusable call reviews removal of its container. Docker image changes
+retain command overrides; conversion to another step kind reviews their removal.

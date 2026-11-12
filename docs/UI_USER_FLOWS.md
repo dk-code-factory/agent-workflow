@@ -321,7 +321,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
+- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Docker image-to-image conversions retain entrypoint, arguments and timeout; conversion to a direct command reviews discarded overrides and supports cancellation and exact Undo. The Docker conversion dialog is dismissed before its captured message is asserted, so an incorrect discard notice cannot leave the modal open on test failure. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
 
 - **Starting point:** A step already has command or action settings.
 - **My flow:** I select a different **Step type** → review any confirmation
@@ -335,7 +335,8 @@ fields. Escape discards an uncommitted field edit.
   Cancellation preserves the document. If I edit a parameter and retry the
   pending target through keyboard **Save**, confirmation includes the latest
   populated settings before saving the converted definition. One **Undo**
-  restores a conversion.
+  restores a conversion. Docker image changes preserve entrypoint/argument overrides;
+  converting to another step kind reviews their removal.
 
 ### UF-22 — Control conditions and error handling
 
@@ -682,7 +683,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-42.spec.ts)
 
-- **Coverage:** The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
+- **Coverage:** Conversion from a local job to a reusable call reviews and removes its container; cancellation and Undo preserve the exact container declaration. The container-removal dialog is dismissed before its captured message is asserted, keeping the cancellation path complete even when that notice is incorrect. The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
 
 - **Starting point:** A job currently calls a reusable workflow, and I want to
   define its steps directly.
@@ -788,3 +789,13 @@ sources are the [UI guide](../ui/README.md),
 [YAML editor](../ui/src/source.tsx), and
 [playground](../ui/playground.ts). Related interaction coverage lives in the
 [browser tests](../ui/test/browser/).
+
+### UF-48 — Configure job containers and Docker steps
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
+
+- **Coverage:** Scalar and mapping job-container forms validate, shell commands default to sh inside a job container, and image edits support Undo/Redo. Null containers remain absent, and numeric, leading-zero and boolean mapping images use the runner's scalar spelling without false diagnostics; untouched exports retain the exact source. Mapping-form image edits retain the container anchor, mapping and image comments, and quoted image scalar; export matches the edited source and Undo/Redo restore the exact original and edited sources. Downloaded YAML must equal the editor source, and reparsing it verifies the exact Docker image, entrypoint, quoted arguments and trailing empty argument. Unfinished single/double quotes and trailing escapes produce Docker argument diagnostics that clear after control edits repair the value. Unsupported shared-job waits produce a diagnostic that clears after YAML repair.
+
+- **Starting point:** A local job has commands or Docker steps.
+- **My flow:** I select the job and edit **Job container image**, then select a Docker step and set **Docker entrypoint** and **Docker arguments**. I review validation and export YAML.
+- **What I see:** Job commands share one container. Docker steps run in separate sibling containers with their own private state. Reusable calls select their containers in the called definition. Shared job containers support sequential commands and sequence blocks; waits, providers and parallel blocks require another job.

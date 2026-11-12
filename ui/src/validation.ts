@@ -20,6 +20,17 @@ export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'c
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+function validContainerArgs(text: string): boolean {
+  let quote = '', escaped = false;
+  for (const char of text) {
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = ''; }
+    else if (char === "'" || char === '"') quote = char;
+  }
+  return !escaped && !quote;
+}
+
 // Match yaml.v3's allowedTimestampFormats and time.Parse ranges, including
 // short date/time fields and fractional seconds. YAML core leaves these strings.
 export function runnerTimestamp(value: string): boolean {
@@ -57,7 +68,7 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | 'container' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
@@ -81,7 +92,7 @@ const schema: Shape = {
     workflow_call: { inputs: { '*': input }, secrets: { '*': { required: 'boolean' } }, outputs: { '*': { value: 'string' } } },
   },
   jobs: { '*': {
-    name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
+    container: 'container', name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
     'for-each': { items: 'any', key: 'string' },
@@ -157,6 +168,10 @@ export function parseWorkflow(source: string): Parsed {
     };
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
+      if (shape === 'container') {
+        if (value != null) checkShape(value, mapping(value) ? { image: 'string' } : 'strict-string', path);
+        return;
+      }
       if (shape === 'any') return;
       if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
@@ -321,6 +336,12 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');
     }
+    if (job.container != null) {
+      const image = typeof job.container === 'string' ? job.container : job.container?.image;
+      if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
+      if (mapping(job.container)) for (const key of Object.keys(job.container)) if (key !== 'image') add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
+      if (job.uses) add('container', 'Reusable calls cannot declare a container', [...p, 'container']);
+    }
     const needs = dependencies(job);
     dependencySets.set(id, new Set(needs));
     for (const dep of needs) if (!Object.hasOwn(jobs, dep)) add('dependency', `Unknown dependency "${dep}"`, [...p, 'needs']);
@@ -342,6 +363,8 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
       const kind = blockKind(step);
+      const docker = step.uses?.startsWith('docker://');
+      if (job.container && (step.parallel || step.conversation || stepAction(step) && !docker)) add('container', 'Shared containers support sequential commands, Docker steps and sequence blocks only', sp);
       if (kind) {
         if (depth > 0) add('handler-action', 'Structural blocks cannot appear inside lifecycle handlers', sp);
         if (!step[kind]?.length) add('block', `${kind} requires at least one step`, [...sp, kind]);
@@ -381,8 +404,14 @@ function validateWorkflow(w: Workflow, add: Add) {
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {
         if (uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
-        if (step.run && (!step.shell || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
+        if (step.run && (!step.shell && !job.container || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
         if (!step.run && step.shell) add('command', 'shell requires run', sp);
+        if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
+      } else if (docker) {
+        if (!step.uses!.slice(9).trim() || step.uses!.includes('${{')) add('container', 'Docker image must be static', [...sp, 'uses']);
+        if (step.argv?.length || step.run || step.shell) add('container', 'Docker steps cannot combine with command fields', sp);
+        for (const [key, value] of Object.entries(params)) if (!['entrypoint', 'args'].includes(key) || typeof value !== 'string' || value.includes('${{')) add('container', 'Docker steps accept static entrypoint and args strings only', [...sp, 'with', key]);
+        if (typeof params.args === 'string' && !validContainerArgs(params.args)) add('container', 'Docker arguments contain an unfinished quote or escape', [...sp, 'with', 'args']);
         if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
       } else {
         if (step.shell || step.timeout || step['working-directory']) add('command', 'Command fields require argv or run', sp);

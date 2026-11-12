@@ -30,7 +30,7 @@ export function stepConversion(step: Step, kind: string) {
     if (!Object.hasOwn(step, kind)) set.push({ path: [kind], value: [{ argv: ['echo', 'Hello'] }] });
     return { remove, set };
   }
-  for (const key of command ? ['uses', 'agent', 'prompt', 'with'] : ['argv', 'run', 'shell', 'timeout', 'working-directory']) {
+  for (const key of command ? ['uses', 'agent', 'prompt', 'with'] : kind.startsWith('docker://') && uses?.startsWith('docker://') ? ['argv', 'run', 'shell'] : ['argv', 'run', 'shell', 'timeout', 'working-directory']) {
     if (Object.hasOwn(step, key)) remove.push([key]);
   }
   if (command) {
@@ -49,8 +49,8 @@ export function stepConversion(step: Step, kind: string) {
       for (const key of ['agent', 'prompt']) if (Object.hasOwn(step, key)) remove.push([key]);
     }
     if (uses !== kind && !(uses?.startsWith('agent/') && kind.startsWith('agent/'))) {
-      const before = Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : [];
-      const after = Object.hasOwn(controllerParameters, kind) ? controllerParameters[kind] : [];
+      const before = uses?.startsWith('docker://') ? ['entrypoint', 'args'] : Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : [];
+      const after = kind.startsWith('docker://') ? ['entrypoint', 'args'] : Object.hasOwn(controllerParameters, kind) ? controllerParameters[kind] : [];
       for (const key of Object.keys(step.with ?? {})) {
         if (!before.includes(key) || !after.includes(key)) remove.push(['with', key]);
       }
