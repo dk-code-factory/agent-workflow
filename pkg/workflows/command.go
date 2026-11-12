@@ -71,6 +71,17 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
+	if step.WorkingDirectory != "" {
+		v, err := renderString(step.WorkingDirectory, ec)
+		if err != nil {
+			return nil, err
+		}
+		var ok bool
+		step.WorkingDirectory, ok = v.(string)
+		if !ok {
+			return nil, fmt.Errorf("working-directory must render to a string")
+		}
+	}
 	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
 		return e.executeContainerCommand(ctx, step, argv, slots)
 	}
@@ -86,19 +97,8 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir
-	} else {
-		v, err := renderString(dir, ec)
-		if err != nil {
-			return nil, err
-		}
-		var ok bool
-		dir, ok = v.(string)
-		if !ok {
-			return nil, fmt.Errorf("working-directory must render to a string")
-		}
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(e.WorkspaceDir, dir)
-		}
+	} else if !filepath.IsAbs(dir) {
+		dir = filepath.Join(e.WorkspaceDir, dir)
 	}
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second

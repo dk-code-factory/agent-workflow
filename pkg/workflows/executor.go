@@ -655,12 +655,13 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 				return fail(err)
 			}
 			for _, a := range attempts {
-				if a.JobID == id && a.Iteration == req.iteration && a.Status == RunStatusSucceeded {
+				completed := a.Status == RunStatusSucceeded || a.Phase == "lifecycle_task_completed" && a.Result.Status == RunStatusSucceeded
+				if a.RunID == ec.RunID && a.JobID == id && a.Iteration == req.iteration && completed {
 					return fail(fmt.Errorf("%w: shared job %s lost transient container state after completed commands; start a new run", ErrActionIntegrity, id))
 				}
 			}
 		}
-		scope := &jobContainerScope{implementation: job.Container.Implementation, slots: slots, executor: e, ctx: ctx}
+		scope := &jobContainerScope{implementation: job.Container.Implementation, slots: slots, executor: e}
 		ctx = context.WithValue(ctx, jobContainerKey{}, scope)
 		defer func() {
 			if err := scope.close(); err != nil {

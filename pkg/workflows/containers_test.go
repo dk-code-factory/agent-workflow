@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -100,6 +101,8 @@ type workflowDocker struct {
 	creates, executions int
 	removalStarted      chan struct{}
 	removalGate         chan struct{}
+	stallPhase          string
+	stallRelease        chan struct{}
 }
 
 func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, dir string) ([]byte, []byte, int) {
@@ -158,6 +161,13 @@ func writeDockerOutput(conn net.Conn, stdout, stderr []byte) {
 }
 func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/v1.56")
+	if d.stallPhase != "" && (d.stallPhase == "create" && p == "/containers/create" || d.stallPhase != "create" && strings.HasPrefix(p, "/containers/") && strings.HasSuffix(p, "/"+d.stallPhase)) {
+		select {
+		case <-r.Context().Done():
+		case <-d.stallRelease:
+		}
+		return
+	}
 	if p == "/_ping" {
 		w.Header().Set("API-Version", "1.56")
 		return
@@ -226,6 +236,9 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer conn.Close()
+		d.mu.Lock()
+		e.running = true
+		d.mu.Unlock()
 		input, _ := io.ReadAll(conn)
 		stdout, stderr, code := d.command(e.parent, e.argv, input, e.dir)
 		d.mu.Lock()
@@ -277,7 +290,11 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		defer conn.Close()
 		input, _ := io.ReadAll(conn)
-		<-c.started
+		select {
+		case <-c.started:
+		case <-c.removed:
+			return
+		}
 		if c.resident {
 			<-c.removed
 			c.mu.Lock()
@@ -473,27 +490,40 @@ func TestSharedContainerCleanupPrecedesJobCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/test.yml"}); done <- err }()
+	ctx, cancel := context.WithCancel(t.Context())
+	finished := make(chan struct{})
+	var release sync.Once
+	defer func() {
+		cancel()
+		release.Do(func() { close(d.removalGate) })
+		select {
+		case <-finished:
+		case <-time.After(25 * time.Second):
+			t.Error("container run did not stop before fixture teardown")
+		}
+	}()
+	go func() {
+		defer close(finished)
+		_, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
+		done <- err
+	}()
 	select {
 	case <-d.removalStarted:
 	case <-time.After(5 * time.Second):
-		close(d.removalGate)
 		t.Fatal("cleanup did not start")
 	}
 	var data []byte
 	if err := store.db.QueryRow("SELECT record FROM runs WHERE status='running'").Scan(&data); err != nil {
-		close(d.removalGate)
 		t.Fatal(err)
 	}
 	var current Run
 	if err := json.Unmarshal(data, &current); err != nil {
-		close(d.removalGate)
 		t.Fatal(err)
 	}
 	if _, terminal := current.Jobs["build"]; terminal {
 		t.Error("published job completion before container absence")
 	}
-	close(d.removalGate)
+	release.Do(func() { close(d.removalGate) })
 	select {
 	case err := <-done:
 		if err != nil {
@@ -501,5 +531,179 @@ func TestSharedContainerCleanupPrecedesJobCompletion(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cleanup did not finish")
+	}
+}
+
+func TestContainerGuardianFailureBlocksHandlersAndContinuation(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared=%t", shared), func(t *testing.T) {
+			e, store, d := containerExecutor(t)
+			uncertain := false
+			if shared {
+				e.BeforeFinalize = func(ctx context.Context, id string) error {
+					records, err := store.Invocations(ctx, id, false)
+					for _, record := range records {
+						if record.Kind == "container-exec" && record.State == "uncertain" && record.Error == "exec guardian cleanup is unconfirmed" {
+							uncertain = true
+						}
+					}
+					return err
+				}
+			}
+			container, command, handlers := "", "uses: docker://ubuntu:24.04\n        with: {args: '-c \"exit 125\"'}", ""
+			if shared {
+				container, command = "    container: ubuntu:24.04\n", "run: exit 125"
+				handlers = "        onError: [{id: handler, argv: [touch, handler-ran]}]\n"
+			}
+			source := "jobs:\n  build:\n" + container + `    steps:
+      - id: unsafe
+        ` + command + `
+        continue-on-error: true
+` + handlers + `
+      - {id: next, argv: [touch, next-ran]}
+`
+			writeWorkflow(t, e.WorkspaceDir, "test.yml", source)
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+			if err == nil || run == nil || run.Status != RunStatusNeedsAttention {
+				t.Fatalf("guardian failure was not hard: run=%+v err=%v", run, err)
+			}
+			for _, name := range []string{"handler-ran", "next-ran"} {
+				if _, err := os.Stat(filepath.Join(e.WorkspaceDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("unsafe continuation %s: %v", name, err)
+				}
+			}
+			if shared {
+				if !uncertain {
+					t.Fatal("guardian cleanup uncertainty was discarded")
+				}
+			}
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if len(d.containers) != 0 || d.creates != 1 || shared && d.executions != 1 {
+				t.Fatalf("continued or leaked containers: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+			}
+		})
+	}
+}
+
+func TestSharedContainerStartupRespectsCommandDeadline(t *testing.T) {
+	for _, phase := range []string{"create", "attach", "start"} {
+		t.Run(phase, func(t *testing.T) {
+			e, _, d := containerExecutor(t)
+			d.stallPhase, d.stallRelease = phase, make(chan struct{})
+			defer close(d.stallRelease)
+			writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs: {build: {container: ubuntu:24.04, steps: [{id: first, timeout: 100ms, run: echo ready}]}}`)
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			started := time.Now()
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/test.yml"})
+			if err == nil || run == nil || run.Jobs["build"].Steps["first"].FailureClass != "timeout" {
+				t.Fatalf("startup was not timed out: run=%+v err=%v", run, err)
+			}
+			if elapsed := time.Since(started); elapsed > 2*time.Second || ctx.Err() != nil {
+				t.Fatalf("startup escaped step timeout: elapsed=%s outer=%v", elapsed, ctx.Err())
+			}
+			if len(e.Slots) != 0 {
+				t.Fatal("startup failure leaked capacity")
+			}
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if len(d.containers) != 0 {
+				t.Fatal("startup failure leaked container")
+			}
+		})
+	}
+}
+
+func TestSharedJobIgnoresSuccessfulReusableChildWithSameJobID(t *testing.T) {
+	e, _, _ := containerExecutor(t)
+	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
+jobs: {build: {container: ubuntu:24.04, steps: [{run: echo child}]}}`)
+	writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs:
+  call: {uses: workflows/child.yml}
+  build: {needs: call, container: ubuntu:24.04, steps: [{id: parent, run: echo parent}]}
+`)
+	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+	if err != nil || run == nil || run.Jobs["build"].Steps["parent"].Outputs["stdout"] != "parent\n" {
+		t.Fatalf("child receipt blocked fresh parent: run=%+v err=%v", run, err)
+	}
+}
+
+func TestSharedJobRefusesRecoveryAfterCompletedLifecycleTask(t *testing.T) {
+	e, store, d := containerExecutor(t)
+	writeWorkflow(t, e.WorkspaceDir, "test.yml", `jobs:
+  build:
+    container: ubuntu:24.04
+    steps:
+      - id: prepare
+        run: echo ready > /tmp/state
+        handlerTimeout: 5m
+        finally: [{id: consume, run: cat /tmp/state}]
+`)
+	// Reject handler admission and final completion writes after the real task receipt.
+	for _, statement := range []string{
+		`CREATE TRIGGER stop_shared_handler BEFORE INSERT ON attempts WHEN NEW.step_id LIKE 'prepare/finally/%' BEGIN SELECT RAISE(ABORT, 'interrupted before shared handler'); END`,
+		`CREATE TRIGGER stop_shared_completion BEFORE UPDATE OF record ON attempts WHEN json_extract(CAST(NEW.record AS TEXT),'$.phase')='lifecycle_completed' BEGIN SELECT RAISE(ABORT, 'interrupted before lifecycle completion'); END`,
+	} {
+		if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml"})
+	if err == nil || run == nil {
+		t.Fatalf("did not interrupt task receipt: run=%+v err=%v", run, err)
+	}
+	attempts, err := store.Attempts(t.Context(), run.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != RunStatusRunning || attempts[0].Phase != "lifecycle_task_completed" || attempts[0].Result.Status != RunStatusSucceeded {
+		t.Fatalf("missing completed-task receipt: attempts=%+v err=%v", attempts, err)
+	}
+	for _, statement := range []string{"DROP TRIGGER stop_shared_handler", "DROP TRIGGER stop_shared_completion"} {
+		if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Resume(t.Context(), run.ID, nil, true)
+	if err == nil || !strings.Contains(err.Error(), "lost transient container state") {
+		t.Fatalf("resumed handlers without transient state: %v", err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.creates != 1 || d.executions != 1 || len(d.containers) != 0 {
+		t.Fatalf("recreated transient state: creates=%d execs=%d retained=%d", d.creates, d.executions, len(d.containers))
+	}
+}
+
+func TestSharedCommandRendersWorkingDirectory(t *testing.T) {
+	for _, dir := range []any{"subdir", 42} {
+		t.Run(fmt.Sprint(dir), func(t *testing.T) {
+			e, _, d := containerExecutor(t)
+			if err := os.Mkdir(filepath.Join(e.WorkspaceDir, "subdir"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			inputType := "string"
+			if dir != "subdir" {
+				inputType = "number"
+			}
+			writeWorkflow(t, e.WorkspaceDir, "test.yml", `on: {workflow_call: {inputs: {dir: {type: `+inputType+`}}}}
+jobs: {build: {container: ubuntu:24.04, steps: [{id: where, run: pwd, working-directory: '${{ inputs.dir }}'}]}}`)
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml", Inputs: map[string]any{"dir": dir}})
+			if dir == "subdir" {
+				if err != nil || run == nil || run.Jobs["build"].Steps["where"].Outputs["stdout"] != filepath.Join(e.WorkspaceDir, "subdir")+"\n" {
+					t.Fatalf("directory expression failed: run=%+v err=%v", run, err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "working-directory must render to a string") {
+					t.Fatalf("non-string directory accepted: run=%+v err=%v", run, err)
+				}
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				if d.creates != 0 {
+					t.Fatal("invalid directory created a container")
+				}
+			}
+		})
 	}
 }

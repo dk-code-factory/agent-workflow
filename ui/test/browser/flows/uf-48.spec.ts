@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { parse } from 'yaml';
 import { open, snapshot, field, job, downloadText } from './harness';
 
 test('configure job and sibling Docker containers and export exact command arguments', async ({ page }) => {
@@ -15,8 +16,20 @@ test('configure job and sibling Docker containers and export exact command argum
   expect((await snapshot(page)).workflow.jobs.build.steps[1].with).toEqual({ entrypoint: '/bin/sh', args: '-c "echo separate" ""' });
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   const text = await downloadText(page);
-  expect(text).toContain('docker://ubuntu:24.04');
-  expect(text).toContain('echo separate');
+  expect(text).toBe((await snapshot(page)).source);
+  expect(parse(text).jobs.build.steps[1]).toMatchObject({ uses: 'docker://ubuntu:24.04', with: { entrypoint: '/bin/sh', args: '-c "echo separate" ""' } });
+});
+
+test('malformed Docker argument quotes and escapes diagnose and clear after repair', async ({ page }) => {
+  const ui = await open(page, `jobs: {build: {steps: [{id: sibling, uses: 'docker://ubuntu:24.04'}]}}`);
+  await job(page);
+  await ui.getByRole('button', { name: '1. sibling', exact: true }).click();
+  for (const args of ["'unfinished", '"unfinished', 'trailing\\']) {
+    await field(page, 'Docker arguments', args);
+    await expect(ui.locator('.aw-diagnostics')).toContainText('Docker arguments contain an unfinished quote or escape');
+    await field(page, 'Docker arguments', `-c "echo repaired" ''`);
+    expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  }
 });
 
 test('unsupported shared job constructs remain visible and can be repaired', async ({ page }) => {

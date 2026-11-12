@@ -52,6 +52,11 @@ func (s *ContainerSession) Exec(ctx context.Context, q containerapi.ExecRequest,
 			for {
 				status, e := s.Runtime.ExecInspect(finish, i.Record.ExecID)
 				if e == nil && !status.Running && status.ID == i.Record.ExecID && status.ContainerID == owner.ID {
+					if status.ExitCode == 125 || status.ExitCode < 0 {
+						state = "uncertain"
+						i.Record.Error = "exec guardian cleanup is unconfirmed"
+						returned = errors.Join(returned, fmt.Errorf("%w: %s", process.ErrCleanup, i.Record.Error))
+					}
 					break
 				}
 				if finish.Err() != nil {

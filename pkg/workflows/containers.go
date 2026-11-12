@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"gopkg.in/yaml.v3"
 )
@@ -265,7 +266,6 @@ type jobContainerScope struct {
 	drained        chan struct{}
 	slots          chan struct{}
 	executor       *Executor
-	ctx            context.Context
 }
 
 func (s *jobContainerScope) acquire(ctx context.Context) error {
@@ -350,8 +350,8 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 			return nil, fmt.Errorf("shared container scope unavailable")
 		}
 		if scope.session == nil {
-			// Parent lifetime follows the job; command deadlines only stop their exec.
-			parent := scope.ctx
+			// Startup follows the command deadline; teardown owns the parent heartbeat.
+			parent := ctx
 			if b, ok := runtimeexec.BindingFrom(ctx); ok {
 				b.LogicalID = "job-container/" + b.LogicalID
 				parent = runtimeexec.WithBinding(parent, b)
@@ -389,6 +389,12 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 		code, err = scope.session.Exec(ctx, containerapi.ExecRequest{Command: argv, WorkingDir: dir}, streams)
 	}
 	out = map[string]any{"stdout": stdout.String(), "stderr": stderr.String(), "exit_code": code, "queue_time_ms": queueTime}
+	if code == 125 {
+		return out, errors.Join(err, fmt.Errorf("%w: container guardian exited with code %d", process.ErrCleanup, code))
+	}
+	if errors.Is(err, process.ErrCleanup) {
+		return out, err
+	}
 	if ctx.Err() != nil {
 		return out, ctx.Err()
 	}

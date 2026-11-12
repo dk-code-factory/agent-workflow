@@ -20,6 +20,17 @@ export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'c
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+function validContainerArgs(text: string): boolean {
+  let quote = '', escaped = false;
+  for (const char of text) {
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = ''; }
+    else if (char === "'" || char === '"') quote = char;
+  }
+  return !escaped && !quote;
+}
+
 // Match yaml.v3's allowedTimestampFormats and time.Parse ranges, including
 // short date/time fields and fractional seconds. YAML core leaves these strings.
 export function runnerTimestamp(value: string): boolean {
@@ -396,6 +407,7 @@ function validateWorkflow(w: Workflow, add: Add) {
         if (!step.uses!.slice(9).trim() || step.uses!.includes('${{')) add('container', 'Docker image must be static', [...sp, 'uses']);
         if (step.argv?.length || step.run || step.shell) add('container', 'Docker steps cannot combine with command fields', sp);
         for (const [key, value] of Object.entries(params)) if (!['entrypoint', 'args'].includes(key) || typeof value !== 'string' || value.includes('${{')) add('container', 'Docker steps accept static entrypoint and args strings only', [...sp, 'with', key]);
+        if (typeof params.args === 'string' && !validContainerArgs(params.args)) add('container', 'Docker arguments contain an unfinished quote or escape', [...sp, 'with', 'args']);
         if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
       } else {
         if (step.shell || step.timeout || step['working-directory']) add('command', 'Command fields require argv or run', sp);
