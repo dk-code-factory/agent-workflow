@@ -12,9 +12,10 @@ process. Each wait occupies its caller's goroutine. Pipeline integration must re
 the caller's bounded workflow controller reservation. Independent waiters can
 observe the same message; unrelated newer mailbox entries cannot satisfy a wait.
 
-Completion and worker-state commits notify subscribers. Subscribers register before
-reading durable state. The worker scheduler's shared one-second sweep repairs missed
-or coalesced notifications without one polling timer per waiter. Terminal receipts
+Ordinary worker saves and completed turns notify subscribers after committing.
+Subscribers register before reading durable state. Recovery commits can rely on
+the worker scheduler's shared one-second sweep, which also repairs missed or
+coalesced notifications without one polling timer per waiter. Terminal receipts
 recorded before subscription are immediately visible. Closed or stopped producers
 with unresolved messages fail instead of waiting indefinitely.
 
