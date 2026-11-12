@@ -197,15 +197,19 @@ jobs:
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown steps reference "local"' }));
     doc.undo(); expect(doc.getSnapshot().source).toBe(original);
   });
-  it('keeps agent parameters, YAML comments and block prompts across provider changes', () => {
+  it('keeps agent parameters, YAML comments and block prompts across definition changes', () => {
     const doc = new WorkflowDocument({ source });
-    doc.setStepKind('build', 0, 'agent/run');
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with).toEqual(new WorkflowDocument({ source }).getSnapshot().workflow!.jobs.build.steps![0].with);
-    expect(doc.getSnapshot().source).toContain('# prompt comment');
-    expect(doc.getSnapshot().source).toContain('prompt: |');
-    expect(doc.getSnapshot().source).toContain('# preserved header');
+    const before = doc.getSnapshot().workflow!.jobs.build.steps![0].with!;
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'agent'], 'codex.toml');
+    const changed = doc.getSnapshot().source;
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with).toEqual({ ...before, agent: 'codex.toml' });
+    expect(changed).not.toBe(source);
+    expect(changed).toContain('# prompt comment');
+    expect(changed).toContain('prompt: |');
+    expect(changed).toContain('# preserved header');
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
-    doc.redo(); expect(doc.getSnapshot().workflow!.jobs.build.steps![0].uses).toBe('agent/run');
+    doc.redo(); expect(doc.getSnapshot().source).toBe(changed);
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.agent).toBe('codex.toml');
   });
   it('retains common controller parameters and initializes null action parameters', () => {
     const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: git/commit, with: { path: /work, message: Keep } }, { uses: agent/run, with: null } ] } }

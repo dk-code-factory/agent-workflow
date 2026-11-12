@@ -371,14 +371,14 @@ func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
 				owner.ID = "work"
 				owner.ContinueOnError = true
 				owner.HandlerTimeout = bound
-				handlers := []Step{blocker, fixtureAgent("downstream", "downstream")}
+				handlers := []Step{blocker, fixtureAgent("hook_downstream", "hook_downstream")}
 				if hook == "onError" {
 					owner.OnError = append([]Step{fixtureAgent("replacement", "replacement")}, handlers...)
 				} else {
 					owner.Finally = handlers
 				}
-				source := nativeWorkflowSource(t, &Workflow{Jobs: map[string]Job{"task": {Steps: []Step{owner}}}})
-				blocked, downstream := false, false
+				source := nativeWorkflowSource(t, &Workflow{Jobs: map[string]Job{"task": {Steps: []Step{owner, fixtureAgent("downstream", "downstream")}}}})
+				blocked, hookDownstream, downstream := false, false, false
 				e, _ := durableExecutor(t, source, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
 					switch r.AgentID {
 					case "primary":
@@ -389,6 +389,8 @@ func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
 						blocked = true
 						<-ctx.Done()
 						return nil, ctx.Err()
+					case "hook_downstream":
+						hookDownstream = true
 					case "downstream":
 						downstream = true
 					}
@@ -397,8 +399,8 @@ func TestLifecycleDeadlineCannotBeContinued(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
-				if err == nil || !blocked || downstream || ctx.Err() != nil || run.Jobs["task"].Steps["work"].Status == RunStatusSucceeded {
-					t.Fatalf("continued handler deadline: blocked=%v downstream=%v run=%+v err=%v", blocked, downstream, run, err)
+				if err == nil || !blocked || hookDownstream || downstream || ctx.Err() != nil || run.Jobs["task"].Steps["work"].Status == RunStatusSucceeded {
+					t.Fatalf("continued handler deadline: blocked=%v hookDownstream=%v downstream=%v run=%+v err=%v", blocked, hookDownstream, downstream, run, err)
 				}
 			})
 		}
