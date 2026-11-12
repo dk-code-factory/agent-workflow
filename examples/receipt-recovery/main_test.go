@@ -4,12 +4,81 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/controller"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestResumeAfterTerminalOwnerRelease(t *testing.T) {
+	const path = "/runs/fixture/resume?request_id=recover-2&retry_uncertain=true"
+	for _, tc := range []struct {
+		name      string
+		first     string
+		wantErr   string
+		wantCalls int
+	}{
+		{name: "terminal_owner_still_active", first: "run is already active; no matching resume request", wantCalls: 2},
+		{name: "changed_acknowledgement", first: "request_id reused with different content", wantErr: "request_id reused with different content", wantCalls: 1},
+		{name: "other_failure", first: "storage unavailable", wantErr: "storage unavailable", wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests []string
+			client := &controller.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.Method+" "+r.URL.RequestURI())
+				status, body := http.StatusAccepted, `{"execution_generation":3,"status":"queued"}`
+				if len(requests) == 1 {
+					status = http.StatusConflict
+					encoded, err := json.Marshal(map[string]string{"error": tc.first})
+					if err != nil {
+						return nil, err
+					}
+					body = string(encoded)
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			run, err := resumeRun(ctx, client, path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected %q, got %v", tc.wantErr, err)
+				}
+			} else if err != nil || run.Generation != 3 || run.Status != "queued" {
+				t.Fatalf("resume after owner release: run=%+v, err=%v", run, err)
+			}
+			if len(requests) != tc.wantCalls {
+				t.Fatalf("expected %d requests, got %v", tc.wantCalls, requests)
+			}
+			for _, request := range requests {
+				if request != "POST "+path {
+					t.Fatalf("resume identity or acknowledgement changed: %s", request)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeOwnerReleaseWaitHasDeadline(t *testing.T) {
+	client := &controller.Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader(`{"error":"run is already active; no matching resume request"}`)), Header: make(http.Header)}, nil
+	})}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := resumeRun(ctx, client, "/runs/fixture/resume?request_id=recover-2&retry_uncertain=true"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("owner release wait did not respect deadline: %v", err)
+	}
+}
 
 func TestReceiptRecoveryMatrix(t *testing.T) {
 	for _, scenario := range []string{"unknown", "lookup_error", "completed", "no_effect"} {

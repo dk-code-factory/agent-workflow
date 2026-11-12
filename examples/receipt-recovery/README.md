@@ -46,6 +46,11 @@ Changing its acknowledgement returns a conflict. A queued resume acknowledgement
 is recorded separately from the eventual execution status; acceptance is not
 proof that the mutation completed.
 
+Terminal status may be visible before the controller releases its execution
+owner. The fixture retries that specific active-owner admission rejection with
+the same resume identity and acknowledgement, bounded by a ten-second deadline.
+Other conflicts and request errors fail the scenario immediately.
+
 The evidence includes the run ID, original and subsequent physical action
 attempts, logical operation key, execution generations, resume identities and
 acknowledgements, reconciliation observations/proofs, and counter values. The

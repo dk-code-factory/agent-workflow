@@ -230,6 +230,25 @@ func waitRun(ctx context.Context, client *controller.Client, id string, generati
 	}
 }
 
+func resumeRun(ctx context.Context, client *controller.Client, path string) (workflows.Run, error) {
+	wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		var run workflows.Run
+		err := client.Call(wait, "POST", path, nil, &run)
+		if err == nil || err.Error() != "controller: run is already active; no matching resume request" {
+			return run, err
+		}
+		// Terminal status can precede execution-owner release. Retry only this
+		// admission rejection, keeping the request identity and acknowledgement.
+		select {
+		case <-wait.Done():
+			return run, fmt.Errorf("waiting for execution owner release: %w", wait.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func runScenario(ctx context.Context, root, scenario string) (ev evidence, err error) {
 	ev.Scenario = scenario
 	if err = os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
@@ -325,15 +344,16 @@ func runScenario(ctx context.Context, root, scenario string) (ev evidence, err e
 	for i, retry := range retries {
 		requestID := fmt.Sprintf("recover-%d", i+1)
 		path := fmt.Sprintf("/runs/%s/resume?request_id=%s&retry_uncertain=%t", ev.RunID, requestID, retry)
-		var accepted, duplicate workflows.Run
-		if err = h.client.Call(ctx, "POST", path, nil, &accepted); err != nil {
-			return ev, err
+		accepted, resumeErr := resumeRun(ctx, h.client, path)
+		if resumeErr != nil {
+			return ev, resumeErr
 		}
 		terminal, e := waitRun(ctx, h.client, ev.RunID, accepted.Generation)
 		if e != nil {
 			return ev, e
 		}
 		ev.Status = terminal.Status
+		var duplicate workflows.Run
 		if err = h.client.Call(ctx, "POST", path, nil, &duplicate); err != nil {
 			return ev, err
 		}
