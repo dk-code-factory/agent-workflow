@@ -264,7 +264,8 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		}
 	}
 	// The controller itself never acquires an execution slot. Child command and
-	// provider work shares slots; registered controller callbacks remain slot-free.
+	// provider work shares slots; Go action dispatch acquires no lease. Retained
+	// validation hooks can also run within a leased execution phase.
 	concurrency := 1
 	if job.ForEach.Concurrency != nil {
 		concurrency = *job.ForEach.Concurrency

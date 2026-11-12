@@ -494,11 +494,12 @@ supported; the browser preserves and validates YAML without guided iteration
 controls. Optional `concurrency` is a positive integer, pinned with the plan;
 omitting it preserves sequential execution. At most that many item controllers
 run concurrently. Their agent invocations, commands and container execution use
-the existing shared host/provider capacity. Registered Go action hooks remain
-controller callbacks outside those execution leases and may overlap across
-active items. The item bound limits active child workflows; each child's own job
-and block concurrency still applies. Such callbacks can start and wait for engine
-workers, whose invocations share execution capacity. The
+the existing shared host/provider capacity. Registered Go action dispatch does
+not acquire an execution lease; handlers may overlap across active items and can
+start and wait for engine workers, whose invocations share execution capacity.
+Retained bindings and checkpoint validation may also run while a later agent or
+command holds capacity. The item bound limits active child workflows; each
+child's own job and block concurrency still applies. The
 iteration controller occupies no execution slot while waiting for children.
 Results retain input order regardless of completion order. A blocking failure or
 durable input suspension stops new item admission, cancels active siblings, and
