@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { parse } from 'yaml';
 
 test('keyboard save commits the active property draft', async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
@@ -233,8 +234,10 @@ test('a valid sibling edit preserves a rejected structured draft until discarded
   await expect(parameters).toBeFocused();
   expect(await page.evaluate(() => (window as any).saves)).toEqual([]);
   await editor.getByRole('button', { name: 'Discard edit', exact: true }).click();
-  await expect(parameters).toHaveValue('prompt: Valid sibling edit\nagent: claude.toml');
+  await expect.poll(async () => parse(await parameters.inputValue())).toEqual({ prompt: 'Valid sibling edit', agent: 'claude.toml' });
+  await expect(parameters).not.toHaveAttribute('aria-invalid', 'true');
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.prompt)).toBe('Valid sibling edit');
+  expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.agent)).toBe('claude.toml');
 });

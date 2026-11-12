@@ -20,7 +20,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-01.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Selection reveals long YAML definitions without moving focus, in both editor and viewer.
+- **Coverage:** Inspecting the shared native task first asserts its explicit definition path, focus and unchanged source/history. The test then replaces it with long command-only YAML to check selection and scrolling without moving focus, in both editor and viewer.
 
 - **Starting point:** The host opens a workflow in the editor.
 - **My flow:** I read the workflow name → inspect the job cards and dependency
@@ -537,7 +537,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-34.spec.ts)
 
-- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Hidden-rejection cases choose the starting step through palette job navigation and the inspector link, keeping initial canvas timing outside the save and focus assertions. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
+- **Coverage:** The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters. Toolbar and keyboard saves reject invalid YAML and all built-in identifier drafts without calling the host. Desktop and narrow layouts reveal collapsed rejected fields, track multiple errors, and allow explicit recovery. Hidden-rejection cases choose the starting step through palette job navigation and the inspector link, keeping initial canvas timing outside the save and focus assertions. Corrected job IDs save in the same toolbar click. Active valid drafts apply once without erasing a rejected sibling draft; discarding rejected Parameters YAML restores the prompt and native definition mapping independent of its YAML presentation, clears rejection, and saves the retained sibling edit. Editors save independently, in-flight saves are guarded, malformed source remains saveable, and failures remain retryable. Persistent status distinguishes unsaved, saving, saved, and failed states. Saves completing after committed edits or uncommitted inspector edits leave those edits unsaved at desktop and narrow widths; undo and discarding rejected drafts restore the saved state.
 
 - **Starting point:** The host provides a **Save** button.
 - **My flow:** I finish my edit → select **Save**, or press **Mod-S** to apply
