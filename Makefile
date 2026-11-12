@@ -4,7 +4,8 @@ build:
 	go build -o bin/agent-workflow ./cmd/agent-workflow
 	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
 test:
-	go test -race -timeout 60m ./...
+	go test -race -timeout 60m $$(go list ./... | sed '\|/pkg/prfix$$|d')
+	python3 scripts/prfix_race.py --all --shards 4
 check: release-tooling-test
 	go vet ./...
 	go run ./cmd/agent-workflow validate workflows/parallel-review.yml
