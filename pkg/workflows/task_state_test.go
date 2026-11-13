@@ -53,9 +53,29 @@ func taskStateCall(t *testing.T, s *SQLiteStore, ctx context.Context, req TaskSt
 	return out
 }
 
+func joinTaskStateCalls(t *testing.T, cancel context.CancelFunc, wg *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-time.After(10 * time.Second):
+		cancel()
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task-state producers did not join after cancellation")
+	}
+	t.Fatal("task-state producers exceeded their local deadline")
+}
+
 func TestTaskStateClaimsAreAtomicAndReplayDoesNotDispatch(t *testing.T) {
 	s := taskStateStore(t)
 	_, ctx := taskStateRun(t, s, "atomic")
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	const n = 16
 	results := make([]TaskStateResponse, n)
 	failures := make([]error, n)
@@ -67,7 +87,7 @@ func TestTaskStateClaimsAreAtomicAndReplayDoesNotDispatch(t *testing.T) {
 			results[i], failures[i] = s.TaskState(ctx, TaskStateRequest{Operation: "claim", Task: "review", Fingerprint: "input1", OperationID: fmt.Sprintf("op-%d", i)})
 		}(i)
 	}
-	wg.Wait()
+	joinTaskStateCalls(t, cancel, &wg)
 	count := 0
 	winner := ""
 	for i, out := range results {
@@ -296,6 +316,8 @@ func TestTaskStateBudgetConcurrencyContinuationAndRestart(t *testing.T) {
 	}
 	defer s.Close()
 	r, ctx := taskStateRun(t, s, "budgets")
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	accepted := 0
@@ -311,7 +333,7 @@ func TestTaskStateBudgetConcurrencyContinuationAndRestart(t *testing.T) {
 			}
 		}(i)
 	}
-	wg.Wait()
+	joinTaskStateCalls(t, cancel, &wg)
 	if accepted != 5 {
 		t.Fatalf("accepted %d reservations", accepted)
 	}

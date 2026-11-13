@@ -301,9 +301,9 @@ retain full results. HTTP list endpoints opt into pagination with `limit` or
 `cursor`; calls without these parameters and existing Go list methods retain
 their legacy array shapes.
 
-Existing schema-1 through schema-11 databases upgrade transactionally when the controller (or a
+Existing schema-1 through schema-12 databases upgrade transactionally when the controller (or a
 foreground execution/cleanup command) holds the workspace lock. The upgrade
-retains `.agent-workflow/state.pre-v12.db`, a consistent database-only backup
+retains `.agent-workflow/state.pre-v13.db`, a consistent database-only backup
 including committed WAL records. Verify upgraded inspection and deterministic
 execution before manually removing this backup. Inspection opens storage read
 only and asks for an explicit controller upgrade when the schema is older;
