@@ -69,7 +69,7 @@ for target in targets:
         for item in ["README.md", "DESIGN.md", "LICENSE", "NOTICE", "agents.yml", "go.mod", "go.sum"]:
             shutil.copyfile(ROOT / item, stage / item)
         for directory in ["workflows", "docs", "examples", "conformance", "plugins/network-runtime"]:
-            shutil.copytree(ROOT / directory, stage / directory)
+            shutil.copytree(ROOT / directory, stage / directory, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
         marketplace = stage / ".agents" / "plugins"
         marketplace.mkdir(parents=True)
         shutil.copyfile(ROOT / ".agents/plugins/marketplace.json", marketplace / "marketplace.json")

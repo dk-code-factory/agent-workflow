@@ -100,6 +100,10 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			if frame.ProviderVersion != "claude-agent-sdk@"+ClaudeSDKVersion {
 				return result, fmt.Errorf("bridge provider dependency mismatch before turn effects")
 			}
+			result.ProviderVersion = frame.ProviderVersion
+			if emit != nil {
+				emit(workflows.ProviderEvent{Type: "provider_identity", Data: map[string]any{"provider": "claude-sdk", "provider_version": frame.ProviderVersion}})
+			}
 			negotiated.Store(true)
 			negotiationTimer.Stop()
 			input["type"] = "turn_start"
@@ -262,7 +266,12 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			terminal = true
 			result.Status = frame.Status
 			result.ProviderStatus = frame.ProviderStatus
-			result.ProviderVersion = frame.ProviderVersion
+			if frame.ProviderVersion != "" {
+				if frame.ProviderVersion != result.ProviderVersion {
+					return result, fmt.Errorf("bridge provider identity changed during turn")
+				}
+				result.ProviderVersion = frame.ProviderVersion
+			}
 			partial := result.Outputs
 			result.Outputs = frame.Outputs
 			if partial != nil {

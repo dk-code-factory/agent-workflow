@@ -3,7 +3,11 @@
 Ordinary tests, CI fixes, release preparation, and production-readiness work
 authorize deterministic checks only. Agents must not run live-provider or
 GitHub publication conformance scenarios unless the user explicitly requests
-those scenarios in the current session. Historical budgets in release evidence
+those scenarios in the current session. The mandatory named provider scenarios
+in `.github/workflows/release.yml` are authorized only for that repository's
+version-tag push through the protected `pre-release` environment. This exception
+does not authorize local live calls, PR/main CI or GitHub publication conformance.
+Historical budgets in release evidence
 do not authorize new live calls.
 
 After changing Go dependencies, run `make go-deps` and commit both `go.mod` and
@@ -37,3 +41,15 @@ require meaningful Coverage notes in every affected flow. If behavior stays the
 same, explain revised assertions or recovery scenarios in the Coverage note;
 comments, formatting, link edits, timestamps, and checksums do not acknowledge
 a change. Preserve stable UF IDs. See `ui/README.md` for setup and repairs.
+
+# Release publication
+
+`.github/workflows/release.yml` is the sole supported publication path. Candidate
+validation and deterministic checks precede artifact builds/scans, then mandatory
+smoke/session and full provider/runtime E2E phases. The `release-certification`
+human gate must remain unavailable until every automated prerequisite succeeds.
+A signed report must match the immutable automated artifact from the same
+candidate and workflow run. Preserve successful E2E artifacts when retrying a
+failed certification job. Never replace required live coverage with synthetic
+reports, rebuild certification images, initiate provider login, or rotate GitHub
+secrets implicitly. See `docs/RELEASE_PIPELINE.md` for setup and recovery.

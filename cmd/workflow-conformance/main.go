@@ -1,5 +1,6 @@
 // workflow-conformance runs explicitly requested real-provider scenarios only.
-// It is deliberately separate from normal tests, build validation and CI.
+// Normal tests and build validation never authorize live calls. Tag release CI
+// has an explicit, repository/workflow/scenario-scoped authorization mode.
 package main
 
 import (
@@ -44,6 +45,9 @@ type evidence struct {
 	Arch                     string                  `json:"arch"`
 	ConfigurationFingerprint string                  `json:"configuration_fingerprint"`
 	ProviderVersions         map[string]string       `json:"provider_versions"`
+	Invocations              []observedInvocation    `json:"invocations"`
+	RuntimeRecovery          map[string]bool         `json:"runtime_recovery,omitempty"`
+	RuntimeVersion           string                  `json:"runtime_version,omitempty"`
 	Runtime                  string                  `json:"runtime,omitempty"`
 	Image                    string                  `json:"image_digest,omitempty"`
 	Assertions               map[string]bool         `json:"assertions"`
@@ -55,16 +59,24 @@ type evidence struct {
 }
 
 func main() {
+	if len(os.Args) == 5 && os.Args[1] == "fixture-controller" && os.Args[2] == "--allow-live" {
+		if err := authorizeCI(os.Getenv("AGENT_WORKFLOW_RELEASE_CONFORMANCE") == "1", os.Getenv("AGENT_WORKFLOW_CONFORMANCE_SCENARIO"), false); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := serveFixture(ctx, os.Args[3], os.Args[4]); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 func run() (resultErr error) {
-	// Check before config reads, credentials, subprocesses or model effects.
-	if _, set := os.LookupEnv("CI"); set {
-		return fmt.Errorf("real-provider/publication conformance refuses execution when CI is set")
-	}
 	flags := flag.NewFlagSet("workflow-conformance", flag.ContinueOnError)
 	scenario := flags.String("scenario", "", "explicit scenario manifest path")
 	config := flags.String("config", "", "explicit provider configuration")
@@ -72,14 +84,19 @@ func run() (resultErr error) {
 	childRole := flags.String("child-role", "", "configured nested worker role")
 	engine := flags.String("engine", "", "matching agent-workflow binary for CLI/MCP scenarios")
 	output := flags.String("evidence", "", "private evidence directory outside the repository")
+	releaseCI := flags.Bool("release-ci", false, "authorize only the named release scenario in version-tag CI")
 	allowLive := flags.Bool("allow-live", false, "explicitly authorize this scenario's real provider calls")
 	allowPublication := flags.Bool("allow-publication", false, "explicitly authorize publication to the supplied disposable repository")
 	disposable := flags.String("disposable-repository", "", "exact existing disposable owner/repository; never created automatically")
 	repositoryPath := flags.String("repository-path", "", "existing local disposable repository to clone independently")
 	workflowRef := flags.String("workflow", "", "workflow reference within the supplied disposable repository")
 	engineCommit := flags.String("engine-commit", "", "exact source commit when running a development harness build")
+	runtimeControl := flags.String("runtime-control", "", "owned disposable runtime stop/start helper")
 	timeout := flags.Duration("timeout", 5*time.Minute, "whole scenario timeout")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+	if err := authorizeCI(*releaseCI, *scenario, *allowPublication); err != nil {
 		return err
 	}
 	if !*allowLive {
@@ -102,12 +119,25 @@ func run() (resultErr error) {
 	if spec.Publication && (!*allowPublication || *disposable == "" || *repositoryPath == "" || *workflowRef == "") {
 		return fmt.Errorf("publication requires --allow-publication, exact --disposable-repository, --repository-path and --workflow")
 	}
+	if err := authorizeCI(*releaseCI, spec.ID, spec.Publication || spec.Driver == "publication"); err != nil {
+		return err
+	}
+	if *timeout <= 0 || (*releaseCI && *timeout > 5*time.Minute) {
+		return fmt.Errorf("release scenarios require a positive deadline no longer than five minutes")
+	}
+	if *releaseCI {
+		_ = os.Setenv("AGENT_WORKFLOW_RELEASE_CONFORMANCE", "1")
+		_ = os.Setenv("AGENT_WORKFLOW_CONFORMANCE_SCENARIO", spec.ID)
+	}
 	commit := buildinfo.Commit
 	if commit == "development" {
 		commit = *engineCommit
 	}
 	if len(commit) != 40 || strings.Trim(commit, "0123456789abcdef") != "" {
 		return fmt.Errorf("an exact engine commit is required in the build or --engine-commit")
+	}
+	if *releaseCI && (commit != os.Getenv("GITHUB_SHA") || buildinfo.Dirty != "false") {
+		return fmt.Errorf("release harness must match the clean tag commit")
 	}
 	if err = validateEvidenceLocation(*output); err != nil {
 		return err
@@ -262,12 +292,12 @@ func run() (resultErr error) {
 		if *engine == "" || selected.Execution.Mode != "container" {
 			return fmt.Errorf("owner-loss scenario requires --engine and a pinned container role")
 		}
-		result, err = ownerLossScenario(ctx, *engine, root, configuration, *role)
+		result, err = ownerLossScenario(ctx, *engine, root, configuration, *role, selected.Execution.Runtime, *runtimeControl, &report)
 	} else if spec.Driver == "external-uncertain" {
 		if *engine == "" {
 			return fmt.Errorf("external uncertain-response scenario requires --engine")
 		}
-		ref, writeErr := writeWorkflow(root, *role, "Call the conformance-only external effect tool exactly once with {}. If it fails, do not issue another call.", false)
+		ref, writeErr := writeManagedWorkflow(root, *role, "Call the conformance-only external effect tool exactly once with {}. If it fails, do not issue another call.", false)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -283,7 +313,7 @@ func run() (resultErr error) {
 			return fmt.Errorf("child role is not in the admitted configuration")
 		}
 		prompt := fmt.Sprintf("Use engine worker tools: spawn role %s with 4 turns and a message asking it to spawn role %s with 1 turn, wait for that grandchild to reply LEAF_OK, then reply CHILD_OK. Wait for the child message result before replying CONFORMANCE_OK. Do not perform native delegation.", *childRole, *childRole)
-		ref, writeErr := writeWorkflow(root, *role, prompt, false)
+		ref, writeErr := writeManagedWorkflow(root, *role, prompt, false)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -295,40 +325,26 @@ func run() (resultErr error) {
 				return fmt.Errorf("scenario requires certified session transport")
 			}
 			err = sessionScenario(ctx, runner, *role, spec.Driver, root, &report)
-		case "agent", "structured", "managed-canary", "container":
+		case "agent", "structured":
+			err = directScenario(ctx, runner, *role, spec, root, &report)
+		case "managed-canary", "container":
 			if spec.Driver == "container" && selected.Execution.Mode != "container" {
-				return fmt.Errorf("container scenario requires an explicit pinned container role")
+				return fmt.Errorf("container scenario requires pinned container role")
 			}
 			if spec.Driver == "managed-canary" {
 				if err = writeCanaries(root); err != nil {
 					return err
 				}
 			}
-			ref, writeErr := writeWorkflow(root, *role, spec.Prompt, spec.Driver == "structured")
+			ref, writeErr := writeManagedWorkflow(root, *role, spec.Prompt, false)
 			if writeErr != nil {
 				return writeErr
 			}
-			store, openErr := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
-			if openErr != nil {
-				return openErr
-			}
-			defer store.Close()
-			executor := &workflows.Executor{WorkspaceDir: root, Agents: runner, Store: store}
-			result, err = executor.Run(ctx, workflows.RunRequest{Ref: ref})
-			if result != nil {
-				report.Usage = result.Usage
-				for _, job := range result.Jobs {
-					for _, step := range job.Steps {
-						if version, ok := step.Outputs["provider_version"].(string); ok {
-							report.ProviderVersions[*role] = version
-						}
-					}
-				}
-			}
+			result, err = cliScenario(ctx, *engine, root, configuration, ref)
 			if err == nil && spec.Driver == "managed-canary" {
 				for _, marker := range []string{"NATIVE_HOOK_RAN", "NATIVE_MCP_RAN"} {
-					if _, statErr := os.Stat(filepath.Join(root, marker)); !os.IsNotExist(statErr) {
-						err = fmt.Errorf("native discovery canary executed: %s", marker)
+					if _, e := os.Stat(filepath.Join(root, marker)); !os.IsNotExist(e) {
+						err = fmt.Errorf("native canary executed")
 					}
 				}
 			}
@@ -338,6 +354,8 @@ func run() (resultErr error) {
 			}
 			if spec.Driver == "workflow-mcp" {
 				result, err = mcpScenario(ctx, *engine, root, configuration, *workflowRef)
+			} else if spec.Publication {
+				result, err = runCLI(ctx, *engine, root, configuration, *workflowRef, true)
 			} else {
 				result, err = cliScenario(ctx, *engine, root, configuration, *workflowRef)
 			}
@@ -367,7 +385,16 @@ func run() (resultErr error) {
 			}
 		}
 	}
-	verified := map[string]bool{"scenario_completed": true, "private_workspace": true, "usage_observed": report.Usage != nil && report.Usage.Invocations > 0}
+	if err = collectObservations(root, &report); err != nil {
+		return err
+	}
+	if selected.Execution.Mode == "container" {
+		report.RuntimeVersion, err = runtimeVersion(ctx, selected.Execution.Runtime)
+		if err != nil {
+			return err
+		}
+	}
+	verified := map[string]bool{"scenario_completed": true, "private_workspace": true, "usage_observed": report.Usage != nil && report.Usage.Invocations > 0 && ((report.Usage.InputTokens != nil && *report.Usage.InputTokens > 0) || (report.Usage.OutputTokens != nil && *report.Usage.OutputTokens > 0))}
 	if spec.Driver == "container-owner-loss" && result != nil {
 		verified["owner_loss_quarantined"] = result.Status == workflows.RunStatusNeedsAttention
 		verified["owner_loss_cleanup_confirmed"] = true
@@ -384,6 +411,11 @@ func run() (resultErr error) {
 				}
 			}
 		}
+	}
+	if spec.Driver == "agent" || spec.Driver == "structured" {
+		verified["workflow_succeeded"] = true
+		verified["response_marker"] = true
+		verified["structured_schema_valid"] = true
 	}
 	if spec.Driver == "session" {
 		verified["session_context_retained"] = true
@@ -402,16 +434,40 @@ func run() (resultErr error) {
 		if openErr != nil {
 			return openErr
 		}
+		usage, usageErr := store.Usage(ctx, result.ID)
+		if usageErr != nil {
+			_ = store.Close()
+			return usageErr
+		}
+		for _, u := range usage.Invocations {
+			if version := report.ProviderVersions[u.Provider]; version != "" {
+				if err = addObservation(&report, observedInvocation{u.ID, u.Provider, version}); err != nil {
+					_ = store.Close()
+					return err
+				}
+			}
+		}
+		verified["both_providers_executed"] = observedBothProviders(report.Invocations)
 		workerManager := &workflows.WorkerManager{Store: store}
 		workers, workersErr := workerManager.List(ctx, result.ID)
 		if workersErr == nil {
 			depth := 0
+			completed := true
 			for _, worker := range workers {
+				messages, messageErr := workerManager.Messages(ctx, result.ID, worker.ID)
+				if messageErr != nil || len(messages) == 0 {
+					completed = false
+				}
+				for _, message := range messages {
+					if message.Status != workflows.RunStatusSucceeded {
+						completed = false
+					}
+				}
 				if worker.Depth > depth {
 					depth = worker.Depth
 				}
 			}
-			verified["nested_workers_at_capacity_one"] = len(workers) >= 2 && depth >= 2
+			verified["nested_workers_at_capacity_one"] = len(workers) >= 2 && depth >= 2 && completed
 		}
 		records, recordsErr := store.Invocations(ctx, result.ID, false)
 		if recordsErr == nil {
@@ -450,6 +506,7 @@ func run() (resultErr error) {
 		}
 		_ = store.Close()
 	}
+	verified["both_providers_executed"] = observedBothProviders(report.Invocations)
 	for _, assertion := range spec.Assertions {
 		if !verified[assertion] {
 			return fmt.Errorf("required assertion was not proved: %s", assertion)
@@ -501,7 +558,7 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 		return err
 	}
 	defer store.Close()
-	run := &workflows.Run{ID: runtimeexec.NewID(), Status: workflows.RunStatusRunning}
+	run := &workflows.Run{ID: runtimeexec.NewID(), Owner: runtimeexec.NewID(), Status: workflows.RunStatusRunning}
 	if err = store.Admit(ctx, run, workflows.Snapshot{Version: 1}); err != nil {
 		return err
 	}
@@ -511,7 +568,7 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 		if err := store.BeginUsage(callCtx, identity); err != nil {
 			return workflows.SessionResult{}, err
 		}
-		callCtx = runtimeexec.WithBinding(callCtx, runtimeexec.Binding{Journal: store, Dir: store.Dir, RunID: run.ID, Generation: run.Generation, LogicalID: id})
+		callCtx = runtimeexec.WithBinding(callCtx, runtimeexec.Binding{Journal: store, Dir: store.Dir, RunID: run.ID, Owner: run.Owner, Generation: run.Generation, LogicalID: id})
 		request := workflows.SessionRequest{SessionID: session, AgentRequest: workflows.AgentRequest{RunID: run.ID, Generation: run.Generation, InvocationID: id, ParentWorkerID: "session-owner", AgentID: role, Prompt: prompt, ObserveUsage: func(update workflows.UsageUpdate) error {
 			return store.ObserveUsage(context.WithoutCancel(callCtx), identity, update)
 		}}}
@@ -536,7 +593,8 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 		if first.SessionID == "" || second.SessionID != first.SessionID || !strings.Contains(fmt.Sprint(second.Outputs["text"]), nonce) {
 			return fmt.Errorf("session identity/context was not retained")
 		}
-		report.ProviderVersions[role] = second.ProviderVersion
+		report.ProviderVersions[provider] = second.ProviderVersion
+		report.Invocations = append(report.Invocations, observedInvocation{"first", provider, first.ProviderVersion}, observedInvocation{"second", provider, second.ProviderVersion})
 	} else {
 		turn, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -547,7 +605,7 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 		go func() {
 			defer close(done)
 			result, callErr = call(turn, "interrupt", "", "Use an approved shell tool to sleep for 60 seconds; do not complete before it finishes.", func(event workflows.ProviderEvent) {
-				if event.SessionID != "" {
+				if event.Type == "usage" && event.SessionID != "" {
 					select {
 					case started <- struct{}{}:
 					default:
@@ -576,7 +634,8 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 		if callErr == nil || result.SessionID == "" {
 			return fmt.Errorf("interruption did not preserve a failed turn/session")
 		}
-		report.ProviderVersions[role] = result.ProviderVersion
+		report.ProviderVersions[provider] = result.ProviderVersion
+		report.Invocations = append(report.Invocations, observedInvocation{"interrupt", provider, result.ProviderVersion})
 	}
 	usage, err := store.Usage(context.WithoutCancel(ctx), run.ID)
 	if err != nil {
@@ -587,7 +646,20 @@ func sessionScenario(ctx context.Context, runner *clirunner.Runner, role, driver
 }
 
 func cliScenario(ctx context.Context, binary, root, configuration, ref string) (*workflows.Run, error) {
-	command := exec.CommandContext(ctx, binary, "run", "--foreground", "--parallel", "1", "--workspace", root, "--config", configuration, ref)
+	fixture, err := startFixture(ctx, root, configuration)
+	if err != nil {
+		return nil, err
+	}
+	defer stopFixture(fixture)
+	return runCLI(ctx, binary, root, configuration, ref, false)
+}
+func runCLI(ctx context.Context, binary, root, configuration, ref string, foreground bool) (*workflows.Run, error) {
+	args := []string{"run", "--parallel", "1", "--workspace", root, "--config", configuration}
+	if foreground {
+		args = append(args, "--foreground")
+	}
+	args = append(args, ref)
+	command := exec.CommandContext(ctx, binary, args...)
 	data, runErr := command.Output()
 	var result workflows.Run
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -596,6 +668,11 @@ func cliScenario(ctx context.Context, binary, root, configuration, ref string) (
 	return &result, runErr
 }
 func mcpScenario(ctx context.Context, binary, root, configuration, ref string) (*workflows.Run, error) {
+	fixture, err := startFixture(ctx, root, configuration)
+	if err != nil {
+		return nil, err
+	}
+	defer stopFixture(fixture)
 	command := exec.CommandContext(ctx, binary, "mcp", "--parallel", "1", "--workspace", root, "--config", configuration)
 	client := mcp.NewClient(&mcp.Implementation{Name: "workflow-conformance", Version: buildinfo.Version}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)

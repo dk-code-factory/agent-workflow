@@ -6,7 +6,8 @@
   "publication": false,
   "assertions": [
     "workflow_succeeded",
-    "usage_observed"
+    "usage_observed",
+    "both_providers_executed"
   ],
   "prompt": ""
 }

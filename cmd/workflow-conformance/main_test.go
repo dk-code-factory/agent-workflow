@@ -18,6 +18,7 @@ func TestConformanceRefusesCIAndImplicitLiveExecution(t *testing.T) {
 		t.Fatal("CI reached scenario effects", err)
 	}
 	_ = os.Unsetenv("CI")
+	t.Setenv("GITHUB_ACTIONS", "false")
 	os.Args = []string{"workflow-conformance", "--scenario", "must-not-read"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "--allow-live") {
 		t.Fatal("generic tests/requests authorized live calls", err)
@@ -34,7 +35,7 @@ func TestCommittedScenariosHaveImplementedDriversAndAssertions(t *testing.T) {
 		drivers[name] = true
 	}
 	assertions := map[string]bool{}
-	for _, name := range []string{"scenario_completed", "private_workspace", "usage_observed", "workflow_succeeded", "response_marker", "session_context_retained", "interruption_retains_session", "structured_schema_valid", "native_canaries_suppressed", "nested_workers_at_capacity_one", "container_cleanup_confirmed", "external_mcp_call_recorded", "uncertain_effect_not_replayed", "owner_loss_quarantined", "owner_loss_cleanup_confirmed", "one_durable_publication"} {
+	for _, name := range []string{"scenario_completed", "private_workspace", "usage_observed", "workflow_succeeded", "response_marker", "session_context_retained", "interruption_retains_session", "structured_schema_valid", "native_canaries_suppressed", "nested_workers_at_capacity_one", "container_cleanup_confirmed", "external_mcp_call_recorded", "uncertain_effect_not_replayed", "owner_loss_quarantined", "owner_loss_cleanup_confirmed", "one_durable_publication", "both_providers_executed"} {
 		assertions[name] = true
 	}
 	for _, path := range paths {

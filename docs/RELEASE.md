@@ -1,5 +1,7 @@
 # Release evidence and gates
 
+The sole supported publication mechanism is `.github/workflows/release.yml`. Its
+mandatory smoke/session and full provider/runtime phases precede human certification.
 The stable signed-tag release pipeline and its current blockers are documented in
 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md). That runbook supersedes older manual-only
 publication instructions below; historical evidence is not current certification.
@@ -112,7 +114,8 @@ execution and CI results remain unverified gates. No image/release was published
 The Docker executable on this development host is a Podman alias, so it is not
 counted as independent Docker evidence.
 
-The manual conformance harness refuses CI and requires explicit live scenario
+Outside the mandatory tagged release provider job, the manual conformance harness
+refuses CI and requires explicit live scenario
 authorization. Sanitized manifests cover native providers, gateway structured
 output, session resume/interruption, discovery canaries, nested capacity-one
 workers, uncertain external MCP responses, containers/owner loss, CLI/MCP mixed

@@ -9,5 +9,6 @@
   "node_image": "docker.io/library/node@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216",
   "node_image_source_tag": "26.13.0-alpine3.24",
   "npm_cli": "12.2.2",
-  "npm_cli_integrity": "sha512-KglgbZyacf7jH+FHuNRqVuCzQi8VhI2a7J87Ix43FsPTuZoGWmIXXGdZtBUOA79vwL+IJREqURVzupA7PsQTcA=="
+  "npm_cli_integrity": "sha512-KglgbZyacf7jH+FHuNRqVuCzQi8VhI2a7J87Ix43FsPTuZoGWmIXXGdZtBUOA79vwL+IJREqURVzupA7PsQTcA==",
+  "claude_cli": "2.1.323"
 }

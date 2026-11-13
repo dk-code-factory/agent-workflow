@@ -120,7 +120,7 @@ func (r *Runner) RunAgent(ctx context.Context, req workflows.AgentRequest) (map[
 	args = append(args, "-")
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
-	cmd.Env = append(nativeEnvironment(), providerEnvironment(agent.Authentication.CredentialEnv)...)
+	cmd.Env = nativeProviderEnvironment(agent)
 	cmd.Env = append(cmd.Env, "MAX_STRUCTURED_OUTPUT_RETRIES=0")
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	stdout := boundedBuffer{limit: outputLimit(agent)}

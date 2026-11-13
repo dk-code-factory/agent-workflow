@@ -43,7 +43,7 @@ func TestBridgeContracts(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
-			if tc.name == "complete" && (result.SessionID != "s" || events != 2) {
+			if tc.name == "complete" && (result.SessionID != "s" || events != 3) {
 				t.Fatal(result, events)
 			}
 		})
@@ -186,7 +186,7 @@ func TestNativeCompatibilityEnvironmentExcludesControllerCredentials(t *testing.
 	t.Setenv("SSH_AUTH_SOCK", "controller-agent")
 	t.Setenv("ANTHROPIC_API_KEY", "provider-native")
 	t.Setenv("EXTERNAL_MCP_TOKEN", "broker-only")
-	joined := strings.Join(nativeEnvironment(), "\n")
+	joined := strings.Join(nativeProviderEnvironment(Agent{Provider: "claude-cli"}), "\n")
 	for _, value := range []string{"controller-gh", "controller-github", "controller-agent", "broker-only"} {
 		if strings.Contains(joined, value) {
 			t.Fatal("controller authority forwarded to native worker")
@@ -295,5 +295,32 @@ func TestNativeCodexTerminalFailureClassificationAndPartialResult(t *testing.T) 
 				t.Fatalf("terminal evidence or classification changed: %+v %v", result, err)
 			}
 		})
+	}
+}
+
+func TestNativeProviderEnvironmentSeparatesCredentials(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-only")
+	t.Setenv("CODEX_HOME", "codex-only")
+	t.Setenv("CLAUDE_CONFIG_DIR", "claude-config-only")
+	t.Setenv("OPENAI_API_KEY", "openai-only")
+	t.Setenv("GH_TOKEN", "github-only")
+	for _, provider := range []string{"claude-cli", "codex-cli"} {
+		env := strings.Join(nativeProviderEnvironment(Agent{Provider: provider}), "\n")
+		forbidden := []string{"github-only"}
+		expected := "claude-only"
+		if provider == "claude-cli" {
+			forbidden = append(forbidden, "codex-only", "openai-only")
+		} else {
+			forbidden = append(forbidden, "claude-only", "claude-config-only")
+			expected = "codex-only"
+		}
+		if !strings.Contains(env, expected) {
+			t.Fatal("missing provider's own credential route", env)
+		}
+		for _, value := range forbidden {
+			if strings.Contains(env, value) {
+				t.Fatalf("%s received %s", provider, value)
+			}
+		}
 	}
 }
