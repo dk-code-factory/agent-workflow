@@ -326,7 +326,17 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		err error
 	}
 	firstResult := make(chan outcome, 1)
+	firstFinished := make(chan struct{})
+	defer func() {
+		interrupt()
+		select {
+		case <-firstFinished:
+		case <-time.After(35 * time.Second):
+			t.Error("interrupted portable executor did not stop before fixture teardown")
+		}
+	}()
 	go func() {
+		defer close(firstFinished)
 		run, err := e.Run(firstContext, request)
 		firstResult <- outcome{run, err}
 	}()
