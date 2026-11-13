@@ -22,7 +22,7 @@ export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, p
   const visit = (value: unknown, parent = '') => {
     if (result.length >= limit || !mapping(value) || !mapping(value.properties)) return;
     for (const key in value.properties) {
-      if (!Object.hasOwn(value.properties, key) || !identifier.test(key) || !parent && ['text', 'outputs', 'status', 'error'].includes(key)) continue;
+      if (!Object.hasOwn(value.properties, key) || !identifier.test(key) || !parent && ['text', 'outputs', 'status', 'error', 'failure_class', 'unsafe_failure_class'].includes(key)) continue;
       const path = parent ? `${parent}.${key}` : key;
       if (path.startsWith(prefix)) result.push(path);
       if (result.length >= limit) return;

@@ -119,3 +119,13 @@ failure only after its exact native message has a retained observation receipt.
 Unclassified guard failures, failed reporting/finalization, and unresolved effects
 still block ordered execution. Application status actions decide optionality and
 retry allowance; a continued step never establishes successful task coverage.
+
+An explicit subsequent step can read `steps.task.failure_class` and
+`steps.task.unsafe_failure_class`, including through
+`needs.job.steps.task` or workflow output `jobs.job.steps.task` paths. These
+strings are engine metadata and are empty when no classification was retained.
+They take precedence over identically named business fields; those remain
+available through `outputs.structured`. The legacy whole-step metadata object
+keeps its existing shape. Reading classifications grants no retry permission:
+the workflow must reserve its own retained allowance and explicitly select
+eligible failures, and engine cleanup and failure-observation guards still apply.

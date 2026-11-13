@@ -62,6 +62,27 @@ test('property expression hints are limited to fields the runner evaluates', asy
   await expect(first.getByLabel('Action target', { exact: true })).not.toHaveAttribute('list');
 });
 
+test('failure classifications do not offer a conflicting business-field alias', async ({ page }) => {
+  await page.goto('/test/browser.html'); const editor = page.locator('#a');
+  await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: {
+    Review: { type: 'object', properties: { approved: { type: 'boolean' }, failure_class: { type: 'string' }, unsafe_failure_class: { type: 'string' } } },
+  }, jobs: { review: { steps: [
+    { id: 'analyze', uses: 'agent/run', with: { agent: 'claude.toml', prompt: 'Review', output: { format: 'json', schema: 'Review' } } },
+    { id: 'finish', uses: 'agent/run', with: { agent: 'claude.toml', prompt: 'Next' } },
+  ] } } }) }));
+  await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
+  await editor.getByRole('button', { name: '2. finish', exact: true }).click();
+  const options = editor.getByLabel('Insert expression into Prompt', { exact: true });
+  await expect(options.locator('option[value="steps.analyze.approved"]')).toHaveCount(1);
+  await expect(options.locator('option[value="steps.analyze.failure_class"]')).toHaveCount(0);
+  await expect(options.locator('option[value="steps.analyze.unsafe_failure_class"]')).toHaveCount(0);
+  const prompt = editor.getByLabel('Prompt', { exact: true });
+  await prompt.fill('${{ steps.analyze.failure_class }} / ${{ steps.analyze.outputs.structured.failure_class }}');
+  await prompt.press('Tab');
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.review.steps[1].with.prompt))
+    .toBe('${{ steps.analyze.failure_class }} / ${{ steps.analyze.outputs.structured.failure_class }}');
+});
+
 test('concise result suggestions and operand diagnostics follow runner scopes', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: { Review: { type: 'object', properties: { approved: { type: 'boolean' } } } }, jobs: {

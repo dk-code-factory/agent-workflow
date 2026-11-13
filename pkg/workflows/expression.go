@@ -272,6 +272,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("step %q not found", parts[1])
 		}
+		if value, handled, err := lookupStepFailure(path, step, parts[2:]); handled {
+			return value, err
+		}
 		if len(parts) > 2 && parts[2] != "" && !legacyStepField(parts[2]) {
 			return lookupStepResult(path, step, parts[2:])
 		}
@@ -344,6 +347,9 @@ func lookupJobStepResult(path string, job JobExecution, parts []string) (any, er
 // Aliases are views of retained results, never separately persisted values.
 // Metadata keeps its legacy meaning even when a structured result has the same key.
 func lookupStepResult(path string, step StepExecution, parts []string) (any, error) {
+	if value, handled, err := lookupStepFailure(path, step, parts); handled {
+		return value, err
+	}
 	var value any
 	if legacyStepField(parts[0]) {
 		value = map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}
@@ -371,6 +377,22 @@ func lookupStepResult(path string, step StepExecution, parts []string) (any, err
 		}
 	}
 	return value, nil
+}
+
+// Failure classifications belong to the engine even when a provider's
+// structured output uses the same names. Explicit fields leave the legacy
+// whole-step metadata object unchanged.
+func lookupStepFailure(path string, step StepExecution, parts []string) (any, bool, error) {
+	if len(parts) == 0 || parts[0] != "failure_class" && parts[0] != "unsafe_failure_class" {
+		return nil, false, nil
+	}
+	if len(parts) != 1 {
+		return nil, true, fmt.Errorf("%s: failure classification is a string", path)
+	}
+	if parts[0] == "unsafe_failure_class" {
+		return step.UnsafeFailureClass, true, nil
+	}
+	return step.FailureClass, true, nil
 }
 
 func stringMapAny(values map[string]string) map[string]any {
