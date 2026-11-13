@@ -14,10 +14,10 @@ import { dependencies, identifier, mapping, hasAgentResult } from './validation'
 import { containingStep, stepEntries } from './step-tree';
 export const expressionSuggestionLimit = 200;
 export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
-  if (limit <= 0 || !hasAgentResult(step)) return [];
-  const result = 'text'.startsWith(prefix) ? ['text'] : [];
+  if (limit <= 0 || !hasAgentResult(step) && step.protocol !== 'action-v1') return [];
+  const result = hasAgentResult(step) && 'text'.startsWith(prefix) ? ['text'] : [];
   const contract = step.with?.output;
-  const rawSchema = mapping(contract) ? contract.schema : undefined;
+  const rawSchema = step.protocol === 'action-v1' ? step['output-schema'] : mapping(contract) ? contract.schema : undefined;
   const schema = typeof rawSchema === 'string' ? schemas[rawSchema] : rawSchema;
   const visit = (value: unknown, parent = '') => {
     if (result.length >= limit || !mapping(value) || !mapping(value.properties)) return;
@@ -30,7 +30,7 @@ export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, p
       if (result.length >= limit) return;
     }
   };
-  visit(schema);
+  visit(schema, step.protocol === 'action-v1' ? 'outputs' : '');
   return result;
 }
 export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path, prefix = ''): string[] {
@@ -41,10 +41,10 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
   const addStep = (step: Step, base: string) => {
     const start = base + '.';
-    if (hasAgentResult(step) && (start.startsWith(prefix) || prefix.startsWith(start))) {
+    if ((hasAgentResult(step) || step.protocol === 'action-v1') && (start.startsWith(prefix) || prefix.startsWith(start))) {
       const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
       const contract = step.with?.output;
-      const schema = mapping(contract) ? contract.schema : undefined;
+      const schema = step.protocol === 'action-v1' ? step : mapping(contract) ? contract.schema : undefined;
       let byPrefix = schemaPaths.get(schema);
       if (!byPrefix) schemaPaths.set(schema, byPrefix = new Map());
       let fields = byPrefix.get(fieldPrefix);

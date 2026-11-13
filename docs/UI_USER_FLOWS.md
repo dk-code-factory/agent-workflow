@@ -321,7 +321,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-21.spec.ts)
 
-- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
+- **Coverage:** Incompatible step conversions list discarded fields, cancellation leaves source unchanged, and one Undo restores the original. Command conversions retain timeout/directory settings; Action target uses the same reviewed conversion and retains shared controller parameters. Keyboard Save retries a cancelled target with the latest active Message draft, including a newly populated Message, and submits the converted settings without restoring discarded parameters. Docker image-to-image conversions retain entrypoint, arguments and timeout; conversion to a direct command reviews discarded overrides and supports cancellation and exact Undo. The Docker conversion dialog is dismissed before its captured message is asserted, so an incorrect discard notice cannot leave the modal open on test failure. Concise agent-to-agent conversions preserve top-level prompts and options; command conversion names discarded shorthand fields, cancellation preserves source, and Undo restores the concise form.
 
 - **Starting point:** A step already has command or action settings.
 - **My flow:** I select a different **Step type** → review any confirmation
@@ -335,7 +335,8 @@ fields. Escape discards an uncommitted field edit.
   Cancellation preserves the document. If I edit a parameter and retry the
   pending target through keyboard **Save**, confirmation includes the latest
   populated settings before saving the converted definition. One **Undo**
-  restores a conversion.
+  restores a conversion. Docker image changes preserve entrypoint/argument overrides;
+  converting to another step kind reviews their removal.
 
 ### UF-22 — Control conditions and error handling
 
@@ -682,7 +683,7 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-42.spec.ts)
 
-- **Coverage:** The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
+- **Coverage:** Conversion from a local job to a reusable call reviews and removes its container; cancellation and Undo preserve the exact container declaration. The container-removal dialog is dismissed before its captured message is asserted, keeping the cancellation path complete even when that notice is incorrect. The confirmation names the reusable reference, inputs, and secrets; cancellation preserves source, while confirmed conversion creates starter steps and one Undo restores the exact original call. An imported job containing both a reusable call and local steps retains its configured steps and comments; the dialog names only the discarded call settings, and Undo restores the exact imported source.
 
 - **Starting point:** A job currently calls a reusable workflow, and I want to
   define its steps directly.
@@ -788,3 +789,33 @@ sources are the [UI guide](../ui/README.md),
 [YAML editor](../ui/src/source.tsx), and
 [playground](../ui/playground.ts). Related interaction coverage lives in the
 [browser tests](../ui/test/browser/).
+
+### UF-48 — Configure job containers and Docker steps
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-48.spec.ts)
+
+- **Coverage:** Scalar and mapping job-container forms validate, shell commands default to sh inside a job container, and image edits support Undo/Redo. Null containers remain absent, and numeric, leading-zero and boolean mapping images use the runner's scalar spelling without false diagnostics; untouched exports retain the exact source. Mapping-form image edits retain the container anchor, mapping and image comments, and quoted image scalar; export matches the edited source and Undo/Redo restore the exact original and edited sources. Downloaded YAML must equal the editor source, and reparsing it verifies the exact Docker image, entrypoint, quoted arguments and trailing empty argument. Unfinished single/double quotes and trailing escapes produce Docker argument diagnostics that clear after control edits repair the value. Unsupported shared-job waits produce a diagnostic that clears after YAML repair.
+
+- **Starting point:** A local job has commands or Docker steps.
+- **My flow:** I select the job and edit **Job container image**, then select a Docker step and set **Docker entrypoint** and **Docker arguments**. I review validation and export YAML.
+- **What I see:** Job commands share one container. Docker steps run in separate sibling containers with their own private state. Reusable calls select their containers in the called definition. Shared job containers support sequential commands and sequence blocks; waits, providers and parallel blocks require another job.
+
+### UF-49 — Configure structured container helpers
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-49.spec.ts)
+
+- **Coverage:** Protocol/effect controls and YAML fields preserve inline input schemas, named output schemas, nested business objects and arrays and explicit secret references. Export and Undo retain the nested values and schema authoring forms. Removing the protocol reviews discarded contract fields, cancellation keeps the helper intact and one Undo restores it. Following commands receive schema-derived helper suggestions using explicit `outputs` paths. The job-result picker previews and applies the same helper field path through a dependency, with export and Undo preservation. Missing schema names and interpolated executable commands diagnose and clear after source repair. Structured helpers inside ordinary onError, onFailure and finally handlers are diagnosed before execution.
+
+- **Starting point:** A command has a job container, or a step uses a Docker image.
+- **My flow:** I open **Helper protocol and environment**, choose **action-v1**, select an explicit effect, enter both object schemas and business input, then set environment references if needed.
+- **What I see:** Structured business input stays separate from executable commands and Docker arguments. Schema fields accept a mapping or a workflow-local name. The engine validates input/output and recovers checkpoints through the action journal. Ordinary commands retain stdout/stderr/exit-code results.
+
+### UF-50 — Package retained helper files
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-50.spec.ts)
+
+- **Coverage:** Job helper editing converts scalar container syntax to a mapping, preserves paths during image changes, and exports both job and sibling bundles. Docker replacement declarations distinguish empty bundles from inheritance. Step conversion reviews file removal, cancellation preserves the declaration, and Undo restores it; the cancellation prompt is dismissed before its message is asserted so failed assertions cannot leave conversion blocked. Invalid relative paths and files on ordinary steps remain diagnosable and repairable through YAML. Repairs clear parser and browser errors for populated and explicit empty job-bundle lists, and reparsed exports preserve both forms. Unrelated visual edits and exported YAML preserve omitted and null Docker inheritance separately from empty replacements, and retain the runner's string spelling for numeric and boolean filenames in job and sibling bundles. Direct entry into both helper-file controls also preserves noncanonical numeric/boolean spelling and explicit scalar tags through export, and decodes binary-tagged ASCII, Unicode and leading-BOM filenames to the same string used by the runner. Importing those binary-tagged paths through complete workflow YAML keeps both job and Docker declarations editable through unrelated edits, export and Undo. Invalid UTF-8 binary entries remain unapplied with a field error until corrected; applying null, an empty list, and an empty control retains their distinct inheritance, replacement, and omission behavior.
+
+- **Starting point:** I select a job with a container or a Docker step.
+- **My flow:** I enter relative files or recursive directories in **Job helper files (YAML)**. For a Docker sibling I optionally declare **Docker helper files (YAML)** to replace the inherited job bundle, using `[]` for an empty replacement.
+- **What I see:** Export retains the declared paths. The host captures them relative to their owning workflow, mounts retained content read-only at `/actions`, and validates checksums during recovery. Browser validation identifies traversal and misplaced declarations; host admission also checks symlinks, file types and bundle limits.

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { controllerParameters, dependencies, effectiveStepID, stepAction } from './validation';
+import { controllerParameters, dependencies, effectiveStepID, normalizeStringScalar, stepAction } from './validation';
 import { blockKind } from './step-tree';
-import { parseDocument, stringify } from 'yaml';
+import { isScalar, isSeq, parseDocument, stringify } from 'yaml';
 import type { WorkflowDocument } from './document';
 import type { ActionDefinition, InputType, Mapping, Path } from './types';
 import { populated, stepConversionImpact } from './conversion';
@@ -130,7 +130,7 @@ export function Field({ path, subtree, label, value, onApply, readOnly, multilin
     {pickingResult && result && <JobResultPicker {...result} selection={cursor.current} close={() => { setPickingResult(false); control.current?.focus(); }} />}
   </div>;
 }
-export function StructuredField({ store, path, label, replacement = false }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean }) {
+export function StructuredField({ store, path, label, replacement = false, stringItems = false, onApply }: { store: WorkflowDocument; path: Path; label: string; replacement?: boolean; stringItems?: boolean; onApply?: (value: unknown) => void }) {
   let value: unknown = store.getSnapshot().workflow ?? store.getSnapshot().previewWorkflow;
   for (const key of path) value = (value as Mapping | undefined)?.[key];
   const text = value === undefined ? '' : stringify(value).trimEnd();
@@ -138,8 +138,11 @@ export function StructuredField({ store, path, label, replacement = false }: { s
   return <>{replacement && <p className="aw-hint">Applying this YAML replaces the entire mapping or value, including its comments. Include every existing entry you want to keep. Guided fields change only their own values.</p>}<Field path={path} subtree label={label} value={text} readOnly={readOnly} multiline onApply={text => applyEdit(() => {
     const doc = parseDocument(text);
     if (doc.errors.length) throw new Error(doc.errors[0].message);
+    if (stringItems && isSeq(doc.contents)) for (const item of doc.contents.items) {
+      if (isScalar(item) && item.value != null) normalizeStringScalar(item);
+    }
     const data = doc.toJS({ maxAliasCount: 0 });
-    store.setField(path, text.trim() ? data : undefined);
+    if (onApply) onApply(text.trim() ? data : undefined); else store.setField(path, text.trim() ? data : undefined);
   })} /></>;
 }
 function valueAt(store: WorkflowDocument, path: Path): unknown {
@@ -342,9 +345,12 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
         <div tabIndex={-1} data-aw-subtree="true" data-aw-path={JSON.stringify([...path, 'needs'])}><fieldset disabled={disabled}><legend>Dependencies</legend>{Object.keys(w.jobs).filter(id => id !== selection.job).map(id => <label className="aw-check" key={id}><input type="checkbox" checked={dependencies(job).includes(id)} onChange={e => attempt(() => e.target.checked ? store.connect(id, selection.job!) : store.disconnect(id, selection.job!))} />{id}</label>)}</fieldset></div>
         <label className="aw-field"><span>Job kind</span><select aria-label="Job kind" disabled={disabled} value={job.uses ? 'reusable' : 'steps'} onChange={e => attempt(() => {
           const reusable = e.target.value === 'reusable';
-          const discarded = (reusable ? ['steps'] : ['uses', 'with', 'secrets']).filter(key => populated(job[key]));
+          const discarded = (reusable ? ['steps', 'container'] : ['uses', 'with', 'secrets']).filter(key => populated(job[key]));
           if (confirmConversion(discarded)) store.setJobKind(selection.job!, reusable);
         })}><option value="steps">Sequential steps</option><option value="reusable">Reusable workflow</option></select></label>
+        {!job.uses && <Field path={[...path, 'container']} label="Job container image" value={typeof job.container === 'string' ? job.container : job.container?.image} readOnly={disabled} onApply={value => applyEdit(() => store.setField(value && typeof job.container !== 'string' ? [...path, 'container', 'image'] : [...path, 'container'], value || undefined))} />}
+        {!job.uses && job.container && <StructuredField store={store} path={[...path, 'container', 'files']} label="Job helper files (YAML)" stringItems onApply={value => store.setJobHelperFiles(selection.job!, value)} />}
+
         {job.uses && field('Reusable workflow', 'uses')}
         {job.uses && <CallFields key={job.uses} store={store} job={selection.job!} suggestionsID={suggestionsID} />}
         <NamedFields suggestionsID={suggestionsID} requestDelete={requestEntryDelete} store={store} path={[...path, 'outputs']} kind="jobOutputs" title="Job outputs" /><details><summary>Advanced output YAML</summary>{advanced('outputs', 'Job outputs (YAML)')}</details>
@@ -364,16 +370,18 @@ export function Inspector({ store, selection, select, attempt, requestDelete, re
           <StructuredField store={store} path={[...path, 'onFailure']} label="Failure reporting steps (YAML)" />
           <StructuredField store={store} path={[...path, 'finally']} label="Finalization steps (YAML)" />
         </details>}
-        <label className="aw-field" data-aw-path={!uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={conversation ? 'conversation' : block ?? commandKind ?? uses ?? 'agent/claude'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', 'parallel', 'sequence', 'conversation', ...(store.getOptions().agents ?? [{ id: 'claude' }, { id: 'codex' }]).map(a => `agent/${a.id}`), ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(uses ? [uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : kind === 'parallel' ? 'Parallel block' : kind === 'sequence' ? 'Sequence block' : kind === 'conversation' ? 'Conversation' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
+        <label className="aw-field" data-aw-path={!uses ? JSON.stringify([...path, 'uses']) : undefined}><span>Step type</span><select disabled={disabled} aria-label="Step type" value={conversation ? 'conversation' : block ?? commandKind ?? uses ?? 'agent/claude'} onChange={e => attempt(() => { changeStepKind(e.target.value); })}>{Array.from(new Set(['argv', 'shell', 'docker://ubuntu:24.04', 'parallel', 'sequence', 'conversation', ...(store.getOptions().agents ?? [{ id: 'claude' }, { id: 'codex' }]).map(a => `agent/${a.id}`), ...Object.keys(controllerParameters), ...(store.getOptions().actions ?? []).map(a => a.uses), ...(uses ? [uses] : [])])).map(kind => <option key={kind} value={kind}>{kind === 'argv' ? 'Direct command' : kind === 'shell' ? 'Shell command' : kind === 'parallel' ? 'Parallel block' : kind === 'sequence' ? 'Sequence block' : kind === 'conversation' ? 'Conversation' : store.getOptions().actions?.find(a => a.uses === kind)?.label ?? kind}</option>)}</select></label>
         {conversation && <><p className="aw-hint">Participants retain sessions and can message declared peers. Only the finisher can complete the step. Host adapter admission checks session and messaging support.</p>{advanced('conversation', 'Participants (YAML)')}{field('Starter', 'start')}{field('Finisher', 'finishBy')}{field('Prompt', 'prompt', true)}{(['maxTurns', 'maxMessages'] as const).map(key => <Field key={key} path={[...path, key]} label={key === 'maxTurns' ? 'Maximum turns' : 'Maximum messages'} value={step[key]} type="number" readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, key], value === '' ? undefined : Number(value)))} />)}{field('Timeout', 'timeout')}{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
         {block && <><p className="aw-hint">Edit nested steps as YAML here or in the source. Parallel branches share the incoming result snapshot; a sequence can use its own preceding steps. All named results become available after the join. Block failure propagates.</p>{advanced(block, block === 'parallel' ? 'Parallel branches (YAML)' : 'Sequence steps (YAML)')}</>}
         {commandKind === 'argv' && <CommandArguments store={store} path={[...path, 'argv']} suggestionsID={suggestionsID} attempt={attempt} />}
         {commandKind === 'shell' && <>{field('Shell', 'shell')}{field('Command', 'run', true)}</>}
         {commandKind && <>{field('Working directory', 'working-directory')}{field('Timeout', 'timeout')}</>}
+        {(commandKind || uses?.startsWith('docker://')) && <details><summary>Helper protocol and environment</summary><label className="aw-field"><span>Protocol</span><select aria-label="Protocol" disabled={disabled} value={step.protocol ?? ''} onChange={event => attempt(() => { if (event.target.value || confirmConversion(['effect', 'input-schema', 'output-schema', 'input'].filter(key => populated(step[key])))) store.setContainerProtocol(selection.job!, selection.step!, event.target.value); })}><option value="">Ordinary command</option><option value="action-v1">action-v1</option></select></label>{step.protocol && <><Field path={[...path, 'effect']} label="Effect" choices={['', 'read_only', 'external_mutation']} value={step.effect} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'effect'], value))} /><StructuredField store={store} path={[...path, 'input-schema']} label="Input schema (YAML)" /><StructuredField store={store} path={[...path, 'output-schema']} label="Output schema (YAML)" /><StructuredField store={store} path={[...path, 'input']} label="Business input (YAML)" /></>}<StructuredField store={store} path={[...path, 'env']} label="Environment (YAML)" /></details>}
         {uses && <Field path={[...path, shorthand ? 'agent' : 'uses']} identifier label="Action target" value={uses} readOnly={disabled} onApply={value => applyEdit(() => {
           if (!value.trim()) throw new Error('Action target is required');
           if (!changeStepKind(value)) throw new Error('Type change cancelled; the previous configuration is unchanged');
         })} />}
+        {uses?.startsWith('docker://') && <><StructuredField store={store} path={[...path, 'files']} label="Docker helper files (YAML)" stringItems /><Field path={[...path, 'with', 'entrypoint']} label="Docker entrypoint" value={params.entrypoint} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'entrypoint'], value || undefined))} /><Field path={[...path, 'with', 'args']} label="Docker arguments" value={params.args} readOnly={disabled} onApply={value => applyEdit(() => store.setField([...path, 'with', 'args'], value))} />{field('Timeout', 'timeout')}</>}
         {uses?.startsWith('agent/') && <>{shorthand && !Object.hasOwn(params, 'prompt') ? field('Prompt', 'prompt', true) : paramField('prompt', 'Prompt', true)}<details open={params.message !== undefined}><summary>Optional message</summary>{paramField('message', 'Message', true)}</details>{paramField('model', 'Model')}{paramField('workspace', 'Workspace')}<details open={params.output !== undefined}><summary>Structured output</summary><StructuredField store={store} path={[...path, 'with', 'output']} label="Structured output contract (YAML)" /></details></>}
         {(Object.hasOwn(controllerParameters, uses ?? '') ? controllerParameters[uses!] : undefined)?.map(key => key === 'independent' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', key])} key={key}><input type="checkbox" disabled={disabled} checked={!!params[key]} onChange={e => attempt(() => store.setField([...path, 'with', key], e.target.checked))} />Independent workspace</label> : key === 'commits' ? <StructuredField key={key} store={store} path={[...path, 'with', key]} label="Commits (YAML)" /> : paramField(key, key[0].toUpperCase() + key.slice(1), key === 'body'))}
         {action?.fields?.map(f => f.type === 'yaml' ? <StructuredField key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} /> : f.type === 'number' ? <TypedValue key={f.key} store={store} path={[...path, 'with', f.key]} label={f.label} type="number" expressions suggestionsID={suggestionsID} /> : f.type === 'boolean' ? <label className="aw-check" data-aw-path={JSON.stringify([...path, 'with', f.key])} key={f.key}><input type="checkbox" disabled={disabled} checked={!!params[f.key]} onChange={e => attempt(() => store.setField([...path, 'with', f.key], e.target.checked))} />{f.label}</label> : paramField(f.key, f.label, f.type === 'textarea'))}

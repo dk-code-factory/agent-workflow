@@ -1,0 +1,10 @@
+# Docker steps select their own image. This default authorizes workspace writes.
+execution:
+  mode: container
+  runtime: docker
+  image: python-git:local
+  writable: true
+agents:
+  unused:
+    provider: codex-cli
+    execution: {mode: local}

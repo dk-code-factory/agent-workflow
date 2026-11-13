@@ -88,7 +88,20 @@ func openBackupSource(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("backup schema %d is unsupported", version)
 	}
-	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}, {"action_attempts"}, {"iteration_plans", "iteration_attempts"}, {"input_gates", "input_controls"}, {"worker_waits"}}
+	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}, {"action_attempts"}, {"iteration_plans", "iteration_attempts"}, {"input_gates", "input_controls"}, {"worker_waits"}, {"helper_assets", "run_helper_assets"}, {"task_groups", "task_group_members", "task_claims", "task_budgets", "task_deadlines", "task_state_requests"}}
+	// Helper prerelease snapshots used versions 11/12 before the independent
+	// worker-wait migration landed. Validate their own complete lineage.
+	if version == 11 || version == 12 {
+		var waits int
+		if err = db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='worker_waits'").Scan(&waits); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if waits == 0 {
+			checks[10] = checks[11]
+			checks[11] = checks[12]
+		}
+	}
 	for index := 0; index < version; index++ {
 		for _, table := range checks[index] {
 			var found int

@@ -1,4 +1,4 @@
-import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node } from 'yaml';
+import { isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseAllDocuments, type Document, type Node, type Scalar } from 'yaml';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isConciseStepReference, isExpressionPath, references } from './expressions';
 import { blockKind, containingStep, stepEntries } from './step-tree';
 import type { Diagnostic, Job, Mapping, Path, Step, Workflow } from './types';
@@ -19,6 +19,28 @@ export const stepAction = (step: Mapping): string | undefined => Object.hasOwn(s
 export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'conversation') || !!stepAction(step)?.startsWith('agent/');
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export function normalizeStringScalar(node: Scalar): string {
+  const value = node.value;
+  const text = typeof value === 'string' ? value
+    : node.tag === 'tag:yaml.org,2002:binary' && value instanceof Uint8Array
+      ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(value)
+      : node.source ?? String(value);
+  node.value = text;
+  if (typeof value !== 'string' && node.tag) node.tag = 'tag:yaml.org,2002:str';
+  return text;
+}
+
+function validContainerArgs(text: string): boolean {
+  let quote = '', escaped = false;
+  for (const char of text) {
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && quote !== "'") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = ''; }
+    else if (char === "'" || char === '"') quote = char;
+  }
+  return !escaped && !quote;
+}
 
 // Match yaml.v3's allowedTimestampFormats and time.Parse ranges, including
 // short date/time fields and fractional seconds. YAML core leaves these strings.
@@ -75,11 +97,12 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | { [key: string]: Shape } | [Shape];
+type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | 'container' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
+ files: ['string'], protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
   id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
   conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
@@ -99,7 +122,7 @@ const schema: Shape = {
     workflow_call: { inputs: { '*': input }, secrets: { '*': { required: 'boolean' } }, outputs: { '*': { value: 'string' } } },
   },
   jobs: { '*': {
-    name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
+    container: 'container', name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
     repeat: { 'max-attempts': 'integer', until: 'string' },
     'for-each': { items: 'any', key: 'string', concurrency: 'strict-integer' },
@@ -164,25 +187,26 @@ export function parseWorkflow(source: string): Parsed {
     };
     const scalarString = (item: unknown, path: Path) => {
       const node = doc!.getIn(path, true);
-      const text = typeof item === 'string' ? item : isScalar(node) ? node.source ?? String(item) : String(item);
       // Subsequent visual edits serialize this tree. Keep string semantics even
       // for YAML booleans/numbers whose canonical spelling differs (TRUE, 01).
-      if (isScalar(node) && item != null) {
-        node.value = text;
-        if (typeof item !== 'string' && node.tag) node.tag = 'tag:yaml.org,2002:str';
-      }
-      return text;
+      return isScalar(node) && item != null ? normalizeStringScalar(node) : String(item);
     };
     let shaped = true;
     const checkShape = (value: unknown, shape: Shape, path: Path) => {
+      if (shape === 'container') {
+        if (value != null) checkShape(value, mapping(value) ? { image: 'string', files: ['string'] } : 'strict-string', path);
+        return;
+      }
       if (shape === 'any') return;
       if (value == null && shape !== 'strict-string' && shape !== 'strict-integer') {
         // Null map/struct values decode to Go zero values. Optional pointers
         // remain absent; other mappings become editable empty collections.
-        const pointer = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
+        const preserveNull = (path[0] === 'on' && path.length === 2 && ['workflow_call', 'channel_message', 'command', 'runtime_event', 'event'].includes(String(path[1])))
           || (path[0] === 'jobs' && path.length === 3 && ['repeat', 'for-each'].includes(String(path[2])))
-          || (path[0] === 'on' && path[1] === 'event' && path.length === 3 && ['actor', 'subject'].includes(String(path[2])));
-        if (!path.length || pointer) return;
+          || (path[0] === 'on' && path[1] === 'event' && path.length === 3 && ['actor', 'subject'].includes(String(path[2])))
+          // Docker files: null inherits the job bundle, while [] replaces it.
+          || (Array.isArray(shape) && path.at(-1) === 'files');
+        if (!path.length || preserveNull) return;
         value = shape === 'string' ? '' : shape === 'boolean' ? false : shape === 'integer' ? 0
           : shape === 'list' || Array.isArray(shape) ? [] : {};
         assign(path, value);
@@ -217,7 +241,7 @@ export function parseWorkflow(source: string): Parsed {
             assign(path, normalized);
           }
         } else if (shape === 'string') {
-          valid = ['string', 'number', 'boolean'].includes(typeof value);
+          valid = ['string', 'number', 'boolean'].includes(typeof value) || value instanceof Uint8Array;
           if (valid) assign(path, scalarString(value, path));
         } else if (shape === 'boolean') {
           const legacy = typeof value === 'string' && ['y', 'Y', 'yes', 'Yes', 'YES', 'on', 'On', 'ON', 'n', 'N', 'no', 'No', 'NO', 'off', 'Off', 'OFF'].includes(value);
@@ -327,6 +351,9 @@ function validateWorkflow(w: Workflow, add: Add) {
   if (mapping(callable?.inputs)) for (const [id, input] of Object.entries(callable.inputs)) {
     if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
   }
+  const validateFiles = (files: unknown, path: Path) => {
+    if (!Array.isArray(files) || files.some(value => typeof value !== 'string' || !value || value.startsWith('/') || /[\\\x00]/.test(value) || value.split('/').includes('..') || value.includes('${{'))) add('files', 'Helper files require static relative paths without traversal', path);
+  };
   for (const [id, job] of Object.entries(jobs)) {
     const p: Path = ['jobs', id];
     if (!identifier.test(id)) add('identifier', 'Invalid job ID', p);
@@ -339,6 +366,13 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!job.uses || job.repeat || !each.key?.trim()) add('for-each', 'for-each requires a reusable workflow and key, and cannot combine with repeat', [...p, 'for-each']);
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');
+    }
+    if (job.container != null) {
+      const image = typeof job.container === 'string' ? job.container : job.container?.image;
+      if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
+      if (mapping(job.container)) for (const key of Object.keys(job.container)) if (!['image', 'files'].includes(key)) add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
+      if (mapping(job.container) && job.container.files != null) validateFiles(job.container.files, [...p, 'container', 'files']);
+      if (job.uses) add('container', 'Reusable calls cannot declare a container', [...p, 'container']);
     }
     const needs = dependencies(job);
     dependencySets.set(id, new Set(needs));
@@ -361,6 +395,9 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
       const kind = blockKind(step);
+      const docker = step.uses?.startsWith('docker://');
+      if (step.files != null) { validateFiles(step.files, [...sp, 'files']); if (!docker) add('files', 'Step files require a Docker step; use container.files for job helpers', [...sp, 'files']); }
+      if (job.container && (step.parallel || step.conversation || stepAction(step) && !docker)) add('container', 'Shared containers support sequential commands, Docker steps and sequence blocks only', sp);
       if (kind) {
         if (depth > 0) add('handler-action', 'Structural blocks cannot appear inside lifecycle handlers', sp);
         if (!step[kind]?.length) add('block', `${kind} requires at least one step`, [...sp, kind]);
@@ -395,13 +432,32 @@ function validateWorkflow(w: Workflow, add: Add) {
       if (shorthand && Object.hasOwn(step, 'uses')) add('agent', 'agent cannot be combined with uses', [...sp, 'agent']);
       if (prompt && !shorthand) add('agent', 'prompt requires agent shorthand; use with.prompt with uses', [...sp, 'prompt']);
       if (prompt && Object.hasOwn(step.with ?? {}, 'prompt')) add('agent', 'prompt cannot be combined with with.prompt', [...sp, 'prompt']);
+      if (step.protocol) {
+        if (depth > 0 || handlerKinds.some(kind => step[kind]?.length) || step.handlerTimeout) add('protocol', 'Structured helpers cannot own or appear inside ordinary lifecycle handlers', [...sp, 'protocol']);
+        if (step.protocol !== 'action-v1') add('protocol', 'Unsupported container protocol', [...sp, 'protocol']);
+        if (!job.container && !docker) add('protocol', 'action-v1 requires a job container or Docker step', [...sp, 'protocol']);
+        if (!['read_only', 'external_mutation'].includes(step.effect ?? '')) add('protocol', 'Structured helpers require an explicit effect', [...sp, 'effect']);
+        for (const key of ['input-schema', 'output-schema'] as const) {
+          const raw = step[key], declaration = typeof raw === 'string' ? w.schemas?.[raw] : raw;
+          if (!mapping(declaration) || declaration.type !== 'object') add('schema', 'Structured helpers require an object schema or a known workflow-local name', [...sp, key]);
+          else inspectSchema(declaration, [...sp, key]);
+        }
+        for (const text of [...(step.argv ?? []), step.run, step.shell, step['working-directory']]) if (typeof text === 'string' && text.includes('${{')) add('protocol', 'Structured executable commands and settings must be static; use input for business data', sp);
+        for (const [key,value] of Object.entries(step.env ?? {})) if (value.includes('${{') && !/^\s*\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}\s*$/.test(value)) add('protocol', 'Structured env expressions must reference one secret directly', [...sp, 'env', key]);
+      } else if (['effect', 'input', 'input-schema', 'output-schema'].some(key => step[key] !== undefined)) add('protocol', 'Structured fields require protocol: action-v1', sp);
       const command = !!(step.argv?.length || step.run);
       if ((depth > 0 || handlerKinds.some(kind => step[kind]?.length)) && !command && !uses?.startsWith('agent/')) add('handler-action', 'Lifecycle handlers support agent and command steps only', sp);
       const params: Mapping = { ...step.with, ...(prompt ? { prompt: step.prompt } : {}) };
       if (command) {
         if (uses || Object.keys(params).length) add('command', 'Commands cannot have uses or with', sp);
-        if (step.run && (!step.shell || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
+        if (step.run && (!step.shell && !job.container || step.argv?.length)) add('command', 'run requires shell and cannot have argv', sp);
         if (!step.run && step.shell) add('command', 'shell requires run', sp);
+        if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
+      } else if (docker) {
+        if (!step.uses!.slice(9).trim() || step.uses!.includes('${{')) add('container', 'Docker image must be static', [...sp, 'uses']);
+        if (step.argv?.length || step.run || step.shell) add('container', 'Docker steps cannot combine with command fields', sp);
+        for (const [key, value] of Object.entries(params)) if (!['entrypoint', 'args'].includes(key) || typeof value !== 'string' || value.includes('${{')) add('container', 'Docker steps accept static entrypoint and args strings only', [...sp, 'with', key]);
+        if (typeof params.args === 'string' && !validContainerArgs(params.args)) add('container', 'Docker arguments contain an unfinished quote or escape', [...sp, 'with', 'args']);
         if (step.timeout && !validDuration(String(step.timeout))) add('timeout', 'Expected a positive Go duration', [...sp, 'timeout']);
       } else {
         if (step.shell || step.timeout || step['working-directory']) add('command', 'Command fields require argv or run', sp);

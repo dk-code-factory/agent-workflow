@@ -93,6 +93,73 @@ describe('runner compatibility', () => {
     const result = parseWorkflow('jobs:\n  build:\n    surprise: true\n    steps: [{argv: [echo]}]\n');
     expect(result.diagnostics[0]).toMatchObject({ code: 'unknown-field', path: ['jobs', 'build', 'surprise'], location: { line: 3 } });
   });
+  it.each(['[helpers/, config.json]', '[]'])('accepts job helper-file list %s without parser errors', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(result.usable).toBe(true);
+    expect(parseWorkflow(result.doc!.toString()).workflow).toEqual(result.workflow);
+  });
+  it.each(['helpers/', '[{path: helpers/}]', '[[helpers/]]', '{path: helpers/}'])('rejects invalid job helper-file shape %s', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.some(d => d.source === 'parser' && d.code === 'shape' && d.path.join('.').startsWith('jobs.build.container.files'))).toBe(true);
+  });
+  it.each(['container', 'step'])('preserves runner scalar filenames in %s files through visual edits', location => {
+    const files = '[123, true, FALSE, 01, 0xA, 1.0, 2024-01-01, !!int 010, !!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]';
+    const source = location === 'container'
+      ? `jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`
+      : `jobs: {build: {steps: [{uses: docker://ubuntu, files: ${files}}]}}`;
+    const document = new WorkflowDocument({ source });
+    const expected = ['123', 'true', 'FALSE', '01', '0xA', '1.0', '2024-01-01', '010', 'helper.py', 'hélp.py', '\uFEFFhelper.py'];
+    const paths = () => location === 'container'
+      ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
+      : document.getSnapshot().workflow!.jobs.build.steps![0].files;
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(paths()).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(paths()).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+  });
+  it.each(['container', 'step'])('retains invalid UTF-8 source for repair in %s files', location => {
+    const source = location === 'container'
+      ? 'jobs: {build: {container: {image: ubuntu, files: [!!binary /w==]}, steps: [{argv: [echo]}]}}'
+      : 'jobs: {build: {steps: [{uses: docker://ubuntu, files: [!!binary /w==]}]}}';
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().stale).toBe(true);
+    expect(document.getSnapshot().diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(true);
+    document.setSource(source.replace('/w==', 'aGVscGVyLnB5'));
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    const files = location === 'container'
+      ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
+      : document.getSnapshot().workflow!.jobs.build.steps![0].files;
+    expect(files).toEqual(['helper.py']);
+  });
+  it.each([
+    { declaration: '', expected: undefined },
+    { declaration: ', files: null', expected: null },
+    { declaration: ', files: []', expected: [] },
+    { declaration: ', files: [null]', expected: [] },
+  ])('preserves Docker inheritance or replacement for "$declaration"', ({ declaration, expected }) => {
+    const source = `jobs: {build: {container: {image: ubuntu, files: [helpers/]}, steps: [{uses: docker://ubuntu${declaration}}]}}`;
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+  });
+  it('keeps null job and ordinary-step helper declarations absent to the runner', () => {
+    const document = new WorkflowDocument({ source: 'jobs: {build: {container: {image: ubuntu, files: null}, steps: [{argv: [echo], files: null}]}}' });
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect((document.getSnapshot().workflow!.jobs.build.container as { files: null }).files).toBeNull();
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toBeNull();
+  });
 });
 
 

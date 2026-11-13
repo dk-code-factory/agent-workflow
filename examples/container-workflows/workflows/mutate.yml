@@ -1,0 +1,22 @@
+name: Simulated mutation with durable receipts
+jobs:
+  mutation:
+    steps:
+      - uses: docker://python-git:local
+        files: [helpers/]
+        with:
+          entrypoint: python3
+          args: -B /actions/helpers/simulate_mutation.py
+        protocol: action-v1
+        effect: external_mutation
+        input-schema:
+          type: object
+          properties: {receipts: {type: string}, value: {type: string}}
+          required: [receipts, value]
+          additionalProperties: false
+        output-schema:
+          type: object
+          properties: {value: {type: string}}
+          required: [value]
+          additionalProperties: false
+        input: {receipts: /workspace/receipts, value: example}

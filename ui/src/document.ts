@@ -231,12 +231,28 @@ export class WorkflowDocument {
   }
   setJobKind(id: string, reusable: boolean) {
     this.edit(doc => {
-      if (reusable) { doc.deleteIn(['jobs', id, 'steps']); doc.setIn(['jobs', id, 'uses'], this.options.workflows?.[0]?.id ?? 'workflows/example.yml'); }
+      if (reusable) { doc.deleteIn(['jobs', id, 'container']); doc.deleteIn(['jobs', id, 'steps']); doc.setIn(['jobs', id, 'uses'], this.options.workflows?.[0]?.id ?? 'workflows/example.yml'); }
       else {
         for (const key of ['uses', 'with', 'secrets']) doc.deleteIn(['jobs', id, key]);
         const steps = doc.getIn(['jobs', id, 'steps'], true);
         if (!isSeq(steps) || !steps.items.length) doc.setIn(['jobs', id, 'steps'], [{ id: 'step_1', argv: ['echo', 'Hello'] }]);
       }
+    });
+  }
+  setJobHelperFiles(id: string, files: unknown) {
+    this.edit(doc => {
+      const path = ['jobs', id, 'container'];
+      const current = this.snapshot.workflow?.jobs[id]?.container;
+      if (typeof current === 'string') doc.setIn(path, { image: current, files });
+      else if (files === undefined) doc.deleteIn([...path, 'files']);
+      else doc.setIn([...path, 'files'], files);
+    });
+  }
+  setContainerProtocol(id: string, index: number, protocol: string) {
+    this.edit(doc => {
+      const path = ['jobs', id, 'steps', index];
+      if (protocol) doc.setIn([...path, 'protocol'], protocol);
+      else for (const key of ['protocol', 'effect', 'input-schema', 'output-schema', 'input']) doc.deleteIn([...path, key]);
     });
   }
   setStepKind(id: string, index: number, kind: string) {

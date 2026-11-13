@@ -16,26 +16,27 @@ var (
 )
 
 type expressionContext struct {
-	Literal         bool
-	Failed          map[string]any
-	Error           map[string]any
-	Item            any
-	Ordered         bool
-	Attempt         *Attempt
-	RunID           string
-	JobID           string
-	IterationNumber int
-	Metadata        map[string]any
-	Iteration       map[string]any
-	Inputs          map[string]any
-	Private         map[string]any
-	Secrets         map[string]string
-	Event           map[string]any
-	Steps           map[string]StepExecution
-	Needs           map[string]JobExecution
-	Jobs            map[string]JobExecution
-	Delivery        Delivery
-	Session         string
+	CredentialAliases map[string]string
+	Literal           bool
+	Failed            map[string]any
+	Error             map[string]any
+	Item              any
+	Ordered           bool
+	Attempt           *Attempt
+	RunID             string
+	JobID             string
+	IterationNumber   int
+	Metadata          map[string]any
+	Iteration         map[string]any
+	Inputs            map[string]any
+	Private           map[string]any
+	Secrets           map[string]string
+	Event             map[string]any
+	Steps             map[string]StepExecution
+	Needs             map[string]JobExecution
+	Jobs              map[string]JobExecution
+	Delivery          Delivery
+	Session           string
 }
 
 func renderValue(value any, ctx expressionContext) (any, error) {

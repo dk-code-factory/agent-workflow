@@ -68,7 +68,7 @@ for target in targets:
             run(["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", str(stage / command), "./cmd/" + command], env=env)
         for item in ["README.md", "DESIGN.md", "LICENSE", "NOTICE", "agents.yml", "go.mod", "go.sum"]:
             shutil.copyfile(ROOT / item, stage / item)
-        for directory in ["workflows", "docs", "conformance", "plugins/network-runtime"]:
+        for directory in ["workflows", "docs", "examples", "conformance", "plugins/network-runtime"]:
             shutil.copytree(ROOT / directory, stage / directory)
         marketplace = stage / ".agents" / "plugins"
         marketplace.mkdir(parents=True)

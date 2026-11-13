@@ -110,6 +110,26 @@ describe('named step result references', () => {
     }
     expect(expressionSuggestions(parsed.workflow, 'build', 5)).toContain('steps.command.outputs.stdout');
   });
+  it.each([false, true])('offers explicit helper outputs in every scope with named schema=%s', named => {
+    const schema = { type: 'object', properties: { head: { type: 'string' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } };
+    const helper = { id: 'helper', argv: ['helper'], protocol: 'action-v1' as const, effect: 'read_only' as const, 'input-schema': { type: 'object' }, 'output-schema': named ? 'Output' : schema };
+    const parsed = parseWorkflow(JSON.stringify({ schemas: { Output: schema }, jobs: {
+      build: { container: 'ubuntu:24.04', steps: [helper, { argv: ['echo', 'ready'] }] },
+      consumer: { needs: ['build'], steps: [{ argv: ['echo', 'ready'] }] },
+    } }));
+    expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(stepResultPaths(helper, parsed.workflow!.schemas)).toEqual(['outputs.head', 'outputs.details', 'outputs.details.reason', 'outputs.status']);
+    for (const [suggestions, base] of [
+      [expressionSuggestions(parsed.workflow, 'build', 1), 'steps.helper'],
+      [expressionSuggestions(parsed.workflow, 'consumer', 0), 'needs.build.steps.helper'],
+      [expressionSuggestions(parsed.workflow), 'jobs.build.steps.helper'],
+    ] as const) {
+      expect(suggestions).toEqual(expect.arrayContaining([`${base}.outputs.head`, `${base}.outputs.details.reason`, `${base}.outputs.status`]));
+      expect(suggestions).not.toContain(`${base}.head`);
+      expect(suggestions).not.toContain(`${base}.details.reason`);
+    }
+    expect(expressionSuggestions(parsed.workflow, 'consumer', 0, undefined, 'needs.build.steps.helper.outputs.details.r')).toEqual(['needs.build.steps.helper.outputs.details.reason']);
+  });
   it('keeps data roots and quoted expressions distinct from cross-job step references', () => {
     expect(references("${{ 'needs.review.steps.analyze.text' == needs.review.steps.analyze.outputs.structured.status }}")).toEqual([
       expect.objectContaining({ scope: 'needs', id: 'review', step: 'analyze', output: 'structured', tail: '.status' }),

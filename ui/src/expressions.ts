@@ -165,7 +165,7 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path[2] === 'outputs' && path.length === 4) return true;
   const step = stepPathLength(path);
   if (step === undefined) return false;
-  return (path[step] === 'with' && path.length >= step + 2)
+  return (['with', 'input', 'env'].includes(String(path[step])) && path.length >= step + 2)
     || (path[step] === 'argv' && path.length === step + 2 && typeof path[step + 1] === 'number')
     || (path.length === step + 1 && (path[step] === 'run' || path[step] === 'working-directory' || path[step] === 'prompt'));
 }

@@ -12,10 +12,15 @@ import (
 )
 
 func init() {
-	if len(os.Args) < 6 || os.Args[1] != "__container_workload_guardian_v1" {
+	if len(os.Args) == 2 && os.Args[1] == "__container_idle_v1" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	if len(os.Args) < 6 || (os.Args[1] != "__container_workload_guardian_v1" && os.Args[1] != "__container_exec_guardian_v1") {
 		return
 	}
-	if runtime.GOOS != "linux" || os.Getpid() != 1 || os.Getuid() == 0 || os.Args[4] != "--" {
+	if runtime.GOOS != "linux" || (os.Args[1] == "__container_workload_guardian_v1" && os.Getpid() != 1) || os.Getuid() == 0 || os.Args[4] != "--" {
 		fmt.Fprintln(os.Stderr, "workload guardian requires a private Linux PID namespace")
 		os.Exit(125)
 	}

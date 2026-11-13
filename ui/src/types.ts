@@ -1,6 +1,8 @@
 export type Path = (string | number)[];
 export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
+ files?: string[] | null; protocol?: string; effect?: string; input?: Mapping; env?: Record<string, string>;
+ 'input-schema'?: Mapping | string; 'output-schema'?: Mapping | string;
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
@@ -9,6 +11,7 @@ export interface Step extends Mapping {
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;
+  container?: string | { image: string; files?: string[] | null };
   'for-each'?: { items: unknown[] | string; key: string; concurrency?: number } | null;
   repeat?: { 'max-attempts': number; until: string } | null; if?: string;
 }

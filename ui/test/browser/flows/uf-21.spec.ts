@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot, field, step } from './harness';
+import { open, snapshot, field, step, job } from './harness';
 
 test('review incompatible settings, cancel conversion, and undo the confirmed change', async ({ page }) => {
   const source = 'jobs: {build: {steps: [{id: run, argv: [echo, before], timeout: 2m, working-directory: /work}]}}';
@@ -90,4 +90,24 @@ test('concise agent conversions retain prompts until an incompatible conversion 
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Keep this prompt');
+});
+
+test('Docker image changes retain command overrides and command conversion reviews them', async ({ page }) => {
+  const source = `jobs: {build: {steps: [{id: image, uses: 'docker://ubuntu:24.04', with: {entrypoint: /bin/sh, args: '-c "echo separate"'}, timeout: 2m}]}}`;
+  const ui = await open(page, source);
+  await job(page);
+  await ui.getByRole('button', { name: '1. image', exact: true }).click();
+  await field(page, 'Action target', 'docker://ubuntu:22.04');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toMatchObject({ uses: 'docker://ubuntu:22.04', with: { entrypoint: '/bin/sh', args: '-c "echo separate"' }, timeout: '2m' });
+  const before = (await snapshot(page)).source;
+  let reviewMessage = '';
+  page.once('dialog', async dialog => { reviewMessage = dialog.message(); await dialog.dismiss(); });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect(reviewMessage).toContain('with');
+  expect((await snapshot(page)).source).toBe(before);
+  page.once('dialog', dialog => dialog.accept());
+  await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with).toBeUndefined();
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
 });

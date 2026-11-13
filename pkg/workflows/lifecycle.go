@@ -30,6 +30,9 @@ func validateLifecycleShape(steps []Step, depth int, count *int) error {
 		return fmt.Errorf("handler nesting exceeds 8")
 	}
 	for _, step := range steps {
+		if step.Protocol != "" && depth > 0 {
+			return fmt.Errorf("structured helpers cannot appear inside ordinary lifecycle handlers")
+		}
 		if step.Conversation != nil && (depth > 0 || step.OnError != nil || step.OnFailure != nil || step.Finally != nil || step.HandlerTimeout != "") {
 			return fmt.Errorf("conversations cannot own or appear inside lifecycle handlers")
 		}
@@ -190,6 +193,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.Error = err.Error()
 		result.FailureClass = classifyFailure(err)
 		return result, err
+	}
+	if step.Protocol == ContainerActionV1 {
+		return e.executeContainerAction(ctx, step, ec, slots)
 	}
 	journal, durable := e.Store.(Journal)
 	var attempt Attempt

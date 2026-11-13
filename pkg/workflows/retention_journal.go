@@ -121,7 +121,7 @@ func (s *SQLiteStore) FinishRetention(ctx context.Context, record Retention, own
 }
 
 func (s *SQLiteStore) InvocationDirectories(ctx context.Context, origin string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id FROM invocations WHERE run_id=? ORDER BY rowid", origin)
+	rows, err := s.db.QueryContext(ctx, "SELECT i.id FROM invocations i JOIN runs r ON r.id=i.run_id WHERE r.origin_id=? OR r.id=? ORDER BY i.rowid", origin, origin)
 	if err != nil {
 		return nil, err
 	}

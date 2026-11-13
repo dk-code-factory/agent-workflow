@@ -178,6 +178,14 @@ See [operator setup, plugin coverage, forwarding and recovery](docs/NETWORK_RUNT
 
 ### Containers
 
+Workflows can declare shared `jobs.<id>.container` images and sibling
+`uses: docker://IMAGE` steps. Ordinary Ubuntu/Python images receive the packaged
+Linux guardian automatically. Optional `action-v1` helpers use inline/named
+schemas, durable lifecycle recovery and retained workflow-local files. See
+[container authoring and recovery](docs/CONTAINER_WORKFLOWS.md) and the
+[portable examples](examples/container-workflows/README.md).
+
+
 Session backends can select:
 
 ```yaml
@@ -233,6 +241,7 @@ agent-workflow status RUN_ID
 agent-workflow list
 agent-workflow logs --follow RUN_ID
 agent-workflow attempts RUN_ID
+agent-workflow task-state RUN_ID
 agent-workflow cancel RUN_ID
 agent-workflow resume --retry-uncertain RUN_ID
 agent-workflow resume --request-id recovery-1 --retry-uncertain --detach RUN_ID
@@ -243,6 +252,13 @@ agent-workflow cleanup RUN_ID
 ```
 
 `status`, `list`, `logs`, and artifact inspection work without the controller.
+Container helpers can opt into durable logical claims, allowances and absolute
+deadlines with `run --task-group GROUP`. Replacement runs must supply the same
+explicit group; resume retains its admitted group. `task-state RUN_ID` inspects
+that group's retained state without starting the controller. See
+[task state](docs/TASK_STATE.md) for the scoped Python client, reconciliation,
+continuation provenance and cleanup contract.
+
 Each supervised invocation is journaled with its originating generation and
 logical/physical identity. Containers are created inert, their identity is
 committed, then attached-started with stdin/stdout intact. Startup and background
@@ -284,9 +300,9 @@ retain full results. HTTP list endpoints opt into pagination with `limit` or
 `cursor`; calls without these parameters and existing Go list methods retain
 their legacy array shapes.
 
-Existing schema-1 through schema-8 databases upgrade transactionally when the controller (or a
+Existing schema-1 through schema-11 databases upgrade transactionally when the controller (or a
 foreground execution/cleanup command) holds the workspace lock. The upgrade
-retains `.agent-workflow/state.pre-v7.db`, a consistent database-only backup
+retains `.agent-workflow/state.pre-v12.db`, a consistent database-only backup
 including committed WAL records. Verify upgraded inspection and deterministic
 execution before manually removing this backup. Inspection opens storage read
 only and asks for an explicit controller upgrade when the schema is older;
@@ -356,7 +372,9 @@ use an explicit uncertain-retry acknowledgement. Restored mailboxes are
 quarantined and pending entries are retained as interrupted, requiring a new
 explicit send rather than replay.
 
-Database-only backup preserves records. Session recovery also requires matching
+Database-only backup preserves records and immutable helper manifests. Portable
+helper recovery also requires the referenced `assets/` files; `bundle` includes
+verified committed assets and preserves executable modes. Session recovery also requires matching
 managed workspaces and engine-owned provider state. Recovery bundles contain
 those engine-owned paths and exclude native credential files and references.
 They are private sensitive archives, not publication artifacts. Restore files at

@@ -13,6 +13,8 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
+type commandEnvKey struct{}
+
 const MaxCommandOutput = 16 << 20
 
 type cappedOutput struct {
@@ -32,6 +34,11 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
+	env, err := renderCommandEnv(step.Env, ec)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, commandEnvKey{}, env)
 	argv := make([]string, 0, len(step.Argv))
 	for _, a := range step.Argv {
 		v, err := renderString(a, ec)
@@ -53,9 +60,13 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if !ok {
 			return nil, fmt.Errorf("run must render to a string")
 		}
-		argv = []string{step.Shell, "-c", script}
+		shell := step.Shell
+		if shell == "" && ctx.Value(jobContainerKey{}) != nil {
+			shell = "sh"
+		}
+		argv = []string{shell, "-c", script}
 	}
-	if len(argv) == 0 || argv[0] == "" {
+	if !isDockerStep(step) && (len(argv) == 0 || argv[0] == "") {
 		return nil, fmt.Errorf("command requires executable")
 	}
 	if step.Timeout != "" {
@@ -67,6 +78,20 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
+	if step.WorkingDirectory != "" {
+		v, err := renderString(step.WorkingDirectory, ec)
+		if err != nil {
+			return nil, err
+		}
+		var ok bool
+		step.WorkingDirectory, ok = v.(string)
+		if !ok {
+			return nil, fmt.Errorf("working-directory must render to a string")
+		}
+	}
+	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
+		return e.executeContainerCommand(ctx, step, argv, slots)
+	}
 	queued := time.Now()
 	select {
 	case slots <- struct{}{}:
@@ -76,22 +101,14 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if len(env) > 0 && e.CommandExecution.Mode != "container" {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir
-	} else {
-		v, err := renderString(dir, ec)
-		if err != nil {
-			return nil, err
-		}
-		var ok bool
-		dir, ok = v.(string)
-		if !ok {
-			return nil, fmt.Errorf("working-directory must render to a string")
-		}
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(e.WorkspaceDir, dir)
-		}
+	} else if !filepath.IsAbs(dir) {
+		dir = filepath.Join(e.WorkspaceDir, dir)
 	}
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
@@ -106,7 +123,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
 			return nil, err
 		}
-		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
+		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir, Environment: env})
 	} else {
 		cleanup, superviseErr = runtimeexec.SupervisePolicy(ctx, cmd, e.CommandExecution)
 	}
@@ -122,7 +139,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 			return nil, err
 		}
 	}
-	err := cmd.Run()
+	err = cmd.Run()
 	code := -1
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()

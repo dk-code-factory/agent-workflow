@@ -83,6 +83,9 @@ func (r *Runtime) CleanupOwned(ctx context.Context, id string, owner *ownership.
 		for _, provider := range []string{"claude", "codex", "commands"} {
 			plan.Removals = append(plan.Removals, workflows.Removal{Kind: "directory", Path: filepath.Join(state, "providers", provider, id), State: "planned"})
 		}
+		for _, directory := range []string{"assets", "containers"} {
+			plan.Removals = append(plan.Removals, workflows.Removal{Kind: "directory", Path: filepath.Join(state, directory, id), State: "planned"})
+		}
 		invocations, listErr := r.Store.InvocationDirectories(ctx, id)
 		if listErr != nil {
 			return listErr
@@ -189,6 +192,11 @@ func validRemoval(state, id string, removal workflows.Removal) bool {
 	}
 	for _, provider := range []string{"claude", "codex", "commands"} {
 		if removal.Path == filepath.Join(state, "providers", provider, id) {
+			return true
+		}
+	}
+	for _, directory := range []string{"assets", "containers"} {
+		if removal.Path == filepath.Join(state, directory, id) {
 			return true
 		}
 	}

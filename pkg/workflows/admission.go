@@ -13,6 +13,8 @@ const RunStatusQueued = "queued"
 func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	copy := *e
 	e = &copy
+	runID := randomID()
+	e.bundleOrigin = runID
 	if err := e.pinExecution(ctx); err != nil {
 		return nil, err
 	}
@@ -40,11 +42,13 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	if _, err = resolveInputs(all[ref].On.WorkflowCall, req.Inputs, req.Secrets); err != nil {
 		return nil, err
 	}
-	runID := randomID()
 	if req.Metadata == nil {
 		req.Metadata = map[string]any{}
 	}
 	req.Metadata["origin_run_id"] = runID
+	if err := admitTaskGroup(&req); err != nil {
+		return nil, err
+	}
 	snap, err := snapshotFor(all, req, e.Roles, e.MaxParallel)
 	if err != nil {
 		return nil, err

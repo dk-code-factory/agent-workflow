@@ -398,7 +398,7 @@ func (e *Executor) executeIterationItem(ctx context.Context, id string, job Job,
 				if secretErr != nil {
 					return fail(secretErr)
 				}
-				child, loadErr = e.execute(ctx, child.WorkflowRef, RunRequest{Ref: child.WorkflowRef, runID: child.ID, Inputs: childSnap.Inputs, Secrets: childSecrets, SecretRefs: req.SecretRefs, Metadata: childSnap.Metadata, Event: req.Event, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, ordered: true}, all, slots, depth+1, child)
+				child, loadErr = e.execute(ctx, child.WorkflowRef, RunRequest{credentialAliases: forwardCredentialAliases(job.Secrets, req.credentialAliases), Ref: child.WorkflowRef, runID: child.ID, Inputs: childSnap.Inputs, Secrets: childSecrets, SecretRefs: req.SecretRefs, Metadata: childSnap.Metadata, Event: req.Event, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, ordered: true}, all, slots, depth+1, child)
 			}
 		}
 		if loadErr == nil && child.Status == RunStatusSucceeded && !iterationRetry(child) {
@@ -460,7 +460,7 @@ func (e *Executor) executeIterationItem(ctx context.Context, id string, job Job,
 		logical = req.runID
 	}
 	metadata["iteration_logical_run_id"] = actionHash([]any{logical, id, item.Key})
-	childReq := RunRequest{Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
+	childReq := RunRequest{credentialAliases: forwardCredentialAliases(job.Secrets, req.credentialAliases), Ref: ref, Inputs: item.Inputs, Secrets: secrets, SecretRefs: req.SecretRefs, Event: req.Event, Metadata: metadata, Execution: req.Execution, actionContracts: req.actionContracts, RetryUncertain: req.RetryUncertain, runID: r.ChildID, ordered: true}
 	child, childErr := e.execute(ctx, ref, childReq, all, slots, depth+1, waitingChild)
 	r.Status = "completed"
 
