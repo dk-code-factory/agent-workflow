@@ -8,6 +8,7 @@ import tempfile
 import subprocess
 import threading
 import unittest
+import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix.core import Ledger, canonical, digest, identity
@@ -65,7 +66,7 @@ class FakeGitHub:
             self.ev["metadata"].update(payload)
             result = copy.deepcopy(self.ev["metadata"])
         elif method == "POST" and path.endswith("/comments"):
-            result = {"id": 123, "body": payload["body"], "user": copy.deepcopy(self.ev["viewer"])}
+            result = {"id": 123 + len(self.ev["comments"]), "body": payload["body"], "user": copy.deepcopy(self.ev["viewer"])}
             if not self.delay_creation:
                 self.ev["comments"].append(copy.deepcopy(result))
         elif method == "POST" and path.endswith("/replies"):
@@ -107,6 +108,7 @@ class FakeGitHub:
 
 class PublicationTests(unittest.TestCase):
     def setUp(self):
+        git_fixture.isolate(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -397,7 +399,8 @@ class PublicationTests(unittest.TestCase):
         source, remote = self.root / "checkout", self.root / "remote.git"
         source.mkdir()
         def git(root, *args):
-            result = subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=root, stdout=subprocess.PIPE,
+            result = subprocess.run(git_fixture.command("-c", "commit.gpgsign=false", *args), cwd=root, stdout=subprocess.PIPE,
+                                    env=git_fixture.environment(),
                                     stderr=subprocess.PIPE, check=True, timeout=10)
             return result.stdout.decode().strip()
         git(self.root, "init", "--bare", str(remote))

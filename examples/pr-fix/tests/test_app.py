@@ -6,9 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
-from prfix import app
+from prfix import app, publishing
 from prfix.core import Ledger, artifact, canonical, digest, identity, read_artifact
 from prfix.prepare import CHECKLIST, prepare
 from test_publication import AUTH, FakeGitHub
@@ -19,7 +20,8 @@ FIXER = "agent_" + "3" * 32
 
 
 def git(root, *args):
-    result = subprocess.run(["git", *args], cwd=root, stdout=subprocess.PIPE,
+    result = subprocess.run(git_fixture.command(*args), cwd=root, stdout=subprocess.PIPE,
+                            env=git_fixture.environment(),
                             stderr=subprocess.PIPE, timeout=15, check=True)
     return result.stdout.decode().strip()
 
@@ -75,6 +77,7 @@ class AppFixture:
 
 class AppTests(unittest.TestCase):
     def setUp(self):
+        git_fixture.isolate(self)
         self.temp = tempfile.TemporaryDirectory(prefix="portable-pr-app-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -97,6 +100,87 @@ class AppTests(unittest.TestCase):
         claim = self.claim()
         self.accept(claim, self.fixture.report(findings=[{"id": "R1", "text": "A sourced original defect", "sources": ["source"]}]))
         return app.candidates(self.root, self.ledger, self.plan)[0]
+
+    def test_incoming_discussion_during_turn_cannot_gain_report_coverage(self):
+        claim = self.claim()
+        self.provider.ev["comments"].append({"id": 88, "body": "New governing request", "user": {"id": 21}})
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            self.accept(claim)
+        self.assertEqual(app._claim(self.ledger, claim["claim"])["state"], "claimed")
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM accepted_reports").fetchone()[0], 0)
+
+    def test_writer_governing_drift_is_rejected_before_controlled_commit(self):
+        claim = self.claim("finding_fix")
+        before = (self.root / "code.py").read_bytes()
+        (self.root / "code.py").write_text("value = 3\n")
+        self.provider.ev["comments"].append({"id": 88, "body": "Changed writing request", "user": {"id": 21}})
+        report = self.fixture.report(changes=[{"path": "code.py", "before": hashlib.sha256(before).hexdigest(),
+            "after": app.source_file(self.root, "code.py")}], commit_message="Fix source")
+        parent = git(self.root, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            self.accept(claim, report, agent=FIXER)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), parent)
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+
+    def publish_items(self, listed):
+        for proposal in listed:
+            prepared = publishing.publication_prepare(self.root, self.provider, self.ledger, self.plan, {"proposal": proposal})
+            report = self.fixture.report(audience={"fingerprint": prepared["fingerprint"], "suitable": True,
+                                                  "audience": "PR participants", "evidence": ["source"]})
+            published = publishing.publication_execute(self.root, self.provider, self.ledger, self.plan,
+                {"id": prepared["id"], "agent": VERIFIER, "report": report})
+            publishing.publication_record(self.root, self.provider, self.ledger, self.plan,
+                {"id": prepared["id"], "receipt": published["receipt"]})
+
+    def test_real_capture_preserves_two_replies_and_edit_but_rejects_incoming_discussion(self):
+        self.plan["options"]["permissions"] = {"reply_to_feedback": True, "edit_pr": True}
+        claim = self.claim()
+        proposals = [{"kind": "reply", "head": self.fixture.head, "target": self.fixture.target,
+                      "payload": {"body": body}} for body in ("First sourced answer", "Second sourced answer")]
+        proposals.insert(1, {"kind": "edit_pr", "head": self.fixture.head, "target": self.fixture.target,
+                             "payload": {"title": "Reconciled application title"}})
+        self.accept(claim, self.fixture.report(operations=proposals))
+        listed = publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"]
+        self.assertEqual(len(listed), 3)
+        self.publish_items(listed)
+        self.assertEqual(len(self.provider.writes), 3)
+        self.assertEqual(len(publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"]), 3)
+        self.provider.ev["comments"][0]["body"] = "Changed after reconciliation"
+        self.assertEqual(publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"], [])
+        self.provider.ev["comments"][0]["body"] = "First sourced answer"
+        self.provider.ev["comments"].append({"id": 999, "body": "Unrelated incoming request", "user": {"id": 21}})
+        self.assertEqual(publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"], [])
+
+    def test_real_capture_preserves_inline_answer_and_thread_resolution(self):
+        self.plan["options"]["permissions"] = {"reply_to_feedback": True, "resolve_threads": True}
+        source = {"id": 15, "body": "Please fix", "user": {"id": 21}}
+        self.provider.ev["inline"] = [source]
+        self.provider.ev["threads"] = [{"id": "thread15", "isResolved": False,
+                                         "comments": {"nodes": [{"databaseId": 15}]}}]
+        claim = self.claim()
+        proposals = [{"id": "inline-answer", "kind": "reply_inline", "head": self.fixture.head, "target": self.fixture.target,
+                      "payload": {"body": "Fixed with evidence", "comment_id": 15},
+                      "source": {"kind": "inline", "id": 15, "fingerprint": digest(source)}},
+                     {"id": "resolve-answer", "kind": "resolve_thread", "head": self.fixture.head, "target": self.fixture.target,
+                      "payload": {"thread_id": "thread15", "reply_operation": "inline-answer"}}]
+        self.accept(claim, self.fixture.report(operations=proposals))
+        listed = publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"]
+        self.publish_items(listed)
+        self.assertEqual(len(self.provider.writes), 2)
+        self.assertTrue(self.provider.ev["threads"][0]["isResolved"])
+        self.assertIsNotNone(app._current(self.ledger, app._snapshot(self.root, self.provider, self.plan), self.review))
+
+    def test_controlled_commit_accounts_for_both_paths_of_a_rename(self):
+        claim = self.claim("finding_fix")
+        before = hashlib.sha256((self.root / "code.py").read_bytes()).hexdigest()
+        (self.root / "code.py").rename(self.root / "renamed.py")
+        report = self.fixture.report(changes=[{"path": "code.py", "before": before, "after": None},
+            {"path": "renamed.py", "before": None, "after": before}], commit_message="Rename fixture source")
+        accepted = self.accept(claim, report, agent=FIXER)
+        self.assertTrue(accepted["complete"])
+        self.assertEqual(git(self.root, "diff", "--cached", "--name-only"), "")
+        self.assertEqual(git(self.root, "show", "HEAD:renamed.py"), "value = 2")
+        self.assertEqual(self.ledger.db.execute("SELECT state FROM local_commits").fetchone()[0], "completed")
 
     def test_empty_and_forged_evidence_checklists_cannot_complete(self):
         task = self.review

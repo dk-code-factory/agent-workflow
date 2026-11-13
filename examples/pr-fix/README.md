@@ -10,8 +10,8 @@ Read the [setup, execution and recovery guide](../../docs/PR_FIX.md) before use.
 The example performs real GitHub operations only when selected permissions and
 the exact original user authorization allow them. The sample disables remote
 permissions and supplies no authorizations.
-Its native `workspace-write` sandbox permits local source edits after the
-required iteration authorization is supplied.
+Its native `workspace-write` sandbox permits local source edits for selected
+writing tasks. Remote publication still requires explicit authorization.
 
 ## Files and requirements
 

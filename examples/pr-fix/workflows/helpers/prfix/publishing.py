@@ -349,6 +349,24 @@ def merge_proposal(root, provider, ledger, plan, inputs):
     return {"invoke": True, "proposal": proposal}
 
 
+def completed_merge(root, provider, ledger, plan, completion):
+    """Validate historical readiness through its exact authorized merge effect."""
+    authority = plan.get("authorizations", {}).get("merge")
+    if not completion.get("complete") or not completion.get("ready") or authority is None:
+        return False
+    publisher = _publication(root, provider, ledger, plan)
+    for row in ledger.db.execute("SELECT id FROM publication_intents WHERE state IN ('uncertain','completed')"):
+        saved = publisher._load(row["id"])
+        intent = saved["intent"]
+        if (intent["kind"] != "merge" or intent["head"] != completion.get("head")
+                or intent["target"] != completion.get("target") or intent["authorization"] != authority):
+            continue
+        _retained_audience(root, ledger, saved)
+        if publisher.reconcile(saved["id"]).get("outcome") == "completed":
+            return True
+    return False
+
+
 def dispatch(operation, root, provider, ledger, plan, inputs):
     handlers = {"publication_list": publication_list, "publication_prepare": publication_prepare,
                 "publication_execute": publication_execute, "publication_record": publication_record,

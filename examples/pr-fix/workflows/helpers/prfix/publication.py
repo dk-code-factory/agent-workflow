@@ -97,6 +97,32 @@ def _discussion(ev):
     return digest({key: ev.get(key, []) for key in ("comments", "reviews", "inline", "threads")})
 
 
+def original_discussion(ledger, plan, discussion):
+    """Remove only exact, reconciled effects created by this logical run."""
+    result = copy.deepcopy(discussion)
+    for row in ledger.db.execute("SELECT id,fingerprint,value,state,receipt FROM publication_intents WHERE state='completed' ORDER BY rowid DESC"):
+        saved = _row(row)
+        intent, receipt = saved["intent"], saved["receipt"]
+        if (saved["fingerprint"] != digest(intent) or intent.get("run") != plan["logical_run"]
+                or intent.get("pr") != plan["pr"] or not isinstance(receipt, dict)
+                or receipt.get("id") != saved["id"] or receipt.get("fingerprint") != saved["fingerprint"]
+                or receipt.get("actor_id") != intent.get("actor_id")):
+            raise PublicationError("retained discussion effect identity differs")
+        kind, payload, observed = intent["kind"], intent["payload"], receipt.get("result")
+        if kind in {"reply", "reply_inline"} and not intent["before"].get("satisfied_comment_id"):
+            key = "comments" if kind == "reply" else "inline"
+            if (isinstance(observed, dict) and observed.get("body") == payload["body"]
+                    and observed.get("user", {}).get("id") == intent["actor_id"]):
+                result[key] = [item for item in result[key] if item != observed]
+        elif kind == "edit_pr" and observed == payload and all(result.get(key) == value for key, value in payload.items()):
+            result.update(intent["before"])
+        elif kind == "resolve_thread" and isinstance(observed, dict):
+            before = intent["before"].get("thread")
+            if before is not None:
+                result["threads"] = [copy.deepcopy(before) if thread == observed else thread for thread in result["threads"]]
+    return result
+
+
 class Publication:
     """Application-owned publication policy with a narrow fakeable transport.
 
@@ -345,6 +371,10 @@ class Publication:
                 intent["before"]["satisfied_comment_id"] = matches[0]["id"]
         elif kind == "edit_pr":
             intent["before"] = {key: meta.get(key) for key in payload}
+        elif kind == "resolve_thread":
+            threads = [thread for thread in ev.get("threads", []) if thread.get("id") == payload["thread_id"]]
+            if len(threads) == 1:
+                intent["before"]["thread"] = copy.deepcopy(threads[0])
         elif kind == "split_pr":
             pushed = self._load(payload["push_operation"])
             if pushed["state"] != "completed" or pushed["intent"]["kind"] != "split_push" or not self.validate(pushed["id"], pushed["receipt"]):

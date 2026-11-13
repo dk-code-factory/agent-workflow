@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from importlib import import_module
+import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix import core
@@ -16,6 +17,7 @@ from test_capture import Fixture, PR, git
 
 class PrepareTests(unittest.TestCase):
     def setUp(self):
+        git_fixture.isolate(self)
         self.temp = tempfile.TemporaryDirectory(prefix="portable-pr-prepare-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -130,6 +132,42 @@ class PrepareTests(unittest.TestCase):
         self.assertNotEqual(first["plan"], second["plan"])
         config = json.loads((self.root / second["config"]).read_text())
         self.assertEqual(config["agents"]["codex"]["model"], "fixture-model")
+
+    def test_five_turn_runtime_ceiling_applies_to_all_generated_native_tasks(self):
+        self.request["runtime"] = {"limits": {"max-turns": 5}}
+        self.request["options"]["tasks"] = ["dk-workflows:dk-pr-description"]
+        result, _ = self.prepare()
+        turns = []
+        def walk(value):
+            if isinstance(value, dict):
+                if value.get("uses") == "agent/run":
+                    turns.append(value["with"]["turns"])
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+        for path in (self.root / result["workflow"]).parent.glob("*.yml"):
+            walk(json.loads(path.read_text()))
+        self.assertTrue(turns)
+        self.assertEqual(set(turns), {5})
+        for limit in (True, -1, 1, 4):
+            self.request["runtime"]["limits"]["max-turns"] = limit
+            with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, "five retained turns"):
+                self.prepare()
+
+    def test_ci_yaml_chunks_cover_the_longest_retained_deadline(self):
+        self.request["options"]["tasks"] = ["dk-workflows:dk-ci"]
+        self.request["options"]["ci"] = {"timeout_seconds": 86400}
+        result, _ = self.prepare()
+        directory = (self.root / result["workflow"]).parent
+        cycle = json.loads((directory / "cycle.yml").read_text())
+        polling = next(job for job in cycle["jobs"].values() if job.get("uses", "").endswith("/ci-poll.yml"))
+        chunk = json.loads((directory / "ci-poll.yml").read_text())["jobs"]["observe"]
+        self.assertIn("iteration.number == 100", chunk["repeat"]["until"])
+        observations = polling["repeat"]["max-attempts"] * chunk["repeat"]["max-attempts"]
+        self.assertGreater((observations - 1) * 10, 86400)
+        self.assertTrue(chunk["uses"].endswith("/ci.yml"))
 
     def test_invalid_runtime_does_not_poison_corrected_preparation(self):
         invalid = copy.deepcopy(self.request)

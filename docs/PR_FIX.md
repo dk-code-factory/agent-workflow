@@ -295,3 +295,9 @@ describes the earlier implementation. Deterministic fixtures for the portable
 contract live under `examples/pr-fix/tests` and in the stock-engine example test.
 Live providers, Docker conformance and GitHub publication conformance remain
 separate opt-ins.
+
+A configured native `runtime.limits.max-turns` ceiling must allow at least five
+turns for the original attempt, one eligible retry and three checklist
+continuations. Generated native tasks use up to eight turns within that ceiling.
+CI observations remain in visible nested YAML repeats; the retained absolute
+deadline governs the supported wait of up to 86,400 seconds.

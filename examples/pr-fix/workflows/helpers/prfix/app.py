@@ -311,6 +311,15 @@ def accept(root, provider, ledger, plan, inputs):
     _dispositions(root, ledger, plan, task, report, agent, assignment)
     reference = artifact(root, {"claim": claim["id"], "agent": agent, "round": round_number, "report": report})
     snapshot = _snapshot(root, provider, plan)
+    governing = dict(snapshot)
+    if task["writes"]:
+        # Source edits belong to this writer; governing instructions and remote
+        # evidence still have to match the assignment it actually received.
+        for key in ("local_tree", "diff", "local_head", "history"):
+            if key in assignment["snapshot"]:
+                governing[key] = assignment["snapshot"][key]
+    if _fingerprint(governing, task, ledger) != _fingerprint(assignment["snapshot"], task, ledger):
+        raise ValueError("governing inputs changed during the native turn")
     # A writing report must account for every actual path and commit through the
     # controlled Git helper before obtaining coverage on its resulting tree.
     if task["writes"] and report.get("changes") and complete:
@@ -445,7 +454,7 @@ def _commit(root, ledger, claim_id, task, report, snapshot):
     if parent != snapshot["local_head"]:
         raise ValueError("agent changed Git history outside controlled commit")
     git(root, "--literal-pathspecs", "add", "--", *names)
-    staged = set(git(root, "diff", "--cached", "--name-only", "-z").decode().split("\0")) - {""}
+    staged = set(git(root, "diff", "--cached", "--name-only", "--no-renames", "-z").decode().split("\0")) - {""}
     if staged != set(names):
         raise ValueError("staged files differ from native accepted manifest")
     tree = git(root, "write-tree").decode().strip()

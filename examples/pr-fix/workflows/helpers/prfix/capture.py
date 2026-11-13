@@ -507,6 +507,12 @@ def capture(root, provider, plan, *, clean=False):
                if k not in ("tasks", "finalizers", "reviewers", "limits")}
     discussion = {"title": metadata.get("title"), "body": metadata.get("body"),
                   **{k: observed[k] for k in ("comments", "reviews", "inline", "threads")}}
+    ledger_path = root / STATE / (plan["logical_run"] + ".sqlite")
+    if ledger_path.is_file():
+        from .core import Ledger
+        from .publication import original_discussion
+        with Ledger(root, plan["logical_run"], pr["url"], read_only=True) as ledger:
+            discussion = original_discussion(ledger, plan, discussion)
     resources = resource_digests(root, plan.get("resources", {}))
     result = {"pr": pr, "head": head, "target": target, "base": base,
               "local_head": local_head, **trees, "author": author["login"],

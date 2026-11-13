@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 import action
@@ -12,10 +13,12 @@ from prfix import app, publishing
 from prfix.core import Ledger, artifact, digest, read_artifact
 from prfix.prepare import prepare
 from test_app import AppFixture, REVIEWER, VERIFIER
+from test_publication import AUTH
 
 
 class ActionTests(unittest.TestCase):
     def setUp(self):
+        git_fixture.isolate(self)
         self.temp = tempfile.TemporaryDirectory(prefix="portable-pr-action-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -170,6 +173,41 @@ class ActionTests(unittest.TestCase):
         before = self.state()
         self.assertTrue(self.handle("completion", "validate_checkpoint", checkpoint=completed["result"])["valid"])
         self.assertEqual(before, self.state())
+
+    def test_completion_survives_authorized_merge_with_lost_response_before_reconciliation(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"]["tasks"] = ["local:review"]
+        request["authorizations"]["merge"] = AUTH
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        head, target = self.fixture.head, self.fixture.target
+        self.provider.merge_state["headRefOid"] = head
+        self.provider.parents = [target, head]
+        with self.ledger() as ledger:
+            for task in self.plan["tasks"]:
+                claim = app.prepare_claim(self.root, self.provider, ledger, self.plan, {"task": task["id"]})
+                app.accept(self.root, self.provider, ledger, self.plan, {"claim": claim["claim"],
+                    "agent": VERIFIER if task["kind"] == "verification" else REVIEWER,
+                    "report": self.fixture.report(dispositions=[])})
+            completion = self.handle("completion", "execute")
+            self.assertTrue(completion["result"]["output"]["ready"], completion)
+            proposal = publishing.merge_proposal(self.root, self.provider, ledger, self.plan, {})["proposal"]
+            prepared = publishing.publication_prepare(self.root, self.provider, ledger, self.plan, {"proposal": proposal})
+        inputs = {"id": prepared["id"], "agent": "agent_" + "4" * 32,
+                  "report": self.fixture.report(audience={"fingerprint": prepared["fingerprint"], "suitable": True,
+                                                         "audience": "PR participants", "evidence": ["source"]})}
+        self.provider.lose_response = True
+        with self.assertRaisesRegex(OSError, "response lost"):
+            self.handle("publication_execute", "execute", inputs, key="merge")
+        self.assertTrue(self.provider.ev["metadata"]["merged"])
+        before = self.state()
+        self.assertTrue(self.handle("completion", "validate_checkpoint", checkpoint=completion["result"])["valid"])
+        self.assertEqual(before, self.state())
+        reconciled = self.handle("publication_execute", "reconcile", inputs, key="merge")
+        self.assertEqual(reconciled["outcome"], "completed")
+        self.assertEqual(len(self.provider.writes), 1)
+        self.provider.ev["metadata"]["merged_by"]["id"] = 999
+        self.assertFalse(self.handle("completion", "validate_checkpoint", checkpoint=completion["result"])["valid"])
 
     def test_publication_record_checkpoint_invokes_service_receipt_validator(self):
         value = {"id": "fixture-publication", "receipt": {"id": "fixture-publication"}}

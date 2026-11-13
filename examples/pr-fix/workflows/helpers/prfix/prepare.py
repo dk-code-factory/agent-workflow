@@ -214,6 +214,17 @@ def ci_workflow(image):
                 outputs={"settled": expression("steps.ci.outputs.pending != true"), "failed": expression("steps.ci.outputs.failed")})}}
 
 
+def ci_poll_workflow(prefix):
+    # Two visible bounded repeats cover every supported absolute deadline;
+    # the helper owns deadline expiry, independently of structural chunking.
+    observe = _call(prefix, "ci.yml", expression("inputs.plan"))
+    observe["repeat"] = {"max-attempts": 100,
+                         "until": expression("iteration.outputs.settled or iteration.number == 100")}
+    return {"name": "Bounded CI observation chunk", "on": interface({"plan": "string"},
+        {"settled": expression("jobs.observe.outputs.settled"), "failed": expression("jobs.observe.outputs.failed")}),
+        "jobs": {"observe": observe}}
+
+
 def _call(prefix, workflow, plan, needs=None, cycle=None):
     value = {"uses": prefix + "/" + workflow, "with": {"plan": plan},
              "secrets": {"github_token": expression("secrets.github_token")}}
@@ -327,6 +338,13 @@ def prepare(root, request, provider=None):
     runtime = request.get("runtime", {})
     if not isinstance(runtime, dict) or set(runtime) - {"authentication", "model", "limits", "sandbox"}:
         raise ValueError("unsupported runtime configuration")
+    runtime_limits = runtime.get("limits", {})
+    if not isinstance(runtime_limits, dict):
+        raise ValueError("runtime limits must be an object")
+    turn_limit = runtime_limits.get("max-turns", 0)
+    if type(turn_limit) is not int or turn_limit < 0 or 0 < turn_limit < 5:
+        raise ValueError("runtime turn limit must support at least five retained turns")
+    turns = min(8, turn_limit) if turn_limit else 8
     options = request.get("options", {})
     if not isinstance(options, dict):
         raise ValueError("options must be an object")
@@ -472,7 +490,8 @@ def prepare(root, request, provider=None):
             for key, value in definitions.items():
                 (directory / "agents" / (key + ".toml")).write_bytes(value)
             documents = {"continue.yml": continue_workflow(image), "retry.yml": retry_workflow(image), "publication.yml": publication_workflow(image),
-                         "publication-barrier.yml": publication_barrier(image, prefix), "ci.yml": ci_workflow(image)}
+                         "publication-barrier.yml": publication_barrier(image, prefix), "ci.yml": ci_workflow(image),
+                         "ci-poll.yml": ci_poll_workflow(prefix)}
             for task in tasks:
                 documents[task["id"] + ".yml"] = leaf_workflow(image, prefix, task)
             jobs, previous = {}, []
@@ -490,7 +509,7 @@ def prepare(root, request, provider=None):
                     jobs[label + "_fix"] = _call(prefix, "finding_fix.yml", expression("inputs.plan"), [label + "_verify"], expression("inputs.cycle"))
                     previous = [label + "_fix"]
                 else:
-                    filename = "publication-barrier.yml" if stage["kind"] == "publication" else "ci.yml"
+                    filename = "publication-barrier.yml" if stage["kind"] == "publication" else "ci-poll.yml"
                     jobs[label] = _call(prefix, filename, expression("inputs.plan"), previous)
                     if stage["kind"] == "ci":
                         jobs[label]["repeat"] = {"max-attempts": 100, "until": expression("iteration.outputs.settled")}
@@ -520,6 +539,16 @@ def prepare(root, request, provider=None):
                     "uses": prefix + "/publication.yml", "with": {"plan": expression("inputs.plan"), "proposal": expression("needs.merge_proposal.outputs.proposal")},
                     "secrets": {"github_token": expression("secrets.github_token")}}
             for name, document in documents.items():
+                def configure_turns(value):
+                    if isinstance(value, dict):
+                        if value.get("uses") == "agent/run":
+                            value["with"]["turns"] = turns
+                        for child in value.values():
+                            configure_turns(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            configure_turns(child)
+                configure_turns(document)
                 atomic_json(directory / name, document)
             configuration = {"execution": {"mode": "container", "image": image, "runtime": "docker", "network": "bridge", "writable": True},
                              "agents": {"codex": {"provider": "codex-app-server", "execution": {"mode": "local"},

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
+import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix import capture as module
@@ -18,7 +19,8 @@ PR = module.identity("https://github.com/owner/repo/pull/17")
 
 
 def git(root, *args):
-    return subprocess.run(["git", *args], cwd=root, check=True,
+    return subprocess.run(git_fixture.command(*args), cwd=root, check=True, timeout=15,
+                          env=git_fixture.environment(),
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
 
 
@@ -57,6 +59,7 @@ class Fixture:
 
 class CaptureTests(unittest.TestCase):
     def setUp(self):
+        git_fixture.isolate(self)
         self.temp = tempfile.TemporaryDirectory(prefix="portable-pr-capture-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

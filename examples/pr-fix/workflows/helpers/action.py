@@ -168,10 +168,12 @@ def handle(operation, request, root=None, provider=None):
                 current_fingerprint = digest([current_fingerprint, assignment["invocation"]])
                 valid = valid and current_fingerprint == retained["fingerprint"]
         if valid and operation == "completion":
-            from prfix.publishing import readiness
+            from prfix.publishing import readiness, completed_merge
             current = readiness(root, provider, ledger, plan)
             old = checkpoint["output"]
             valid = current["complete"] and (not old["ready"] or current["ready"] and current["head"] == old["head"] and current["target"] == old["target"])
+            if not valid:
+                valid = completed_merge(root, provider, ledger, plan, old)
         return {**response, "valid": bool(valid)}
 
 
