@@ -80,6 +80,19 @@ def _positive(value, label):
     return value
 
 
+def _kill_process_group(child):
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS can report EPERM for a group containing only an exited,
+        # unreaped child. Preserve the original transport failure in that case,
+        # but never suppress denied cleanup while the child is still running.
+        if child.poll() is None:
+            raise
+
+
 def run(root, argv, data=None, *, timeout=60, limit=MAX_OUTPUT, env=None):
     """Bound both pipes while the process runs, including diagnostic output.
 
@@ -144,10 +157,7 @@ def run(root, argv, data=None, *, timeout=60, limit=MAX_OUTPUT, env=None):
         finally:
             selector.close()
             if not completed or child.poll() is None:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                _kill_process_group(child)
                 child.wait(timeout=5)
 
 
