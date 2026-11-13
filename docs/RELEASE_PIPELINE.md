@@ -3,7 +3,7 @@
 `.github/workflows/release.yml` is the **sole supported publication mechanism**
 for public `dk-code-factory/agent-workflow`. Do not invoke the publisher locally
 or introduce another workflow that publishes. The current policy version is
-`v0.2.0`; production support remains Linux amd64, subject to complete evidence.
+`v0.2.1`; production support remains Linux amd64, subject to complete evidence.
 Linux arm64 and macOS live certification, API-key/gateway certification and
 Codex managed policy are outside this change.
 
@@ -113,7 +113,7 @@ Create and verify the maintainer-signed annotated version tag, then intentionall
 push it. Do not move an existing tag. Read-only candidate inspection is:
 
 ```sh
-python3 scripts/validate-release.py v0.2.0 --phase candidate
+python3 scripts/validate-release.py v0.2.1 --phase candidate
 ```
 
 `--offline` validates only local gates and never authorizes publication. Complete
@@ -173,13 +173,13 @@ Consumers should verify the signed tag, SHA256SUMS, manifest/provenance and immu
 release membership before extraction. For example:
 
 ```sh
-git verify-tag v0.2.0
-gh attestation verify agent-workflow-0.2.0-linux-amd64.tar.gz \
+git verify-tag v0.2.1
+gh attestation verify agent-workflow-0.2.1-linux-amd64.tar.gz \
   --repo dk-code-factory/agent-workflow \
   --signer-workflow dk-code-factory/agent-workflow/.github/workflows/release.yml \
-  --source-digest "$COMMIT" --signer-digest "$COMMIT" --source-ref refs/tags/v0.2.0 \
+  --source-digest "$COMMIT" --signer-digest "$COMMIT" --source-ref refs/tags/v0.2.1 \
   --bundle archive-provenance.jsonl
-gh release verify v0.2.0 --repo dk-code-factory/agent-workflow
+gh release verify v0.2.1 --repo dk-code-factory/agent-workflow
 ```
 
 Obtain `$COMMIT` from the verified tag. Verify `release-manifest.json` and images
