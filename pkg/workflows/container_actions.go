@@ -290,17 +290,21 @@ func validateContainerCapabilities(v containerResponse, effect ActionEffect) err
 }
 
 type boundedProtocolOutput struct {
-	bytes.Buffer
+	// A named buffer keeps io.Copy from bypassing Write through ReadFrom.
+	buffer   bytes.Buffer
 	limit    int
 	overflow bool
 }
 
+func (b *boundedProtocolOutput) Bytes() []byte  { return b.buffer.Bytes() }
+func (b *boundedProtocolOutput) String() string { return b.buffer.String() }
+
 func (b *boundedProtocolOutput) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > b.limit {
+	if b.buffer.Len()+len(p) > b.limit {
 		b.overflow = true
 		return 0, fmt.Errorf("helper output exceeds %d bytes", b.limit)
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 func decodeContainerResponse(data []byte, phase string) (containerResponse, error) {
 	var v containerResponse

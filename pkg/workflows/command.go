@@ -20,18 +20,21 @@ type commandInputKey struct{}
 const MaxCommandOutput = 16 << 20
 
 type cappedOutput struct {
-	bytes.Buffer
+	// A named buffer keeps io.Copy from bypassing Write through ReadFrom.
+	buffer   bytes.Buffer
 	overflow bool
 }
 
+func (b *cappedOutput) String() string { return b.buffer.String() }
+
 func (b *cappedOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	remaining := MaxCommandOutput - b.Len()
+	remaining := MaxCommandOutput - b.buffer.Len()
 	if len(p) > remaining {
 		p = p[:remaining]
 		b.overflow = true
 	}
-	_, _ = b.Buffer.Write(p)
+	_, _ = b.buffer.Write(p)
 	return n, nil
 }
 
