@@ -174,6 +174,65 @@ class PrepareTests(unittest.TestCase):
                 self.assertIn("merge_proposal", main["jobs"])
                 self.assertIn("merge", main["jobs"])
 
+    def test_ci_controls_fail_before_capture_or_state_creation(self):
+        invalid = [None, [], True, "timeout", {"timeout": 30}, {"unknown": True}]
+        invalid += [{"timeout_seconds": value} for value in (0, 86401, True, None, "30", 1.5)]
+        invalid += [{"classifications": value} for value in ({}, None, [False])]
+        invalid += [{"exceptions": value} for value in (False, None, [False], {"entries": {}})]
+        for selected in invalid:
+            request = copy.deepcopy(self.request)
+            request["options"]["tasks"] = ["dk-workflows:dk-ci"]
+            request["options"]["ci"] = selected
+            with self.subTest(ci=selected), patch.object(self.fixture, "capture", wraps=self.fixture.capture) as capture:
+                with self.assertRaisesRegex(ValueError, "CI"):
+                    self.prepare(request)
+                capture.assert_not_called()
+                self.assertFalse((self.root / core.STATE).exists())
+                self.assertFalse((self.root / core.GENERATED).exists())
+
+    def test_ci_alias_controls_are_validated_before_state_creation(self):
+        for options in ({"ci_timeout_seconds": 0}, {"ci_classifications": {}},
+                        {"ci_exceptions": {"entries": False}}):
+            request = copy.deepcopy(self.request)
+            request["options"].update(options)
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "CI"):
+                self.prepare(request)
+            self.assertFalse((self.root / core.STATE).exists())
+            self.assertFalse((self.root / core.GENERATED).exists())
+
+    def test_supported_ci_controls_retain_nested_and_alias_configuration(self):
+        for selected in ({"ci": {"timeout_seconds": 1, "classifications": [], "exceptions": []}},
+                         {"ci": {"timeout_seconds": 86400, "exceptions": {"entries": []}}},
+                         {"ci_timeout_seconds": 120, "ci_classifications": [], "ci_exceptions": {"entries": []}}):
+            request = copy.deepcopy(self.request)
+            request["options"].update(selected)
+            with self.subTest(options=selected):
+                _, plan = self.prepare(request)
+                for key, value in selected.items():
+                    self.assertEqual(plan["options"][key], value)
+
+    def test_worker_admission_reserves_the_known_final_merge_audience(self):
+        request = copy.deepcopy(self.request)
+        request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"], "finalizers": [],
+                              "reviewers": ["local:review"], "limits": {"review_cycles": 1}}
+        request["adapters"] = {"local:review": {"kind": "review", "assignment": "Inspect sources"}}
+        request["runtime"] = {"limits": {"max-workers": 3}}
+        request["authorizations"]["merge"] = {
+            "request_id": "merge-fixture", "instruction": "Merge this PR when ready.", "source": "user:fixture"}
+        with patch.object(self.fixture, "capture", wraps=self.fixture.capture) as capture:
+            with self.assertRaisesRegex(ValueError, "worker admission"):
+                self.prepare(request)
+            capture.assert_not_called()
+        self.assertFalse(any((self.root / core.GENERATED).rglob("main.yml")))
+        request["runtime"]["limits"]["max-workers"] = 4
+        result, _ = self.prepare(request)
+        main = json.loads((self.root / result["workflow"]).read_text())
+        self.assertIn("merge", main["jobs"])
+        request["runtime"]["limits"]["max-workers"] = 3
+        del request["authorizations"]["merge"]
+        result, _ = self.prepare(request)
+        self.assertNotIn("merge", json.loads((self.root / result["workflow"]).read_text())["jobs"])
+
     def test_worker_admission_counts_every_retained_cycle(self):
         request = copy.deepcopy(self.request)
         request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"], "finalizers": [],

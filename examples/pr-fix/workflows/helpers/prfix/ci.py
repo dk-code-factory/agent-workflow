@@ -34,6 +34,34 @@ def _tuple(value):
     return tuple(str(value.get(k, "")) for k in ("head", "check_id", "run_id", "job_id", "attempt"))
 
 
+def configuration(options):
+    """Validate declared controls before admission or any CI observation."""
+    selected = options.get("ci", {})
+    if not isinstance(selected, dict) or set(selected) - {"timeout_seconds", "classifications", "exceptions"}:
+        raise ValueError("unsupported CI controls; expected timeout_seconds/classifications/exceptions object")
+    for values, key in ((selected, "timeout_seconds"), (options, "ci_timeout_seconds")):
+        if key in values:
+            timeout = values[key]
+            if type(timeout) is not int or not 1 <= timeout <= 86400:
+                raise ValueError("CI timeout must be an integer in 1..86400 seconds")
+    for values, classification_key, exception_key in (
+            (selected, "classifications", "exceptions"), (options, "ci_classifications", "ci_exceptions")):
+        if classification_key in values:
+            candidates = values[classification_key]
+            if not isinstance(candidates, list) or any(not isinstance(item, dict) for item in candidates):
+                raise ValueError("CI classifications must be an array of objects")
+        if exception_key in values:
+            rules = values[exception_key]
+            if isinstance(rules, dict):
+                rules = rules.get("entries", [])
+            if not isinstance(rules, list) or any(not isinstance(item, dict) for item in rules):
+                raise ValueError("CI exceptions must contain an array of objects")
+    rules = selected.get("exceptions", options.get("ci_exceptions", []))
+    return {"timeout_seconds": selected.get("timeout_seconds", options.get("ci_timeout_seconds", 1800)),
+            "classifications": selected.get("classifications", options.get("ci_classifications", [])),
+            "exceptions": rules.get("entries", []) if isinstance(rules, dict) else rules}
+
+
 def classify(observation, exceptions=None):
     """Classify an exact inventory using independently verified proof objects.
 
@@ -265,11 +293,8 @@ def _timestamp(value):
 
 def observe(provider, plan, ledger, operation):
     """Observe once. A new process or head never silently renews the clock."""
-    options = plan.get("options", {})
-    selected = options.get("ci", {})
-    timeout = selected.get("timeout_seconds", options.get("ci_timeout_seconds", 1800))
-    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 86400:
-        raise ValueError("CI timeout must be an integer in 1..86400 seconds")
+    selected = configuration(plan.get("options", {}))
+    timeout = selected["timeout_seconds"]
     text(operation, "CI observation operation")
     deadline = _timestamp(ledger.deadline("ci:" + plan["logical_run"], timeout))
     if time.time() >= deadline:
@@ -279,10 +304,8 @@ def observe(provider, plan, ledger, operation):
     observation = provider.observe_ci(plan["pr"], head)
     if observation.get("head") != head:
         raise ValueError("CI observer returned another head")
-    candidates = selected.get("classifications", options.get("ci_classifications", []))
-    rules = selected.get("exceptions", options.get("ci_exceptions", []))
-    if isinstance(rules, dict):
-        rules = rules.get("entries", [])
+    candidates = selected["classifications"]
+    rules = selected["exceptions"]
     proofs = verify_exceptions(provider, plan["pr"], observation, candidates, rules) if candidates else []
     result = classify(observation, proofs)
     if time.time() >= deadline:

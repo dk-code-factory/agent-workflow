@@ -323,7 +323,8 @@ A configured native `runtime.limits.max-turns` ceiling must allow at least five
 turns for the original attempt, one eligible retry and three checklist
 continuations. Generated native tasks use up to eight turns within that ceiling.
 Preparation counts native task, verification/fix and possible CI-repair workers
-across every configured cycle, including repeated stages. Plans exceeding the
+across every configured cycle, including repeated stages, plus the final audience
+worker when merge is authorized. Plans exceeding the
 stock retained-worker limit of 64 or a lower `runtime.limits.max-workers` ceiling
 fail preparation; closing a session does not restore that allowance. Publication
 audience sessions also consume retained workers when their intents are dispatched.

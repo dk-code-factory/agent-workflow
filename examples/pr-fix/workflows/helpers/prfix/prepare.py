@@ -370,6 +370,8 @@ def prepare(root, request, provider=None):
                        "ci_timeout_seconds", "ci_classifications", "ci_exceptions", "before_cycle", "after_cycle"}
     if set(options) - allowed_options:
         raise ValueError("unsupported portable option: " + ", ".join(sorted(set(options) - allowed_options)))
+    from .ci import configuration
+    configuration(options)
     if options.get("merge_method", "merge") not in ("merge", "squash"):
         raise ValueError("merge_method supports merge/squash only")
     limits = {"review_cycles": 5, "retries_per_task": 1, "ci_repairs_per_cycle": 5, "ci_reruns_per_head": 3,
@@ -503,7 +505,8 @@ def prepare(root, request, provider=None):
     native_per_cycle = sum(len(stage["tasks"]) if stage["kind"] == "tasks" else
                            2 if stage["kind"] == "verify_fix" else
                            1 if stage["kind"] == "ci" else 0 for stage in stages)
-    if len(tasks) > 40 or native_per_cycle * limits["review_cycles"] > min(64, worker_limit or 64):
+    native_workers = native_per_cycle * limits["review_cycles"] + (1 if "merge" in authorizations else 0)
+    if len(tasks) > 40 or native_workers > min(64, worker_limit or 64):
         raise ValueError("portable plan exceeds bounded engine worker admission")
     if any(task["writes"] for task in tasks):
         _validate_commit_identity(root)
