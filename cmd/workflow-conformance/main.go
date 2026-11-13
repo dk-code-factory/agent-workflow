@@ -461,14 +461,21 @@ func run() (resultErr error) {
 }
 
 func writeWorkflow(root, role, prompt string, structured bool) (string, error) {
+	if role != "codex" {
+		return "", fmt.Errorf("workflow agent-task scenarios require the codex runtime; other backends retain direct adapter scenarios")
+	}
+
 	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		return "", err
 	}
-	with := map[string]any{"prompt": prompt}
+	if err := os.WriteFile(filepath.Join(root, "workflows", "conformance.toml"), []byte("name='conformance'\ndescription='Explicit disposable conformance task'\ndeveloper_instructions='Follow the supplied bounded conformance task.'\n"), 0600); err != nil {
+		return "", err
+	}
+	with := map[string]any{"agent": "conformance.toml", "prompt": prompt}
 	if structured {
 		with["output"] = map[string]any{"format": "json", "repair-attempts": 0, "schema": map[string]any{"type": "object", "required": []string{"ok"}, "properties": map[string]any{"ok": map[string]any{"type": "boolean", "const": true}}, "additionalProperties": false}}
 	}
-	definition := map[string]any{"jobs": map[string]any{"conformance": map[string]any{"steps": []any{map[string]any{"uses": "agent/" + role, "with": with}}}}}
+	definition := map[string]any{"jobs": map[string]any{"conformance": map[string]any{"steps": []any{map[string]any{"uses": "agent/run", "with": with}}}}}
 	data, err := yaml.Marshal(definition)
 	if err != nil {
 		return "", err

@@ -40,6 +40,7 @@ type Snapshot struct {
 }
 
 type Attempt struct {
+	AgentTask        *AgentTaskDispatch `json:"agent_task,omitempty"`
 	Conversation     *ConversationState `json:"conversation,omitempty"`
 	InputFingerprint string             `json:"input_fingerprint,omitempty"`
 	Phase            string             `json:"phase,omitempty"`
@@ -372,8 +373,9 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 	if (phase == "orchestration" || phase == "conversation") && last.Conversation != nil {
 		a.Conversation = last.Conversation
 	}
-	if schemaPhase(last.Phase) {
+	if schemaPhase(last.Phase) && (fingerprint == "" || last.InputFingerprint == fingerprint) {
 		a.Phase = last.Phase
+		a.AgentTask = last.AgentTask
 		a.TaskAttemptID = last.TaskAttemptID
 		a.TaskOutputs = last.TaskOutputs
 		a.RepairCount = last.RepairCount

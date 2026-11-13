@@ -119,7 +119,7 @@ func TestYAMLConversationRoutingSessionsAuthorityAndResult(t *testing.T) {
 		return result, nil
 	})
 	e, store := durableExecutor(t, conversationYAML, runner)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "${{ secrets.unavailable }}"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "${{ secrets.unavailable }}"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestYAMLConversationInvalidOutputIsTerminalWithoutRepair(t *testing.T) {
 		return result, nil
 	})
 	e, _ := durableExecutor(t, conversationYAML, runner)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 	if err == nil || !strings.Contains(err.Error(), "invalid structured output") || run.Status != RunStatusFailed || runner.calls.Load() != 2 {
 		t.Fatalf("invalid completion: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
 	}
@@ -187,7 +187,7 @@ func TestYAMLConversationRejectedArgumentsCannotBeRepaired(t *testing.T) {
 				return result, nil
 			})
 			e, store := durableExecutor(t, conversationYAML, runner)
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 			if err == nil || !strings.Contains(err.Error(), "invalid structured output") || run.Status != RunStatusFailed || runner.calls.Load() != 2 {
 				t.Fatalf("rejected completion: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
 			}
@@ -228,7 +228,7 @@ func TestYAMLConversationBudgetsAndStall(t *testing.T) {
 				return result, nil
 			})
 			e, _ := durableExecutor(t, source, runner)
-			_, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			_, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("missing %s: %v", tc.want, err)
 			}
@@ -262,7 +262,7 @@ func TestYAMLConversationCancellationAndTimeout(t *testing.T) {
 				return result, tc.Err()
 			})
 			e, _ := durableExecutor(t, source, runner)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 			want := context.Canceled
 			if timeout {
 				want = context.DeadlineExceeded
@@ -300,7 +300,7 @@ func TestYAMLConversationIntegrityAndSessionIdentity(t *testing.T) {
 				return result, nil
 			})
 			e, _ := durableExecutor(t, conversationYAML, runner)
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 			if !errors.Is(err, ErrActionIntegrity) || run.Status != RunStatusNeedsAttention || runner.calls.Load() != 1 {
 				t.Fatalf("integrity failure lost: %+v %v", run, err)
 			}
@@ -332,7 +332,7 @@ func TestYAMLConversationAdmissionBeforeEffects(t *testing.T) {
 			})
 			e, _ := durableExecutor(t, conversationYAML, runner)
 			tc.change(e, runner)
-			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil {
+			if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil {
 				t.Fatal("unsupported conversation admitted")
 			}
 		})
@@ -405,7 +405,7 @@ func TestYAMLConversationResumeReusesCompletedTurnAndBudget(t *testing.T) {
 			source := strings.Replace(conversationYAML, "finishBy: reviewer", fmt.Sprintf("finishBy: reviewer\n        maxTurns: %d", maxTurns), 1)
 			e, store := durableExecutor(t, source, runner)
 			e.Store = &conversationFaultStore{SQLiteStore: store, loseCheckpoint: true, loseCompletion: true}
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 			if err == nil || runner.calls.Load() != 1 {
 				t.Fatalf("fault not reached: calls=%d %v", runner.calls.Load(), err)
 			}
@@ -418,7 +418,7 @@ func TestYAMLConversationResumeReusesCompletedTurnAndBudget(t *testing.T) {
 			}
 			defer reopened.Close()
 			e.Store = reopened
-			resumed, err := e.Resume(context.Background(), run.ID, nil, false)
+			resumed, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if maxTurns == 1 {
 				if err == nil || !strings.Contains(err.Error(), "turn budget") || runner.calls.Load() != 1 {
 					t.Fatalf("resume reset budget: %+v calls=%d err=%v", resumed, runner.calls.Load(), err)
@@ -441,12 +441,12 @@ func TestYAMLConversationResumeDoesNotResendUncertainTurn(t *testing.T) {
 		return result, errors.New("lost provider outcome")
 	})
 	e, _ := durableExecutor(t, conversationYAML, runner)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 	if err == nil {
 		t.Fatal("missing uncertain outcome")
 	}
 	for _, retry := range []bool{false, true} {
-		if _, err = e.Resume(context.Background(), run.ID, nil, retry); err == nil {
+		if _, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, retry); err == nil {
 			t.Fatal("uncertain participant turn automatically resent")
 		}
 		if runner.calls.Load() != 1 {
@@ -463,7 +463,7 @@ func TestYAMLConversationLostCompletionReconstructsWithoutProvider(t *testing.T)
 	})
 	e, store := durableExecutor(t, source, runner)
 	e.Store = &conversationFaultStore{SQLiteStore: store, loseCheckpoint: true, loseCompletion: true}
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}})
 	if err == nil {
 		t.Fatal("missing injected failure")
 	}
@@ -478,7 +478,7 @@ func TestYAMLConversationLostCompletionReconstructsWithoutProvider(t *testing.T)
 		t.Fatal(err)
 	}
 	e.Store = store
-	resumed, err := e.Resume(context.Background(), run.ID, nil, false)
+	resumed, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if err != nil || resumed.Status != RunStatusSucceeded || runner.calls.Load() != 1 {
 		t.Fatalf("lost completion repeated provider: %+v calls=%d err=%v", resumed, runner.calls.Load(), err)
 	}
@@ -512,7 +512,7 @@ func TestYAMLConversationNestedCapacityOne(t *testing.T) {
 	e.Slots = make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || run.Status != RunStatusSucceeded || runner.calls.Load() != 2 {
 		t.Fatalf("nested conversations failed: %+v %v", run, err)
 	}
@@ -527,7 +527,7 @@ func TestYAMLConversationRedactsDataPreservingProtocolIdentities(t *testing.T) {
 		return result, conversationCall(ctx, req, "session-finish", "finish", `{"answer":"session-"}`)
 	})
 	e, store := durableExecutor(t, conversationYAML, runner)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}, Secrets: map[string]string{"credential": "session-"}})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}, Secrets: map[string]string{"credential": "session-"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +567,7 @@ func TestYAMLConversationJSONFormatHasObjectToolSchema(t *testing.T) {
 			})
 			source := "jobs: {solve: {steps: [{conversation: [builder, reviewer], finishBy: builder, prompt: task, with: {output: " + output + "}}]}}"
 			e, _ := durableExecutor(t, source, runner)
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusSucceeded {
 				t.Fatalf("JSON contract failed: %+v %v", run, err)
 			}
@@ -617,7 +617,7 @@ func TestYAMLConversationOrderedItemRetryRetainsReceiptsAndBounds(t *testing.T) 
 			e, store := iterationExecutor(t, runner)
 			child := "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n      ordinal: {type: number}\n      identity: {type: string}\n" + conversationYAML
 			if mode == "completed" {
-				child += "      - id: after\n        uses: agent/reviewer\n        with: {prompt: after}\n"
+				child += "      - id: after\n        uses: agent/run\n        with: {prompt: after, agent: reviewer.toml}\n"
 			}
 			if mode == "budget" {
 				child = strings.Replace(child, "finishBy: reviewer", "finishBy: reviewer\n        maxTurns: 1", 1)
@@ -634,7 +634,7 @@ func TestYAMLConversationOrderedItemRetryRetainsReceiptsAndBounds(t *testing.T) 
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			run, err := e.Run(ctx, iterationRequest("task"))
+			run, err := nativeTestExecutor(t, e).Run(ctx, iterationRequest("task"))
 			if err == nil {
 				t.Fatal("missing initial item failure")
 			}
@@ -660,7 +660,7 @@ func TestYAMLConversationOrderedItemRetryRetainsReceiptsAndBounds(t *testing.T) 
 				t.Fatalf("missing retained conversation: %+v calls=%d", state, before)
 			}
 			e.Store = store
-			resumed, err := e.Resume(ctx, run.ID, nil, true)
+			resumed, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true)
 			items := resumed.Jobs["review"].Items
 			if len(items) != 1 || items[0].ChildID == firstChild {
 				t.Fatalf("fresh physical retry not reached: %+v %v", resumed, err)

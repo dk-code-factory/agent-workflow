@@ -2,8 +2,8 @@
 
 `agent-workflow pr-fix` materializes the PR maintenance contract from
 **dk-workflows 5.2.0** into ordinary, versioned YAML workflows. The application
-registers individual operations with the existing typed action API. The workflow
-schema, scheduler, and engine database are unchanged.
+registers individual operations with the existing typed action API. Provider turns use native `agent/run` tasks and their ordered event hooks; PR
+claims, evidence validation, and publication remain application actions.
 
 The authorized core extension, `WorkerManager.AcknowledgeFailure`, lets explicit
 YAML stages acknowledge settled optional failures and eligible retries in the
@@ -15,11 +15,12 @@ classes retain the cleanup barrier. See [the parity matrix](PR_FIX_PARITY.md).
 ## Preparation and execution
 
 Requirements: Git, Python 3, `gh` authenticated for the selected host, and a
-managed leaf role with sessions, resume, and enforceable managed tool policy.
-The bundled source readers use Python's standard library; an installed
-dk-workflows package is not required. Currently the Claude SDK backend supplies
-the necessary capabilities. Its locked Node dependencies must be installed as
-described in the main README. Preparation never refreshes provider login.
+`codex` runtime configured with provider `codex-app-server`, explicit native or
+API-key authentication, and its existing execution policy. Native tasks support
+Codex's default tool policy; explicit managed tool subsets and MCP grants remain
+unsupported. The bundled source readers use Python's standard library; an
+installed dk-workflows package is not required. Preparation never refreshes
+provider login.
 
 Run from a checkout containing the PR head and target objects. Initial runs
 require a clean worktree. Preparation performs GitHub reads, resolves settings,
@@ -27,14 +28,14 @@ validates every selected adapter and role, and writes only local application
 state and generated definitions. It never starts an agent or publishes anything.
 
 ```sh
-agent-workflow pr-fix prepare --workspace . --role pr-fix-leaf \
+agent-workflow pr-fix prepare --workspace . --role codex \
   --instruction-file /path/to/original-request.txt \
   --adapters examples/pr-fix/adapters.yml \
   --options examples/pr-fix/options.json \
   https://github.com/OWNER/REPO/pull/123
 ```
 
-The example role name must exist in `agents.yml`; adapter pass roles are explicit.
+The `codex` role must exist in `agents.yml`; adapter pass roles use that runtime.
 An existing controller retains its admitted role configuration. Restart it after
 changing `agents.yml`; role drift blocks claims before native dispatch.
 The example options preserve default tasks and finalizers while supplying a

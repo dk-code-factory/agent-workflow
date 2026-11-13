@@ -173,9 +173,24 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			continue
 		}
 		command := len(step.Argv) > 0 || step.Run != ""
+		if completionAware(step) && step.Uses != "agent/run" {
+			return fmt.Errorf("step %s: completion hooks require agent/run", sid)
+		}
 		if command {
-			if step.Uses != "" || len(step.With) > 0 {
-				return fmt.Errorf("step %s: commands cannot have uses or with", sid)
+			if step.Uses != "" {
+				return fmt.Errorf("step %s: commands cannot have uses", sid)
+			}
+			for key := range step.With {
+				if key != "input" && key != "output" {
+					return fmt.Errorf("step %s: unsupported command parameter %q", sid, key)
+				}
+			}
+			output, err := resolveNamedOutput(w, step.With["output"])
+			if err != nil {
+				return err
+			}
+			if _, err = ParseAgentOutputContract(output); err != nil {
+				return err
 			}
 			if step.Run != "" && (step.Shell == "" && w.Jobs[id].Container == nil || len(step.Argv) > 0) {
 				return fmt.Errorf("step %s: run requires an explicit shell and cannot have argv", sid)
@@ -258,23 +273,42 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			}
 			continue
 		}
-		if !strings.HasPrefix(step.Uses, "agent/") || !idPattern.MatchString(strings.TrimPrefix(step.Uses, "agent/")) {
-			return fmt.Errorf("step %s: only agent/<name> targets are supported", sid)
+		if step.Uses != "agent/run" {
+			return fmt.Errorf("step %s: only agent/run targets are supported", sid)
 		}
 		if step.Context != (RunContext{}) {
 			return fmt.Errorf("step %s: session/delivery context requires PicoClaw", sid)
 		}
 		for key := range step.With {
 			switch key {
-			case "model", "prompt", "message", "workspace", "output":
+			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns":
 			default:
 				return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
 			}
+		}
+		if step.Uses == "agent/run" {
+			ref, ok := step.With["agent"].(string)
+			if !ok || strings.TrimSpace(ref) == "" {
+				return fmt.Errorf("step %s: agent/run requires with.agent definition or reference", sid)
+			}
+		}
+		for _, key := range []string{"prompt", "message", "model", "workspace"} {
+			if v, present := step.With[key]; present && v != nil {
+				if _, ok := v.(string); !ok {
+					return fmt.Errorf("step %s: with.%s must be a string", sid, key)
+				}
+			}
+		}
+		if _, err := agentTaskTurns(step.With["turns"]); err != nil {
+			return fmt.Errorf("step %s: %w", sid, err)
 		}
 		if step.With["prompt"] == nil && step.With["message"] == nil {
 			return fmt.Errorf("step %s requires prompt or message", sid)
 		}
 		output, err := resolveNamedOutput(w, step.With["output"])
+		if err == nil {
+			err = validateCompletionContract(step, output)
+		}
 		if err == nil {
 			_, err = ParseAgentOutputContract(output)
 		}
@@ -283,7 +317,7 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 		}
 	}
 	for _, step := range steps {
-		for _, list := range [][]Step{step.OnError, step.OnFailure, step.Finally} {
+		for _, list := range [][]Step{step.OnResult, step.OnComplete, step.OnIncomplete, step.OnError, step.OnFailure, step.Finally} {
 			if err := validateStepSequence(w, id, list); err != nil {
 				return err
 			}

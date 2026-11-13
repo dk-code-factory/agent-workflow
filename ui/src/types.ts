@@ -5,7 +5,7 @@ export interface Step extends Mapping {
  'input-schema'?: Mapping | string; 'output-schema'?: Mapping | string;
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
-  onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
+  onResult?: Step[]; onComplete?: Step[]; onIncomplete?: Step[]; onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
   parallel?: Step[]; sequence?: Step[];
   conversation?: string[]; start?: string; finishBy?: string; maxTurns?: number; maxMessages?: number;
 }

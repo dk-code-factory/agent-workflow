@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 import { open, snapshot, field, step } from './harness';
 
 test('repair expression after deleting its producer', async ({ page }) => {
-  const ui = await open(page, 'jobs: {build: {steps: [{id: collect, argv: [echo]}, {id: analyze, uses: agent/claude, with: {prompt: "${{ steps.collect.outputs.stdout }}"}}]}}');
+  const ui = await open(page, `jobs: { build: { steps: [ { id: collect, argv: [ echo ] }, { id: analyze, uses: agent/run, with: { prompt: "\${{ steps.collect.outputs.stdout }}", agent: claude.toml } } ] } }
+`);
   await step(page, 'collect direct command'); await ui.getByRole('button', { name: 'Delete step', exact: true }).click();
   await expect(ui.getByRole('alertdialog')).toContainText('jobs.build.steps.1.with.prompt');
   await ui.getByRole('button', { name: 'Confirm delete', exact: true }).click();
@@ -15,7 +16,8 @@ test('repair expression after deleting its producer', async ({ page }) => {
 });
 
 test('missing dependency guidance requires an explicit edge repair', async ({ page }) => {
-  const ui = await open(page, 'jobs: {producer: {outputs: {text: hello}, steps: [{argv: [echo]}]}, consumer: {steps: [{uses: agent/claude, with: {prompt: "${{ needs.producer.outputs.text }} ${{ needs.producer.outputs.text }}"}}]}}');
+  const ui = await open(page, `jobs: { producer: { outputs: { text: hello }, steps: [ { argv: [ echo ] } ] }, consumer: { steps: [ { uses: agent/run, with: { prompt: "\${{ needs.producer.outputs.text }} \${{ needs.producer.outputs.text }}", agent: claude.toml } } ] } }
+`);
   await ui.locator('.aw-diagnostics summary').click();
   const warning = ui.locator('.aw-diagnostics').getByRole('button', { name: /missing from Dependencies/ });
   await expect(warning).toHaveCount(1);
@@ -33,7 +35,8 @@ test('missing dependency guidance requires an explicit edge repair', async ({ pa
 test('viewer dependency diagnostics focus read-only Dependencies', async ({ page }) => {
   await page.goto('/test/browser.html?viewer');
   const ui = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: 'jobs: {producer: {outputs: {text: hello}, steps: [{argv: [echo]}]}, consumer: {steps: [{uses: agent/claude, with: {prompt: "${{ needs.producer.outputs.text }}"}}]}}' }));
+  await page.evaluate(() => (window as any).first.update({ source: `jobs: { producer: { outputs: { text: hello }, steps: [ { argv: [ echo ] } ] }, consumer: { steps: [ { uses: agent/run, with: { prompt: "\${{ needs.producer.outputs.text }}", agent: claude.toml } } ] } }
+` }));
   await ui.locator('.aw-diagnostics summary').click();
   const before = await snapshot(page);
   const warning = ui.locator('.aw-diagnostics').getByRole('button', { name: /missing from Dependencies/ });

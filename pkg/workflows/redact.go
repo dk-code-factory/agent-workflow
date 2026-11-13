@@ -25,6 +25,14 @@ func redactStep(step StepExecution, secrets map[string]string) StepExecution {
 	if step.Lifecycle != nil {
 		lifecycle := *step.Lifecycle
 		lifecycle.OriginalError = Redact(lifecycle.OriginalError, secrets)
+		lifecycle.Candidate, _ = redactValue(lifecycle.Candidate, secrets).(map[string]any)
+		lifecycle.Verification = redactValue(lifecycle.Verification, secrets)
+		if lifecycle.Verifications != nil {
+			lifecycle.Verifications = make([]any, len(step.Lifecycle.Verifications))
+			for i, verdict := range step.Lifecycle.Verifications {
+				lifecycle.Verifications[i] = redactValue(verdict, secrets)
+			}
+		}
 		lifecycle.Handlers = map[string][]StepExecution{}
 		for kind, results := range step.Lifecycle.Handlers {
 			for _, child := range results {
@@ -217,4 +225,22 @@ func redactAttempt(a Attempt, secrets map[string]string) Attempt {
 }
 func (s redactedStore) RecordAttempt(ctx context.Context, a Attempt) error {
 	return s.Journal.RecordAttempt(ctx, redactAttempt(a, s.secrets))
+}
+
+// Compare decoded values so JSON escaping cannot conceal credential literals.
+func containsCredential(value any, secrets map[string]string) (bool, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false, err
+	}
+	var decoded any
+	if err = decodeJSONWithNumbers(encoded, &decoded); err != nil {
+		return false, err
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return false, err
+	}
+	safe, err := json.Marshal(redactValue(decoded, secrets))
+	return string(canonical) != string(safe), err
 }

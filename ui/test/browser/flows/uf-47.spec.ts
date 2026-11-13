@@ -94,7 +94,7 @@ async function rawInspector(page: import('@playwright/test').Page, viewer = fals
   await page.evaluate(commitOnBlur => {
     const state: { contexts: import('../../../src').CustomInspectorContext[]; cleanups: number; discards: number; renders: number; failDiscard?: boolean; onDiscard?: () => void; action?: import('../../../src').ActionDefinition } = (window as any).raw = { contexts: [], cleanups: 0, discards: 0, renders: 0 };
     const action: import('../../../src').ActionDefinition = {
-      uses: 'agent/claude', label: 'Buffered renderer',
+      uses: 'agent/run', label: 'Buffered renderer',
       renderInspector(element, context) {
         state.contexts.push(context); state.renders++;
         const input = document.createElement('input');
@@ -281,7 +281,8 @@ test('renderer replacement and destruction release only their own pending contri
   expect((await snapshot(page)).source).toBe(incoming + '\n# clean');
   await page.evaluate(() => {
     const host = (window as any);
-    host.second.update({ source: 'jobs: {other: {steps: [{uses: agent/claude, with: {prompt: Second}}]}}', actions: [host.raw.action] });
+    host.second.update({ source: `jobs: { other: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.toml } } ] } }
+`, actions: [host.raw.action] });
   });
   await page.locator('#b').getByRole('button', { name: /step_1/ }).first().click();
   await page.locator('#b').getByLabel('Raw prompt', { exact: true }).fill('Other editor pending');
@@ -364,7 +365,8 @@ test('anonymous step replacement invalidates old raw callbacks before React clea
   // Prepare two anonymous steps with the same action for local YAML authoring.
   await page.evaluate(() => {
     const host = (window as any);
-    host.first.update({ source: 'jobs: {build: {steps: [{uses: agent/claude, with: {prompt: First}}, {uses: agent/claude, with: {prompt: Second}}]}}' });
+    host.first.update({ source: `jobs: { build: { steps: [ { uses: agent/run, with: { prompt: First, agent: claude.toml } }, { uses: agent/run, with: { prompt: Second, agent: claude.toml } } ] } }
+` });
     host.first.resolveSourceReplacement('use-incoming');
   });
   await expect(raw).toHaveValue('First');
@@ -380,7 +382,10 @@ test('anonymous step replacement invalidates old raw callbacks before React clea
     } });
   });
   // Filling CodeMirror is a local arbitrary source edit, not a host candidate.
-  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill('jobs: {build: {steps: [{uses: agent/claude, with: {prompt: Second}}, {uses: agent/claude, with: {prompt: First}}]}}\n# reordered');
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(`jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.toml } }, { uses: agent/run, with: { prompt: First, agent: claude.toml } } ] } }
+
+# reordered
+`);
   await expect(raw).toHaveValue('Second');
   expect((await snapshot(page)).source).not.toContain('Wrong owner write');
   expect(await page.evaluate(() => (window as any).reorderGuard)).toBe(true);
@@ -399,7 +404,7 @@ test('whole anonymous-step edits and undo invalidate the prior renderer callback
   await raw.fill('First raw buffer');
   await page.evaluate(() => {
     const host = (window as any); host.beforeStepEdit = host.raw.contexts.at(-1);
-    host.beforeStepEdit.setField([], { uses: 'agent/claude', with: { prompt: 'Replacement anonymous step' } });
+    host.beforeStepEdit.setField([], {uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Replacement anonymous step'}});
     host.beforeStepEdit.setField(['with', 'prompt'], 'Wrong immediate owner');
   });
   await expect(raw).toHaveValue('Replacement anonymous step');

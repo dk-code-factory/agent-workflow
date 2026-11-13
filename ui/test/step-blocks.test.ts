@@ -9,24 +9,30 @@ const source = `jobs:
   review:
     steps:
       - id: prepare
-        argv: [echo, ready]
+        argv: [ echo, ready ]
       - id: reviews
         parallel:
           - id: first
-            agent: claude
-            prompt: \${{ steps.prepare.outputs.stdout }}
+            uses: agent/run
+            with:
+              agent: claude.toml
+              prompt: \${{ steps.prepare.outputs.stdout }}
           - sequence:
               - id: collect
-                argv: [echo, collect]
+                argv: [ echo, collect ]
               - id: second
-                agent: claude
-                prompt: \${{ steps.collect.outputs.stdout }}
+                uses: agent/run
+                with:
+                  agent: claude.toml
+                  prompt: \${{ steps.collect.outputs.stdout }}
       - id: combine
-        agent: claude
-        prompt: \${{ steps.first.text }} \${{ steps.second.text }}
+        uses: agent/run
+        with:
+          agent: claude.toml
+          prompt: \${{ steps.first.text }} \${{ steps.second.text }}
   summarize:
-    needs: [review]
-    steps: [{agent: claude, prompt: Summary}]
+    needs: [ review ]
+    steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: Summary } } ]
 `;
 
 describe('nested step blocks', () => {
@@ -34,7 +40,7 @@ describe('nested step blocks', () => {
     const parsed = parseWorkflow(source);
     expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     expect(stepEntries(parsed.workflow!.jobs.review.steps).map(entry => entry.id)).toEqual(['prepare', 'reviews', 'first', 'step_2_parallel_2', 'collect', 'second', 'combine']);
-    const path = ['jobs', 'review', 'steps', 1, 'parallel', 1, 'sequence', 1, 'prompt'];
+    const path = ['jobs', 'review', 'steps', 1, 'parallel', 1, 'sequence', 1, 'with', 'prompt'];
     const nested = expressionSuggestions(parsed.workflow, 'review', 1, path);
     expect(nested).toContain('steps.collect.outputs.stdout');
     expect(nested).toContain('steps.prepare.outputs.stdout');
@@ -65,18 +71,18 @@ describe('nested step blocks', () => {
     const entries = stepEntries(doc.getSnapshot().workflow!.jobs.review.steps);
     expect(new Set(entries.map(entry => entry.id)).size).toBe(entries.length);
     const copy = doc.getSnapshot().workflow!.jobs.review.steps![2];
-    expect(copy.parallel![1].sequence![1].prompt).toBe('${{ steps.collect_copy.outputs.stdout }}');
-    expect(copy.parallel![0].prompt).toBe('${{ steps.prepare.outputs.stdout }}');
+    expect(copy.parallel![1].sequence![1].with!.prompt).toBe('${{ steps.collect_copy.outputs.stdout }}');
+    expect(copy.parallel![0].with!.prompt).toBe('${{ steps.prepare.outputs.stdout }}');
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
-    expect(doc.deletionImpact('review', 1)).toContainEqual(['jobs', 'review', 'steps', 2, 'prompt']);
+    expect(doc.deletionImpact('review', 1)).toContainEqual(['jobs', 'review', 'steps', 2, 'with', 'prompt']);
     expect(() => doc.deleteStep('review', 1)).toThrow('confirmation');
   });
 
   it('materializes nested IDs before reordering and renames references inside branches', () => {
     const doc = new WorkflowDocument({ source });
     doc.renameStep('review', 0, 'ready');
-    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].parallel![0].prompt).toContain('steps.ready.outputs.stdout');
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].parallel![0].with!.prompt).toContain('steps.ready.outputs.stdout');
     expect(() => doc.renameStep('review', 0, 'collect')).toThrow('unique');
     doc.moveStep('review', 1, 0);
     expect(doc.getSnapshot().workflow!.jobs.review.steps![0].parallel![1].id).toBe('step_2_parallel_2');
@@ -88,27 +94,28 @@ describe('nested step blocks', () => {
 
   it('copies named contracts with descendant references while preserving other consumers', () => {
     const original = `schemas:
-  Shared: # preserve this contract comment
+  Shared:
+    # preserve this contract comment
     type: string
-    enum: ['\${{ steps.collect.outputs.stdout }}']
-  Shared_copy: {type: boolean}
-  Static: {type: string}
+    enum: [ '\${{ steps.collect.outputs.stdout }}' ]
+  Shared_copy: { type: boolean }
+  Static: { type: string }
 jobs:
   review:
     steps:
       - id: reviews
         parallel:
           - sequence:
-              - {id: collect, argv: [echo, collect]}
-              - {id: first, agent: claude, prompt: Review, with: {output: {schema: Shared}}}
-              - {id: second, uses: agent/claude, with: {prompt: Again, output: {schema: Shared, repair: false}}}
-              - {id: fixed, agent: claude, prompt: Static, with: {output: {schema: Static}}}
-          - {id: other, argv: [echo, other]}
-      - {id: after, agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+              - { id: collect, argv: [ echo, collect ] }
+              - { id: first, with: { output: { schema: Shared }, agent: claude.toml, prompt: Review }, uses: agent/run }
+              - { id: second, uses: agent/run, with: { prompt: Again, output: { schema: Shared, repair: false }, agent: claude.toml } }
+              - { id: fixed, with: { output: { schema: Static }, agent: claude.toml, prompt: Static }, uses: agent/run }
+          - { id: other, argv: [ echo, other ] }
+      - { id: after, with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
   other:
     steps:
-      - {id: collect, argv: [echo, other]}
-      - {agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+      - { id: collect, argv: [ echo, other ] }
+      - { with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
 `;
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
@@ -133,10 +140,10 @@ jobs:
 
   it('wires nested producer results without declaring output aliases', () => {
     const doc = new WorkflowDocument({ source });
-    const preview = doc.previewJobResult({ target: ['jobs', 'summarize', 'steps', 0, 'prompt'], producer: 'review', source: { kind: 'result', step: ['steps', 1, 'parallel', 1, 'sequence', 1], field: 'text' } });
+    const preview = doc.previewJobResult({ target: ['jobs', 'summarize', 'steps', 0, 'with', 'prompt'], producer: 'review', source: { kind: 'result', step: ['steps', 1, 'parallel', 1, 'sequence', 1], field: 'text' } });
     expect(preview.expression).toBe('${{ needs.review.steps.second.text }}');
     doc.applyJobResult(preview);
-    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toContain('needs.review.steps.second.text');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toContain('needs.review.steps.second.text');
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
   });
 });

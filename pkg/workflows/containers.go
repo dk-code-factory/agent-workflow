@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -528,7 +529,12 @@ func (e *Executor) executeContainerCommand(ctx context.Context, step Step, argv 
 	}
 	var stdout, stderr cappedOutput
 	env, _ := ctx.Value(commandEnvKey{}).([]string)
-	code, queueTime, err := e.runContainerIO(ctx, step, argv, env, containerapi.Streams{Stdout: &stdout, Stderr: &stderr}, slots)
+	input, _ := ctx.Value(commandInputKey{}).([]byte)
+	streams := containerapi.Streams{Stdout: &stdout, Stderr: &stderr}
+	if input != nil {
+		streams.Stdin = bytes.NewReader(input)
+	}
+	code, queueTime, err := e.runContainerIO(ctx, step, argv, env, streams, slots)
 	out = map[string]any{"stdout": stdout.String(), "stderr": stderr.String(), "exit_code": code, "queue_time_ms": queueTime}
 	if errors.Is(err, process.ErrCleanup) {
 		return out, err

@@ -9,12 +9,12 @@ test('review incompatible settings, cancel conversion, and undo the confirmed ch
     expect(dialog.message()).toContain('argv'); expect(dialog.message()).toContain('timeout'); expect(dialog.message()).toContain('working-directory');
     await dialog.dismiss();
   });
-  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/claude');
+  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/run');
   expect((await snapshot(page)).source).toBe(source);
   await expect(ui.getByLabel('Step type', { exact: true })).toHaveValue('argv');
   page.once('dialog', dialog => dialog.accept());
-  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/claude');
-  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({ id: 'run', uses: 'agent/claude', with: { prompt: '' } });
+  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/run');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({id: 'run', uses: 'agent/run', with: {agent: "", prompt: ''}});
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(source);
 });
@@ -47,7 +47,7 @@ test('action target and step type use the same reviewed conversion', async ({ pa
 
 for (const initialMessage of ['Keep', '']) {
   test(`keyboard save retries a cancelled action conversion with an active message draft (${initialMessage || 'initially empty'})`, async ({ page }) => {
-    const target = initialMessage ? 'workspace/integrate' : 'agent/claude';
+    const target = initialMessage ? 'workspace/integrate' : 'agent/run';
     const source = `jobs: {build: {steps: [{id: run, uses: git/commit, with: {path: /work, message: "${initialMessage}"}}]}}`;
     const ui = await open(page, source);
     await page.evaluate(() => {
@@ -67,7 +67,7 @@ for (const initialMessage of ['Keep', '']) {
     await message.press('ControlOrMeta+s');
     await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
     expect(discarded).toContain('with.message');
-    const expected = { id: 'run', uses: target, with: initialMessage ? { path: '/work' } : { prompt: '' } };
+    const expected = { id: 'run', uses: target, with: initialMessage ? { path: '/work' } : { agent:'', prompt: '' } };
     expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0])).toEqual(expected);
     expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual(expected);
     await expect(ui.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Saved');
@@ -75,13 +75,15 @@ for (const initialMessage of ['Keep', '']) {
 }
 
 test('concise agent conversions retain prompts until an incompatible conversion is confirmed', async ({ page }) => {
-  const source = 'jobs: {build: {steps: [{id: review, agent: claude, prompt: Keep this prompt, with: {model: sonnet}}]}}';
+  const source = `jobs: { build: { steps: [ { id: review, with: { model: sonnet, agent: claude.toml, prompt: Keep this prompt }, uses: agent/run } ] } }
+`;
   const ui = await open(page, source);
-  await step(page, 'review agent/claude');
-  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/codex');
-  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({ id: 'review', agent: 'codex', prompt: 'Keep this prompt', with: { model: 'sonnet' } });
+  await step(page, 'review agent/run');
+  await ui.getByLabel('Step type', { exact: true }).selectOption('agent/run');
+  await field(page,'Agent definition or reference','codex.toml');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({id: 'review', uses: 'agent/run', with: {agent: "codex.toml", model: 'sonnet', prompt: 'Keep this prompt'}});
   const before = (await snapshot(page)).source;
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('agent'); expect(dialog.message()).toContain('prompt'); await dialog.dismiss(); });
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('with'); await dialog.dismiss(); });
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
   expect((await snapshot(page)).source).toBe(before);
   page.once('dialog', dialog => dialog.accept());

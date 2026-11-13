@@ -136,7 +136,10 @@ func (s *SQLiteStore) queueResume(ctx context.Context, id, requestID string, ret
 		if uncertain != 0 {
 			return retryRequired("explicit retry_uncertain acknowledgement required for uncertain attempts")
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id WHERE w.run_id=? AND m.status IN ('running','failed','interrupted')`, id).Scan(&uncertain); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id WHERE w.run_id=? AND (m.status IN ('running','interrupted') OR (m.status='failed' AND NOT COALESCE(
+json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.message_id')=m.id
+AND json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.execution_generation')=json_extract(CAST(m.record AS TEXT),'$.execution_generation')
+AND length(json_extract(CAST(m.record AS TEXT),'$.failure_acknowledgement.request_id'))>0,0)))`, id).Scan(&uncertain); err != nil {
 			return nil, err
 		}
 		if uncertain != 0 {

@@ -1,10 +1,12 @@
 jobs:
   review:
     steps:
-      - agent: claude
-        prompt: Review
-        argv: null
+      - argv: null
         run: null
         shell: null
         timeout: null
         working-directory: null
+        uses: agent/run
+        with:
+          agent: claude.toml
+          prompt: Review

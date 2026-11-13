@@ -189,7 +189,7 @@ func (f *fakeSession) RunTurn(ctx context.Context, req SessionRequest, emit func
 func workerFixture(t *testing.T, f *fakeSession) (*WorkerManager, string) {
 	t.Helper()
 	e, s := durableExecutor(t, "jobs: {x: {steps: [{argv: [true]}]}}", nil)
-	run, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}

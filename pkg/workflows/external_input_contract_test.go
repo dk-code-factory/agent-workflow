@@ -47,7 +47,7 @@ func TestExternalInputContractAcceptedAnswerResumes(t *testing.T) {
 			}))
 			store := inputContractStore{ExternalInputJournal: sqlite}
 			e.Store = store
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusWaiting || calls.Load() != 1 {
 				t.Fatalf("initial wait %+v err=%v effects=%d", run, err, calls.Load())
 			}
@@ -57,7 +57,7 @@ func TestExternalInputContractAcceptedAnswerResumes(t *testing.T) {
 				t.Fatal("missing preparation checkpoint", attempts, err)
 			}
 			checkpoint := attempts[0].ID
-			pending, err := e.Resume(ctx, run.ID, nil, false)
+			pending, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if err != nil || pending.Status != RunStatusWaiting || pending.Generation != run.Generation || calls.Load() != 1 || !reflect.DeepEqual(inputGate(t, sqlite, run.ID), gate) {
 				t.Fatal("unanswered resume changed gate, generation or effects", pending, err)
 			}
@@ -86,7 +86,7 @@ func TestExternalInputContractAcceptedAnswerResumes(t *testing.T) {
 			}
 			// No manual SQLite admission: direct embedded Resume must use the
 			// method promoted by the complete optional interface.
-			done, err := e.Resume(ctx, run.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if err != nil || done.Status != RunStatusSucceeded || done.Generation != run.Generation+1 || calls.Load() != 3 || done.Jobs["decide"].Outputs["value"] != "approved" {
 				t.Fatalf("accepted answer stranded or replayed: %+v err=%v effects=%d", done, err, calls.Load())
 			}
@@ -115,7 +115,7 @@ func TestExternalInputContractControlRejectionsPreserveState(t *testing.T) {
 				return map[string]any{}, nil
 			}))
 			e.Store = inputContractStore{ExternalInputJournal: sqlite}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusWaiting {
 				t.Fatal(run, err)
 			}
@@ -138,7 +138,7 @@ func TestExternalInputContractControlRejectionsPreserveState(t *testing.T) {
 				}
 			}
 			before := inputContractSnapshot(t, sqlite, run.ID)
-			_, err = e.Resume(ctx, run.ID, nil, false)
+			_, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			want := "retry_uncertain"
 			if control == "canceled" {
 				want = "canceled input gates"
@@ -150,7 +150,7 @@ func TestExternalInputContractControlRejectionsPreserveState(t *testing.T) {
 				t.Fatal("rejected admission mutated run, pause, answer history or checkpoints")
 			}
 			if control == "canceled" {
-				if _, err = e.Resume(ctx, run.ID, nil, true); err == nil || !strings.Contains(err.Error(), want) || inputContractSnapshot(t, sqlite, run.ID) != before {
+				if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true); err == nil || !strings.Contains(err.Error(), want) || inputContractSnapshot(t, sqlite, run.ID) != before {
 					t.Fatal("retry acknowledgement revived canceled gates", err)
 				}
 			}
@@ -161,7 +161,8 @@ func TestExternalInputContractControlRejectionsPreserveState(t *testing.T) {
 func TestExternalInputContractLegacyJournalOrdinaryResume(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
-	e, sqlite := durableExecutor(t, `jobs: {x: {steps: [{id: before, uses: agent/a, with: {prompt: before}}, {id: retry, uses: agent/a, with: {prompt: retry}}, {id: after, uses: agent/a, with: {prompt: after}}]}}`, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+	e, sqlite := durableExecutor(t, `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}, {id: retry, uses: agent/run, with: {prompt: retry, agent: a.toml}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}]}}
+`, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		n := calls.Add(1)
 		if req.Prompt == "retry" && n == 2 {
 			return nil, errors.New("ordinary retry fixture")
@@ -172,14 +173,14 @@ func TestExternalInputContractLegacyJournalOrdinaryResume(t *testing.T) {
 	if _, ok := e.Store.(ExternalInputJournal); ok {
 		t.Fatal("legacy wrapper exposed the optional extension")
 	}
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusFailed || calls.Load() != 2 {
 		t.Fatal("ordinary Journal-only execution changed", run, err, calls.Load())
 	}
-	if _, err = e.Resume(ctx, run.ID, nil, false); err == nil || calls.Load() != 2 {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil || calls.Load() != 2 {
 		t.Fatal("legacy Resume bypassed uncertain-attempt acknowledgement", err, calls.Load())
 	}
-	done, err := e.Resume(ctx, run.ID, nil, true)
+	done, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true)
 	if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 4 {
 		t.Fatal("ordinary Journal-only Resume lost compatibility/checkpoint reuse", done, err, calls.Load())
 	}
@@ -210,7 +211,8 @@ func TestExternalInputContractIncompleteExtensionRejectsFreshRun(t *testing.T) {
 				var calls atomic.Int32
 				source := waitSource
 				if nested {
-					source = `jobs: {review: {uses: workflows/child.yml}, independent: {steps: [{uses: agent/a, with: {prompt: before-admission}}]}}`
+					source = `jobs: {review: {uses: workflows/child.yml}, independent: {steps: [{uses: agent/run, with: {prompt: before-admission, agent: a.toml}}]}}
+`
 				}
 				e, sqlite := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 					calls.Add(1)
@@ -220,7 +222,7 @@ func TestExternalInputContractIncompleteExtensionRejectsFreshRun(t *testing.T) {
 					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\n"+waitSource)
 				}
 				e.Store = incompleteInputContractStore(sqlite, kind)
-				if _, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), DurableExternalInputV1) {
+				if _, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), DurableExternalInputV1) {
 					t.Fatal("incomplete wait contract admitted", err)
 				}
 				runs, err := sqlite.List(ctx)
@@ -257,9 +259,9 @@ func TestExternalInputContractIncompleteExtensionRejectsRetainedSnapshot(t *test
 					var run *Run
 					var err error
 					if state == "queued" {
-						run, err = e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+						run, err = nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 					} else {
-						run, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+						run, err = nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 					}
 					if err != nil {
 						t.Fatal(err)
@@ -273,13 +275,14 @@ func TestExternalInputContractIncompleteExtensionRejectsRetainedSnapshot(t *test
 					}
 					// Capability validation must use retained definitions even when
 					// current files no longer contain any wait.
-					writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs: {x: {steps: [{uses: agent/a, with: {prompt: changed}}]}}`)
+					writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs: {x: {steps: [{uses: agent/run, with: {prompt: changed, agent: a.toml}}]}}
+`)
 					if nested {
 						writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {}")
 					}
 					e.Store = incompleteInputContractStore(sqlite, kind)
 					before, beforeCalls := inputContractSnapshot(t, sqlite, run.ID), calls.Load()
-					if _, err = e.Resume(ctx, run.ID, nil, false); err == nil || !strings.Contains(err.Error(), DurableExternalInputV1) {
+					if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil || !strings.Contains(err.Error(), DurableExternalInputV1) {
 						t.Fatal("retained wait snapshot accepted incomplete contract", err)
 					}
 					if after := inputContractSnapshot(t, sqlite, run.ID); after != before || calls.Load() != beforeCalls {

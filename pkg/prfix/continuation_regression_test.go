@@ -21,7 +21,7 @@ func TestQueuedWorkerSetupFailureStopsApplicationWait(t *testing.T) {
 	// Spawn and Send preflight succeed; the scheduled native turn's setup fails.
 	session := &fakeSession{factoryError: errors.New("fixture runner setup failed"), factoryErrorAfter: 2, failureTimeout: 30 * time.Second}
 	_, run, runtime := executeFixture(t, root, provider, prepared, session, true)
-	if run.Status == workflows.RunStatusSucceeded || !strings.Contains(run.Error, "native worker stopped with unresolved message") || !strings.Contains(run.Error, "fixture runner setup failed") {
+	if run.Status == workflows.RunStatusSucceeded || !strings.Contains(run.Error, "stopped with unresolved message") || !strings.Contains(run.Error, "fixture runner setup failed") {
 		t.Fatal("setup failure was not surfaced before the fixture deadline", run.Status, run.Error)
 	}
 	workers, err := runtime.Workers.List(context.Background(), run.ID)
@@ -191,7 +191,7 @@ func TestRequiredHookResourcesStayFreshWithinSameCycle(t *testing.T) {
 	if err := os.WriteFile(resource, []byte("first policy"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Resources: []string{resource}, Procedure: [][]Pass{{{ID: "hook", Role: "leaf", Assignment: "Check the hook-only policy.", Evidence: []string{"original"}}}}}
+	hook := Adapter{Identity: "custom:hook", Version: "v1", Kind: "hook", Cacheable: true, Resources: []string{resource}, Procedure: [][]Pass{{{ID: "hook", Role: "codex", Assignment: "Check the hook-only policy.", Evidence: []string{"original"}}}}}
 	req.Adapters = map[string]Adapter{hook.Identity: hook, "custom:review": reviewAdapter()}
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}}
 	configFile(t, "", map[string]any{"processes": map[string]any{"pr-fix": map[string]any{"hooks": map[string]any{"before_cycle": []any{map[string]any{"skill": hook.Identity}}}}}})

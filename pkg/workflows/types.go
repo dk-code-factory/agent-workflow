@@ -138,6 +138,10 @@ type Step struct {
 	Input                   map[string]any           `json:"input,omitempty" yaml:"input,omitempty"`
 	Env                     map[string]string        `json:"env,omitempty" yaml:"env,omitempty"`
 	ContainerImplementation *ContainerImplementation `json:"container_implementation,omitempty" yaml:"-"`
+	Definition              *AgentDefinition         `json:"agent_definition,omitempty" yaml:"-"`
+	OnResult                []Step                   `json:"onResult,omitempty" yaml:"onResult,omitempty"`
+	OnComplete              []Step                   `json:"onComplete,omitempty" yaml:"onComplete,omitempty"`
+	OnIncomplete            []Step                   `json:"onIncomplete,omitempty" yaml:"onIncomplete,omitempty"`
 	Conversation            []string                 `json:"conversation,omitempty" yaml:"conversation,omitempty"`
 	Start                   string                   `json:"start,omitempty" yaml:"start,omitempty"`
 	FinishBy                string                   `json:"finishBy,omitempty" yaml:"finishBy,omitempty"`
@@ -149,7 +153,6 @@ type Step struct {
 	HandlerTimeout          string                   `json:"handlerTimeout,omitempty" yaml:"handlerTimeout,omitempty"`
 	Parallel                []Step                   `json:"parallel,omitempty" yaml:"parallel,omitempty"`
 	Sequence                []Step                   `json:"sequence,omitempty" yaml:"sequence,omitempty"`
-	Agent                   *string                  `json:"agent,omitempty" yaml:"agent,omitempty"`
 	Prompt                  *string                  `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	Argv                    []string                 `json:"argv,omitempty" yaml:"argv,omitempty"`
 	Run                     string                   `json:"run,omitempty" yaml:"run,omitempty"`

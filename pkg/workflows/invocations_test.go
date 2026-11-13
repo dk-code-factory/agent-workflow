@@ -188,7 +188,7 @@ func containerExecutorFixture(t *testing.T, mode string) (*Executor, *SQLiteStor
 
 func TestContainerCommandCreatesBeforeStartAndCleansVerifiedIdentity(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatalf("container command: %+v %v", run, err)
 	}
@@ -234,7 +234,7 @@ func TestContainerCommandForwardsOnlyExplicitStepEnvironment(t *testing.T) {
 
 func TestLostCreateResponseNeverStartsWork(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "lost-create-response")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -248,7 +248,7 @@ func TestLostCreateResponseNeverStartsWork(t *testing.T) {
 
 func TestRuntimeOutageRetainsUncertaintyAndRecoversWhenAvailable(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "outage-after-start")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -271,7 +271,7 @@ func TestRuntimeOutageRetainsUncertaintyAndRecoversWhenAvailable(t *testing.T) {
 
 func TestForeignContainerLabelsAreNeverRemoved(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "wrong-label")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -315,7 +315,7 @@ func TestContainerCannotStartBeforeIdentityCommit(t *testing.T) {
 
 func TestChangedRuntimeIdentityCannotProveAbsence(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "outage-after-start")
-	run, _ := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, _ := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err := os.Remove(filepath.Join(runtime, "offline")); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestChangedRuntimeIdentityCannotProveAbsence(t *testing.T) {
 
 func TestCommandExecutionPolicyIsPinnedAcrossResume(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "")
-	run, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestCommandExecutionPolicyIsPinnedAcrossResume(t *testing.T) {
 		t.Fatal("command policy was not admitted", snapshot.Execution, err)
 	}
 	e.CommandExecution = runtimeexec.Policy{} // changing current configuration cannot weaken admission
-	result, err := e.Resume(context.Background(), run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded {
 		t.Fatal(result, err)
 	}

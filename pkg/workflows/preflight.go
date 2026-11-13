@@ -28,6 +28,24 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 			}
 		}
 	}
+	for _, workflow := range all {
+		for _, job := range workflow.Jobs {
+			for _, step := range lifecycleSteps(job.Steps) {
+				if step.Uses == "agent/run" {
+					if e.Workers == nil {
+						return fmt.Errorf("agent/run requires durable controller-owned workers")
+					}
+					if _, ok := e.Store.(Journal); !ok {
+						return fmt.Errorf("agent/run requires durable step receipts")
+					}
+					if _, ok := e.Agents.(NativeTaskRunner); !ok {
+						return fmt.Errorf("agent/run requires the configured Codex runtime")
+					}
+				}
+			}
+		}
+	}
+
 	if err := e.configureActions(all); err != nil {
 		return err
 	}
@@ -83,7 +101,7 @@ func (e *Executor) preflightAgents(ctx context.Context, all map[string]*Workflow
 					set[role] = true
 				}
 				if strings.HasPrefix(step.Uses, "agent/") {
-					set[strings.TrimPrefix(step.Uses, "agent/")] = true
+					set[agentRole(step)] = true
 				}
 			}
 		}

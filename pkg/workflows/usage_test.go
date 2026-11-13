@@ -111,19 +111,20 @@ func TestRepairsAndCheckpointReuseHaveDistinctUsageIdentities(t *testing.T) {
 	e, store := durableExecutor(t, `jobs:
   build:
     steps:
-      - uses: agent/a
+      - uses: agent/run
         with:
           prompt: task
           output:
             format: json
             repair-attempts: 1
             schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}
+          agent: a.toml
 `, runner)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("expected schema failure")
 	}
-	result, err := e.Resume(context.Background(), run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +138,10 @@ func TestRepairsAndCheckpointReuseHaveDistinctUsageIdentities(t *testing.T) {
 }
 
 func TestFailedProviderCallUsageIsCounted(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/a, with: {prompt: task}}]}}", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"usage": usageTokens(9, 2), "cost_usd": 0.02}, errors.New("provider failed after reporting usage")
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("expected failed call")
 	}
@@ -151,14 +152,14 @@ func TestFailedProviderCallUsageIsCounted(t *testing.T) {
 }
 
 func TestMigrationBackfillsHistoricalProviderUsage(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/a, with: {prompt: task}}]}}", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": "done", "provider": "claude-cli", "usage": map[string]any{"input_tokens": 8, "cache_read_input_tokens": 2, "output_tokens": 1}, "cost_usd": 0.03}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.db.Exec(dropTaskStateFixtureSchema + "DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; DROP TABLE iteration_attempts; DROP TABLE iteration_plans; DROP TABLE action_attempts; DROP TABLE usage_observations; DROP TABLE usage_session_counters; DROP TABLE usage_invocations; DROP TABLE retention_groups; ALTER TABLE executions DROP COLUMN finalizing; PRAGMA user_version=4;"); err != nil {
+	if _, err = store.db.Exec(dropTaskStateFixtureSchema + "DELETE FROM messages; DELETE FROM workers; DROP TABLE worker_waits; DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; DROP TABLE iteration_attempts; DROP TABLE iteration_plans; DROP TABLE action_attempts; DROP TABLE usage_observations; DROP TABLE usage_session_counters; DROP TABLE usage_invocations; DROP TABLE retention_groups; ALTER TABLE executions DROP COLUMN finalizing; PRAGMA user_version=4;"); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := ownership.Own(store.Dir)
@@ -179,7 +180,7 @@ func TestMigrationBackfillsHistoricalProviderUsage(t *testing.T) {
 }
 
 func TestInterruptedCallRetainsDurablePartialUsage(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/a, with: {prompt: task}}]}}", agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
 		if request.ObserveUsage == nil {
 			return nil, errors.New("observer not installed")
 		}
@@ -188,7 +189,7 @@ func TestInterruptedCallRetainsDurablePartialUsage(t *testing.T) {
 		}
 		return nil, context.Canceled
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
 		t.Fatal("expected interrupted call")
 	}

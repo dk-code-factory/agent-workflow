@@ -25,17 +25,23 @@ test('edit a local parallel block and consume joined nested results', async ({ p
       - id: reviews
         parallel:
           - id: first
-            agent: claude
-            prompt: First review
+            uses: agent/run
+            with:
+              agent: claude.toml
+              prompt: First review
           - sequence:
               - id: collect
-                argv: [echo, collect]
+                argv: [ echo, collect ]
               - id: second
-                agent: claude
-                prompt: \${{ steps.collect.outputs.stdout }}
+                uses: agent/run
+                with:
+                  agent: claude.toml
+                  prompt: \${{ steps.collect.outputs.stdout }}
       - id: combine
-        agent: claude
-        prompt: Combine reviews
+        uses: agent/run
+        with:
+          agent: claude.toml
+          prompt: Combine reviews
 `);
   const before = (await snapshot(page)).source;
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
@@ -44,23 +50,36 @@ test('edit a local parallel block and consume joined nested results', async ({ p
   await expect(ui.getByRole('checkbox', { name: 'Continue on error', exact: true })).toHaveCount(0);
   const branches = ui.getByLabel('Parallel branches (YAML)', { exact: true });
   await expect(branches).toHaveValue(/sequence:/);
-  await field(page, 'Parallel branches (YAML)', '- id: first\n  agent: claude\n  prompt: Revised first review\n- sequence:\n    - id: collect\n      argv: [echo, collect]\n    - id: second\n      agent: claude\n      prompt: ${{ steps.collect.outputs.stdout }}\n');
-  expect((await snapshot(page)).workflow.jobs.review.steps[0].parallel[0].prompt).toBe('Revised first review');
+  await field(page, 'Parallel branches (YAML)', `- id: first
+  uses: agent/run
+  with:
+    agent: claude.toml
+    prompt: Revised first review
+- sequence:
+    - id: collect
+      argv: [ echo, collect ]
+    - id: second
+      uses: agent/run
+      with:
+        agent: claude.toml
+        prompt: \${{ steps.collect.outputs.stdout }}
+`);
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].parallel[0].with.prompt).toBe('Revised first review');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   const edited = (await snapshot(page)).source;
   await ui.getByRole('button', { name: 'Duplicate step', exact: true }).click();
   const copy = (await snapshot(page)).workflow.jobs.review.steps[1];
   expect(copy.parallel[0].id).toBe('first_copy');
-  expect(copy.parallel[1].sequence[1].prompt).toContain('steps.collect_copy.outputs.stdout');
+  expect(copy.parallel[1].sequence[1].with.prompt).toContain('steps.collect_copy.outputs.stdout');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(edited);
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('parallel'); await dialog.dismiss(); });
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');
   expect((await snapshot(page)).source).toBe(edited);
-  await step(page, 'combine agent/claude');
+  await step(page, 'combine agent/run');
   await ui.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('steps.second.text');
-  expect((await snapshot(page)).workflow.jobs.review.steps[1].prompt).toContain('${{ steps.second.text }}');
+  expect((await snapshot(page)).workflow.jobs.review.steps[1].with.prompt).toContain('${{ steps.second.text }}');
   await expect(ui.getByLabel('Insert expression into Prompt', { exact: true }).locator('option[value="steps.first.text"]')).toHaveCount(1);
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
@@ -82,17 +101,17 @@ test('duplicated nested consumers use contracts bound to their copied producers'
   const ui = await open(page, `schemas:
   Shared:
     type: string
-    enum: ['\${{ steps.collect.outputs.stdout }}']
+    enum: [ '\${{ steps.collect.outputs.stdout }}' ]
 jobs:
   review:
     steps:
       - id: reviews
         parallel:
           - sequence:
-              - {id: collect, argv: [echo, collect]}
-              - {id: consume, agent: claude, prompt: Review, with: {output: {schema: Shared}}}
-          - {id: other, argv: [echo, other]}
-      - {id: after, agent: claude, prompt: Original, with: {output: {schema: Shared}}}
+              - { id: collect, argv: [ echo, collect ] }
+              - { id: consume, with: { output: { schema: Shared }, agent: claude.toml, prompt: Review }, uses: agent/run }
+          - { id: other, argv: [ echo, other ] }
+      - { id: after, with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
 `);
   const before = (await snapshot(page)).source;
   await step(page, 'reviews parallel block');

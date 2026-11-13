@@ -44,14 +44,15 @@ jobs:
     outputs: {text: '${{ steps.run.outputs.text }}'}
     steps:
       - id: run
-        uses: agent/reviewer
-        with: {prompt: '${{ inputs.task }}'}
+        uses: agent/run
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
 `
 
 func iterationExecutor(t *testing.T, runner AgentRunner) (*Executor, *SQLiteStore) {
 	e, s := durableExecutor(t, iterationSource, runner)
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", iterationChild)
 	e.Slots = make(chan struct{}, 1)
+	nativeTestExecutor(t, e)
 	return e, s
 }
 func iterationRequest(tasks ...string) RunRequest {
@@ -69,7 +70,7 @@ func TestOrderedIterationPinnedDataAndSequentialCapacity(t *testing.T) {
 	}))
 	ctx := context.Background()
 	req := iterationRequest("third", "${{ secrets.do_not_render }}", "first")
-	run, err := e.Run(ctx, req)
+	run, err := nativeTestExecutor(t, e).Run(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestOrderedIterationPinnedDataAndSequentialCapacity(t *testing.T) {
 		t.Fatal(p)
 	}
 	before, _ := json.Marshal(p)
-	result, err := e.Resume(ctx, run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded || len(calls) != 3 {
 		t.Fatal(result, err, calls)
 	}
@@ -108,7 +109,7 @@ func TestOrderedIterationIdentitiesBeforeDispatch(t *testing.T) {
 			}))
 			req := iterationRequest()
 			req.Inputs["reviewers"] = items
-			run, err := e.Run(context.Background(), req)
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), req)
 			if err == nil || run.Status != RunStatusNeedsAttention {
 				t.Fatal(run, err)
 			}
@@ -131,7 +132,7 @@ func TestOrderedIterationAggregateAndExplicitRetry(t *testing.T) {
 		}
 		return map[string]any{"text": r.Prompt}, nil
 	}))
-	run, err := e.Run(ctx, iterationRequest("ok", "exhaust", "fail", "last"))
+	run, err := nativeTestExecutor(t, e).Run(ctx, iterationRequest("ok", "exhaust", "fail", "last"))
 	if err == nil {
 		t.Fatal("unresolved failure accepted")
 	}
@@ -145,11 +146,11 @@ func TestOrderedIterationAggregateAndExplicitRetry(t *testing.T) {
 	}
 	p, _ := s.IterationPlan(ctx, run.ID, "review")
 	before, _ := s.IterationAttempts(ctx, run.ID, "review")
-	if _, err = e.Resume(ctx, run.ID, nil, false); err == nil {
+	if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil {
 		t.Fatal("uncertainty not acknowledged")
 	}
 	retry = true
-	run, err = e.Resume(ctx, run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func TestOrderedIterationEmptyAndAllExhausted(t *testing.T) {
 				}
 				return map[string]any{"text": "ok"}, nil
 			}))
-			run, err := e.Run(context.Background(), iterationRequest(tasks...))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest(tasks...))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +190,7 @@ func TestOrderedIterationEmptyAndAllExhausted(t *testing.T) {
 				t.Fatal(run)
 			}
 			if len(tasks) > 0 {
-				_, err = e.Resume(context.Background(), run.ID, nil, true)
+				_, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 				if err != nil || calls != len(tasks)+len(tasks)-boolInt(tasks[0] == "ok") {
 					t.Fatal(calls, err)
 				}
@@ -210,7 +211,7 @@ func TestOrderedIterationGuardsCannotContinue(t *testing.T) {
 			e, _ := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { calls++; return nil, cause }))
 			writeWorkflow(t, e.WorkspaceDir, "main.yml", strings.Replace(iterationSource, "    uses:", "    continue-on-error: true\n    uses:", 1))
 			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "        uses:", "        continue-on-error: true\n        uses:", 1))
-			run, err := e.Run(context.Background(), iterationRequest("bad", "untouched"))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("bad", "untouched"))
 			if err == nil || calls != 1 || run.Status != RunStatusNeedsAttention {
 				t.Fatal(run, calls, err)
 			}
@@ -262,7 +263,7 @@ func TestOrderedIterationLostCheckpoints(t *testing.T) {
 			}
 			e.Store = fault
 			ctx := context.Background()
-			run, err := e.Run(ctx, iterationRequest("first", "second"))
+			run, err := nativeTestExecutor(t, e).Run(ctx, iterationRequest("first", "second"))
 			if err == nil {
 				t.Fatal("fault not reached")
 			}
@@ -270,7 +271,7 @@ func TestOrderedIterationLostCheckpoints(t *testing.T) {
 				t.Fatal(err)
 			}
 			e.Store = s
-			run, err = e.Resume(ctx, run.ID, nil, false)
+			run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -291,7 +292,7 @@ func TestOrderedIterationInterruptionRestartAndConcurrentResume(t *testing.T) {
 		}
 		return map[string]any{"text": r.Prompt}, nil
 	}))
-	run, err := e.Run(ctx, iterationRequest("done", "interrupt", "pending"))
+	run, err := nativeTestExecutor(t, e).Run(ctx, iterationRequest("done", "interrupt", "pending"))
 	if err == nil {
 		t.Fatal("not interrupted")
 	}
@@ -323,7 +324,7 @@ func TestOrderedIterationInterruptionRestartAndConcurrentResume(t *testing.T) {
 	if successes.Load() != 1 {
 		t.Fatal("concurrent resume admitted", successes.Load())
 	}
-	run, err = e.Resume(context.Background(), run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,14 +335,14 @@ func TestOrderedIterationInterruptionRestartAndConcurrentResume(t *testing.T) {
 func TestOrderedIterationLegacyStoreRejected(t *testing.T) {
 	e, _ := iterationExecutor(t, nil)
 	e.Store = FileStore{Dir: t.TempDir()}
-	if _, err := e.Run(context.Background(), iterationRequest("a")); err == nil || !strings.Contains(err.Error(), "IterationJournal") {
+	if _, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a")); err == nil || !strings.Contains(err.Error(), "IterationJournal") {
 		t.Fatal(err)
 	}
 }
 func TestOrderedIterationMigrationFromV8(t *testing.T) {
 	ctx := context.Background()
 	e, s := iterationExecutor(t, nil)
-	run, err := e.Prepare(ctx, iterationRequest("a"))
+	run, err := nativeTestExecutor(t, e).Prepare(ctx, iterationRequest("a"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +398,7 @@ jobs:
     for-each: {items: [{id: separate, task: independent}], key: '${{ item.id }}'}
     with: {task: '${{ item.task }}'}
 `)
-	run, err := e.Run(context.Background(), iterationRequest("a", "b"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a", "b"))
 	if err != nil || calls.Load() != 3 || !run.Jobs["review"].Complete || !run.Jobs["other"].Complete {
 		t.Fatal(run, calls.Load(), err)
 	}
@@ -440,7 +441,7 @@ func TestOrderedIterationBindingAndEvidenceDrift(t *testing.T) {
 				return validate(ctx, ac, cp)
 			}
 			registerTestAction(t, e, spec)
-			run, err := e.Run(context.Background(), iterationRequest("a", "b"))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a", "b"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -449,7 +450,7 @@ func TestOrderedIterationBindingAndEvidenceDrift(t *testing.T) {
 				spec.Implementation = "changed"
 				registerTestAction(t, e, spec)
 			}
-			if _, err = e.Resume(context.Background(), run.ID, nil, false); !errors.Is(err, ErrActionIntegrity) || providerCalls.Load() != 2 {
+			if _, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false); !errors.Is(err, ErrActionIntegrity) || providerCalls.Load() != 2 {
 				t.Fatal(err, providerCalls.Load())
 			}
 		})
@@ -474,7 +475,7 @@ func TestOrderedIterationGuardRecheckedBetweenChildren(t *testing.T) {
 		return validate(ctx, ac, cp)
 	}
 	registerTestAction(t, e, spec)
-	run, err := e.Run(context.Background(), iterationRequest("a", "b"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a", "b"))
 	if !errors.Is(err, ErrActionIntegrity) || calls.Load() != 1 || run.Jobs["review"].Items[1].Status != "pending" {
 		t.Fatal(run, err, calls.Load())
 	}
@@ -501,8 +502,8 @@ func TestOrderedIterationDownstreamInputInvalidation(t *testing.T) {
     needs: review
     steps:
       - id: aggregate
-        uses: agent/reviewer
-        with: {prompt: 'aggregate ${{ needs.review.outputs.complete }}'}
+        uses: agent/run
+        with: {prompt: 'aggregate ${{ needs.review.outputs.complete }}', agent: reviewer.toml}
 `
 			if mutation {
 				source = iterationSource + `  aggregate:
@@ -517,12 +518,12 @@ func TestOrderedIterationDownstreamInputInvalidation(t *testing.T) {
 				registerTestAction(t, e, spec)
 			}
 			writeWorkflow(t, e.WorkspaceDir, "main.yml", source)
-			run, err := e.Run(context.Background(), iterationRequest("exhaust"))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("exhaust"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			retry = true
-			run, err = e.Resume(context.Background(), run.ID, nil, true)
+			run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 			if mutation {
 				if !errors.Is(err, ErrActionIntegrity) || mutations.Load() != 1 {
 					t.Fatal(run, err, mutations.Load())
@@ -542,7 +543,7 @@ func TestOrderedIterationMutationRetryReconciliation(t *testing.T) {
 			var mutations atomic.Int32
 			var reconciles atomic.Int32
 			e, _ := iterationExecutor(t, nil)
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "uses: agent/reviewer\n        with: {prompt: '${{ inputs.task }}'}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1))
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1))
 			spec := readSpec(&mutations)
 			spec.Effect = ActionExternalMutation
 			spec.Handler = func(_ context.Context, _ ActionContext, i actionInput) (ActionResult[actionOutput], error) {
@@ -556,11 +557,11 @@ func TestOrderedIterationMutationRetryReconciliation(t *testing.T) {
 				return ActionReconciliation[actionOutput]{Outcome: outcome, Proof: json.RawMessage(`{"receipt":"checked"}`), Result: ActionResult[actionOutput]{Output: actionOutput{cp.Input.Value}, Evidence: json.RawMessage(`{"digest":"fixture"}`)}}, nil
 			}
 			registerTestAction(t, e, spec)
-			run, err := e.Run(context.Background(), iterationRequest("a"))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 			if err == nil {
 				t.Fatal("missing mutation acknowledgement accepted")
 			}
-			run, err = e.Resume(context.Background(), run.ID, nil, true)
+			run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 			if reconciles.Load() != 1 {
 				t.Fatal(reconciles.Load(), err)
 			}
@@ -584,7 +585,7 @@ func TestOrderedIterationPlanFencingRetentionAndRedaction(t *testing.T) {
 	}))
 	req := iterationRequest("safe")
 	req.Secrets = map[string]string{"token": "secret-token"}
-	run, err := e.Run(context.Background(), req)
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +619,7 @@ func TestOrderedIterationPlanFencingRetentionAndRedaction(t *testing.T) {
 	}
 	req = iterationRequest("secret-token")
 	req.Secrets = map[string]string{"token": "secret-token"}
-	if _, err = e.Run(context.Background(), req); err == nil {
+	if _, err = nativeTestExecutor(t, e).Run(context.Background(), req); err == nil {
 		t.Fatal("credential literal accepted")
 	}
 }
@@ -637,12 +638,12 @@ func TestOrderedIterationReadonlyActionAggregateRefreshes(t *testing.T) {
     needs: review
     steps: [{uses: action/capture, with: {value: 'complete=${{ needs.review.outputs.complete }}'}}]
 `)
-	run, err := e.Run(context.Background(), iterationRequest("a"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	retry = true
-	run, err = e.Resume(context.Background(), run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 	if err != nil || calls.Load() != 2 || run.Jobs["aggregate"].Steps["step_1"].Outputs["value"] != "complete=true" {
 		t.Fatal(run, err, calls.Load())
 	}
@@ -662,12 +663,12 @@ func TestOrderedIterationPriorMutationIsNotReplayed(t *testing.T) {
 	spec.Effect = ActionExternalMutation
 	registerTestAction(t, e, spec)
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "      - id: run", "      - id: mutate\n        uses: action/capture\n        with: {value: stable}\n      - id: run", 1))
-	run, err := e.Run(context.Background(), iterationRequest("a"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 	if err == nil {
 		t.Fatal("failure hidden")
 	}
 	retry = true
-	run, err = e.Resume(context.Background(), run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 	if err != nil || mutations.Load() != 1 || providers.Load() != 2 {
 		t.Fatal(run, err, mutations.Load(), providers.Load())
 	}
@@ -681,7 +682,7 @@ func TestOrderedIterationRetainedCorruptionRejected(t *testing.T) {
 				return map[string]any{"text": "done"}, nil
 			}))
 			ctx := context.Background()
-			run, err := e.Run(ctx, iterationRequest("a"))
+			run, err := nativeTestExecutor(t, e).Run(ctx, iterationRequest("a"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -699,7 +700,7 @@ func TestOrderedIterationRetainedCorruptionRejected(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.Resume(ctx, run.ID, nil, false); err == nil || calls.Load() != 1 {
+			if _, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil || calls.Load() != 1 {
 				t.Fatal(err, calls.Load())
 			}
 		})
@@ -728,7 +729,10 @@ func TestOrderedIterationRechecksEvidenceAfterCapacityWait(t *testing.T) {
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", strings.Replace(iterationSource, "  review:", "  guard:\n    steps: [{uses: action/capture, with: {value: stable}}]\n  review:\n    needs: guard", 1))
 	e.Slots <- struct{}{}
 	done := make(chan error, 1)
-	go func() { _, err := e.Run(context.Background(), iterationRequest("a")); done <- err }()
+	go func() {
+		_, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
+		done <- err
+	}()
 	<-ready
 	// Ensure the provider step has been admitted while it is waiting for capacity.
 	admitted := make(chan struct{})
@@ -781,7 +785,7 @@ jobs:
 					root += "    for-each: {items: [{id: outer}], key: item.id}\n"
 				}
 				writeWorkflow(t, e.WorkspaceDir, "main.yml", root)
-				run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 				if failure == ErrProviderFailure && err == nil {
 					t.Fatal("failure hidden")
 				}
@@ -795,7 +799,7 @@ jobs:
 					}
 				}
 				retry = true
-				run, err = e.Resume(context.Background(), run.ID, nil, true)
+				run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 				if err != nil || !reflect.DeepEqual(calls, []string{"ok", "retry", "retry"}) || iterationRetry(run) {
 					t.Fatal(run, err, calls)
 				}
@@ -808,7 +812,7 @@ func TestOrderedIterationProviderClassificationRetainsReasons(t *testing.T) {
 		t.Run(cause.Error(), func(t *testing.T) {
 			calls := 0
 			e, _ := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { calls++; return nil, cause }))
-			run, _ := e.Run(context.Background(), iterationRequest("a", "b"))
+			run, _ := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a", "b"))
 			if calls != 2 || run.Jobs["review"].Items[0].Error == "" {
 				t.Fatal(run, calls)
 			}
@@ -827,12 +831,12 @@ func TestOrderedIterationCommandCheckpointAcrossPhysicalAttempts(t *testing.T) {
 	path := filepath.Join(e.WorkspaceDir, "command-count")
 	command := fmt.Sprintf("        argv: [sh, '-c', 'echo once >> %s']", path)
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "      - id: run", "      - id: command\n"+command+"\n      - id: run", 1))
-	run, err := e.Run(context.Background(), iterationRequest("a"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 	if err == nil {
 		t.Fatal("failure hidden")
 	}
 	retry = true
-	run, err = e.Resume(context.Background(), run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, true)
 	if err != nil {
 		t.Fatal(run, err)
 	}
@@ -857,7 +861,7 @@ jobs:
     uses: workflows/wrapper.yml
     for-each: {items: [{id: outer}], key: item.id}
 `)
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if !errors.Is(err, ErrProviderFailure) || run.Jobs["outer"].Items[0].Status != "provider_failure" || run.Jobs["outer"].Complete {
 		t.Fatal(run, err)
 	}
@@ -889,7 +893,7 @@ func TestOrderedIterationStorageFailureDominatesProvider(t *testing.T) {
 			calls := 0
 			e, s := iterationExecutor(t, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) { calls++; return nil, ErrProviderFailure }))
 			e.Store = &iterationStorageFailure{SQLiteStore: s, phase: phase}
-			run, err := e.Run(context.Background(), iterationRequest("a", "b"))
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a", "b"))
 			if err == nil || calls != 1 || run.Jobs["review"].Items[0].Status != "interrupted" || !strings.Contains(run.Error, "sqlite disk full") {
 				t.Fatal(run, err, calls)
 			}
@@ -909,11 +913,11 @@ func TestOrderedIterationMixedChildFailuresKeepProviderBlocker(t *testing.T) {
     inputs: {task: {type: string}, ordinal: {type: number}, identity: {type: string}}
 jobs:
   exhausted:
-    steps: [{uses: agent/reviewer, with: {prompt: exhaust}}]
+    steps: [{uses: agent/run, with: {prompt: exhaust, agent: reviewer.toml}}]
   failed:
-    steps: [{uses: agent/reviewer, with: {prompt: fail}}]
+    steps: [{uses: agent/run, with: {prompt: fail, agent: reviewer.toml}}]
 `)
-	run, err := e.Run(context.Background(), iterationRequest("a"))
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 	if !errors.Is(err, ErrProviderFailure) || run.Jobs["review"].Items[0].Status != "provider_failure" || run.Jobs["review"].Complete {
 		t.Fatal(run, err)
 	}

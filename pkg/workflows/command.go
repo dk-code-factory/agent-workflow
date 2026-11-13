@@ -3,6 +3,7 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 )
 
 type commandEnvKey struct{}
+type commandInputKey struct{}
 
 const MaxCommandOutput = 16 << 20
 
@@ -39,6 +41,21 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, commandEnvKey{}, env)
+	if ec.Hook && step.Run != "" {
+		scriptContext := ec
+		scriptContext.NoShellEvent = true
+		for _, match := range expressionPattern.FindAllStringSubmatch(step.Run, -1) {
+			value, err := renderString(match[0], scriptContext)
+			if err != nil {
+				return nil, err
+			}
+			_, object := value.(map[string]any)
+			_, array := value.([]any)
+			if object || array {
+				return nil, fmt.Errorf("script hooks receive event JSON on stdin; event interpolation into shell scripts is unsupported")
+			}
+		}
+	}
 	argv := make([]string, 0, len(step.Argv))
 	for _, a := range step.Argv {
 		v, err := renderString(a, ec)
@@ -89,8 +106,28 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 			return nil, fmt.Errorf("working-directory must render to a string")
 		}
 	}
+	input, err := renderValue(step.With["input"], ec)
+	if err != nil {
+		return nil, err
+	}
+	if ec.Hook {
+		input = ec.Event
+	}
+	var inputJSON []byte
+	if input != nil {
+		inputJSON, err = json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+		inputJSON = append(inputJSON, '\n')
+	}
 	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
-		return e.executeContainerCommand(ctx, step, argv, slots)
+		ctx = context.WithValue(ctx, commandInputKey{}, inputJSON)
+		out, err := e.executeContainerCommand(ctx, step, argv, slots)
+		if err != nil {
+			return out, err
+		}
+		return validateCommandOutput(out, step, ec)
 	}
 	queued := time.Now()
 	select {
@@ -101,9 +138,13 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if inputJSON != nil {
+		cmd.Stdin = bytes.NewReader(inputJSON)
+	}
 	if len(env) > 0 && e.CommandExecution.Mode != "container" {
 		cmd.Env = append(os.Environ(), env...)
 	}
+
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir
@@ -156,6 +197,25 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	}
 	if err != nil {
 		return out, fmt.Errorf("command failed: %w", err)
+	}
+	return validateCommandOutput(out, step, ec)
+}
+
+func validateCommandOutput(out map[string]any, step Step, ec expressionContext) (map[string]any, error) {
+	output, err := renderValue(step.With["output"], ec)
+	if err != nil {
+		return out, err
+	}
+	contract, err := ParseAgentOutputContract(output)
+	if err != nil {
+		return out, err
+	}
+	if contract != nil {
+		validated := ValidateAgentStructuredOutput(out["stdout"].(string), contract)
+		if !validated.Valid {
+			return out, fmt.Errorf("invalid command structured output: %s", validated.Error)
+		}
+		out["structured"] = validated.Structured
 	}
 	return out, nil
 }

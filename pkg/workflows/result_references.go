@@ -112,7 +112,7 @@ func validateResultReferences(w *Workflow) error {
 				for _, entry := range []struct {
 					name  string
 					steps []Step
-				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+				}{{"onResult", step.OnResult}, {"onComplete", step.OnComplete}, {"onIncomplete", step.OnIncomplete}, {"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
 					if err := handlers(entry.steps, local, path+"."+sid+"."+entry.name); err != nil {
 						return err
 					}
@@ -149,7 +149,7 @@ func validateResultReferences(w *Workflow) error {
 				for _, entry := range []struct {
 					name  string
 					steps []Step
-				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+				}{{"onResult", step.OnResult}, {"onComplete", step.OnComplete}, {"onIncomplete", step.OnIncomplete}, {"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
 					if err := handlers(entry.steps, available, prefix+".steps."+sid+"."+entry.name); err != nil {
 						return err
 					}

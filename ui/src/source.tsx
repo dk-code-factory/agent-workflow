@@ -61,7 +61,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   for (const id of Object.keys(callable?.inputs ?? {})) if (add(`inputs.${id}`)) return result;
   const job = jobID ? workflow.jobs[jobID] : undefined;
   const handler = path !== undefined && inHandlerPath(path);
-  if (handler) for (const value of ['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
+  if (handler) for (const value of ['event.type', 'event.agent', 'event.result', 'event.verification', 'event.error', 'event.source', 'failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
     const producer = workflow.jobs[dep];
     for (const output of Object.keys(producer?.outputs ?? {})) if (add(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`)) return result;
@@ -75,7 +75,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
     for (const [id, { step }] of completedSteps(workflow, path!)) {
       const base = `steps.${id}`;
       if (addStep(step, base)) return result;
-      for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+      for (const output of ['agent', 'complete', 'text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
     }
     return result;
   }
@@ -85,7 +85,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
     if (consumer && !consumer.available.has(id)) continue;
     const base = `steps.${id}`;
     if ((conciseLocal || consumer) && addStep(step, base)) return result;
-    for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+    for (const output of ['agent', 'complete', 'text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
   }
   return result;
 }

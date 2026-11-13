@@ -17,19 +17,22 @@ func TestLifecycleArgumentFailurePreservesPromptContext(t *testing.T) {
   task:
     steps:
       - id: seed
-        agent: seed
-        prompt: Seed
-      - id: work
-        uses: agent/primary
+        uses: agent/run
         with:
-          ` + field + `: 'original ${{ secrets.token }}'
+          agent: seed.toml
+          prompt: Seed
+      - id: work
+        uses: agent/run
+        with:
+          agent: primary.toml
+` + "          " + field + `: 'original ${{ secrets.token }}'
           workspace: '${{ steps.seed.text.foo }}'
         onFailure:
-          - agent: observer
-            prompt: '${{ failed.prompt }}'
+          - uses: agent/run
+            with: {agent: observer.toml, prompt: '${{ failed.prompt }}'}
         finally:
-          - agent: cleanup
-            prompt: '${{ failed.prompt }}'
+          - uses: agent/run
+            with: {agent: cleanup.toml, prompt: '${{ failed.prompt }}'}
 `
 			var calls []string
 			e, _ := lifecycleArgumentExecutor(t, source, ordered, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
@@ -39,14 +42,14 @@ func TestLifecycleArgumentFailurePreservesPromptContext(t *testing.T) {
 				}
 				return map[string]any{"text": "seed"}, nil
 			}))
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "private-token"}})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "private-token"}})
 			if err == nil || !strings.Contains(err.Error(), `cannot access result field "foo" on non-object`) {
 				t.Fatalf("original argument failure lost: run=%+v err=%v", run, err)
 			}
 			if !reflect.DeepEqual(calls, []string{"seed", "observer", "cleanup"}) {
 				t.Fatalf("failure context prevented handlers: calls=%v err=%v", calls, err)
 			}
-			_, _ = e.Resume(context.Background(), run.ID, nil, false)
+			_, _ = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if !reflect.DeepEqual(calls, []string{"seed", "observer", "cleanup"}) {
 				t.Fatalf("terminal argument failure replayed effects: %v", calls)
 			}
@@ -65,26 +68,28 @@ func TestLifecycleFallbackRecoversArgumentFailure(t *testing.T) {
       result: ${{ steps.work.text }}
     steps:
       - id: seed
-        agent: seed
-        prompt: Seed
+        uses: agent/run
+        with:
+          agent: seed.toml
+          prompt: Seed
       - id: work
-        agent: primary
-        prompt: original
         with:
           workspace: '${{ steps.seed.text.foo }}'
+          agent: primary.toml
+          prompt: original
         onError:
-          - agent: backup
-            prompt: Recover
+          - uses: agent/run
+            with:
+              agent: backup.toml
+              prompt: Recover
+        uses: agent/run
 `
 			if contract != "none" {
-				source = strings.Replace(source, "        with:\n", `        with:
-          output:
-            schema:
-              type: object
-              required: [ok]
-              properties:
-                ok: {type: boolean}
-`, 1)
+				source = editNativeWorkflow(t, source, func(w *Workflow) {
+					j := w.Jobs["task"]
+					j.Steps[1].With["output"] = map[string]any{"format": "json", "repair-attempts": 0, "schema": map[string]any{"type": "object", "required": []any{"ok"}, "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}}}
+					w.Jobs["task"] = j
+				})
 			}
 			var calls []string
 			e, _ := lifecycleArgumentExecutor(t, source, ordered, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
@@ -95,9 +100,9 @@ func TestLifecycleFallbackRecoversArgumentFailure(t *testing.T) {
 				}
 				return map[string]any{"text": r.AgentID, "structured": value}, nil
 			}))
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if contract == "invalid" {
-				if err == nil || !strings.Contains(err.Error(), "structured output fallback") {
+				if err == nil || !strings.Contains(err.Error(), "structured output") {
 					t.Fatalf("invalid replacement contract accepted or not checked: run=%+v err=%v", run, err)
 				}
 			} else if err != nil || run.Jobs["task"].Outputs["result"] != "backup" {
@@ -109,7 +114,7 @@ func TestLifecycleFallbackRecoversArgumentFailure(t *testing.T) {
 			if original := run.Jobs["task"].Steps["work"].Lifecycle.OriginalError; !strings.Contains(original, `cannot access result field "foo" on non-object`) {
 				t.Fatalf("original argument failure not retained: %q", original)
 			}
-			resumed, resumeErr := e.Resume(context.Background(), run.ID, nil, false)
+			resumed, resumeErr := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if (resumeErr == nil) != (contract != "invalid") || resumed == nil || !reflect.DeepEqual(calls, []string{"seed", "backup"}) {
 				t.Fatalf("argument recovery replay changed: run=%+v err=%v calls=%v", resumed, resumeErr, calls)
 			}
@@ -120,15 +125,13 @@ func TestLifecycleFallbackRecoversArgumentFailure(t *testing.T) {
 func lifecycleArgumentExecutor(t *testing.T, source string, ordered bool, runner AgentRunner) (*Executor, *SQLiteStore) {
 	t.Helper()
 	if ordered {
-		source += `  iteration:
-    needs: task
-    uses: workflows/child.yml
-    for-each: {items: [], key: item.id}
-`
+		source = editNativeWorkflow(t, source, func(w *Workflow) {
+			w.Jobs["iteration"] = Job{Needs: []string{"task"}, Uses: "workflows/child.yml", ForEach: &ForEach{Items: []any{}, Key: "item.id"}}
+		})
 	}
 	e, store := durableExecutor(t, source, runner)
 	if ordered {
-		writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{agent: unused, prompt: unused}]}}\n")
+		writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{uses: agent/run, with: {agent: unused.toml, prompt: unused}}]}}\n")
 	}
 	return e, store
 }
@@ -136,10 +139,10 @@ func lifecycleArgumentExecutor(t *testing.T, source string, ordered bool, runner
 func TestLifecycleOrderedArgumentFailureRetainsAdmissionGuards(t *testing.T) {
 	ctx := context.Background()
 	store, run := executionStore(t)
-	e := &Executor{Store: store}
-	step := Step{ID: "work", Uses: "agent/a", With: map[string]any{
+	e := nativeTestExecutor(t, &Executor{Store: store})
+	step := Step{ID: "work", Uses: "agent/run", With: map[string]any{"agent": "a.toml",
 		"prompt": "${{ inputs.prompt }}", "workspace": "${{ steps.seed.text.foo }}",
-	}, OnError: []Step{{Uses: "agent/backup"}}}
+	}, OnError: []Step{{Uses: "agent/run", With: map[string]any{"agent": "backup.toml"}}}}
 	ec := expressionContext{Ordered: true, RunID: run.ID, JobID: "task", IterationNumber: 1,
 		Inputs: map[string]any{"prompt": "original"}, Steps: map[string]StepExecution{"seed": {ID: "seed", Status: RunStatusSucceeded, Outputs: map[string]any{"text": "seed"}}}}
 	attempt, reused, err := e.beginIterationStep(ctx, store, step, ec, false)
@@ -185,13 +188,12 @@ func TestLifecycleOrderedArgumentFailureResumesOriginalReceipt(t *testing.T) {
   task:
     outputs: {result: '${{ steps.work.text }}'}
     steps:
-      - {id: seed, agent: seed, prompt: Seed}
+      - {id: seed, uses: agent/run, with: {agent: seed.toml, prompt: Seed}}
       - id: work
-        agent: primary
-        prompt: original
-        with: {workspace: '${{ steps.seed.text.foo }}'}
-        onError: [{agent: backup, prompt: Recover}]
-        finally: [{agent: cleanup, prompt: Cleanup}]
+        with: {workspace: '${{ steps.seed.text.foo }}', agent: primary.toml, prompt: original}
+        onError: [{uses: agent/run, with: {agent: backup.toml, prompt: Recover}}]
+        finally: [{uses: agent/run, with: {agent: cleanup.toml, prompt: Cleanup}}]
+        uses: agent/run
 `
 	var calls []string
 	e, store := lifecycleArgumentExecutor(t, source, true, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
@@ -199,12 +201,12 @@ func TestLifecycleOrderedArgumentFailureResumesOriginalReceipt(t *testing.T) {
 		return map[string]any{"text": r.AgentID}, nil
 	}))
 	e.Store = interruptArgumentLifecycleJournal{store}
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run == nil || !reflect.DeepEqual(calls, []string{"seed"}) {
 		t.Fatalf("argument failure did not stop after durable task receipt: run=%+v err=%v calls=%v", run, err, calls)
 	}
 	e.Store = store
-	run, err = e.Resume(context.Background(), run.ID, nil, false)
+	run, err = nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if err != nil || run.Jobs["task"].Outputs["result"] != "backup" || !reflect.DeepEqual(calls, []string{"seed", "backup", "cleanup"}) {
 		t.Fatalf("argument failure receipt did not resume handlers: run=%+v err=%v calls=%v", run, err, calls)
 	}

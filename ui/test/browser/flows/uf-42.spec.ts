@@ -18,6 +18,10 @@ test('replace reusable call with starter steps and undo', async ({ page }) => {
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
   expect((await snapshot(page)).workflow.jobs.build).toMatchObject({ uses: 'workflows/review.yml', with: { task: 'Review' }, secrets: { token: 'secret' } });
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build).toEqual(build);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(before);
 });
 
 test('imported reusable job retains existing local steps when converted and undo restores source', async ({ page }) => {

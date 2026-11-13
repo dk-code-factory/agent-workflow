@@ -5,18 +5,20 @@ import { expressionSuggestions } from '../src/source';
 import { stepConversionImpact } from '../src/conversion';
 
 const source = `schemas:
-  decision: {type: object, properties: {approved: {type: boolean}}}
+  decision: { type: object, properties: { approved: { type: boolean } } }
 jobs:
   solve:
     steps:
       - id: solution
-        conversation: [builder, reviewer]
+        conversation: [ builder, reviewer ]
         finishBy: reviewer
         prompt: Complete the task.
-        with: {output: {format: json, schema: decision}}
+        with: { output: { format: json, schema: decision } }
       - id: report
-        agent: reviewer
-        prompt: '\${{ steps.solution.approved }}'
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: '\${{ steps.solution.approved }}'
 `;
 
 describe('YAML conversations', () => {
@@ -32,23 +34,24 @@ describe('YAML conversations', () => {
 
   it('retains conversation schema consumers and handler references during renames', () => {
     const doc = new WorkflowDocument({ source: `schemas:
-  Decision: {type: object, properties: {answer: {type: string, enum: ['\${{ steps.seed.text }}']}}}
+  Decision: { type: object, properties: { answer: { type: string, enum: [ '\${{ steps.seed.text }}' ] } } }
 jobs:
   solve:
     steps:
-      - {id: seed, agent: builder, prompt: Prepare}
+      - { id: seed, uses: agent/run, with: { agent: builder.toml, prompt: Prepare } }
       - id: solution
-        conversation: [builder, reviewer]
+        conversation: [ builder, reviewer ]
         finishBy: reviewer
         prompt: '\${{ steps.seed.text }}'
-        with: {output: {schema: Decision}}
+        with: { output: { schema: Decision } }
       - id: report
-        agent: reviewer
-        prompt: Report
         finally:
-          - agent: builder
-            prompt: '\${{ steps.solution.answer }}'
-            with: {output: {schema: Decision}}
+          - with: { output: { schema: Decision }, agent: builder.toml, prompt: '\${{ steps.solution.answer }}' }
+            uses: agent/run
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: Report
 ` });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     doc.renameStep('solve', 0, 'prepared');
@@ -57,12 +60,12 @@ jobs:
     const conversation = workflow.jobs.solve.steps![1];
     const finalizer = workflow.jobs.solve.steps![2].finally![0];
     expect(conversation.prompt).toBe('${{ steps.prepared.text }}');
-    expect(finalizer.prompt).toBe('${{ steps.reviewed.answer }}');
+    expect(finalizer.with!.prompt).toBe('${{ steps.reviewed.answer }}');
     for (const consumer of [conversation, finalizer]) {
       const name = (consumer.with!.output as any).schema;
       expect((workflow.schemas![name] as any).properties.answer.enum).toEqual(['${{ steps.prepared.text }}']);
     }
-    expect(expressionSuggestions(workflow, 'solve', 2, ['jobs', 'solve', 'steps', 2, 'finally', 0, 'prompt'])).toContain('steps.reviewed.answer');
+    expect(expressionSuggestions(workflow, 'solve', 2, ['jobs', 'solve', 'steps', 2, 'finally', 0, 'with', 'prompt'])).toContain('steps.reviewed.answer');
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
   });
 
@@ -100,12 +103,13 @@ jobs:
   });
 
   it('keeps prompts and compatible contracts when converting through conversations', () => {
-    const doc = new WorkflowDocument({ source: 'jobs: {solve: {steps: [{agent: claude, prompt: Work, with: {model: chosen, message: Old, output: {format: json}}}]}}' });
-    expect(stepConversionImpact(doc.getSnapshot().workflow!.jobs.solve.steps![0], 'conversation')).toEqual(['agent', 'with.message']);
+    const doc = new WorkflowDocument({ source: `jobs: { solve: { steps: [ { with: { model: chosen, message: Old, output: { format: json }, agent: claude.toml, prompt: Work }, uses: agent/run } ] } }
+` });
+    expect(stepConversionImpact(doc.getSnapshot().workflow!.jobs.solve.steps![0], 'conversation')).toEqual(['uses', 'with.message', 'with.agent', 'with.prompt']);
     doc.setStepKind('solve', 0, 'conversation');
     expect(doc.getSnapshot().workflow!.jobs.solve.steps![0]).toMatchObject({ conversation: ['builder', 'reviewer'], finishBy: 'reviewer', prompt: 'Work', with: { model: 'chosen', output: { format: 'json' } } });
-    doc.setStepKind('solve', 0, 'agent/claude');
-    expect(doc.getSnapshot().workflow!.jobs.solve.steps![0]).toEqual({ agent: 'claude', prompt: 'Work', with: { model: 'chosen', output: { format: 'json' } } });
+    doc.setStepKind('solve', 0, 'agent/run');
+    expect(doc.getSnapshot().workflow!.jobs.solve.steps![0]).toEqual({uses: 'agent/run', with: {agent: "", model: 'chosen', output: { format: 'json' }, prompt: 'Work'}});
     doc.undo();
     expect(doc.getSnapshot().workflow!.jobs.solve.steps![0].conversation).toEqual(['builder', 'reviewer']);
   });
@@ -113,7 +117,7 @@ jobs:
   it('rewrites conversation prompt references and preserves literal participant identities', () => {
     const doc = new WorkflowDocument({ source });
     doc.renameStep('solve', 0, 'decision');
-    expect(doc.getSnapshot().workflow!.jobs.solve.steps![1].prompt).toBe('${{ steps.decision.approved }}');
+    expect(doc.getSnapshot().workflow!.jobs.solve.steps![1].with!.prompt).toBe('${{ steps.decision.approved }}');
     expect(doc.getSnapshot().workflow!.jobs.solve.steps![0].conversation).toEqual(['builder', 'reviewer']);
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
   });
@@ -126,18 +130,20 @@ jobs:
   });
 
   it('requires an object completion schema for managed finisher arguments', () => {
-    const scalar = parseWorkflow(source.replace('decision: {type: object', 'decision: {type: string'));
+    const scalar = parseWorkflow(source.replace('decision: { type: object', 'decision: { type: string'));
     expect(scalar.diagnostics).toContainEqual(expect.objectContaining({ code: 'conversation-output', path: ['jobs', 'solve', 'steps', 0, 'with', 'output', 'schema'] }));
     const inline = parseWorkflow(source.replace('schema: decision', 'schema: {type: array}'));
     expect(inline.diagnostics.some(d => d.code === 'conversation-output')).toBe(true);
   });
 
   it('wires conversation results across jobs and reverses the dependency and prompt together', () => {
-    const doc = new WorkflowDocument({ source: source + '  report:\n    steps: [{agent: reviewer, prompt: Review}]\n' });
+    const doc = new WorkflowDocument({ source: source + `  report:
+    steps: [ { uses: agent/run, with: { agent: reviewer.toml, prompt: Review } } ]
+` });
     const before = doc.getSnapshot().source;
-    doc.applyJobResult(doc.previewJobResult({ target: ['jobs', 'report', 'steps', 0, 'prompt'], producer: 'solve', source: { kind: 'result', step: 0, field: 'approved' } }));
+    doc.applyJobResult(doc.previewJobResult({ target: ['jobs', 'report', 'steps', 0, 'with', 'prompt'], producer: 'solve', source: { kind: 'result', step: 0, field: 'approved' } }));
     expect(doc.getSnapshot().workflow!.jobs.report.needs).toEqual(['solve']);
-    expect(doc.getSnapshot().workflow!.jobs.report.steps![0].prompt).toBe('Review${{ needs.solve.steps.solution.approved }}');
+    expect(doc.getSnapshot().workflow!.jobs.report.steps![0].with!.prompt).toBe('Review${{ needs.solve.steps.solution.approved }}');
     doc.undo();
     expect(doc.getSnapshot().source).toBe(before);
   });

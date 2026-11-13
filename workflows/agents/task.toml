@@ -1,0 +1,3 @@
+name = "task"
+description = "Execute a workflow task."
+developer_instructions = "Complete the supplied task and respect its structured result contract. Do not publish changes unless the task explicitly authorizes publication."

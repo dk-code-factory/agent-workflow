@@ -149,6 +149,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	var workerDone chan struct{}
 	if s.Workers != nil {
+		s.Executor.Workers = s.Workers
 		s.Workers.AdmissionReady = s.requireReady
 		s.Workers.Slots = s.Executor.Slots
 		s.Workers.Capacity = s.Executor.Capacity

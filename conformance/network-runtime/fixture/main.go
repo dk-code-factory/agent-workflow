@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -115,6 +116,41 @@ func run() error {
 		})
 	case "network":
 		return networkCycle(os.Args[2])
+	case "app-server":
+		scanner := bufio.NewScanner(os.Stdin)
+		encoder := json.NewEncoder(os.Stdout)
+		for scanner.Scan() {
+			var f struct {
+				ID     any            `json:"id"`
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &f); err != nil {
+				return err
+			}
+			switch f.Method {
+			case "initialize":
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.167.0 (fixture)"}})
+			case "account/login/start":
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{}})
+			case "thread/start", "thread/resume":
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"thread": map[string]any{"id": "fixture-thread"}}})
+			case "turn/start":
+				input, _ := f.Params["input"].([]any)
+				if len(input) != 1 {
+					return fmt.Errorf("expected one fixture prompt")
+				}
+				item, _ := input[0].(map[string]any)
+				prompt, _ := item["text"].(string)
+				if err := networkCycle(strings.TrimSpace(prompt)); err != nil {
+					return err
+				}
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"turn": map[string]any{"id": "fixture-turn"}}})
+				encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "fixture-thread", "turnId": "fixture-turn", "item": map[string]any{"type": "agentMessage", "text": "contained"}}})
+				encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "fixture-thread", "turn": map[string]any{"id": "fixture-turn", "status": "completed"}}})
+			}
+		}
+		return scanner.Err()
 	case "exec": // fake codex-cli: prompts contain a disposable network name.
 		prompt, _ := io.ReadAll(io.LimitReader(os.Stdin, 4096))
 		if err := networkCycle(strings.TrimSpace(string(prompt))); err != nil {

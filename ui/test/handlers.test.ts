@@ -11,22 +11,30 @@ jobs:
   build:
     steps:
       - id: earlier
-        agent: claude
-        prompt: Prepare
+        uses: agent/run
+        with:
+          agent: claude.toml
+          prompt: Prepare
       - id: task
-        agent: claude
-        prompt: Work
         handlerTimeout: 45s
         onError:
           - id: earlier
-            agent: codex
-            prompt: \${{ failed.prompt }} \${{ steps.earlier.text }}
-          - agent: claude
-            prompt: \${{ steps.earlier.text }} \${{ error.message }}
+            uses: agent/run
+            with:
+              agent: codex.toml
+              prompt: \${{ failed.prompt }} \${{ steps.earlier.text }}
+          - uses: agent/run
+            with:
+              agent: claude.toml
+              prompt: \${{ steps.earlier.text }} \${{ error.message }}
         onFailure:
-          - argv: [echo, '\${{ error.class }}']
+          - argv: [ echo, '\${{ error.class }}' ]
         finally:
-          - argv: [echo, done]
+          - argv: [ echo, done ]
+        uses: agent/run
+        with:
+          agent: claude.toml
+          prompt: Work
 `;
 
 describe('step lifecycle handler authoring', () => {
@@ -35,8 +43,8 @@ describe('step lifecycle handler authoring', () => {
     expect(doc.getSnapshot().diagnostics).toEqual([]);
     const original = doc.getSnapshot().workflow!.jobs.build.steps![1];
     doc.setField(['name'], 'Handlers');
-    doc.setStepKind('build', 1, 'agent/codex');
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({ ...original, agent: 'codex' });
+    doc.setField(['jobs','build','steps',1,'with','agent'],'codex.toml');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({ ...original, with: {...original.with, agent: 'codex.toml'} });
     expect(doc.getSnapshot().source).toContain('# preserve handlers');
     doc.undo(); doc.undo();
     expect(doc.getSnapshot().source).toBe(source);
@@ -46,19 +54,19 @@ describe('step lifecycle handler authoring', () => {
     const doc = new WorkflowDocument({ source });
     doc.renameStep('build', 0, 'prepared');
     const fallback = doc.getSnapshot().workflow!.jobs.build.steps![1].onError!;
-    expect(fallback[0].prompt).toContain('steps.prepared.text');
-    expect(fallback[1].prompt).toContain('steps.earlier.text');
+    expect(fallback[0].with!.prompt).toContain('steps.prepared.text');
+    expect(fallback[1].with!.prompt).toContain('steps.earlier.text');
     expect(doc.getSnapshot().diagnostics).toEqual([]);
   });
 
   it('tracks named schemas consumed by nested handlers without rewriting shadowed consumers', () => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
-      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
-      { agent: 'claude', prompt: 'Work', onError: [
-        { agent: 'codex', prompt: 'Inherited', with: { output: { schema: 'Shared' } } },
-        { id: 'earlier', agent: 'codex', prompt: 'Local' },
-        { agent: 'claude', prompt: 'Shadowed', with: { output: { schema: 'Shared' } } },
-      ], finally: [{ agent: 'claude', prompt: 'Finalize', with: { output: { schema: 'Shared' } } }] },
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {onError: [
+        {uses: 'agent/run', with: {agent: "codex.toml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
+        {id: 'earlier', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
+        {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Shadowed'}},
+      ], finally: [{uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Finalize'}}], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
     ] } } });
     const doc = new WorkflowDocument({ source: original });
     expect(doc.deletionImpact('build', 0)).toContainEqual(['schemas', 'Shared', 'enum', 0]);
@@ -80,11 +88,11 @@ describe('step lifecycle handler authoring', () => {
 
   it.each(['prompt', 'schema'])('rejects rename capture by a sibling matching the new ID in %s', kind => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
-      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
-      { agent: 'claude', prompt: 'Work', finally: [
-        { id: 'prepared', agent: 'codex', prompt: 'Local' },
-        kind === 'prompt' ? { agent: 'claude', prompt: '${{ steps.earlier.text }}' } : { agent: 'claude', prompt: 'Inherited', with: { output: { schema: 'Shared' } } },
-      ] },
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {finally: [
+        {id: 'prepared', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
+        kind === 'prompt' ? {uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ steps.earlier.text }}'}} : {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
+      ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
     ] } } });
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
@@ -99,11 +107,11 @@ describe('step lifecycle handler authoring', () => {
 
   it.each(['earlier', 'task', 'fallback', 'later', 'missing'])('validates named handler schemas against the local scope: %s', reference => {
     const yaml = stringify({ schemas: { Result: { type: 'string', enum: [`\${{ steps.${reference}.text }}`] } }, jobs: { build: { steps: [
-      { id: 'earlier', agent: 'claude', prompt: 'Prepare' },
-      { id: 'task', agent: 'claude', prompt: 'Work', onError: [
-        { id: 'fallback', agent: 'claude', prompt: 'Fallback', with: { output: { schema: 'Result' } } },
-        { id: 'later', agent: 'claude', prompt: 'Later' },
-      ] },
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {id: 'task', onError: [
+        {id: 'fallback', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Result' }, prompt: 'Fallback'}},
+        {id: 'later', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Later'}},
+      ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
     ] } } });
     expect(parseWorkflow(yaml).diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(reference !== 'earlier');
   });
@@ -118,7 +126,7 @@ describe('step lifecycle handler authoring', () => {
 
   it('suggests authenticated failure context only inside hooks and uses preceding sibling scope', () => {
     const w = parseWorkflow(source).workflow!;
-    const path = ['jobs', 'build', 'steps', 1, 'onError', 1, 'prompt'];
+    const path = ['jobs', 'build', 'steps', 1, 'onError', 1, 'with', 'prompt'];
     expect(expressionSuggestions(w, 'build', 1, path)).toEqual(expect.arrayContaining(['failed.prompt', 'error.message', 'steps.earlier.text']));
     expect(expressionSuggestions(w, 'build', 1)).not.toContain('failed.prompt');
     expect(expressionSuggestions(w, 'build', 1, ['jobs', 'build', 'steps', 1, 'finally', 0, 'argv', 1])).not.toContain('steps.step_2.text');
@@ -134,9 +142,10 @@ describe('step lifecycle handler authoring', () => {
     ['invalid duration', 'jobs: {build: {steps: [{argv: [echo], handlerTimeout: 6m}]}}', 'handler-timeout'],
     ['orphan timeout', 'jobs: {build: {steps: [{argv: [echo], handlerTimeout: 45s}]}}', 'handler-timeout'],
     ['wrong hook shape', 'jobs: {build: {steps: [{argv: [echo], finally: nope}]}}', 'shape'],
-    ['context outside hook', 'jobs: {build: {steps: [{agent: claude, prompt: "${{ failed.prompt }}"}]}}', 'handler-context'],
+    ['context outside hook', `jobs: { build: { steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: "\${{ failed.prompt }}" } } ] } }
+`, 'handler-context'],
     ['invalid context field', source.replace('failed.prompt', 'failed.credentials'), 'handler-context'],
-    ['sibling hook invisibility', source.replace('argv: [echo, done]', 'argv: [echo, "${{ steps.step_2.text }}"]'), 'expression-reference'],
+    ['sibling hook invisibility', source.replace('argv: [ echo, done ]', 'argv: [echo, "${{ steps.step_2.text }}"]'), 'expression-reference'],
   ])('diagnoses %s', (_name, yaml, code) => {
     expect(parseWorkflow(yaml).diagnostics.some(d => d.code === code && d.severity === 'error')).toBe(true);
   });
@@ -156,27 +165,27 @@ describe('step lifecycle handler authoring', () => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
       { id: 'group', parallel: [
         { sequence: [
-          { id: 'seed', agent: 'claude', prompt: 'Seed' },
-          { id: 'work', agent: 'claude', prompt: 'Work', onError: [
-            { agent: 'codex', prompt: '${{ failed.prompt }} ${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
-            { id: 'seed', agent: 'codex', prompt: 'Local' },
-            { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
-          ] },
+          {id: 'seed', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Seed'}},
+          {id: 'work', onError: [
+            {uses: 'agent/run', with: {agent: "codex.toml", output: { schema: 'Shared' }, prompt: '${{ failed.prompt }} ${{ steps.seed.text }}'}},
+            {id: 'seed', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
+            {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+          ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
         ] },
-        { id: 'sibling', agent: 'claude', prompt: 'Sibling' },
+        {id: 'sibling', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Sibling'}},
       ] },
     ] } } });
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     const owner = ['jobs', 'build', 'steps', 0, 'parallel', 0, 'sequence', 1];
-    const suggestions = expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'onError', 0, 'prompt']);
+    const suggestions = expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'onError', 0, 'with', 'prompt']);
     expect(suggestions).toEqual(expect.arrayContaining(['failed.prompt', 'steps.seed.text']));
     expect(suggestions).not.toContain('steps.sibling.text');
-    expect(expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'prompt'])).not.toContain('failed.prompt');
+    expect(expressionSuggestions(doc.getSnapshot().workflow, 'build', 0, [...owner, 'with', 'prompt'])).not.toContain('failed.prompt');
     doc.duplicateStep('build', 0);
     const copy = doc.getSnapshot().workflow!.jobs.build.steps![1].parallel![0].sequence![1].onError!;
-    expect(copy[0].prompt).toContain('steps.seed_copy.text');
-    expect(copy[2].prompt).toBe('${{ steps.seed.text }}');
+    expect(copy[0].with!.prompt).toContain('steps.seed_copy.text');
+    expect(copy[2].with!.prompt).toBe('${{ steps.seed.text }}');
     expect(copy[0].with!.output).toEqual({ schema: 'Shared_copy' });
     expect(copy[2].with!.output).toEqual({ schema: 'Shared' });
     expect(doc.getSnapshot().workflow!.schemas!.Shared_copy.enum).toEqual(['${{ steps.seed_copy.text }}']);
@@ -191,16 +200,16 @@ describe('step lifecycle handler authoring', () => {
   it.each(['onError', 'onFailure', 'finally'] as const)('avoids generated IDs captured by direct and nested %s siblings', kind => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
       { id: 'group', sequence: [
-        { id: 'seed', agent: 'claude', prompt: 'Seed' },
-        { id: 'work', agent: 'claude', prompt: 'Work', [kind]: [
-          { id: 'seed_copy', agent: 'codex', prompt: 'Local copy name' },
-          { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } }, finally: [
-            { id: 'seed_copy_2', agent: 'codex', prompt: 'Nested copy name' },
-            { agent: 'claude', prompt: '${{ steps.seed.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}', with: { output: { schema: 'Shared' } } },
-          ] },
-          { id: 'seed', agent: 'codex', prompt: 'Local source name' },
-          { agent: 'claude', prompt: '${{ steps.seed.text }}', with: { output: { schema: 'Shared' } } },
-        ] },
+        {id: 'seed', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Seed'}},
+        {id: 'work', [kind]: [
+          {id: 'seed_copy', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local copy name'}},
+          {finally: [
+            {id: 'seed_copy_2', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Nested copy name'}},
+            {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}'}},
+          ], uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+          {id: 'seed', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local source name'}},
+          {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+        ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
       ] },
     ] } } });
     const doc = new WorkflowDocument({ source: original });
@@ -211,12 +220,12 @@ describe('step lifecycle handler authoring', () => {
     const handlers = sequence[1][kind]!;
     expect(sequence[0].id).toBe('seed_copy_3');
     expect(handlers[0].id).toBe('seed_copy');
-    expect(handlers[1].prompt).toBe('${{ steps.seed_copy_3.text }}');
+    expect(handlers[1].with!.prompt).toBe('${{ steps.seed_copy_3.text }}');
     expect(handlers[1].with!.output).toEqual({ schema: 'Shared_copy' });
     expect(handlers[1].finally![0].id).toBe('seed_copy_2');
-    expect(handlers[1].finally![1].prompt).toBe('${{ steps.seed_copy_3.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}');
+    expect(handlers[1].finally![1].with!.prompt).toBe('${{ steps.seed_copy_3.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}');
     expect(handlers[1].finally![1].with!.output).toEqual({ schema: 'Shared_copy' });
-    expect(handlers[3].prompt).toBe('${{ steps.seed.text }}');
+    expect(handlers[3].with!.prompt).toBe('${{ steps.seed.text }}');
     expect(handlers[3].with!.output).toEqual({ schema: 'Shared' });
     expect(edited.workflow!.schemas!.Shared_copy.enum).toEqual(['${{ steps.seed_copy_3.text }}']);
     expect(edited.workflow!.schemas!.Shared.enum).toEqual(['${{ steps.seed.text }}']);

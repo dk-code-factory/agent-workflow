@@ -1,9 +1,10 @@
-import { isMap, isScalar, isSeq, type Document, type Node } from 'yaml';
+import { isMap, isScalar, isSeq, visit, type Document, type Node } from 'yaml';
 import type { Diagnostic, JobResultPreview, JobResultRequest, LayoutState, Path, Snapshot, Step, WorkflowOptions } from './types';
 import { dependencies, effectiveStepID, stepAction, hasAgentResult, identifier, parseWorkflow, runnerTimestamp } from './validation';
 import { completedSteps, hasExpressionReferences, inHandlerPath, isExpressionPath, mapReferences, pathJob, references, referenceText, stepPathLength, type Reference } from './expressions';
 import { blockKind, producerStep, stepEntries } from './step-tree';
 import { stepConversion } from './conversion';
+import { parseExactYAML, preserveNumericTokens } from './exact-yaml';
 
 // Whole workflow/job/step replacements may change anonymous owners; field leaves do not.
 const preservesInspectorOwner = (path: Path) => path.length > 0 && (path[0] !== 'jobs' || (path.length >= 3 && path[2] !== 'steps') || path.length > 4);
@@ -126,7 +127,24 @@ export class WorkflowDocument {
   private edit(fn: (doc: Document) => void, preserveInspector = false) {
     if (this.readOnly) throw new Error('Viewer is read-only');
     if (!this.parsed.usable || !this.parsed.doc) throw new Error('Visual editing is suspended while the preview is stale');
-    const doc = this.parsed.doc.clone(); fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
+    const doc = preserveNumericTokens(this.parsed.doc.clone());
+    // Typed input is opaque JSON data. Restore its exact source nodes before
+    // serializing an unrelated edit; the semantic preview uses JS numbers.
+    const sourceKey = (node: Node) => `${isMap(node) ? 'map' : isSeq(node) ? 'sequence' : 'scalar'}:${node.range?.join(',')}`;
+    const exact = new Map<string, Node>();
+    visit(parseExactYAML(this.snapshot.source), (_key, node) => {
+      if ((isMap(node) || isSeq(node) || isScalar(node)) && node.range) exact.set(sourceKey(node), node);
+    });
+    visit(doc, (_key, node) => {
+      if (isMap(node) && node.get('uses') === 'agent/run') {
+        const input = node.getIn(['with', 'input'], true);
+        if ((isMap(input) || isSeq(input) || isScalar(input)) && input.range) {
+          const original = exact.get(sourceKey(input));
+          if (original) node.setIn(['with', 'input'], original.clone());
+        }
+      }
+    });
+    fn(doc); this.commit(doc.toString({ lineWidth: 0 }), true, undefined, preserveInspector);
   }
   private writeField(doc: Document, path: Path, value: unknown) {
     if (value === undefined) { doc.deleteIn(path); return; }
@@ -146,12 +164,28 @@ export class WorkflowDocument {
       }
     }
     doc.setIn(path, value);
-    if (stepPathLength(path) === path.length - 1 && path.at(-1) === 'prompt' && typeof value === 'string' && runnerTimestamp(value)) {
+    if (((stepPathLength(path) === path.length - 1 && path.at(-1) === 'prompt') || (stepPathLength(path) === path.length - 2 && path.at(-2) === 'with' && ['prompt','message'].includes(String(path.at(-1))))) && typeof value === 'string' && runnerTimestamp(value)) {
       const node = doc.getIn(path, true);
       if (isScalar(node)) node.type = 'QUOTE_DOUBLE';
     }
   }
   setField(path: Path, value: unknown) { this.edit(doc => this.writeField(doc, path, value), preservesInspectorOwner(path)); }
+  getFieldYAML(path: Path): string {
+    const node = this.parsed.doc?.getIn(path, true);
+    if (!node || (!isMap(node) && !isSeq(node) && !isScalar(node))) return '';
+    const fragment: Document = parseExactYAML(this.snapshot.source);
+    // Semantic parsing omits null entries from typed sequences. Source ranges
+    // still identify the original node, even when its sequence index shifted.
+    let original: Node | undefined;
+    visit(fragment, (_key, candidate) => {
+      if ((isMap(candidate) || isSeq(candidate) || isScalar(candidate)) && candidate.range?.[0] === node.range?.[0]) {
+        original = candidate; return visit.BREAK;
+      }
+    });
+    if (!original) return '';
+    fragment.contents = original.clone() as Node;
+    return fragment.toString({ lineWidth: 0 }).trimEnd();
+  }
   moveArgument(path: Path, from: number, to?: number) {
     this.edit(doc => {
       const seq = doc.getIn(path, true);
@@ -354,7 +388,7 @@ export class WorkflowDocument {
       const location = [...path, index];
       const output = step.with?.output;
       if (hasAgentResult(step) && output && typeof output === 'object' && !Array.isArray(output) && 'schema' in output && output.schema === name) result.push({ job, path: location });
-      for (const kind of ['onError', 'onFailure', 'finally', 'parallel', 'sequence'] as const) walk(step[kind] ?? [], job, [...location, kind]);
+      for (const kind of ['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally', 'parallel', 'sequence'] as const) walk(step[kind] ?? [], job, [...location, kind]);
     });
     for (const [job, value] of Object.entries(this.snapshot.workflow!.jobs)) walk(value.steps ?? [], job, ['jobs', job, 'steps']);
     return result;
@@ -475,7 +509,7 @@ export class WorkflowDocument {
       const copied = entries.filter(entry => entry.path[1] === index);
       const used = entries.map(entry => entry.id);
       const reserveHandlerIDs = (step: Step) => {
-        for (const kind of ['onError', 'onFailure', 'finally'] as const) (step[kind] ?? []).forEach((child, index) => {
+        for (const kind of ['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally'] as const) (step[kind] ?? []).forEach((child, index) => {
           used.push(effectiveStepID(child, index));
           reserveHandlerIDs(child);
         });
@@ -579,7 +613,7 @@ export class WorkflowDocument {
       if (job.uses && this.options.workflows && !this.options.workflows.some(item => item.id.replace(/^\.\//, '') === job.uses!.replace(/^\.\//, ''))) diagnostics.push({ code: 'workflow-catalog', message: `Workflow ${job.uses} is unavailable in the host catalog`, path: ['jobs', id, 'uses'], source: 'host', severity: 'warning' });
       stepEntries(job.steps).forEach(({ step, path }) => {
         for (const [index, role] of (step.conversation ?? []).entries()) if (this.options.agents && !this.options.agents.some(agent => agent.id === role)) diagnostics.push({ code: 'agent-catalog', message: `Agent ${role} is unavailable in the host catalog`, path: ['jobs', id, ...path, 'conversation', index], source: 'host', severity: 'warning' });
-        if (stepAction(step)?.startsWith('agent/') && this.options.agents && !this.options.agents.some(a => a.id === stepAction(step)!.slice(6))) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
+        if (stepAction(step) === 'agent/run' && this.options.agents && !this.options.agents.some(a => a.id === 'codex')) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();
