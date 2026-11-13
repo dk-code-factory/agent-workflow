@@ -23,6 +23,7 @@ import (
 type Policy struct {
 	NetworkRuntime string             `yaml:"network-runtime"`
 	Network        *network.Reference `yaml:"-" json:",omitempty"`
+	NetworkMode    string             `yaml:"network" json:",omitempty"`
 	Mode           string             `yaml:"mode"`
 	Image          string             `yaml:"image"`
 	Runtime        string             `yaml:"runtime"`
@@ -36,6 +37,12 @@ func (p Policy) Validate() error {
 	return p.ValidateFor(runtime.GOOS)
 }
 func (p Policy) ValidateFor(goos string) error {
+	if p.NetworkMode != "" && p.NetworkMode != "none" && p.NetworkMode != "bridge" {
+		return fmt.Errorf("container network must be none or bridge")
+	}
+	if p.NetworkMode != "" && (p.NetworkRuntime != "" || p.Network != nil) {
+		return fmt.Errorf("container network cannot override network-runtime")
+	}
 	if p.NetworkRuntime != "" {
 		if goos != "linux" {
 			return fmt.Errorf("network-runtime requires Linux/rootful Podman")
@@ -67,7 +74,7 @@ func (p Policy) ValidateFor(goos string) error {
 	if p.Mode != "container" && p.Cleanup == "strict" && goos == "darwin" {
 		return fmt.Errorf("strict descendant cleanup on macOS requires container execution")
 	}
-	if p.Mode != "container" && (p.Image != "" || p.Runtime != "" || p.Writable || p.UID != nil || p.GID != nil) {
+	if p.Mode != "container" && (p.Image != "" || p.Runtime != "" || p.NetworkMode != "" || p.Writable || p.UID != nil || p.GID != nil) {
 		return fmt.Errorf("container parameters require execution.mode: container")
 	}
 	if p.Mode == "container" && p.Image == "" {

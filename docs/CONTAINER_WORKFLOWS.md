@@ -25,8 +25,29 @@ blocks new execution through the existing invocation journal.
 The typed policy builder enforces a non-root user, read-only root filesystem,
 dropped capabilities, no privilege escalation, PID/memory/CPU bounds, private
 `/tmp`, explicit environment values, and permitted workspace/private-state mounts.
-Networking defaults to `none`. The initial typed launcher explicitly rejects
-`network-runtime`; the existing network-contained launcher remains supported.
+Networking defaults to `none`. An operator can enable ordinary outbound
+container networking with `execution.network: bridge` in `agents.yml`:
+
+```yaml
+execution:
+  mode: container
+  image: ghcr.io/example/python-tools@sha256:FULL_IMAGE_DIGEST
+  runtime: docker
+  network: bridge
+  writable: true
+```
+
+The policy applies to shared job containers and standalone Docker steps and is
+retained in their admitted contract. `network` accepts only `none` or `bridge`;
+host networking, other containers' namespaces and named networks are rejected.
+Provider roles can declare `execution: {mode: local}` to use their host runtime
+instead of inheriting this container policy. Existing provider/command container
+launches keep their runtime's default network when the option is omitted and
+honor an explicit value when supplied.
+
+`network` cannot be combined with `network-runtime`. The typed launcher still
+explicitly rejects `network-runtime`; the existing network-contained launcher
+remains supported.
 Runtime sockets and ambient provider credentials are not mounted or forwarded.
 
 An independent host guardian watches a private controller lifetime pipe and can

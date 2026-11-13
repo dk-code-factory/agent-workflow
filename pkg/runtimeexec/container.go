@@ -110,6 +110,9 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 		return nil, err
 	}
 	args := []string{"create", "--interactive", "--name", owner.Name, "--pull=never", "--restart=no", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--memory=4g", "--cpus=2", "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m", "--workdir", "/workspace"}
+	if policy.NetworkMode != "" {
+		args = append(args, "--network", policy.NetworkMode)
+	}
 	keys := make([]string, 0, len(owner.Labels))
 	for key := range owner.Labels {
 		keys = append(keys, key)
