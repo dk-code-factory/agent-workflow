@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"testing"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
@@ -31,6 +32,35 @@ func TestFilesystemFailureClassificationDoesNotInterpretResourceNames(t *testing
 		permission := &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
 		if got := unsafeWorkerFailureClass(permission); got != "authentication" {
 			t.Fatalf("real permission denial was lost: %s", got)
+		}
+	}
+}
+
+func TestLinkFailureClassificationDoesNotInterpretResourceNames(t *testing.T) {
+	for _, path := range []string{"/tmp/1333810401/lease", "/work/credentials/authentication-401.sqlite", "/work/storage/disk-limit"} {
+		for _, ordinary := range []*os.LinkError{
+			{Op: "rename", Old: path, New: "/work/lease", Err: fs.ErrExist},
+			{Op: "link", Old: "/work/lease", New: path, Err: fs.ErrExist},
+		} {
+			for _, err := range []error{ordinary, fmt.Errorf("input: %w", ordinary), errors.Join(errors.New("input rejected"), ordinary)} {
+				if got := classifyFailure(err); got != "execution" {
+					t.Fatalf("resource path became %s: %v", got, err)
+				}
+				if got := unsafeWorkerFailureClass(err); got != "" {
+					t.Fatalf("resource path became unsafe %s: %v", got, err)
+				}
+			}
+			if got := unsafeWorkerFailureClass(&runtimeexec.StorageError{Err: ordinary}); got != "storage" {
+				t.Fatalf("typed storage identity was lost: %s", got)
+			}
+			if got := unsafeWorkerFailureClass(fmt.Errorf("authentication failed: %w", ordinary)); got != "authentication" {
+				t.Fatalf("wrapper authentication diagnostic was lost: %s", got)
+			}
+			permission := *ordinary
+			permission.Err = fs.ErrPermission
+			if got := unsafeWorkerFailureClass(&permission); got != "authentication" {
+				t.Fatalf("real permission denial was lost: %s", got)
+			}
 		}
 	}
 }

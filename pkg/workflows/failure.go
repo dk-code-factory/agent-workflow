@@ -7,6 +7,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"io/fs"
+	"os"
 	"strings"
 
 	"modernc.org/sqlite"
@@ -98,6 +99,9 @@ func failureDiagnosticText(err error) string {
 	sanitize = func(cause error) {
 		if path, ok := cause.(*fs.PathError); ok {
 			text = strings.ReplaceAll(text, path.Error(), path.Op+": "+path.Err.Error())
+		}
+		if link, ok := cause.(*os.LinkError); ok {
+			text = strings.ReplaceAll(text, link.Error(), link.Op+": "+link.Err.Error())
 		}
 		if joined, ok := cause.(interface{ Unwrap() []error }); ok {
 			for _, child := range joined.Unwrap() {
