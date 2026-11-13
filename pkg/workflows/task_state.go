@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -325,7 +326,7 @@ func taskClaim(ctx context.Context, tx *sql.Tx, group string, f executionFence, 
 		if req.Outcome != "unknown" && req.Outcome != "no_effect" && req.Outcome != "completed" {
 			return out, fmt.Errorf("reconciliation outcome must be unknown, no_effect or completed")
 		}
-		if req.Outcome != "unknown" && (len(req.Proof) == 0 || string(req.Proof) == "null" || !json.Valid(req.Proof)) {
+		if req.Outcome != "unknown" && (len(req.Proof) == 0 || bytes.Equal(bytes.TrimSpace(req.Proof), []byte("null")) || !json.Valid(req.Proof)) {
 			return out, fmt.Errorf("authoritative reconciliation proof is required")
 		}
 		if req.Outcome == "completed" {

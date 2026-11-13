@@ -44,26 +44,34 @@ func taskStateEndpoint(t *testing.T) (*taskStateService, *SQLiteStore, *Run, con
 
 func taskStateRPC(t *testing.T, service *taskStateService, token, body string) (int, []byte) {
 	t.Helper()
+	code, raw, err := taskStateRPCRequest(t.Context(), service, token, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, raw
+}
+
+func taskStateRPCRequest(ctx context.Context, service *taskStateService, token, body string) (int, []byte, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", filepath.Join(service.dir, "rpc.sock"))
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	request, err := http.NewRequestWithContext(t.Context(), "POST", "http://localhost/v1", strings.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, "POST", "http://localhost/v1", strings.NewReader(body))
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.Do(request)
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
-	return response.StatusCode, raw
+	return response.StatusCode, raw, nil
 }
 
 func TestTaskStateTransportCapabilitiesFencingAndPhaseRestrictions(t *testing.T) {
@@ -146,10 +154,25 @@ func TestTaskStateCapabilityRevocationCancelsAndJoinsPendingStoreRPC(t *testing.
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	initialWaits := store.db.Stats().WaitCount
-	result := make(chan int, 1)
+	type rpcResult struct {
+		code int
+		err  error
+	}
+	result := make(chan rpcResult, 1)
+	finished := make(chan struct{})
+	rpcContext, cancelRPC := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		cancelRPC()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("pending RPC client did not finish")
+		}
+	})
 	go func() {
-		code, _ := taskStateRPC(t, s, descriptor.Token, `{"operation":"reserve","name":"reviews","operation_id":"blocked","limit":1,"amount":1}`)
-		result <- code
+		defer close(finished)
+		code, _, err := taskStateRPCRequest(rpcContext, s, descriptor.Token, `{"operation":"reserve","name":"reviews","operation_id":"blocked","limit":1,"amount":1}`)
+		result <- rpcResult{code, err}
 	}()
 	deadline := time.NewTimer(2 * time.Second)
 	defer deadline.Stop()
@@ -158,6 +181,8 @@ func TestTaskStateCapabilityRevocationCancelsAndJoinsPendingStoreRPC(t *testing.
 	for store.db.Stats().WaitCount == initialWaits {
 		select {
 		case <-ticker.C:
+		case response := <-result:
+			t.Fatalf("RPC finished before entering the SQLite wait: status=%d error=%v", response.code, response.err)
 		case <-deadline.C:
 			t.Fatal("authenticated RPC did not enter the bounded SQLite wait")
 		}
@@ -170,9 +195,12 @@ func TestTaskStateCapabilityRevocationCancelsAndJoinsPendingStoreRPC(t *testing.
 		t.Fatal("capability revocation did not join the pending store operation")
 	}
 	select {
-	case code := <-result:
-		if code != http.StatusConflict {
-			t.Fatalf("pending write survived hook revocation: %d", code)
+	case response := <-result:
+		if response.err != nil {
+			t.Fatal(response.err)
+		}
+		if response.code != http.StatusConflict {
+			t.Fatalf("pending write survived hook revocation: %d", response.code)
 		}
 	case <-deadline.C:
 		t.Fatal("canceled RPC did not finish")

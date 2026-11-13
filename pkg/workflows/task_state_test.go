@@ -145,6 +145,37 @@ func TestTaskStateRejectsInvalidEvidenceBeforeClaimDispatch(t *testing.T) {
 	}
 }
 
+func TestTaskStateReconciliationRejectsNullProofWithoutResolvingClaim(t *testing.T) {
+	for _, outcome := range []string{"no_effect", "completed"} {
+		t.Run(outcome, func(t *testing.T) {
+			s := taskStateStore(t)
+			_, ctx := taskStateRun(t, s, "null-proof")
+			claim := TaskStateRequest{Operation: "claim", Task: "capture", Fingerprint: "input", OperationID: "original"}
+			taskStateCall(t, s, ctx, claim)
+			reconcile := claim
+			reconcile.Operation, reconcile.RequestID, reconcile.Outcome = "reconcile", "lookup", outcome
+			reconcile.ResultReference, reconcile.EvidenceFingerprint = "artifact", "evidence"
+			for _, proof := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(" null "), json.RawMessage("\t\nnull\r\n")} {
+				reconcile.Proof = proof
+				if _, err := s.TaskState(ctx, reconcile); err == nil {
+					t.Fatalf("%s accepted null proof %q", outcome, proof)
+				}
+				replacement := claim
+				replacement.OperationID = "replacement"
+				observed := taskStateCall(t, s, ctx, replacement)
+				if observed.Dispatch || observed.Reusable || observed.Claim.State != "claimed" {
+					t.Fatalf("rejected proof resolved the original claim: %+v", observed)
+				}
+			}
+			reconcile.Proof = json.RawMessage(` {"receipt":"checked"} `)
+			resolved := taskStateCall(t, s, ctx, reconcile)
+			if resolved.Claim.State != outcome || resolved.Reusable != (outcome == "completed") {
+				t.Fatalf("valid proof after rejected requests: %+v", resolved)
+			}
+		})
+	}
+}
+
 func TestTaskStateRestartAndUncertainClaimRecovery(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenSQLite(dir)

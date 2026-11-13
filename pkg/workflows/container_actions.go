@@ -210,7 +210,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 					}{p.Selection, p.Image.ID, p.Image.OS, p.Image.Architecture, argv, step.Protocol, step.WorkingDirectory, step.Timeout, p.Policy, p.Guardian.SHA256, p.Guardian.Platform, bundle, step.Env})
 				}
 				a := &registeredAction{contract: buildActionContract(name, implementation, step.Effect, in, out), input: ir, output: or}
-				a.recovery = validateContainerRecoveryRequest
+				a.recovery = e.validateContainerRecoveryRequest
 				helper := step
 				selected := p
 				call := func(ctx context.Context, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
@@ -345,18 +345,27 @@ func encodeContainerRequest(f executionFence, ac ActionContext, phase string, in
 	return raw, nil
 }
 
-func validateContainerRecoveryRequest(ctx context.Context, ac ActionContext, input, bindings json.RawMessage, result ActionValue) error {
+func (e *Executor) validateContainerRecoveryRequest(ctx context.Context, ac ActionContext, input, bindings json.RawMessage, result ActionValue) error {
 	f, owned := ctx.Value(fenceKey{}).(executionFence)
 	if !owned {
 		return fmt.Errorf("structured helper hooks require current execution ownership")
+	}
+	var reserved *taskStateDescriptor
+	if store := invocationStore(e.Store); store != nil {
+		_, snap, err := store.Load(ctx, f.id)
+		if err != nil {
+			return err
+		}
+		if group := nativeString(snap.Metadata, "task_group"); group != "" {
+			// Only grouped runs receive a capability. Its group and socket stay
+			// fixed, while each future hook receives another 64-character token.
+			reserved = &taskStateDescriptor{Socket: taskStateMount + "/rpc.sock", Token: strings.Repeat("0", 64), Group: group}
+		}
 	}
 	// Future validation uses a fresh 32-character run ID; reserve the full
 	// generation width so a later owner cannot outgrow this admitted budget.
 	f.id = strings.Repeat("0", max(32, len(f.id)))
 	f.generation = math.MaxInt64
-	// Reserve the bounded ephemeral capability descriptor as well. A later
-	// validation hook may use a different endpoint/token but must fit the wire.
-	reserved := &taskStateDescriptor{Socket: taskStateMount + "/rpc.sock", Token: strings.Repeat("0", 64), Group: strings.Repeat("0", 128)}
 	if _, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result, reserved); err != nil {
 		return fmt.Errorf("helper recovery request exceeds the combined input/bindings/result budget: %w", err)
 	}
