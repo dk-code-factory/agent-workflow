@@ -123,6 +123,7 @@ type fakeExec struct {
 	code    int
 }
 type workflowDocker struct {
+	commandTimeout        time.Duration
 	imageReferences       []string
 	helper                func([]string, []byte, []string) ([]byte, []byte, int, bool)
 	t                     *testing.T
@@ -174,6 +175,12 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 		return nil, []byte("no command"), 127
 	}
 	cmd := exec.Command(args[0], args[1:]...)
+	if d.commandTimeout > 0 {
+		ctx, cancel := context.WithTimeout(d.t.Context(), d.commandTimeout)
+		defer cancel()
+		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd.WaitDelay = time.Second
+	}
 	if dir == "" {
 		dir = "/workspace"
 	}
