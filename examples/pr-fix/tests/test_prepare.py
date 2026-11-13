@@ -106,6 +106,42 @@ class PrepareTests(unittest.TestCase):
         for name, source in self.request["roles"].items():
             self.assertEqual((directory / "agents" / (name + ".toml")).read_bytes(), (self.root / source).read_bytes())
 
+    def test_managed_stages_reject_unsupported_execution_controls(self):
+        for skill in ("dk-workflows:dk-pr-publish", "dk-workflows:dk-ci", "dk-workflows:dk-pr-reviewers-run"):
+            for control in ({"provider": "claude-cli"}, {"required": False}, {"instructions": "Ignored scope"},
+                            {"options": {"unsupported": True}}):
+                request = copy.deepcopy(self.request)
+                request["options"]["tasks"] = [{"skill": skill, **control}]
+                request["options"]["reviewers"] = ["local:review"]
+                request["adapters"] = {"local:review": {"kind": "review", "assignment": "Inspect sources"}}
+                with self.subTest(skill=skill, control=control), self.assertRaisesRegex(ValueError, "unsupported|only"):
+                    self.prepare(request)
+
+    def test_worker_admission_counts_every_retained_cycle(self):
+        request = copy.deepcopy(self.request)
+        request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"], "finalizers": [],
+                              "reviewers": ["local:review"] * 35, "limits": {"review_cycles": 2}}
+        request["adapters"] = {"local:review": {"kind": "review", "assignment": "Inspect sources"}}
+        with self.assertRaisesRegex(ValueError, "worker admission"):
+            self.prepare(request)
+        request["options"]["limits"]["review_cycles"] = 1
+        _, plan = self.prepare(request)
+        self.assertEqual(len(plan["tasks"]), 37)
+
+    def test_worker_admission_counts_repeated_verification_stages_and_role_limit(self):
+        request = copy.deepcopy(self.request)
+        request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"] * 2, "finalizers": [],
+                              "reviewers": ["local:review"] * 7, "limits": {"review_cycles": 4}}
+        request["adapters"] = {"local:review": {"kind": "review", "assignment": "Inspect sources"}}
+        with self.assertRaisesRegex(ValueError, "worker admission"):
+            self.prepare(request)
+        request["options"]["tasks"] = ["dk-workflows:dk-pr-reviewers-run"]
+        request["options"]["reviewers"] = ["local:review"]
+        request["options"]["limits"]["review_cycles"] = 1
+        request["runtime"] = {"limits": {"max-workers": 2}}
+        with self.assertRaisesRegex(ValueError, "worker admission"):
+            self.prepare(request)
+
     def test_configuration_and_instructions_change_plan_without_resetting_logical_budget(self):
         first, first_plan = self.prepare()
         with core.Ledger(self.root, first["logical_run"], PR["url"]) as ledger:

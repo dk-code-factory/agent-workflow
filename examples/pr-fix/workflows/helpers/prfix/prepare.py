@@ -410,6 +410,15 @@ def prepare(root, request, provider=None):
                   ("finalizers", options.get("finalizers", DEFAULT_FINALIZERS))]
     for phase, selected in selections:
         for group in _groups(selected):
+            for call in group:
+                if not isinstance(call, dict) or set(call) - {"skill", "options", "required", "instructions"}:
+                    raise ValueError("portable calls support skill/options/required/instructions only")
+                if call.get("skill") in {"dk-workflows:dk-pr-publish", "dk-workflows:dk-ci", "dk-workflows:dk-pr-reviewers-run"}:
+                    allowed = {"reviewers"} if call["skill"] == "dk-workflows:dk-pr-reviewers-run" else set()
+                    controls = call.get("options", {})
+                    if (not isinstance(controls, dict) or set(controls) - allowed
+                            or call.get("required", True) is not True or call.get("instructions", "") != ""):
+                        raise ValueError("unsupported managed stage controls; place task instructions and optionality on its explicit adapters")
             if len(group) > 1 and any(call.get("skill") in {"dk-workflows:dk-pr-publish", "dk-workflows:dk-ci", "dk-workflows:dk-pr-reviewers-run"} for call in group):
                 raise ValueError("managed publication/review/CI stages cannot be in a parallel group")
             if len(group) == 1 and group[0].get("skill") == "dk-workflows:dk-pr-publish":
@@ -466,7 +475,15 @@ def prepare(root, request, provider=None):
     plan["resources"] = resource_digests(root, request.get("resources", []))
     if any(name not in plan["resources"] for task in tasks for name in task["resources"]):
         raise ValueError("adapter resource is undeclared")
-    if len(tasks) > 40:
+    worker_limit = runtime_limits.get("max-workers", 0)
+    if type(worker_limit) is not int or worker_limit < 0:
+        raise ValueError("runtime worker limit must be a nonnegative integer")
+    # Workers remain recorded after closing; each cycle has distinct native
+    # coordinates, including repeated verification/fix stages of one task.
+    native_per_cycle = sum(len(stage["tasks"]) if stage["kind"] == "tasks" else
+                           2 if stage["kind"] == "verify_fix" else
+                           1 if stage["kind"] == "ci" else 0 for stage in stages)
+    if len(tasks) > 40 or native_per_cycle * limits["review_cycles"] > min(64, worker_limit or 64):
         raise ValueError("portable plan exceeds bounded engine worker admission")
     from .capture import GitHub, capture
     provider = provider or GitHub(root)

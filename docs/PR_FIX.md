@@ -195,6 +195,11 @@ Changed code, incoming discussion or governing inputs invalidates affected reuse
 An independent native verifier accounts for every original finding before fixes.
 Finding IDs remain claim-scoped, and checklist continuation preserves original
 findings. Accepted/deferred findings need the exact retained user authorization.
+Completion uses the latest verification and fix disposition for each finding.
+Retries and checklist dispatches refresh governing evidence, including when their
+preparation checkpoints are reused. The original fenced writer can keep its
+unfinished source edits while instructions, remote evidence and ownership remain
+unchanged.
 
 Writing leaves report every changed file as `{path,before,after}` with SHA-256
 byte hashes and `null` for absence, plus a repository-native `commit_message`.
@@ -284,6 +289,10 @@ This portable contract deliberately changes the former Go application's setup:
   assignment, checklist, resource paths and sensitivity flags. Parallel groups
   may contain independent readers; writers sharing the Git index run in order.
   Arbitrary provider/session controls and shell orchestration are not adapters.
+- Managed publication and CI selections accept only the skill name and empty
+  default controls. A managed reviewer selection additionally accepts
+  `options.reviewers`. Put task instructions and optionality on explicit adapters;
+  unsupported managed stage controls fail preparation.
 - Existing Go/plugin run ledgers and provider sessions are not migrated into a
   new portable logical run. Old evidence remains inspectable through its original
   implementation. Start portable work explicitly rather than claiming recovered
@@ -299,5 +308,10 @@ separate opt-ins.
 A configured native `runtime.limits.max-turns` ceiling must allow at least five
 turns for the original attempt, one eligible retry and three checklist
 continuations. Generated native tasks use up to eight turns within that ceiling.
+Preparation counts native task, verification/fix and possible CI-repair workers
+across every configured cycle, including repeated stages. Plans exceeding the
+stock retained-worker limit of 64 or a lower `runtime.limits.max-workers` ceiling
+fail preparation; closing a session does not restore that allowance. Publication
+audience sessions also consume retained workers when their intents are dispatched.
 CI observations remain in visible nested YAML repeats; the retained absolute
 deadline governs the supported wait of up to 86,400 seconds.
