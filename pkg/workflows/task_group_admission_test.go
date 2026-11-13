@@ -10,7 +10,7 @@ const dropTaskStateFixtureSchema = `DROP TABLE task_state_requests; DROP TABLE t
 
 func TestTaskGroupAdmissionPreservesReplacementIdentity(t *testing.T) {
 	root := t.TempDir()
-	writeWorkflow(t, root, "main.yml", "jobs: {one: {steps: [{uses: agent/fake, with: {prompt: test}}]}}")
+	writeWorkflow(t, root, "main.yml", "jobs: {one: {steps: [{uses: agent/run, with: {prompt: test, agent: fake.toml}}]}}")
 	store, err := OpenSQLite(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -19,6 +19,7 @@ func TestTaskGroupAdmissionPreservesReplacementIdentity(t *testing.T) {
 	executor := &Executor{WorkspaceDir: root, Store: store, Agents: agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": "done"}, nil
 	})}
+	nativeTestExecutor(t, executor)
 	for _, prepare := range []bool{true, false} {
 		for i := 0; i < 2; i++ {
 			req := RunRequest{Ref: "workflows/main.yml", TaskGroup: "logical-work", Metadata: map[string]any{"custom": "keep"}}

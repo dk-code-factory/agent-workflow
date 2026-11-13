@@ -224,7 +224,11 @@ func TestIterationRetryReconciliationPreservesCancellation(t *testing.T) {
 	for _, independent := range []error{nil, process.ErrCleanup, errors.New("storage failure")} {
 		t.Run(classifyFailure(independent), func(t *testing.T) {
 			e, store := iterationExecutor(t, nil)
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "uses: agent/reviewer\n        with: {prompt: '${{ inputs.task }}'}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1))
+			child := strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1)
+			if child == iterationChild {
+				t.Fatal("mutation recovery fixture did not replace its native task")
+			}
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", child)
 			var mutations, reconciles atomic.Int32
 			var cancelResume context.CancelFunc
 			spec := readSpec(&mutations)
