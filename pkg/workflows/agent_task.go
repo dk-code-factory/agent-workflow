@@ -144,11 +144,28 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 			outputs["agent"] = reference
 			return outputs, err
 		}
-		// Continued failures belong to downstream YAML disposition. Losing the
-		// step checkpoint cannot substitute a provider retry before that stage
-		// observes the original result. Ordinary explicit resume retry semantics
-		// and original-session recovery after interruption remain unchanged.
-		if outcome.Status == RunStatusSucceeded || step.ContinueOnError && outcome.Status == RunStatusFailed || ec.Attempt.Number <= 1 || errors.Is(lookupErr, sql.ErrNoRows) {
+		// Losing a continued failure's completion cannot substitute a provider
+		// retry before YAML observes it. A committed failed step, however, retains
+		// the explicit --retry-uncertain continuation contract.
+		uncheckpointedFailure := false
+		if step.ContinueOnError && outcome.Status == RunStatusFailed {
+			attempts, loadErr := lifecycleAttempts(ctx, e.Store, ec.RunID)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			found := false
+			for _, prior := range attempts {
+				if prior.ID == outcome.TaskAttemptID {
+					found = true
+					uncheckpointedFailure = prior.Result.Status != RunStatusFailed
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("%w: original failed task attempt unavailable", ErrActionIntegrity)
+			}
+		}
+		if outcome.Status == RunStatusSucceeded || uncheckpointedFailure || ec.Attempt.Number <= 1 || errors.Is(lookupErr, sql.ErrNoRows) {
 			break
 		}
 		if outcome.UnsafeFailureClass != "" && outcome.UnsafeFailureClass != "canceled" {

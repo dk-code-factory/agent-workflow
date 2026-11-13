@@ -85,6 +85,10 @@ func TestInputContinuationBlockedOldestMakesBoundedProgress(t *testing.T) {
 			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 3 {
 				t.Fatal("acknowledged retry did not retain answer", done, err, calls.Load())
 			}
+			gate = inputGate(t, s, blocked.ID)
+			if gate.State != "consumed" || gate.Answer == nil || string(gate.Answer.Value) != `"approved"` || len(gate.History) != 3 || gate.History[1].State != "accepted" {
+				t.Fatal("explicit task retry changed the accepted answer", gate)
+			}
 		})
 	}
 }
