@@ -862,8 +862,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		}
 		usageIdentity.Provider, usageIdentity.Model = source.UsageProvider(w.Role, model)
 	}
-	if err := m.Store.BeginUsage(ctx, usageIdentity); err != nil {
-		journalErr = workerPersistenceError(err)
+	usageErr := m.Store.BeginUsage(ctx, usageIdentity)
+	if usageErr != nil {
+		journalErr = workerPersistenceError(usageErr)
 		runner = &failedSessionRunner{err: journalErr}
 	}
 	request.ObserveUsage = func(update UsageUpdate) error {
@@ -942,12 +943,16 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	retainedJournalErr := journalErr
 	eventMu.Unlock()
 	turnErr = errors.Join(turnErr, retainedJournalErr)
-	update := usageUpdate(result.Outputs, true)
-	if update.SessionID == "" {
-		update.SessionID = result.SessionID
-	}
-	if usageErr := m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update); usageErr != nil {
-		turnErr = errors.Join(turnErr, workerPersistenceError(usageErr))
+	// Failed admission never starts the provider. In particular, cancellation
+	// can leave no usage row, so final accounting would invent a storage failure.
+	if usageErr == nil {
+		update := usageUpdate(result.Outputs, true)
+		if update.SessionID == "" {
+			update.SessionID = result.SessionID
+		}
+		if err := m.Store.ObserveUsage(context.WithoutCancel(ctx), usageIdentity, update); err != nil {
+			turnErr = errors.Join(turnErr, workerPersistenceError(err))
+		}
 	}
 	// Retain admission evidence before validation replaces the diagnostic.
 	failureCauses := errors.Join(turnErr, progressErr)
