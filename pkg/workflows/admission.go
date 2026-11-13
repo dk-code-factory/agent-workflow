@@ -46,6 +46,9 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 		req.Metadata = map[string]any{}
 	}
 	req.Metadata["origin_run_id"] = runID
+	if err := admitTaskGroup(&req); err != nil {
+		return nil, err
+	}
 	snap, err := snapshotFor(all, req, e.Roles, e.MaxParallel)
 	if err != nil {
 		return nil, err

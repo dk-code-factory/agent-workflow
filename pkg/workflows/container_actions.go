@@ -319,15 +319,19 @@ func decodeContainerResponse(data []byte, phase string) (containerResponse, erro
 	}
 	return v, nil
 }
-func encodeContainerRequest(f executionFence, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) ([]byte, error) {
+func encodeContainerRequest(f executionFence, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue, taskState ...*taskStateDescriptor) ([]byte, error) {
 	request := struct {
-		Protocol     string          `json:"protocol"`
-		Phase        string          `json:"phase"`
-		Context      ActionContext   `json:"context"`
-		RuntimeOwner map[string]any  `json:"runtime_owner"`
-		Input        json.RawMessage `json:"input"`
-		Checkpoint   map[string]any  `json:"checkpoint,omitempty"`
-	}{ContainerActionV1, phase, ac, map[string]any{"run_id": f.id, "generation": f.generation}, input, nil}
+		Protocol     string               `json:"protocol"`
+		Phase        string               `json:"phase"`
+		Context      ActionContext        `json:"context"`
+		RuntimeOwner map[string]any       `json:"runtime_owner"`
+		Input        json.RawMessage      `json:"input"`
+		Checkpoint   map[string]any       `json:"checkpoint,omitempty"`
+		TaskState    *taskStateDescriptor `json:"task_state,omitempty"`
+	}{Protocol: ContainerActionV1, Phase: phase, Context: ac, RuntimeOwner: map[string]any{"run_id": f.id, "generation": f.generation}, Input: input}
+	if len(taskState) > 0 {
+		request.TaskState = taskState[0]
+	}
 	if phase == "validate_checkpoint" || phase == "reconcile" {
 		request.Checkpoint = map[string]any{"bindings": bindings, "result": result}
 	}
@@ -350,13 +354,16 @@ func validateContainerRecoveryRequest(ctx context.Context, ac ActionContext, inp
 	// generation width so a later owner cannot outgrow this admitted budget.
 	f.id = strings.Repeat("0", max(32, len(f.id)))
 	f.generation = math.MaxInt64
-	if _, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result); err != nil {
+	// Reserve the bounded ephemeral capability descriptor as well. A later
+	// validation hook may use a different endpoint/token but must fit the wire.
+	reserved := &taskStateDescriptor{Socket: taskStateMount + "/rpc.sock", Token: strings.Repeat("0", 64), Group: strings.Repeat("0", 128)}
+	if _, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result, reserved); err != nil {
 		return fmt.Errorf("helper recovery request exceeds the combined input/bindings/result budget: %w", err)
 	}
 	return nil
 }
 
-func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImplementation, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
+func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImplementation, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (response containerResponse, returned error) {
 	f, owned := ctx.Value(fenceKey{}).(executionFence)
 	if !owned {
 		return containerResponse{}, fmt.Errorf("structured helper hooks require current execution ownership")
@@ -368,10 +375,6 @@ func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImp
 		if err := e.Ready(ctx); err != nil {
 			return containerResponse{}, err
 		}
-	}
-	raw, err := encodeContainerRequest(f, ac, phase, input, bindings, result)
-	if err != nil {
-		return containerResponse{}, err
 	}
 	argv, err := structuredCommand(step, p.Image)
 	if err != nil {
@@ -414,6 +417,33 @@ func (e *Executor) containerHook(ctx context.Context, step Step, p *ContainerImp
 	// Each hook has its own physical invocation. Retained original context remains
 	// in the request; current fencing and cleanup use the active runtime owner.
 	ctx = invocationContext(ctx, e.Store, &Attempt{ID: "helper-" + phase + "-" + runtimeexec.NewID()})
+	var service *taskStateService
+	if scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope); scope != nil {
+		if err = scope.ensureTaskState(ctx); err != nil {
+			return containerResponse{}, err
+		}
+		service = scope.taskState
+	} else {
+		service, err = e.newTaskStateService(ctx)
+		if err != nil {
+			return containerResponse{}, err
+		}
+		defer func() { returned = errors.Join(returned, service.close()) }()
+	}
+	var descriptor *taskStateDescriptor
+	if service != nil {
+		var revoke func()
+		descriptor, revoke, err = service.capability(ctx, phase)
+		if err != nil {
+			return containerResponse{}, err
+		}
+		defer revoke()
+		ctx = context.WithValue(ctx, taskStateServiceKey{}, service)
+	}
+	raw, err := encodeContainerRequest(f, ac, phase, input, bindings, result, descriptor)
+	if err != nil {
+		return containerResponse{}, err
+	}
 	var stdout = boundedProtocolOutput{limit: 1 << 20}
 	var stderr = boundedProtocolOutput{limit: 4 << 20}
 	// Recovery/validation hooks use independent containers with the same admitted

@@ -20,7 +20,7 @@ const RegisteredGoActionsV1 = "registered-go-actions-v1"
 const OrderedDynamicIterationV1 = "ordered-dynamic-iteration-v1"
 
 func Capabilities() []string {
-	return []string{StructuredContainersV1, GitHubContainersV1, RegisteredGoActionsV1, OrderedDynamicIterationV1, DurableExternalInputV1}
+	return []string{DurableTaskStateV1, StructuredContainersV1, GitHubContainersV1, RegisteredGoActionsV1, OrderedDynamicIterationV1, DurableExternalInputV1}
 }
 
 type ActionEffect string

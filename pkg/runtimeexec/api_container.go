@@ -38,6 +38,7 @@ type LaunchOptions struct {
 	WorkingDir             string
 	Actions                string
 	EngineState            string
+	TaskStateDir           string
 }
 
 func containerIdentity(p Policy) (int, int) {
@@ -181,6 +182,19 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 	}
 	if o.Actions != "" {
 		if err = bind(o.Actions, "/actions", true); err != nil {
+			return q, err
+		}
+	}
+	if o.TaskStateDir != "" {
+		info, err := os.Lstat(o.TaskStateDir)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0022 != 0 {
+			return q, fmt.Errorf("task-state mount requires a real directory without group/world write permission")
+		}
+		entries, err := os.ReadDir(o.TaskStateDir)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "rpc.sock" || entries[0].Type()&os.ModeSocket == 0 {
+			return q, fmt.Errorf("task-state mount must contain only its RPC socket")
+		}
+		if err = bind(o.TaskStateDir, "/engine-task-state", true); err != nil {
 			return q, err
 		}
 	}

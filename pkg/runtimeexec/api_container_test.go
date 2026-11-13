@@ -89,6 +89,55 @@ func TestBuildRequestRequiresGuardianForAdmittedImagePlatform(t *testing.T) {
 	}
 }
 
+func TestBuildRequestMountsOnlyTaskStateRPCDirectoryReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", filepath.Join(dir, "rpc.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	opts := LaunchOptions{
+		Policy:   Policy{Mode: "container", Image: "fixture"},
+		Image:    containerapi.Image{ID: "sha256:" + strings.Repeat("a", 64), OS: "linux", Architecture: "amd64"},
+		Guardian: fixtureGuardian(t, "amd64"), Workspace: t.TempDir(), State: t.TempDir(), TaskStateDir: dir,
+	}
+	owner := containerapi.Owner{Name: "owned", Labels: map[string]string{"agent-workflow.token": "token"}}
+	q, err := BuildRequest(opts, owner, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, mount := range q.Mounts {
+		if mount.Target == "/engine-task-state" {
+			found = true
+			if !mount.ReadOnly || mount.Source != dir {
+				t.Fatalf("unsafe task-state mount: %+v", mount)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing scoped socket mount")
+	}
+	if err = os.WriteFile(filepath.Join(dir, "state.db"), []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = BuildRequest(opts, owner, t.TempDir()); err == nil {
+		t.Fatal("socket directory with unrelated state was exposed")
+	}
+	if err = os.Remove(filepath.Join(dir, "state.db")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = BuildRequest(opts, owner, t.TempDir()); err == nil {
+		t.Fatal("writable socket directory was exposed")
+	}
+}
+
 type apiJournal struct {
 	mu          sync.Mutex
 	records     []Record

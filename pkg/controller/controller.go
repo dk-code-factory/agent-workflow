@@ -26,6 +26,7 @@ import (
 )
 
 type StartRequest struct {
+	TaskGroup  string            `json:"task_group,omitempty"`
 	RequestID  string            `json:"request_id,omitempty"`
 	Ref        string            `json:"ref"`
 	Inputs     map[string]any    `json:"inputs,omitempty"`
@@ -359,7 +360,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 					ref, _ := workflows.CanonicalLocalRef(req.Ref)
 					c, _ := json.Marshal(req.SecretRefs)
 					d, _ := json.Marshal(snap.SecretRefs)
-					if existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) {
+					group, _ := snap.Metadata["task_group"].(string)
+					if existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) || req.TaskGroup != group {
 						fail(409, fmt.Errorf("request_id reused with different content"))
 						return
 					}
@@ -392,7 +394,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				fail(429, fmt.Errorf("queued run limit reached"))
 				return
 			}
-			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
+			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{TaskGroup: req.TaskGroup, RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
 			if err != nil {
 				fail(400, err)
 				return
