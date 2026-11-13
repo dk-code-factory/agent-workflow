@@ -9,6 +9,7 @@ export function preserveNumericTokens(doc: Document): Document {
     if (!['tag:yaml.org,2002:float', 'tag:yaml.org,2002:int'].includes(tag.tag) || !tag.stringify) return tag;
     const original = tag as ScalarTag;
     return { ...original, stringify(node, ...args) {
+      if (node.source !== undefined && /^[+-]?[0-9]+$/.test(node.source) && typeof node.value === 'bigint' && BigInt(node.source) === node.value) return node.source;
       if (node.source !== undefined && /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(node.source) && typeof node.value === 'number' && Object.is(Number(node.source), node.value)) return node.source;
       return original.stringify!(node, ...args);
     } } satisfies ScalarTag;

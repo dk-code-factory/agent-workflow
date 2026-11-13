@@ -24,7 +24,7 @@ jobs:
       - argv: [ echo, '\${{ needs.build.outputs.result }}' ]
 `;
 describe('document edits', () => {
-  it.each(['0.10000000000000001', '1.0000000000000001', '1.234567890123456789e-20', '-0.0'])('retains exact typed numeric token %s across input and unrelated edits', token => {
+  it.each(['010', '+010', '-010', '000', '08', '-00', '0.10000000000000001', '1.0000000000000001', '1.234567890123456789e-20', '-0.0'])('retains exact typed numeric token %s across input and unrelated edits', token => {
     const original = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, input: {fraction: ${token}}}}]}}`;
     const doc = new WorkflowDocument({ source: original });
     const path = ['jobs', 'review', 'steps', 0, 'with', 'input'];
