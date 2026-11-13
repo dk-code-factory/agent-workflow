@@ -529,6 +529,30 @@ func TestFailureAcknowledgementRejectsWrappedAuthenticationFailures(t *testing.T
 	}
 }
 
+func TestWorkerUsageAdmissionFailureDoesNotFinalizeUsage(t *testing.T) {
+	session := &failedNativeSession{beforeResult: func(SessionRequest) {
+		t.Error("provider ran after usage admission failed")
+	}}
+	m, req, msg := failureFixtureWithSetup(t, session, func(m *WorkerManager) {
+		if _, err := m.Store.db.Exec("CREATE TRIGGER reject_worker_usage BEFORE INSERT ON usage_invocations BEGIN SELECT RAISE(ABORT,'usage admission failed'); END"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(msg.Error, "usage admission failed") || strings.Contains(msg.Error, "no rows in result set") {
+		t.Fatal("failed admission gained a synthetic final-accounting failure", msg)
+	}
+	if msg.UnsafeFailureClass != "storage" {
+		t.Fatal("usage admission lost its storage barrier", msg)
+	}
+	var count int
+	if err := m.Store.db.QueryRow("SELECT count(*) FROM usage_invocations").Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed admission recorded an invocation", count, err)
+	}
+	if err := m.StopRun(failureTestContext(t), req.RunID); !errors.Is(err, process.ErrCleanup) {
+		t.Fatal("usage admission failure lost its finalization barrier", err)
+	}
+}
+
 func TestFailureAcknowledgementRejectsUsageJournalFailures(t *testing.T) {
 	for _, phase := range []string{"begin", "stream", "final"} {
 		t.Run(phase, func(t *testing.T) {
