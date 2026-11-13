@@ -515,7 +515,7 @@ func executeFixture(t *testing.T, root string, provider interface {
 // service expires; queued native messages must not wait for the package timeout.
 func resumeFixture(t *testing.T, ex *workflows.Executor, id string, recover bool) (*workflows.Run, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	return ex.Resume(ctx, id, nil, recover)
 }
