@@ -46,8 +46,11 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
         previous = ledger.db.execute("SELECT round FROM submissions WHERE claim_id=? ORDER BY round DESC LIMIT 1", (claim["id"],)).fetchone()
         if not previous or previous[0] != round_number - 1:
             raise ValueError("checklist continuation cannot skip an original round")
+        assignment = read_artifact(root, claim["assignment"])
+        if not app.continuation_current(root, provider, ledger, plan, claim, assignment):
+            raise ValueError("governing inputs changed before checklist dispatch")
         return {"prompt": "Complete only the remaining checklist in this original native session. Preserve original analysis and every finding/source ID. Return the full report contract.",
-                "task_input": {"assignment": read_artifact(root, claim["assignment"]),
+                "task_input": {"assignment": assignment,
                                "prior_report": read_artifact(root, claim["report"]), "round": round_number}}
     if operation == "coverage":
         return app.coverage(root, provider, ledger, plan, inputs)
@@ -167,6 +170,11 @@ def handle(operation, request, root=None, provider=None):
                     current_fingerprint = digest([current_fingerprint, payload])
                 current_fingerprint = digest([current_fingerprint, assignment["invocation"]])
                 valid = valid and current_fingerprint == retained["fingerprint"]
+        if valid and (operation == "check_prepare" or operation == "turn_result" and checkpoint["output"].get("retry")):
+            retained = app._claim(ledger, inputs["claim"])
+            if retained["state"] not in {"complete", "optional_failed"}:
+                assignment = read_artifact(root, retained["assignment"])
+                valid = app.continuation_current(root, provider, ledger, plan, retained, assignment)
         if valid and operation == "completion":
             from prfix.publishing import readiness, completed_merge
             current = readiness(root, provider, ledger, plan)

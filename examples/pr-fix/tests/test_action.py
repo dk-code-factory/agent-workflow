@@ -121,6 +121,47 @@ class ActionTests(unittest.TestCase):
             key="claim-before-native", checkpoint=claimed["result"])["valid"])
         self.assertEqual(before, self.state())
 
+    def review_claim(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"]["tasks"] = ["local:review"]
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        return self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]})["result"]["output"]["claim"]
+
+    def test_retry_checkpoint_rechecks_governing_evidence_until_the_claim_finishes(self):
+        claim = self.review_claim()
+        inputs = {"claim": claim, "agent": REVIEWER, "status": "failed",
+                  "failure_class": "usage_exhausted", "unsafe_failure_class": "", "error": "exhausted"}
+        retry = self.handle("turn_result", "execute", inputs, key="eligible-retry")
+        self.assertTrue(retry["result"]["output"]["retry"])
+        self.provider.ev["comments"].append({"id": 88, "body": "New request", "user": {"id": 21}})
+        self.assertFalse(self.handle("turn_result", "validate_checkpoint", inputs,
+            key="eligible-retry", checkpoint=retry["result"])["valid"])
+        self.provider.ev["comments"].clear()
+        self.assertTrue(self.handle("turn_result", "validate_checkpoint", inputs,
+            key="eligible-retry", checkpoint=retry["result"])["valid"])
+        with self.ledger() as ledger:
+            app.accept(self.root, self.provider, ledger, self.plan,
+                {"claim": claim, "agent": REVIEWER, "report": self.fixture.report()})
+        self.provider.ev["comments"].append({"id": 89, "body": "Later request", "user": {"id": 21}})
+        self.assertTrue(self.handle("turn_result", "validate_checkpoint", inputs,
+            key="eligible-retry", checkpoint=retry["result"])["valid"])
+
+    def test_checklist_dispatch_and_checkpoint_reject_governing_drift(self):
+        claim = self.review_claim()
+        partial = self.fixture.report(complete=False)
+        partial["checklist"][-1]["status"] = "incomplete"
+        with self.ledger() as ledger:
+            app.accept(self.root, self.provider, ledger, self.plan,
+                {"claim": claim, "agent": REVIEWER, "report": partial})
+        inputs = {"claim": claim, "agent": REVIEWER, "round": 1}
+        continuation = self.handle("check_prepare", "execute", inputs, key="checklist")
+        (self.root / "AGENTS.md").write_text("Changed governing instructions\n")
+        self.assertFalse(self.handle("check_prepare", "validate_checkpoint", inputs,
+            key="checklist", checkpoint=continuation["result"])["valid"])
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            self.handle("check_prepare", "execute", inputs, key="new-checklist")
+
     def test_corrupt_original_helper_result_and_closure_block_recovery(self):
         executed = self.handle("coverage", "execute")
         reference = executed["result"]["evidence"]["artifact"]

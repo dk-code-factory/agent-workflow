@@ -301,6 +301,29 @@ class AppTests(unittest.TestCase):
         accepted = self.accept(claim, report, agent=VERIFIER)
         self.assertTrue(accepted["complete"])
 
+    def test_later_confirmation_overrides_an_original_rejection_for_completion(self):
+        first = self.original_finding()
+        rejected = {"finding_id": first["id"], "status": "rejected", "sources": ["source"],
+                    "reason": "Original independent assessment"}
+        self.accept(self.claim("finding_verification"), self.fixture.report(dispositions=[rejected]), agent=VERIFIER)
+        self.accept(self.claim("finding_fix"), agent=FIXER)
+        later = copy.deepcopy(self.review)
+        later["id"] += "_later"
+        self.plan["tasks"].append(later)
+        self.accept(self.claim(later["id"]), self.fixture.report(findings=[
+            {"id": "R2", "text": "Another original finding", "sources": ["source"]}]))
+        originals = app.candidates(self.root, self.ledger, self.plan)
+        dispositions = [{"finding_id": finding["id"], "status": "confirmed" if finding["id"] == first["id"] else "rejected",
+                         "sources": ["source"], "reason": "Current independent assessment"} for finding in originals]
+        self.accept(self.claim("finding_verification"), self.fixture.report(dispositions=dispositions), agent=VERIFIER)
+        fixer = self.claim("finding_fix")
+        self.assertEqual([finding["id"] for finding in fixer["task_input"]["findings"]], [first["id"]])
+        self.accept(fixer, self.fixture.report(dispositions=[rejected]), agent=FIXER)
+        observed = app.coverage(self.root, self.provider, self.ledger, self.plan, {})
+        self.assertEqual(observed["missing"], [])
+        self.assertFalse(observed["complete"])
+        self.assertEqual(observed["unresolved"], [first["id"]])
+
     def test_forged_disposition_sources_are_not_evidence(self):
         finding = self.original_finding()
         claim = self.claim("finding_verification")
@@ -401,6 +424,36 @@ class AppTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "without eligible retained retry"):
             app.turn_result(self.root, self.provider, self.ledger, self.plan,
                 {**failure, "claim": other["claim"], "agent": VERIFIER, "unsafe_failure_class": "cleanup"})
+
+    def test_eligible_retry_checks_governing_evidence_before_reserving_a_turn(self):
+        claim = self.claim()
+        failure = {"claim": claim["claim"], "agent": REVIEWER, "status": "failed",
+                   "failure_class": "usage_exhausted", "unsafe_failure_class": "", "error": "exhausted"}
+        changes = [(self.root / "code.py", "value = 3\n"),
+                   (self.root / "AGENTS.md", "Changed governing instruction\n")]
+        for path, content in changes:
+            original = path.read_text()
+            path.write_text(content)
+            with self.subTest(path=path.name), self.assertRaisesRegex(ValueError, "governing inputs changed"):
+                app.turn_result(self.root, self.provider, self.ledger, self.plan, failure)
+            path.write_text(original)
+        self.provider.ev["comments"].append({"id": 88, "body": "Changed request", "user": {"id": 21}})
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            app.turn_result(self.root, self.provider, self.ledger, self.plan, failure)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM reservations WHERE name LIKE 'native-retry:%'").fetchone()[0], 0)
+        self.provider.ev["comments"].clear()
+        self.assertTrue(app.turn_result(self.root, self.provider, self.ledger, self.plan, failure)["retry"])
+
+    def test_original_writer_retry_preserves_unfinished_edits_but_checks_governing_inputs(self):
+        claim = self.claim("finding_fix")
+        (self.root / "code.py").write_text("value = 3\n")
+        failure = {"claim": claim["claim"], "agent": FIXER, "status": "failed",
+                   "failure_class": "usage_exhausted", "unsafe_failure_class": "", "error": "exhausted"}
+        self.assertTrue(app.turn_result(self.root, self.provider, self.ledger, self.plan, failure)["retry"])
+        (self.root / "AGENTS.md").write_text("Changed writer instructions\n")
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            app.turn_result(self.root, self.provider, self.ledger, self.plan, failure)
+        self.assertEqual((self.root / "code.py").read_text(), "value = 3\n")
 
     def test_ci_repair_requires_current_failure_and_retained_cycle_allowance(self):
         repair = copy.deepcopy(next(t for t in self.plan["tasks"] if t["id"] == "finding_fix"))

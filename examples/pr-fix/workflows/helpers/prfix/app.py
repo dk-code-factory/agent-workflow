@@ -251,6 +251,20 @@ def _claim(ledger, key):
     return dict(row)
 
 
+def continuation_current(root, provider, ledger, plan, claim, assignment):
+    task = assignment["task"]
+    current = _snapshot(root, provider, plan)
+    if task["writes"]:
+        from .core import verify_writer_lease
+        verify_writer_lease(root, plan["logical_run"], claim["id"])
+        if any(current[key] != assignment["snapshot"][key] for key in ("head", "local_head")):
+            return False
+        # The original fenced writer keeps its unfinished edits. Governing
+        # instructions, remote evidence and task resources still remain bound.
+        current = {**current, **{key: assignment["snapshot"][key] for key in ("local_tree", "diff", "history")}}
+    return _fingerprint(current, task, ledger) == _fingerprint(assignment["snapshot"], task, ledger)
+
+
 def _dispositions(root, ledger, plan, task, report, agent, assignment):
     original = assignment["findings"]
     evidence_ids = {item["id"] for item in report["evidence"]}
@@ -389,8 +403,10 @@ def turn_result(root, provider, ledger, plan, inputs):
         classification == "provider_failure" and any(token in diagnostic.lower()
             for token in ("session limit", "session_limit")))
     if eligible and not retried and plan["limits"]["retries_per_task"]:
-        ledger.reserve("native-retry:" + claim["id"], "original-session-retry", plan["limits"]["retries_per_task"])
         assignment = read_artifact(root, claim["assignment"])
+        if not continuation_current(root, provider, ledger, plan, claim, assignment):
+            raise ValueError("governing inputs changed before native retry dispatch")
+        ledger.reserve("native-retry:" + claim["id"], "original-session-retry", plan["limits"]["retries_per_task"])
         return {"claim": claim["id"], "complete": False, "retry": True,
                 "checklist": False,
                 "prompt": "Continue the original bounded assignment in this same session after the retained eligible provider failure. Preserve original analysis and finding identities.",
@@ -511,18 +527,19 @@ def coverage(root, provider, ledger, plan, inputs):
                 raise ValueError("accepted task coverage lost its original native evidence")
     unresolved = []
     originals = candidates(root, ledger, plan)
-    confirmed, rejected, settled = set(), set(), set()
+    verification, fixes = {}, {}
     for row in ledger.db.execute("SELECT kind,report FROM accepted_reports ORDER BY rowid"):
         report = bounded_json(row["report"])
         for item in report.get("dispositions", []):
             key = item.get("finding_id")
             if row["kind"] == "verification":
-                (confirmed if item.get("status") == "confirmed" else rejected).add(key)
-            if row["kind"] == "fix" and item.get("status") in {"fixed", "accepted", "deferred"}:
-                settled.add(key)
+                verification[key] = item.get("status")
+            if row["kind"] == "fix":
+                fixes[key] = item.get("status")
     for candidate in originals:
         key = candidate["id"]
-        if key not in rejected and (key not in confirmed or key not in settled):
+        if verification.get(key) != "rejected" and (verification.get(key) != "confirmed"
+                or fixes.get(key) not in {"fixed", "accepted", "deferred"}):
             unresolved.append(key)
     if any(stage["kind"] == "ci" for stage in plan["stages"]):
         observed = ledger.db.execute("SELECT * FROM ci_observations ORDER BY rowid DESC LIMIT 1").fetchone()
