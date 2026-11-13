@@ -206,7 +206,10 @@ history-sensitive and head-sensitive tasks refresh their respective evidence.
 Changed code, incoming discussion or governing inputs invalidates affected reuse.
 An independent native verifier accounts for every original finding before fixes.
 Finding IDs remain claim-scoped, and checklist continuation preserves original
-findings. Accepted/deferred findings need the exact retained user authorization.
+findings. Continuations use the original native session and immutable workspace
+references to its full assignment and prior report, keeping large documents out
+of the combined helper/native input envelope. Accepted/deferred findings need
+the exact retained user authorization.
 Completion uses the latest verification and fix disposition for each finding.
 Retries and checklist dispatches refresh governing evidence, including when their
 preparation checkpoints are reused. The original fenced writer can keep its

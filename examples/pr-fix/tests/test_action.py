@@ -10,7 +10,7 @@ import git_fixture
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 import action
 from prfix import app, publishing
-from prfix.core import Ledger, artifact, digest, read_artifact
+from prfix.core import MAX_JSON, Ledger, artifact, canonical, digest, read_artifact
 from prfix.prepare import prepare
 from test_app import AppFixture, REVIEWER, VERIFIER
 from test_publication import AUTH
@@ -161,6 +161,55 @@ class ActionTests(unittest.TestCase):
             key="checklist", checkpoint=continuation["result"])["valid"])
         with self.assertRaisesRegex(ValueError, "governing inputs changed"):
             self.handle("check_prepare", "execute", inputs, key="new-checklist")
+
+    def test_large_accepted_assignment_and_report_continue_with_complete_artifacts(self):
+        def native_json(value):
+            return canonical(value).replace(b"<", b"\\u003c").replace(b">", b"\\u003e").replace(b"&", b"\\u0026")
+
+        for instructions, finding_text in (("i" * (800 << 10), "f" * (256 << 10)),
+                                           ("i" * (800 << 10), "<&>" * (20 << 10))):
+            with self.subTest(escaped="<" in finding_text):
+                request = copy.deepcopy(self.fixture.request)
+                request["logical_run"] = "large-" + digest([instructions, finding_text])
+                request["instructions"] = instructions
+                request["options"]["tasks"] = ["local:review"]
+                self.prepared = prepare(self.root, request, self.provider)
+                self.plan = read_artifact(self.root, self.prepared["plan"])
+                claimed = self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]},
+                                      key="large-claim")["result"]["output"]
+                self.assertLess(len(native_json(claimed)), MAX_JSON)
+                claim = claimed["claim"]
+                partial = self.fixture.report(complete=False,
+                    findings=[{"id": "original", "text": finding_text, "sources": ["source"]}])
+                partial["checklist"][-1]["status"] = "incomplete"
+                accept_inputs = {"claim": claim, "agent": REVIEWER, "report": partial}
+                self.assertLess(len(native_json(self.request("execute", accept_inputs))), MAX_JSON)
+                accepted = self.handle("accept", "execute", accept_inputs, key="large-partial")
+                self.assertFalse(accepted["result"]["output"]["complete"])
+                inputs = {"claim": claim, "agent": REVIEWER, "round": 1}
+                continued = self.handle("check_prepare", "execute", inputs, key="large-checklist")
+                recovered = self.handle("check_prepare", "reconcile", inputs, key="large-checklist")
+                self.assertEqual(recovered["result"], continued["result"])
+                for envelope in (continued, recovered):
+                    self.assertLess(len(canonical(envelope)), MAX_JSON)
+                    # Go's HTML-escaping encoder must also keep the next native
+                    # input small, regardless of text in either saved artifact.
+                    self.assertLess(len(native_json(envelope)), MAX_JSON)
+                task_input = continued["result"]["output"]["task_input"]
+                assignment = read_artifact(self.root, task_input["assignment_reference"])
+                previous = read_artifact(self.root, task_input["prior_report_reference"])
+                self.assertEqual(assignment["instructions"], instructions)
+                self.assertEqual(previous["report"], partial)
+                self.assertEqual(previous["agent"], REVIEWER)
+                self.assertEqual(previous["claim"], claim)
+                self.assertEqual(task_input["claim"], claim)
+                self.assertEqual(task_input["round"], 1)
+                completed = copy.deepcopy(previous["report"])
+                completed["complete"] = True
+                completed["checklist"][-1]["status"] = "completed"
+                final = self.handle("accept", "execute",
+                    {"claim": claim, "agent": REVIEWER, "report": completed, "round": 1}, key="large-finished")
+                self.assertTrue(final["result"]["output"]["complete"])
 
     def test_corrupt_original_helper_result_and_closure_block_recovery(self):
         executed = self.handle("coverage", "execute")

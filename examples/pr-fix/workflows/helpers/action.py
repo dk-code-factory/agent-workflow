@@ -49,9 +49,13 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
         assignment = read_artifact(root, claim["assignment"])
         if not app.continuation_current(root, provider, ledger, plan, claim, assignment):
             raise ValueError("governing inputs changed before checklist dispatch")
-        return {"prompt": "Complete only the remaining checklist in this original native session. Preserve original analysis and every finding/source ID. Return the full report contract.",
-                "task_input": {"assignment": assignment,
-                               "prior_report": read_artifact(root, claim["report"]), "round": round_number}}
+        # Both bodies already belong to this original session. References keep
+        # their complete immutable bytes available without combining two valid
+        # large documents into an invalid helper/native input envelope.
+        read_artifact(root, claim["report"])
+        return {"prompt": "Complete only the remaining checklist in this original native session. Preserve original analysis and every finding/source ID. The exact assignment and prior report remain available at the workspace artifact references in task_input; reread them if needed. Return the full report contract.",
+                "task_input": {"claim": claim["id"], "assignment_reference": claim["assignment"],
+                               "prior_report_reference": claim["report"], "round": round_number}}
     if operation == "coverage":
         return app.coverage(root, provider, ledger, plan, inputs)
     if operation == "completion":
