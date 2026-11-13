@@ -1,49 +1,34 @@
-on:
-  workflow_call:
-    inputs:
-      task:
-        type: string
-        default: 'Create conformance.txt containing PUBLIC_CONFORMANCE_OK and verify it.'
 jobs:
   plan:
     steps:
-      - id: plan
-        uses: agent/run
+      - uses: action/conformance-turn
         with:
-          prompt: 'Plan this disposable task briefly: ${{ inputs.task }}'
-          agent: planner.toml
+          role: claude
+          prompt: 'Plan a disposable task: create conformance.txt containing PUBLIC_CONFORMANCE_OK. Reply CONFORMANCE_OK after a brief plan.'
+          structured: false
   build:
     needs: plan
     steps:
-      - id: build
-        uses: agent/run
+      - uses: agent/run
         with:
-          prompt: 'Implement the task in this disposable repository: ${{ inputs.task }}'
           agent: builder.toml
+          prompt: 'Write conformance.txt containing exactly PUBLIC_CONFORMANCE_OK and a newline. Reply CONFORMANCE_OK.'
   check:
     needs: build
     steps:
-      - argv: [git, diff, --check]
-      - argv: [sh, -c, 'test -f conformance.txt && test "$(cat conformance.txt)" = PUBLIC_CONFORMANCE_OK']
+      - argv: [sh, -c, 'test "$(cat conformance.txt)" = PUBLIC_CONFORMANCE_OK']
   review_claude:
     needs: check
     steps:
-      - uses: agent/run
+      - uses: action/conformance-turn
         with:
-          prompt: 'Read conformance.txt and review the disposable task. Return {"clean":true} only when it contains PUBLIC_CONFORMANCE_OK.'
-          output:
-            format: json
-            repair-attempts: 0
-            schema: {type: object, required: [clean], properties: {clean: {type: boolean, const: true}}}
-          agent: review_correctness.toml
+          role: claude
+          prompt: 'Read conformance.txt. Return exactly {"ok":true} only if it contains PUBLIC_CONFORMANCE_OK.'
+          structured: true
   review_codex:
     needs: check
     steps:
       - uses: agent/run
         with:
-          prompt: 'Read conformance.txt and independently review the disposable task. Return {"clean":true} only when it contains PUBLIC_CONFORMANCE_OK.'
-          output:
-            format: json
-            repair-attempts: 0
-            schema: {type: object, required: [clean], properties: {clean: {type: boolean, const: true}}}
-          agent: review_security.toml
+          agent: reviewer.toml
+          prompt: 'Read conformance.txt and independently verify it contains PUBLIC_CONFORMANCE_OK. Reply CONFORMANCE_OK.'

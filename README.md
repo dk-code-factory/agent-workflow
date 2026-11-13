@@ -887,8 +887,10 @@ The original schema/expression/output foundations came from PicoClaw; see
 [NOTICE](NOTICE) and [LICENSE](LICENSE). Runtime bindings and orchestration are
 standalone Go implementations.
 
-Stable release preparation, signed evidence, verification and remaining certification
-gates: [release operations](docs/RELEASE_PIPELINE.md).
+The sole supported publication path is the signed-tag `.github/workflows/release.yml`
+pipeline. It requires deterministic checks, both provider E2E phases and human
+certification against immutable same-run evidence before publication. Credential
+setup, signing, approval, retry and recovery procedures: [release operations](docs/RELEASE_PIPELINE.md).
 
 The independent [workflow viewer and editor](ui/README.md) provides React components,
 plain JavaScript mounts, and a standalone browser bundle for authoring workflow YAML.

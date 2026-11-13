@@ -53,7 +53,21 @@ def manifest(reference):
             return None
         raise
 
+def validate_certified(out, tag):
+    require(os.environ.get('GITHUB_WORKFLOW_REF') == WORKFLOW + '@refs/tags/' + tag,
+            'publication only accepts release.yml')
+    run('python3', str(ROOT / 'scripts/validate-release.py'), tag,
+        '--report-file', str(out / 'conformance-evidence.json'),
+        '--automated-evidence', str(out / 'automated-evidence.json'))
+
 def registry(out, tag):
+    validate_certified(out, tag)
+    evidence = json.loads((out / 'conformance-evidence.json').read_text())
+    # Verify all platform identities before the first registry mutation.
+    for arch in ['amd64', 'arm64']:
+        metadata = json.loads((out / ('worker-linux-' + arch + '.json')).read_text())
+        require(evidence['images'][arch] == metadata['image'], 'distribution image differs from same-run certified image')
+        require(sha256(out / metadata['archive']) == metadata['archive_sha256'], 'image archive changed')
     digests = {}
     for arch in ['amd64', 'arm64']:
         metadata = json.loads((out / ('worker-linux-' + arch + '.json')).read_text())
@@ -124,7 +138,7 @@ def publish(out, tag):
     for name, digest in expected.items():
         require(Path(name).name == name and sha256(out / name) == digest, 'local asset mismatch: ' + name)
     # Recheck all gates immediately before external effects. No offline override.
-    run('python3', str(ROOT / 'scripts/validate-release.py'), tag)
+    validate_certified(out, tag)
     for path in sorted(out.glob('*.tar.gz')):
         verify_attestation(path, commit, tag)
     verify_attestation(out / 'release-manifest.json', commit, tag)

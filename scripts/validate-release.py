@@ -63,6 +63,8 @@ def validate_evidence(report, policy, commit, fingerprint):
         pins = json.loads((ROOT / 'images/pins.json').read_text())
         if expected['provider'] in ['codex-cli', 'codex-app-server']:
             require(any(re.search(r'(?<![0-9.])' + re.escape(pins['codex_cli']) + r'(?![0-9.])', v) for v in versions.values()), 'evidence uses another Codex protocol version')
+        if expected['provider'] == 'claude-cli':
+            require(any(re.search(r'(?<![0-9.])' + re.escape(pins['claude_cli']) + r'(?![0-9.])', v) for v in versions.values()), 'evidence uses another Claude CLI version')
         if expected['provider'] == 'claude-sdk':
             require('claude-agent-sdk@' + pins['claude_sdk'] in versions.values(), 'evidence uses another Claude SDK version')
         require('artifacts' not in record, 'remove private artifact paths before signing evidence')
@@ -118,6 +120,10 @@ def validate_version(tag, policy, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('tag')
+    parser.add_argument('--phase', choices=['candidate', 'complete'], default='complete')
+    parser.add_argument('--automated-evidence', type=Path)
+    parser.add_argument('--report-file', type=Path, help='pinned report, with adjacent .asc signature')
+    parser.add_argument('--pin-output', type=Path, help='save the verified signed report for publication')
     parser.add_argument('--evidence-ref', default='refs/remotes/origin/release-evidence')
     parser.add_argument('--offline', action='store_true', help='local gates only; never authorizes publication')
     args = parser.parse_args()
@@ -134,18 +140,36 @@ def main():
     require(commit == git('rev-parse', 'HEAD'), 'checkout must match tag commit')
     subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'refs/remotes/origin/main'], cwd=ROOT, check=True)
     fingerprint = source_fingerprint()
-    prefix = args.evidence_ref + ':' + commit + '/'
-    with tempfile.TemporaryDirectory(prefix='release-evidence-') as directory:
-        report = Path(directory) / 'report.json'
-        signature = Path(directory) / 'report.json.asc'
-        for path in [report, signature]:
-            path.write_bytes(subprocess.check_output(['git', 'show', prefix + path.name], cwd=ROOT))
-        trusted_signature(['gpg', '--batch', '--status-fd=1', '--verify', str(signature), str(report)], keys, policy['signers'])
-        count = validate_evidence(json.loads(report.read_text()), policy, commit, fingerprint)
+    count = 0
+    if args.phase == 'complete':
+        require(args.automated_evidence is not None or os.environ.get('GITHUB_ACTIONS') != 'true',
+                'complete release CI requires immutable same-run automated evidence')
+        prefix = args.evidence_ref + ':' + commit + '/'
+        with tempfile.TemporaryDirectory(prefix='release-evidence-') as directory:
+            report = Path(directory) / 'report.json'
+            signature = Path(directory) / 'report.json.asc'
+            if args.report_file:
+                report.write_bytes(args.report_file.read_bytes())
+                signature.write_bytes(Path(str(args.report_file) + '.asc').read_bytes())
+            else:
+                for path in [report, signature]:
+                    path.write_bytes(subprocess.check_output(['git', 'show', prefix + path.name], cwd=ROOT))
+            trusted_signature(['gpg', '--batch', '--status-fd=1', '--verify', str(signature), str(report)], keys, policy['signers'])
+            value = json.loads(report.read_text())
+            count = validate_evidence(value, policy, commit, fingerprint)
+            if args.automated_evidence:
+                from release_certification import match_signed
+                match_signed(value, json.loads(args.automated_evidence.read_text()))
+            if args.pin_output:
+                args.pin_output.mkdir(parents=True, exist_ok=True)
+                (args.pin_output / 'conformance-evidence.json').write_bytes(report.read_bytes())
+                (args.pin_output / 'conformance-evidence.json.asc').write_bytes(signature.read_bytes())
+    else:
+        require(not args.report_file and not args.pin_output, 'candidate validation cannot certify or pin evidence')
     if not args.offline:
         validate_remote(policy, commit)
     print(json.dumps({'tag': args.tag, 'commit': commit, 'signer': signer, 'source_fingerprint': fingerprint,
-                      'evidence_records': count, 'publication_authorized': not args.offline}))
+                      'evidence_records': count, 'phase': args.phase, 'publication_authorized': not args.offline and args.phase == 'complete'}))
 
 if __name__ == '__main__':
     try:

@@ -16,12 +16,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
-      - name: Require trusted tag, exact signed evidence and current main CI
+      - run: git fetch origin main:refs/remotes/origin/main
+      - name: Validate signed candidate and exact-commit main CI
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: python3 scripts/validate-release.py "$TAG"
+        run: python3 scripts/validate-release.py "$TAG" --phase candidate
   checks:
     needs: validate
     uses: ./.github/workflows/pre-release.yml
@@ -101,8 +101,91 @@ jobs:
             dist/worker-*.tar.gz
             dist/worker-*.json
           if-no-files-found: error
-  publish:
+  provider-e2e:
     needs: [archives, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: pre-release
+    outputs:
+      artifact: provider-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.13.0'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archives
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: image-*
+          path: dist
+          merge-multiple: true
+      - name: Install locked provider clients and isolated runtime prerequisites
+        run: |
+          npm ci --prefix conformance/providers --ignore-scripts --no-audit --no-fund
+          node conformance/providers/node_modules/@anthropic-ai/claude-code/install.cjs
+          conformance/providers/node_modules/.bin/claude --version
+          npm ci --prefix images/codex --ignore-scripts --no-audit --no-fund
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns
+      - name: Materialize private subscription authentication
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python3 scripts/release_e2e.py setup --state "$RUNNER_TEMP/release-provider-e2e"
+      - name: Smoke and resumable session E2E
+        run: python3 scripts/release_e2e.py smoke --state "$RUNNER_TEMP/release-provider-e2e"
+      - name: Full provider and disposable runtime recovery matrix
+        run: python3 scripts/release_e2e.py matrix --state "$RUNNER_TEMP/release-provider-e2e"
+      - name: Require complete sanitized evidence
+        run: python3 scripts/release_e2e.py aggregate --state "$RUNNER_TEMP/release-provider-e2e" --output dist/e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: provider-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/automated-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove owned credentials, transcripts and disposable runtime storage
+        if: always()
+        run: python3 scripts/release_e2e.py cleanup --state "$RUNNER_TEMP/release-provider-e2e"
+  certify:
+    needs: [archives, images, provider-e2e]
+    if: ${{ needs.archives.result == 'success' && needs.images.result == 'success' && needs.provider-e2e.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: release-certification
+    outputs:
+      artifact: certified-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.provider-e2e.outputs.artifact }}
+          path: dist
+      - name: Fetch human-reviewed report after approval and pin verified bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
+          python3 scripts/validate-release.py "$TAG" --automated-evidence dist/automated-evidence.json --pin-output dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: certified-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/conformance-evidence.json
+            dist/conformance-evidence.json.asc
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: [archives, images, provider-e2e, certify]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -118,8 +201,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git fetch origin main:refs/remotes/origin/main release-evidence:refs/remotes/origin/release-evidence
-      - run: python3 scripts/validate-release.py "$TAG"
+      - run: git fetch origin main:refs/remotes/origin/main
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.provider-e2e.outputs.artifact }}
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.certify.outputs.artifact }}
+          path: dist
+      - run: python3 scripts/validate-release.py "$TAG" --report-file dist/conformance-evidence.json --automated-evidence dist/automated-evidence.json
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: archives
@@ -129,11 +220,6 @@ jobs:
           pattern: image-*
           path: dist
           merge-multiple: true
-      - name: Include reviewed signed evidence
-        run: |
-          commit=$(git rev-parse HEAD)
-          git show "refs/remotes/origin/release-evidence:$commit/report.json" > dist/conformance-evidence.json
-          git show "refs/remotes/origin/release-evidence:$commit/report.json.asc" > dist/conformance-evidence.json.asc
       - run: echo "DOCKER_CONFIG=$RUNNER_TEMP/release-docker" >> "$GITHUB_ENV"
       - name: Login to GHCR using only this job's token
         run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin

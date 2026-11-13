@@ -361,9 +361,16 @@ func (r *Runner) WorkerLimits(id string) (workflows.WorkerLimits, error) {
 	return workflows.WorkerLimits{MaxWorkers: limit.MaxWorkers, MaxDepth: limit.MaxDepth, MaxQueued: limit.MaxQueued, MaxTurns: limit.MaxTurns, TurnDuration: duration, MaxOutput: limit.MaxOutput}, nil
 }
 
-func nativeEnvironment() []string {
-	out := providerEnvironment("")
-	for _, key := range []string{"HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"} {
+// Compatibility subprocesses receive only their own provider credential route.
+func nativeProviderEnvironment(agent Agent) []string {
+	out := providerEnvironment(agent.Authentication.CredentialEnv)
+	keys := []string{"HOME", "USER", "LOGNAME", "SHELL", "TERM", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"}
+	if agent.Provider == "claude" || agent.Provider == "claude-cli" {
+		keys = append(keys, "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
+	} else {
+		keys = append(keys, "CODEX_HOME", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL")
+	}
+	for _, key := range keys {
 		if value, ok := os.LookupEnv(key); ok {
 			out = append(out, key+"="+value)
 		}

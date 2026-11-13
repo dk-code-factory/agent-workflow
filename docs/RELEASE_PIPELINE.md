@@ -1,199 +1,176 @@
 # Stable release operations
 
-The target is public `dk-code-factory/agent-workflow`, with the existing history
-and first stable version `v0.2.0`. This checkout is a preparation candidate;
-the public repository has been created, the preserved history pushed, and
-immutable releases enabled through GitHub’s API. Remote CI and signed current-build
-live evidence still gate the first immutable publication. The repository is
-https://github.com/dk-code-factory/agent-workflow.
+`.github/workflows/release.yml` is the **sole supported publication mechanism**
+for public `dk-code-factory/agent-workflow`. Do not invoke the publisher locally
+or introduce another workflow that publishes. The current policy version is
+`v0.2.0`; production support remains Linux amd64, subject to complete evidence.
+Linux arm64 and macOS live certification, API-key/gateway certification and
+Codex managed policy are outside this change.
 
-## Repository bootstrap
+## Ordering and environments
 
-After explicit repository-creation authorization, create the empty public
-repository without an initial README and push this history as `main`. Configure
-`origin` to `git@github.com:dk-code-factory/agent-workflow.git`. Do not rewrite
-existing commits. Initial bootstrap precedes enforcing PR-only main updates.
+A stable version-tag push follows this order:
 
-Repository protections and release immutability are one-time setup. Review the
-proposed settings with `python3 scripts/repository-settings.py`.
-An administrator can explicitly apply them to the existing public repository
-with `python3 scripts/repository-settings.py --apply`. This enables immutable
-releases, requires PRs with zero mandatory approvals, resolved conversations and
-the strict `Required` aggregate check, and prevents main force-push/deletion.
-Two version-tag rulesets restrict creation to repository administrators and
-prohibit tag updates/deletion with no bypass. Avoid introducing a bypass while
-repairing a blocked release.
+1. Validate the signed annotated tag, version, clean source identity, main ancestry
+   and successful exact-commit main CI. Candidate validation needs no evidence.
+2. Run the reusable credential-free `pre-release.yml`: native race/tests/vet on
+   four platforms, filesystem fixtures, Docker/Podman checks, locked SDK fake
+   gateway, three browser projects and the `Pre-release Required` aggregate.
+3. Build archives reproducibly and build, test and scan both worker images.
+4. In one Linux amd64 `pre-release` job, use the built binaries and exact scanned
+   distribution image for smoke/session E2E, then the full provider/runtime matrix.
+5. Upload an unsigned sanitized aggregate, then open `release-certification` for
+   human review. Failed, cancelled or skipped prerequisites block this gate.
+6. After approval, verify the signed report against immutable same-run E2E bytes,
+   pin the verified report, publish the tested artifacts, and verify the release.
 
-Release jobs use the ephemeral Actions token to verify repository identity,
-existing release state and successful main CI for the exact release commit.
-They do not recheck administrative settings on every release or require a
-separate policy token. GitHub continues enforcing the configured protections
-and release immutability. PR CI has read-only permissions and no provider or
-publication credentials. Release jobs also use the ephemeral Actions token for
-GHCR, release assets and OIDC attestations; no GPG private key is uploaded.
+`test.yml` and standalone `pre-release.yml` remain credential-free and do not
+invoke live conformance. Deterministic validation does not certify a provider.
+A manual `gh workflow run pre-release.yml --ref <candidate>` does not replace the
+release workflow's mandatory invocation on the exact signed candidate.
 
-PRs, merge queues, and main pushes use the four-job `test.yml`: Linux AMD64
-native checks, actionlint, the complete Chromium UI project, and `Required`.
-`Required` rejects any failed, cancelled, or skipped prerequisite.
-
-Full deterministic validation lives in `pre-release.yml`, available through
-`workflow_dispatch` and `workflow_call`. It runs Linux amd64/arm64 and macOS
-amd64/arm64, including race, vet, extracted-archive smoke/verification and the
-locked SDK fake gateway. Linux additionally runs the bounded filesystem fixture
-and genuine Docker/rootless Podman on both architectures. UI jobs run complete
-Chromium, Firefox, and WebKit projects, including flow synchronization, types,
-unit tests, and package/packed-consumer builds. `Pre-release Required` rejects
-any failed, cancelled, or skipped prerequisite. This workflow has read-only
-permissions, a separate concurrency group, and does not cancel active validation.
-It has no scheduled or main-push trigger and creates no release candidate or tag.
-For an optional manual run against a candidate branch or tag:
+An administrator sets up the existing repository once with:
 
 ```sh
-gh workflow run pre-release.yml --ref <candidate-branch-or-tag>
+python3 scripts/release-environments.py --apply
 ```
 
-A manual success does not replace the mandatory fresh invocation by `release.yml`
-after release validation, using the reusable workflow from the same tagged commit.
-Release archive/image jobs depend on that invocation; publication depends on both
-artifact jobs. No release build or publication proceeds unless the full suite
-passes. Live provider and publication conformance remain separate signed-evidence
-gates requiring explicit scenario authorization.
+This idempotently configures tag-only `v*` policies on `pre-release` and
+`release-certification`. The latter requires `dkropachev` and permits self-review.
+Existing wait timers, reviewers, bypass preferences, custom protection rules and
+unrelated secrets are preserved. Conflicting deployment branch policies stop
+setup for explicit reconciliation. Existing credentials are preserved; explicit
+rotation uses `--apply --replace-credentials`.
 
-The weekly security workflow audits locked Go/npm dependencies. Dependabot opens
-proposals; merging an update never creates a version tag.
+The default files are:
 
-## Support and evidence
+- `CODEX_AUTH_JSON`: `/home/dkropachev/.codex/accounts/dmitry.kropachev.dev+codex+1/auth.json`.
+- `CLAUDE_CODE_OAUTH_TOKEN`: `/home/dkropachev/.config/agent-workflow/claude-oauth-token`.
 
-Initial production support is limited to **Linux amd64**, subject to passing all
-remaining certification gates. Linux arm64 and macOS amd64/arm64 live-provider
-certification are deferred. Their deterministic CI, archive builds and Linux
-arm64 worker image checks remain required by the full pre-release workflow;
-those checks do not establish a production support claim.
+Override paths with `--codex-auth-file` and `--claude-token-file`. Credential bytes
+travel through stdin to `gh secret set`, never argv, logs or committed files.
+Use [Codex file-backed authentication](https://learn.chatgpt.com/docs/auth) and
+[Claude's subscription-token setup](https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md).
+The operator obtains a fresh Claude subscription token with `claude setup-token`
+when rotation is necessary. The workflow never runs login or updates secrets.
+Missing, expired, invalid or rejected credentials fail validation. Any provider's
+normal in-job auth-cache changes stay private; secret rotation is always explicit.
 
-`release/policy.json` is the enforceable support matrix. Its 17 mandatory records
-cover Linux amd64 native Claude/Codex CLI smoke; resume/interruption through
-native Claude SDK and Codex app-server session transports; Claude SDK
-structured output, managed discovery, nested workers, uncertain MCP
-and mixed CLI/MCP development; Linux amd64 on Docker/Podman with
-container execution/owner loss; and disposable GitHub publication recovery.
-Two additional signed `runtime_recovery` records (Linux amd64 × runtimes)
-require `owner_loss`, `runtime_unavailable`, `runtime_restart`, `cleanup_recovery`
-and `stale_execution_ownership` assertions, candidate/fingerprint, runtime version
-and exact image digest. These are reviewed records from disposable runtime failure
-fixtures; the manual provider harness does not generate them automatically.
-The initial Claude SDK route uses the operator's own subscription token, with
-`authentication.mode: native`. Gateway/API-key authentication remains available
-in the implementation and requires its own evidence before a support claim.
-The structured-output scenario retains its historical `claude-gateway-structured`
-ID; the report and policy explicitly identify the selected authentication route.
-Compatibility CLI adapters do not support resumable sessions. Every combination
-absent from this matrix remains uncertified, including alternate authentication
-routes. Evidence records the selected provider and authentication mode directly
-from the admitted configuration.
-No production support is certified until the whole matrix passes for the exact
-candidate commit. Codex managed policy remains rejected by admission. macOS
-VM/container certification is deferred and has no required row or support claim.
+Credentials are materialized with private permissions under
+`$RUNNER_TEMP/release-provider-e2e`. The same private state survives both phases.
+Credential components are masked. Provider adapters forward only the selected
+provider's credential route; GitHub tokens stay outside provider subprocesses.
+Only selected identity/assertion fields enter the uploaded aggregate. Raw provider
+output, SQLite state, config, paths and transcripts remain private and are removed
+with owned runtime storage by the always-run cleanup step. A cancelled runner is
+ephemeral; never recover its private state into public artifacts.
 
-Real scenarios remain outside ordinary CI. They require fresh named-scenario
-authorization, working credentials and, for publication, an explicitly supplied
-disposable target whose branches/PRs are preserved. Historical pilot reports and
-budgets cannot satisfy these gates. `publication_repositories` pins the authorized
-disposable targets: a target must be designated in policy **before**
-freezing the candidate. Nothing refreshes provider login automatically.
+Repository protections and release immutability are separately configured through
+`scripts/repository-settings.py --apply`. Main requires the strict `Required` check,
+PRs and resolved conversations. Version-tag rules restrict creation and prohibit
+updates/deletion. Release jobs use the ephemeral workflow token, with write
+permissions only in `publish`. No signing private key is uploaded.
 
-Build and run the manual conformance binary from the exact clean candidate.
-Read `conformance/README.md` for the harness and its assertions. Review private
-reports outside the checkout. Remove private `artifacts` paths and sanitize all
-remaining fields. Retain `provider` and `authentication` from the harness; add `runtime_version` for containers,
-and authorized `publication_repository` for publication. Preserve all original
-assertions, timestamps, build identity and provider versions. Container records
-must identify the exact image configuration digest distributed by the release;
-rebuilding a different image blocks release and requires new evidence.
+## Required live evidence
 
-The reviewed aggregate has this structure:
+`release/policy.json` owns the full matrix. Phase one requires seven records:
+Claude/Codex CLI authenticated smoke, Claude SDK and Codex app-server resume and
+interruption, and Claude structured output. Phase two requires nine records:
+Claude discovery isolation, nested workers at capacity one, uncertain external MCP
+responses, mixed development through CLI and MCP, and container execution and
+owner loss on Docker and rootless Podman. Mixed scenarios require actual recorded
+invocations and versions from both providers. `agent/run` accepts native Codex
+definitions; conformance-only registered Go actions execute managed Claude turns.
 
-```json
-{
-  "candidate": "<full clean candidate commit>",
-  "source_fingerprint": "<candidate fingerprint>",
-  "reviewed": true,
-  "records": ["<sanitized report objects, one per policy row>"]
-}
+The job installs locked provider dependencies, including the pinned Claude CLI
+in `conformance/providers`, the existing Codex CLI and the packaged SDK lock.
+It never rebuilds a worker image for certification. Runtime fixtures load the
+scanned compressed distribution archive and verify its configuration digest.
+Docker runs a separate daemon with private data/exec directories and socket;
+Podman uses a separate rootless service, storage and run directory. Only these
+owned services are stopped/restarted. No shared filesystem is exhausted.
+Each named scenario gets one attempt and a five-minute deadline; the whole job
+has a 120-minute limit. There are no automatic scenario retries.
+
+Two runtime-recovery records additionally prove `owner_loss`,
+`runtime_unavailable`, `runtime_restart`, `cleanup_recovery` and
+`stale_execution_ownership`. Owner loss waits for observed model usage, kills
+only the owned fixture controller, verifies that an unavailable runtime retains
+cleanup obligations, restarts the same owned service, reconciles cleanup and
+rejects a stale invocation owner.
+
+GitHub publication conformance is **separate** and still requires current explicit
+named-scenario authorization, an existing designated disposable repository and
+`--allow-publication`. CI authorization never permits it. Preserve disposable
+branches/PRs. Historical budgets authorize no calls and historical reports cannot
+certify another candidate. No tool automatically creates repositories, refreshes
+login, merges or deletes remote fixtures.
+
+## Tag, inspect, sign and approve
+
+Freeze a clean candidate, merge it to main, and wait for exact-commit main CI.
+Create and verify the maintainer-signed annotated version tag, then intentionally
+push it. Do not move an existing tag. Read-only candidate inspection is:
+
+```sh
+python3 scripts/validate-release.py v0.2.0 --phase candidate
 ```
 
-Compute the fingerprint from a clean checkout with
-`PYTHONPATH=scripts python3 -c 'from release_lib import source_fingerprint; print(source_fingerprint())'`.
-Each record retains `engine.commit`, `engine.version`, `engine.dirty` as the
-string `false`, and `engine.source_fingerprint`. Evidence is stored on a separate
-orphan `release-evidence` branch at `<candidate>/report.json`, with its detached
-ASCII signature in `<candidate>/report.json.asc`. Use a separate worktree so
-recording evidence does not change the candidate it certifies. Keep raw private
-reports and credentials off this branch. Sign **only after human review**:
+`--offline` validates only local gates and never authorizes publication. Complete
+validation remains the default and retains all signature/evidence requirements.
+The candidate phase cannot pin evidence or authorize publication.
+
+After both E2E phases succeed, download the release run's `provider-e2e-<run-id>-<E2E-attempt>`
+artifact with `gh run download <run-id> --repo dk-code-factory/agent-workflow
+--name provider-e2e-<run-id>-<E2E-attempt> --dir <private-review-directory>`. Inspect
+`automated-evidence.json`: candidate, source fingerprint, originating run/attempt,
+all assertions, observed provider identities/versions and both exact image IDs.
+Do not edit automated records, their order, runtime recovery, origin or images.
+
+Copy the aggregate to `report.json`, change `reviewed` to `true`, and append the
+separately authorized, sanitized `disposable-github-publication` record to
+`records`. That publication record must identify this exact candidate and an
+allowlisted repository. Remove private `artifacts` paths and preserve actual
+assertions, timestamps, versions and authentication mode. Review all fields.
+Sign only after human review with the existing maintainer key:
 
 ```sh
 gpg --local-user DC4DED587433F319EEE1EB745BD1EAD257F21B89 --armor --detach-sign report.json
 ```
 
-The checked-in public key and allowlist use the existing configured maintainer
-key, fingerprint `DC4DED587433F319EEE1EB745BD1EAD257F21B89`. No release tag or conformance evidence
-was signed by the implementation. The validator imports only checked-in
-public keys into a temporary keyring. Missing, expired, revoked or untrusted
-signatures fail. Missing, duplicate, dirty, failed or stale evidence fails.
-Evidence review is a human trust boundary; a signature does not prove assertions
-were honestly measured.
+In a separate worktree on orphan `release-evidence`, store the report and detached
+signature as `<candidate-commit>/report.json` and `report.json.asc`. Push that
+branch, then approve the pending `release-certification` deployment. Approval
+alone cannot satisfy the signed-report check. No agent signs the human report.
 
-## Validate, tag and publish
+After approval, certification fetches the evidence branch, verifies signatures
+against checked-in keys and the signer allowlist, and validates every policy row.
+It compares automated records exactly with the immutable E2E artifact, including
+candidate/fingerprint, run/attempt and image IDs. Another candidate/run, a future
+attempt, missing coverage or edited automated records fails. Verified report
+bytes and signature are pinned in a separate certification artifact for publication.
+Later evidence-branch edits cannot change those pinned bytes. The publisher
+revalidates the pinned signature, automated match, source, tag and main CI before
+registry effects and again before draft-release publication.
 
-Wait for successful main CI and signed evidence for the candidate. Use a clean
-checkout; even unrelated untracked files prevent signing off a release checkout.
-`make release-check TAG=v0.2.0` is read-only and validates an existing local signed
-tag, evidence, ancestry, current main CI and GitHub settings.
-`python3 scripts/validate-release.py v0.2.0 --offline` checks local gates only and
-never authorizes publication. Neither command creates a tag or invokes a provider.
+## Publication and verification
 
-Create the annotated signed tag locally with your maintainer key, verify it with
-`git verify-tag v0.2.0`, then intentionally push that exact tag. Tag pushes start
-`release.yml`. The pipeline validates signed evidence and release policy, then
-requires fresh full pre-release validation on that exact tagged commit. After
-`Pre-release Required` passes, the pipeline builds all four CLI archives twice
-and compares hashes, builds/tests worker images natively, audits Go/npm, and
-blocks high/critical image vulnerabilities.
-Any reported scan failure requires repair before publication. Vulnerability DBs
-are current network inputs; scans are separate from deterministic tests.
+Archives have normalized timestamps, gzip metadata, ordering, ownership and modes.
+The source fingerprint covers all tracked bytes and modes. Builds require the
+exact pinned Go toolchain. Scans use current vulnerability databases; high or
+critical image vulnerabilities block release.
+Images are loaded and pushed from the tested archives without rebuilding. Image
+configuration IDs and registry manifest/index digests are kept distinct in the
+inventory. The multi-architecture index references the tested platform manifests.
 
-Archive timestamps, gzip metadata, order, ownership and modes are normalized.
-All tracked source bytes and executable modes, including Dockerfiles, enter the
-fingerprint. The archive builder refuses any Go runtime other than the exact
-`go_toolchain` pin; `go.mod` alone would otherwise allow a newer local toolchain. Worker builds pass the source epoch to BuildKit and Podman; the
-release still requires actual image identities to match reviewed evidence.
-Images are loaded from the tested compressed archives and pushed without a
-second build. The multi-architecture index references those platform digests.
-Image IDs identify configurations; registry manifest/index digests identify the
-published artifacts. Both identities are retained, never conflated.
+The publisher uploads archives/images, dependency inventories, SBOMs, audit
+reports, unsigned automated and signed certification evidence, checksums and OIDC
+provenance. It downloads each draft asset, compares bytes and verifies provenance
+constrained to repository, workflow, commit and tag. It publishes the completed
+draft immutably and runs public release/asset verification.
 
-The publisher verifies protected settings again immediately before creating a
-draft. It uploads archives, compressed images, checksums, dependency and image
-SBOMs, audit reports, signed sanitized evidence, the source/registry manifest and
-OIDC verification bundles. It downloads every draft asset, compares bytes and
-verifies provenance constrained to repository, release workflow, commit and tag.
-The completed draft is then published under enabled immutability. Post-publication
-`gh release verify` and `gh release verify-asset` checks must also pass.
-
-Publication is serialized per version. Existing version image labels may only be
-reused when they identify the exact expected image. Existing drafts must match
-the target commit and each existing asset byte. Unknown or changed assets stop
-the run; uploads never use `--clobber`. Published releases always stop retries.
-OIDC bundles can differ between builds, so a retry with newly generated bundles
-can correctly stop on a conflict: retain and reuse the original verified build
-artifacts for a matching draft, or investigate before choosing a new version.
-A failed public post-check is an incident, never permission to replace assets.
-
-## Installation and verification
-
-Download the archive for your platform plus the manifest, SHA256SUMS and both
-provenance bundles. Check SHA256SUMS (`sha256sum --check` on Linux or
-`shasum -a 256 --check` on macOS), then verify provenance and immutable release
-membership before extracting:
+Consumers should verify the signed tag, SHA256SUMS, manifest/provenance and immutable
+release membership before extraction. For example:
 
 ```sh
 git verify-tag v0.2.0
@@ -203,57 +180,49 @@ gh attestation verify agent-workflow-0.2.0-linux-amd64.tar.gz \
   --source-digest "$COMMIT" --signer-digest "$COMMIT" --source-ref refs/tags/v0.2.0 \
   --bundle archive-provenance.jsonl
 gh release verify v0.2.0 --repo dk-code-factory/agent-workflow
-gh release verify-asset v0.2.0 agent-workflow-0.2.0-linux-amd64.tar.gz \
-  --repo dk-code-factory/agent-workflow
 ```
 
-Obtain `$COMMIT` from the independently verified tag. Verify release-manifest.json
-with the same constraints and `manifest-provenance.jsonl`. For images, take the
-index/architecture digest from that verified manifest and run
-`gh attestation verify oci://ghcr.io/dk-code-factory/agent-workflow-worker@sha256:...`
-with the same repository/workflow/commit/tag constraints. Pull and execute by
-digest; version labels are conveniences. Extract the archive, put the CLI on PATH,
-then use `agent-workflow doctor` and the locked `bridge setup` flow described in
-`DISTRIBUTION.md`. Provider CLIs and Node remain explicit prerequisites.
+Obtain `$COMMIT` from the verified tag. Verify `release-manifest.json` and images
+with the same constraints and their manifest/image bundles. Install by verified
+archive or registry digest; use `agent-workflow doctor` and the bridge setup flow
+in `DISTRIBUTION.md`. Both static Linux guardians and their SHA256 inventory are
+included in every archive, including macOS archives.
 
-## Recovery, incidents and patch releases
+## Retry and recovery
 
-Use the CLI backup/restore and recovery-bundle commands documented in README;
-stop the owner before maintenance, preserve the pre-restore copy, and verify
-integrity before resuming quarantined work. Store private state backups separately
-from public release artifacts and keep native authentication out of evidence.
-Back up the Git repository including signed tags and `release-evidence`, release
-assets/checksums/bundles, and OCI archives plus registry digest inventories.
+For a failed certification job, preserve the successful same-run E2E artifact.
+Repair/review/sign the report and push `release-evidence`, then **rerun failed jobs**
+in that release run. The gate requires approval again. It accepts the original
+successful E2E attempt from the same run and creates a new certification artifact
+named with the current attempt. It never requires another provider run just to
+repair certification. Rerunning all jobs incurs fresh provider calls and creates
+another immutable artifact named with the new E2E attempt; old artifacts remain.
+Expired/missing artifacts require full validation again; another run's report
+cannot be substituted.
 
-For a failed prepublication run, preserve logs and fixtures, inspect uncertainty,
-and never delete disposable conformance branches/PRs automatically. For a broken
-published version, document the affected commit/digests and suspend further tag
-pushes while investigating. Corrections get a new patch version and new evidence;
-never move a signed version tag or replace published bytes. Repository/release
-administrators can still delete entire resources; immutability is bounded by
-GitHub administrative controls, so independent backups matter.
+A provider failure blocks the human gate. Investigate private diagnostics and
+credential rejection, explicitly replace secrets if necessary, and rerun the
+failed job. Do not silently retry a scenario within a job or sign synthetic
+coverage. A changed candidate needs a new signed version candidate and evidence.
 
-Rotate signing keys through a reviewed main PR: add the new public key and full
-fingerprint, verify it out of band, retain old public keys for historical releases,
-and remove compromised keys from the active allowlist. Re-certify a new candidate
-if policy changes. Set `buildinfo.Version` and policy version together for every
-patch, refresh dependencies by reviewed PR when necessary, and repeat all gates.
+Publication is serialized by version. Existing image labels and draft assets can
+only be reused with identical expected bytes/identities. No `--clobber` is used.
+A published release stops retries; failed public verification is an incident,
+never permission to replace bytes. Retain original build/provenance artifacts
+when repairing a matching draft, since regenerated attestations may conflict.
+Never move a signed version tag or delete remote fixtures automatically.
 
-## Pending acceptance
+Back up signed tags, the evidence branch, release artifacts, checksums, provenance
+and OCI inventories independently. Keep private state backups separate. Use the
+CLI stopped-owner backup/restore and recovery-bundle procedures; preserve the
+pre-restore copy and inspect quarantined work before resuming. Rotate signing keys
+through a reviewed main change, verifying the new fingerprint out of band and
+retaining historical public keys. Corrections to a published version require a
+new patch version and the entire release pipeline.
 
-Repository creation and enabled immutability have been verified through the API.
-Current deterministic CI results are available in
-[GitHub Actions](https://github.com/dk-code-factory/agent-workflow/actions/workflows/test.yml).
-Protection settings and current main checks are revalidated by the release gate.
-Live conformance, GHCR upload and immutable release verification remain pending. Current live credentials,
-named-scenario authorization, a designated disposable repository, reviewed signed
-evidence, and an exact clean committed candidate remain required. Genuine runtime
-restart/outage and broader provider-frame boundary certification also remain in
-the production audit; the new real-container removal test covers runtime-side
-container loss, not every daemon restart behavior. Do not publish `v0.2.0` until
-these nondeferred gates are closed.
+## Acceptance status
 
-All CLI archives also contain both static Linux workload guardians under
-`guardians/`, with a SHA256 manifest. This includes macOS archives, which must
-select a guardian by image architecture rather than host OS. Packaging and
-verification reject changed bytes, missing platforms and dynamic linkage.
+Implemented gates and deterministic fixtures are not live certification. Acceptance
+requires both E2E phases to pass in the signed-tag release pipeline before the human
+gate becomes available, followed by separately reviewed publication evidence and
+signature. No current candidate is certified merely by implementing this runbook.
