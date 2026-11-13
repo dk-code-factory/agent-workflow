@@ -24,12 +24,24 @@ describe('native agent tasks', () => {
         finally: [{argv: [echo, finalize]}]
 `;
     const doc=new WorkflowDocument({source});
+    const hooks = {
+      onResult: [{argv: ['python3', 'verify.py']}], onComplete: [{argv: ['echo', 'accepted']}],
+      onIncomplete: [{argv: ['echo', 'feedback']}], onError: [{argv: ['echo', 'recover']}],
+      onFailure: [{argv: ['echo', 'report']}], finally: [{argv: ['echo', 'finalize']}],
+    };
     expect(doc.getSnapshot().diagnostics.filter(d=>d.severity==='error')).toEqual([]);
     doc.setField(['jobs','review','steps',0,'with','prompt'],'Review carefully');
     const edited=doc.getSnapshot().source;
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![0]).toMatchObject(hooks);
     expect(doc.getSnapshot().workflow!.jobs.review.steps![0].with!.input).toEqual({count:7,enabled:true});
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);doc.redo();expect(doc.getSnapshot().source).toBe(edited);
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![0]).toMatchObject(hooks);
     expect(parseWorkflow(edited).diagnostics.filter(d=>d.severity==='error')).toEqual([]);
-    doc.setStepKind('review',0,'argv');expect(doc.getSnapshot().workflow!.jobs.review.steps![0].onResult).toBeUndefined();doc.undo();expect(doc.getSnapshot().source).toBe(edited);
+    doc.setStepKind('review',0,'argv');
+    const converted = doc.getSnapshot().workflow!.jobs.review.steps![0];
+    for (const hook of ['onResult', 'onComplete', 'onIncomplete']) expect(converted[hook]).toBeUndefined();
+    expect(converted).toMatchObject({onError: hooks.onError, onFailure: hooks.onFailure, finally: hooks.finally});
+    doc.undo();expect(doc.getSnapshot().source).toBe(edited);
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![0]).toMatchObject(hooks);
   });
 });

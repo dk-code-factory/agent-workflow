@@ -37,14 +37,16 @@ test('YAML expression completion follows the cursor and only offers preceding st
       - id: current
         uses: agent/run
         with:
-          prompt: |
-            \${{ steps.
           agent: claude.toml
-`);
+          prompt: |
+            \${{ steps.`);
   await yaml.press('Control+Space');
   await expect(first.getByRole('option', { name: 'steps.earlier.outputs.stdout', exact: true })).toBeVisible();
   await expect(first.getByRole('option', { name: 'steps.earlier.text', exact: true })).toHaveCount(0);
   await expect(first.getByRole('option', { name: 'steps.current.outputs.stdout', exact: true })).toHaveCount(0);
+  await first.getByRole('option', { name: 'steps.earlier.outputs.stdout', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().source))
+    .toContain('${{ steps.earlier.outputs.stdout');
 });
 
 test('property expression hints are limited to fields the runner evaluates', async ({ page }) => {
