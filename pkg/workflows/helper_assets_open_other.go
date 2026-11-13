@@ -10,3 +10,7 @@ import (
 func openAssetFile(*os.Root, string) (*os.File, error) {
 	return nil, fmt.Errorf("helper assets require a supported Unix host")
 }
+
+func openAgentDefinitionFile(path string) (*os.File, error) {
+	return os.Open(path)
+}

@@ -51,17 +51,9 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 	if !info.Mode().IsRegular() || info.Size() > 1<<20 || !strings.EqualFold(filepath.Ext(path), ".toml") {
 		return nil, fmt.Errorf("agent definition requires a regular TOML file of at most 1 MiB")
 	}
-	file, err := os.Open(path)
+	data, err := readAgentDefinition(path, info)
 	if err != nil {
 		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 1<<20 {
-		return nil, fmt.Errorf("agent definition exceeds 1 MiB")
 	}
 	var definition AgentDefinition
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
@@ -78,6 +70,29 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 	}
 	definition.Source, definition.Bytes = path, string(data)
 	return &definition, nil
+}
+
+func readAgentDefinition(path string, admitted os.FileInfo) ([]byte, error) {
+	file, err := openAgentDefinitionFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || opened.Size() > 1<<20 || !os.SameFile(admitted, opened) || opened.Size() != admitted.Size() || !opened.ModTime().Equal(admitted.ModTime()) {
+		return nil, fmt.Errorf("agent definition changed before reading")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1<<20 {
+		return nil, fmt.Errorf("agent definition exceeds 1 MiB")
+	}
+	return data, nil
 }
 
 type NativeTaskRunner interface {
