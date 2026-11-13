@@ -1,4 +1,10 @@
-# PR-fix 5.2.0 parity and deterministic evidence
+# Historical Go PR-fix 5.2.0 parity and deterministic evidence
+
+This matrix describes the retained Go reference implementation in `pkg/prfix`
+and its legacy templates under `pkg/prfix/testdata`. The stock CLI no longer
+registers those actions or supplies a `pr-fix` command. These historical tests do
+not establish parity for the portable Python/YAML example; its current contract,
+compatibility changes and deterministic checks are documented in [PR_FIX.md](PR_FIX.md).
 
 The source contract is pinned under `pkg/prfix/source/`; provenance is verified
 by `TestPinnedSourceProvenance`. Tests use local fakes and disposable repositories.

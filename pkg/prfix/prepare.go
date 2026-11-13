@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 
-	workflowassets "github.com/dk-code-factory/agent-workflow"
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
@@ -244,12 +243,12 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 		}
 	}
 	templates := map[string]string{}
-	entries, e := workflowassets.Examples.ReadDir("workflows/pr-fix/v1")
+	entries, e := legacyExamples.ReadDir("testdata/workflows/pr-fix/v1")
 	if e != nil {
 		return Prepared{}, e
 	}
 	for _, entry := range entries {
-		b, e := workflowassets.Examples.ReadFile("workflows/pr-fix/v1/" + entry.Name())
+		b, e := legacyExamples.ReadFile("testdata/workflows/pr-fix/v1/" + entry.Name())
 		if e != nil {
 			return Prepared{}, e
 		}
@@ -559,12 +558,12 @@ func callJob(ref string, needs []string, with map[string]any) workflows.Job {
 func generate(p Plan, planPath, dir string) (map[string][]byte, error) {
 	defs := map[string][]byte{}
 	// Copy templates into this immutable closure and rewrite only local refs.
-	entries, e := workflowassets.Examples.ReadDir("workflows/pr-fix/v1")
+	entries, e := legacyExamples.ReadDir("testdata/workflows/pr-fix/v1")
 	if e != nil {
 		return nil, e
 	}
 	for _, entry := range entries {
-		b, e := workflowassets.Examples.ReadFile("workflows/pr-fix/v1/" + entry.Name())
+		b, e := legacyExamples.ReadFile("testdata/workflows/pr-fix/v1/" + entry.Name())
 		if e != nil {
 			return nil, e
 		}

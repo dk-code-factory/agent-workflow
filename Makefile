@@ -3,13 +3,13 @@ build:
 	python3 scripts/build-guardians.py
 	go build -o bin/agent-workflow ./cmd/agent-workflow
 	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
-test:
+test: portable-prfix-test
 	@packages=$$(go list ./...) || exit $$?; \
 	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d') || exit $$?; \
 	test -n "$$packages" || { echo 'No non-PR-fix Go packages discovered' >&2; exit 1; }; \
 	go test -race -timeout 60m $$packages
 	python3 scripts/prfix_race.py --all --shards 4
-check: release-tooling-test
+check: release-tooling-test portable-prfix-test
 	go vet ./...
 	go run ./cmd/agent-workflow validate workflows/parallel-review.yml
 	go run ./cmd/agent-workflow validate workflows/classify.yml
@@ -49,3 +49,7 @@ ui-flow-checker-test:
 	node --test ui/scripts/flows-check.test.mjs
 ui-pr-check: ui-flow-checker-test
 	node ui/scripts/flows-check.mjs --base="$(BASE)" --run
+
+.PHONY: portable-prfix-test
+portable-prfix-test:
+	python3 -B -m unittest discover -s examples/pr-fix/tests -p 'test_*.py' -v

@@ -26,7 +26,6 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/controller"
 	"github.com/dk-code-factory/agent-workflow/pkg/development"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
-	"github.com/dk-code-factory/agent-workflow/pkg/prfix"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
@@ -54,15 +53,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
 		return json.NewEncoder(stdout).Encode(buildinfo.Metadata())
 	}
-	if len(args) > 0 && args[0] == "pr-fix" {
-		return prFixCommand(ctx, args[1:], stdout, stderr)
-	}
 	if len(args) > 0 && args[0] == "bridge" {
 		return bridgeSetup(ctx, args[1:], stdout, stderr)
 	}
 
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow <pr-fix|run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|task-state|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow <run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|task-state|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
 		return nil
 	}
 	verb := args[0]
@@ -348,12 +344,6 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return err
 	}
 	executor := &workflows.Executor{CommandExecution: cfg.CommandExecutionPolicy(), WorkspaceDir: root, Agents: &clirunner.Runner{Config: cfg, Workspace: root}, MaxParallel: *parallel, Roles: roles}
-	prFixRuntime := &prfix.Runtime{Root: root}
-	registry := &workflows.ActionRegistry{}
-	if err = prFixRuntime.Register(registry); err != nil {
-		return err
-	}
-	executor.ApplicationActions = registry
 	executor.RoleRunner = func(raw json.RawMessage) (workflows.AgentRunner, error) {
 		var pinned clirunner.Config
 		if err := json.Unmarshal(raw, &pinned); err != nil {
@@ -378,7 +368,6 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		defer store.Close()
 		executor.Store = store
-		prFixRuntime.Store = store
 		executor.Actions = &development.Runtime{Root: root, Store: store, Policy: cfg.Publication}
 		executor.ActionFactory = func(raw json.RawMessage) (workflows.ActionRunner, error) {
 			var pinned clirunner.Config
@@ -389,7 +378,6 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		fmt.Fprintln(stderr, "Controller listening in", dir)
 		workers := workerManager(store, root)
-		prFixRuntime.Workers = workers
 		executor.Workers = workers
 		binder := toolBinder(store, workers, root)
 		executor.BindTools = binder
@@ -432,7 +420,6 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return store.ProbeStorage(ctx)
 		}
 		executor.Store = store
-		prFixRuntime.Store = store
 		executor.Actions = &development.Runtime{Root: root, Store: store, Policy: cfg.Publication}
 		executor.ActionFactory = func(raw json.RawMessage) (workflows.ActionRunner, error) {
 			var pinned clirunner.Config
@@ -445,7 +432,6 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		workers := workerManager(store, root)
-		prFixRuntime.Workers = workers
 		executor.Workers = workers
 		if executor.Slots == nil {
 			executor.Slots = make(chan struct{}, *parallel)

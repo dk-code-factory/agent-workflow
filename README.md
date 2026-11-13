@@ -7,10 +7,11 @@ iterations, worker mailboxes, isolated Git workspaces, and GitHub publication.
 Embedding Go applications can also [register typed application actions](docs/REGISTERED_ACTIONS.md)
 with durable provenance, checkpoint validation, and receipt-based mutation recovery.
 
-The [PR-fix application](docs/PR_FIX.md) materializes dk-workflows 5.2.0 PR
-maintenance as deterministic YAML, with a separate private ledger and bounded
-managed leaves. Its [parity matrix](docs/PR_FIX_PARITY.md) records deterministic
-evidence, including guarded native-failure acknowledgement and recovery.
+The [portable PR maintenance example](examples/pr-fix/README.md) uses ordinary
+YAML and container-backed Python helpers with the stock CLI. The controller owns
+native agent sessions and recovery; the example owns PR policy, retained
+allowances, evidence checks and guarded publication receipts. Its [guide](docs/PR_FIX.md)
+documents explicit setup, recovery and changes from the earlier Go application.
 
 **Release status: implementation candidate, not yet production certified.** See
 [release evidence and outstanding gates](docs/RELEASE.md). Live evidence is
