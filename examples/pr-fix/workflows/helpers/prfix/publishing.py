@@ -46,7 +46,10 @@ def _source(root, provider, ledger, plan, reference, *, snapshot=None, audience_
         if verdict.get("fingerprint") != audience_intent["fingerprint"] or verdict.get("suitable") is not True:
             raise PublicationError("audience verdict does not accept the exact payload")
         return row
-    task = app._task(plan, row["task"])
+    try:
+        task = app._task(plan, row["task"])
+    except ValueError as exc:
+        raise PublicationError("publication source task is outside admitted plan") from exc
     if task["kind"] != row["kind"]:
         raise PublicationError("publication source task kind differs from admitted plan")
     claim = ledger.db.execute("SELECT * FROM claims WHERE id=?", (wrapper.get("claim"),)).fetchone()

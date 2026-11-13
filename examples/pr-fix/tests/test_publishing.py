@@ -119,6 +119,22 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"], [])
         self.assertEqual(self.provider.writes, [])
 
+    def test_replacement_plan_ignores_proposals_from_removed_tasks(self):
+        removed = self.accepted("description", self.report(operations=[self.proposal()]))
+        self.plan["tasks"] = [task for task in self.plan["tasks"] if task["id"] != "description"]
+        current = self.proposal()
+        current["payload"]["body"] = "Current selected task proposal."
+        retained = self.accepted("review", self.report(operations=[current]))
+        listed = publishing.publication_list(self.root, self.provider, self.ledger, self.plan, {})["items"]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["sources"], [retained])
+        self.assertEqual(listed[0]["payload"], current["payload"])
+        self.assertIsNotNone(self.ledger.db.execute(
+            "SELECT reference FROM accepted_reports WHERE reference=?", (removed,)).fetchone())
+        with self.assertRaisesRegex(PublicationError, "outside admitted plan"):
+            publishing._source(self.root, self.provider, self.ledger, self.plan, removed)
+        self.assertEqual(self.provider.writes, [])
+
     def test_audience_cannot_be_producer_or_replace_exact_retained_assessment(self):
         _, _, prepared, report = self.setup_publication()
         with self.assertRaisesRegex(PublicationError, "independent"):
