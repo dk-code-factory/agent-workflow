@@ -11,16 +11,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
@@ -112,6 +115,10 @@ type fakeContainer struct {
 	code                   int
 	startDelayInspections  int
 	mu                     sync.Mutex
+	commandContext         context.Context
+	cancelCommands         context.CancelFunc
+	commands               sync.WaitGroup
+	commandsClosed         bool
 }
 type fakeExec struct {
 	env     []string
@@ -123,6 +130,7 @@ type fakeExec struct {
 	code    int
 }
 type workflowDocker struct {
+	commandContext        context.Context
 	commandTimeout        time.Duration
 	imageReferences       []string
 	helper                func([]string, []byte, []string) ([]byte, []byte, int, bool)
@@ -174,13 +182,23 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 	if len(args) == 0 {
 		return nil, []byte("no command"), 127
 	}
-	cmd := exec.Command(args[0], args[1:]...)
-	if d.commandTimeout > 0 {
-		ctx, cancel := context.WithTimeout(d.t.Context(), d.commandTimeout)
-		defer cancel()
-		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
-		cmd.WaitDelay = time.Second
+	c.mu.Lock()
+	if c.commandsClosed {
+		c.mu.Unlock()
+		return nil, []byte("container was removed"), 127
 	}
+	c.commands.Add(1)
+	c.mu.Unlock()
+	defer c.commands.Done()
+	timeout := d.commandTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.commandContext, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	process.Configure(cmd)
+	cmd.WaitDelay = time.Second
 	if dir == "" {
 		dir = "/workspace"
 	}
@@ -203,6 +221,19 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 		}
 	}
 	return []byte(stdout.String()), []byte(stderr.String()), code
+}
+
+func (c *fakeContainer) stopCommands() {
+	c.mu.Lock()
+	c.commandsClosed = true
+	c.cancelCommands()
+	select {
+	case <-c.removed:
+	default:
+		close(c.removed)
+	}
+	c.mu.Unlock()
+	c.commands.Wait()
 }
 func fakeStream(w http.ResponseWriter) (net.Conn, error) {
 	conn, buf, err := w.(http.Hijacker).Hijack()
@@ -289,6 +320,7 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			d.t.Error(err)
 		}
 		c := &fakeContainer{id: id, name: r.URL.Query().Get("name"), dir: dir, workingDir: q.WorkingDir, env: q.Env, labels: q.Labels, argv: argv, resident: len(argv) > 1 && argv[1] == "__container_idle_v1", started: make(chan struct{}), done: make(chan struct{}), removed: make(chan struct{}), startDelayInspections: d.startDelayInspections}
+		c.commandContext, c.cancelCommands = context.WithCancel(d.commandContext)
 		if d.stallOnce && d.stallPhase == "running" {
 			d.startDelayInspections = 0
 		}
@@ -376,8 +408,8 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		delete(d.containers, c.id)
 		delete(d.containers, c.name)
-		close(c.removed)
 		d.mu.Unlock()
+		c.stopCommands()
 		w.WriteHeader(204)
 		return
 	}
@@ -478,7 +510,8 @@ func containerExecutor(t *testing.T) (*Executor, *SQLiteStore, *workflowDocker) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	d := &workflowDocker{t: t, root: root, workspace: workspace, containers: map[string]*fakeContainer{}, execs: map[string]*fakeExec{}}
+	commandContext, cancelCommands := context.WithCancel(t.Context())
+	d := &workflowDocker{t: t, commandContext: commandContext, root: root, workspace: workspace, containers: map[string]*fakeContainer{}, execs: map[string]*fakeExec{}}
 	socket := filepath.Join(t.TempDir(), "api.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -486,7 +519,19 @@ func containerExecutor(t *testing.T) (*Executor, *SQLiteStore, *workflowDocker) 
 	}
 	server := &http.Server{Handler: http.HandlerFunc(d.serve)}
 	go server.Serve(listener)
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() {
+		cancelCommands()
+		_ = server.Close()
+		d.mu.Lock()
+		remaining := make(map[*fakeContainer]bool)
+		for _, container := range d.containers {
+			remaining[container] = true
+		}
+		d.mu.Unlock()
+		for container := range remaining {
+			container.stopCommands()
+		}
+	})
 	t.Setenv("DOCKER_HOST", "unix://"+socket)
 	t.Setenv("DOCKER_CONTEXT", "")
 	directory := filepath.Join(root, "guardians")
@@ -508,6 +553,103 @@ func containerExecutor(t *testing.T) (*Executor, *SQLiteStore, *workflowDocker) 
 		t.Fatal(err)
 	}
 	return &Executor{WorkspaceDir: workspace, Store: store, MaxParallel: 1, Slots: make(chan struct{}, 1), ContainerGuardianDirectory: directory}, store, d
+}
+
+func TestWorkflowDockerBlockedCommand(t *testing.T) {
+	ready := os.Getenv("WORKFLOW_DOCKER_BLOCKED_COMMAND_PID")
+	if ready == "" {
+		return
+	}
+	if err := os.WriteFile(ready, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(ready + ".stop"); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWorkflowDockerRemovalJoinsBlockedCommand(t *testing.T) {
+	_, _, d := containerExecutor(t)
+	created := httptest.NewRecorder()
+	d.serve(created, httptest.NewRequest(http.MethodPost, "/containers/create?name=blocked-fixture", strings.NewReader(`{}`)))
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status=%d: %s", created.Code, created.Body.String())
+	}
+	d.mu.Lock()
+	c := d.containers["blocked-fixture"]
+	d.mu.Unlock()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.actions = filepath.Dir(self)
+	pidFile := filepath.Join(t.TempDir(), "owned-command.pid")
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		d.command(c, []string{"/actions/" + filepath.Base(self), "-test.run=^TestWorkflowDockerBlockedCommand$"}, nil, d.workspace,
+			[]string{"WORKFLOW_DOCKER_BLOCKED_COMMAND_PID=" + pidFile})
+	}()
+	// Independently own the reproducer: even the prior fixture must kill and
+	// join this exact child on every assertion path, before temporary cleanup.
+	t.Cleanup(func() {
+		_ = os.WriteFile(pidFile+".stop", nil, 0600)
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		data, readErr := os.ReadFile(pidFile)
+		if readErr == nil {
+			pid, parseErr := strconv.Atoi(string(data))
+			if parseErr == nil {
+				owned, findErr := os.FindProcess(pid)
+				if findErr == nil {
+					_ = owned.Kill()
+				}
+			}
+		}
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("owned fixture subprocess did not join after independent cleanup")
+		}
+	})
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		if _, err = os.Stat(pidFile); err == nil {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("owned fixture command did not start")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	removed := make(chan int, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		d.serve(response, httptest.NewRequest(http.MethodDelete, "/containers/"+c.id, nil))
+		removed <- response.Code
+	}()
+	select {
+	case code := <-removed:
+		if code != http.StatusNoContent {
+			t.Fatalf("remove status=%d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("fixture removal did not finish")
+	}
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fixture removal returned before its blocked subprocess exited")
+	}
 }
 func TestSharedJobStateSiblingIsolationCapacityAndCleanup(t *testing.T) {
 	e, store, d := containerExecutor(t)
