@@ -1,0 +1,58 @@
+name: PR fix one admitted attempt v1
+on:
+  workflow_call:
+    inputs:
+      plan: {type: string, required: true}
+      occurrence: {type: string, required: true}
+      cycle: {type: string, required: true}
+      payload: {type: string, default: ''}
+      attempt: {type: number, required: true}
+    outputs:
+      settled: {value: '${{ jobs.result.outputs.settled }}'}
+      claim: {value: '${{ jobs.claim.outputs.claim }}'}
+jobs:
+  claim:
+    outputs:
+      claim: ${{ steps.claim.outputs.claim }}
+      invoke: ${{ steps.claim.outputs.invoke }}
+    steps:
+      - id: claim
+        uses: action/prfix_claim
+        with:
+          plan: ${{ inputs.plan }}
+          occurrence: ${{ inputs.occurrence }}
+          cycle: ${{ inputs.cycle }}
+          payload: ${{ inputs.payload }}
+          attempt: ${{ inputs.attempt }}
+  primary:
+    needs: claim
+    if: ${{ needs.claim.outputs.invoke }}
+    uses: workflows/pr-fix/v1/turn.yml
+    with: {plan: '${{ inputs.plan }}', claim: '${{ needs.claim.outputs.claim }}', round: 0}
+  finish:
+    needs: [claim, primary]
+    if: ${{ needs.claim.status == 'succeeded' and needs.primary.status != 'failed' and needs.primary.status != 'needs_attention' and needs.primary.status != 'canceled' }}
+    outputs:
+      recheck: ${{ steps.finish.outputs.recheck }}
+    steps:
+      - id: finish
+        uses: action/prfix_finish
+        with: {plan: '${{ inputs.plan }}', claim: '${{ needs.claim.outputs.claim }}', round: 0}
+  checklist:
+    needs: [claim, finish]
+    if: ${{ needs.finish.outputs.recheck }}
+    uses: workflows/pr-fix/v1/check.yml
+    repeat: {max-attempts: 3, until: '${{ iteration.outputs.settled }}'}
+    with: {plan: '${{ inputs.plan }}', claim: '${{ needs.claim.outputs.claim }}', round: '${{ iteration.number }}'}
+  result:
+    needs: [claim, finish, checklist]
+    if: ${{ needs.finish.status == 'succeeded' and needs.checklist.status != 'failed' and needs.checklist.status != 'needs_attention' and needs.checklist.status != 'canceled' }}
+    outputs:
+      settled: ${{ steps.result.outputs.settled }}
+    steps:
+      - id: result
+        uses: action/prfix_status
+        with: {plan: '${{ inputs.plan }}', claim: '${{ needs.claim.outputs.claim }}'}
+      - id: commit
+        uses: action/prfix_commit
+        with: {plan: '${{ inputs.plan }}', claim: '${{ needs.claim.outputs.claim }}'}

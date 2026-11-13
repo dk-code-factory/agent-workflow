@@ -8,9 +8,9 @@ jobs:
     steps:
       - id: greeting
         name: Shared step
-        uses: agent/claude
-        with: {prompt: Needle prompt from build}
-      - argv: [echo, Needle direct command]
+        uses: agent/run
+        with: { prompt: Needle prompt from build, agent: claude.toml }
+      - argv: [ echo, Needle direct command ]
       - id: deploy
         name: Deploy shell
         shell: sh
@@ -21,12 +21,12 @@ jobs:
     steps:
       - id: greeting
         name: Shared step
-        uses: agent/claude
-        with: {prompt: Needle prompt from test}
+        uses: agent/run
+        with: { prompt: Needle prompt from test, agent: claude.toml }
   docs:
     needs: test
     steps:
-      - argv: [echo, documentation]
+      - argv: [ echo, documentation ]
 `;
 const results = (ui: Locator) => ui.getByRole('list', { name: 'Workflow search results' });
 const search = (ui: Locator) => ui.getByLabel('Search workflow', { exact: true });
@@ -104,7 +104,7 @@ test('activate duplicate names with Tab, arrows, Enter and Space and reveal YAML
   await expect(ui.getByRole('button', { name: 'Expand test', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await expect(buttons.nth(1)).toBeFocused();
   await expectStepInCanvas(ui, 'test', 0);
-  await expect(ui.locator('.cm-line').filter({ hasText: 'with: {prompt: Needle prompt from test}' })).toBeInViewport();
+  await expect(ui.locator('.cm-line').filter({ hasText: 'with: { prompt: Needle prompt from test, agent: claude.toml }' })).toBeInViewport();
   await page.keyboard.press('ArrowUp'); await page.keyboard.press('Space');
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Needle prompt from build');
   await expectStepInCanvas(ui, 'build', 0);

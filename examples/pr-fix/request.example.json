@@ -1,0 +1,71 @@
+{
+  "pr": "https://github.com/OWNER/REPOSITORY/pull/123",
+  "instructions": "Replace this text with the exact original user instruction and its agreed scope.",
+  "image": "registry.example.com/team/python-git-gh@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "roles": {
+    "leaf": "examples/pr-fix/workflows/agents/leaf.toml",
+    "reviewer": "examples/pr-fix/workflows/agents/reviewer.toml",
+    "verifier": "examples/pr-fix/workflows/agents/verifier.toml",
+    "fixer": "examples/pr-fix/workflows/agents/fixer.toml",
+    "audience": "examples/pr-fix/workflows/agents/audience.toml"
+  },
+  "runtime": {
+    "sandbox": "workspace-write",
+    "authentication": {"mode": "native"}
+  },
+  "options": {
+    "tasks": [
+      "dk-workflows:dk-pr-feedback-read",
+      "dk-workflows:dk-pr-decisions",
+      "dk-workflows:dk-pr-feedback-address",
+      "dk-workflows:dk-pr-publish",
+      "dk-workflows:dk-pr-split",
+      "dk-workflows:dk-pr-description",
+      "dk-workflows:dk-pr-reviewers-run",
+      "dk-workflows:dk-pr-publish"
+    ],
+    "finalizers": [
+      "dk-workflows:dk-commit-split",
+      "dk-workflows:dk-preferences",
+      "dk-workflows:dk-ci"
+    ],
+    "reviewers": [{"skill": "local:review"}],
+    "permissions": {
+      "push_commits": false,
+      "rewrite_commits": false,
+      "edit_pr": false,
+      "reply_to_feedback": false,
+      "resolve_threads": false,
+      "create_draft_prs": false,
+      "request_review": false
+    },
+    "limits": {
+      "review_cycles": 5,
+      "retries_per_task": 1,
+      "ci_repairs_per_cycle": 5,
+      "ci_reruns_per_head": 3
+    },
+    "ci": {"timeout_seconds": 1800},
+    "merge_method": "merge"
+  },
+  "adapters": {
+    "local:review": {
+      "kind": "review",
+      "definition": "reviewer",
+      "writes": false,
+      "assignment": "Review the actual changes against the originating issue, documented repository standards and accepted user scope. Return supported actionable findings or an evidenced no-findings report.",
+      "checklist": [
+        {"id": "assignment", "text": "Inspect the actual diff and originating requirements."},
+        {"id": "evidence", "text": "Verify source evidence and every concrete finding."},
+        {"id": "scope", "text": "Account for repository rules, changed tests and unresolved checks."}
+      ],
+      "resources": [],
+      "history": false,
+      "head_sensitive": false,
+      "cacheable": true
+    }
+  },
+  "settings": {},
+  "resources": [],
+  "authorizations": {}
+}

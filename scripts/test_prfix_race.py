@@ -54,12 +54,17 @@ class PRFixRaceTests(unittest.TestCase):
 
 
 class MakeTestTargetTests(unittest.TestCase):
-    def run_target(self, packages, discovery_exit=0, test_exit=0):
+    portable_command = '-B -m unittest discover -s examples/pr-fix/tests -p test_*.py -v'
+    shard_command = 'scripts/prfix_race.py --all --shards 4'
+
+    def run_target(self, packages, discovery_exit=0, test_exit=0,
+                   portable_exit=0, shard_exit=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             go = root / 'go'
             go.write_text('''#!/bin/sh
 printf '%s\\n' "$*" >> "$GO_CALLS"
+printf 'go %s\\n' "$*" >> "$RUN_CALLS"
 case "$1" in
     list) printf '%s' "$DISCOVERED_PACKAGES"; exit "$DISCOVERY_EXIT" ;;
     test) exit "$TEST_EXIT" ;;
@@ -69,48 +74,86 @@ exit 1
             go.chmod(0o755)
             python = root / 'python3'
             python.write_text('''#!/bin/sh
-printf '%s\\n' "$*" >> "$SHARD_CALLS"
+printf '%s\\n' "$*" >> "$PYTHON_CALLS"
+printf 'python3 %s\\n' "$*" >> "$RUN_CALLS"
+case "$1" in
+    -B) exit "$PORTABLE_EXIT" ;;
+    scripts/prfix_race.py) exit "$SHARD_EXIT" ;;
+esac
+exit 1
 ''')
             python.chmod(0o755)
             go_calls = root / 'go-calls'
-            shard_calls = root / 'shard-calls'
+            python_calls = root / 'python-calls'
+            run_calls = root / 'run-calls'
             environment = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
-                               GO_CALLS=str(go_calls), SHARD_CALLS=str(shard_calls),
+                               GO_CALLS=str(go_calls), PYTHON_CALLS=str(python_calls),
+                               RUN_CALLS=str(run_calls), PORTABLE_EXIT=str(portable_exit),
+                               SHARD_EXIT=str(shard_exit),
                                DISCOVERED_PACKAGES=packages, DISCOVERY_EXIT=str(discovery_exit),
                                TEST_EXIT=str(test_exit))
             result = subprocess.run(['make', '--no-print-directory', '-s', '-f', str(ROOT / 'Makefile'), 'test'],
                                     cwd=root, env=environment, capture_output=True, text=True, timeout=10)
             return (result.returncode,
                     go_calls.read_text().splitlines() if go_calls.exists() else [],
-                    shard_calls.read_text().splitlines() if shard_calls.exists() else [])
+                    python_calls.read_text().splitlines() if python_calls.exists() else [],
+                    run_calls.read_text().splitlines() if run_calls.exists() else [])
 
-    def test_package_discovery_failure_stops_before_running_any_suite(self):
+    def test_package_discovery_failure_stops_before_go_tests_and_shards(self):
         for output in ['', 'example/root\nexample/root/pkg/prfix\n']:
             with self.subTest(output=output):
-                status, calls, shards = self.run_target(output, discovery_exit=1)
+                status, calls, python, sequence = self.run_target(output, discovery_exit=1)
                 self.assertNotEqual(status, 0)
                 self.assertEqual(calls, ['list ./...'])
-                self.assertEqual(shards, [])
+                self.assertEqual(python, [self.portable_command])
+                self.assertEqual(sequence, ['python3 ' + self.portable_command, 'go list ./...'])
 
-    def test_empty_package_selection_stops_before_running_any_suite(self):
+    def test_empty_package_selection_stops_before_go_tests_and_shards(self):
         for output in ['', 'example/root/pkg/prfix\n']:
             with self.subTest(output=output):
-                status, calls, shards = self.run_target(output)
+                status, calls, python, sequence = self.run_target(output)
                 self.assertNotEqual(status, 0)
                 self.assertEqual(calls, ['list ./...'])
-                self.assertEqual(shards, [])
+                self.assertEqual(python, [self.portable_command])
+                self.assertEqual(sequence, ['python3 ' + self.portable_command, 'go list ./...'])
 
-    def test_success_runs_non_prfix_packages_then_all_shards(self):
-        status, calls, shards = self.run_target('example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n')
+    def test_success_runs_portable_then_non_prfix_packages_then_all_shards(self):
+        status, calls, python, sequence = self.run_target('example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n')
         self.assertEqual(status, 0)
         self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root example/root/pkg/other'])
-        self.assertEqual(shards, ['scripts/prfix_race.py --all --shards 4'])
+        self.assertEqual(python, [self.portable_command, self.shard_command])
+        self.assertEqual(sequence, [
+            'python3 ' + self.portable_command, 'go list ./...',
+            'go test -race -timeout 60m example/root example/root/pkg/other',
+            'python3 ' + self.shard_command,
+        ])
 
     def test_non_prfix_failure_stops_before_shards(self):
-        status, calls, shards = self.run_target('example/root\n', test_exit=1)
+        status, calls, python, sequence = self.run_target('example/root\n', test_exit=1)
         self.assertNotEqual(status, 0)
         self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root'])
-        self.assertEqual(shards, [])
+        self.assertEqual(python, [self.portable_command])
+        self.assertEqual(sequence, [
+            'python3 ' + self.portable_command, 'go list ./...',
+            'go test -race -timeout 60m example/root',
+        ])
+
+    def test_portable_failure_stops_before_package_discovery_and_go_suites(self):
+        status, calls, python, sequence = self.run_target('example/root\n', portable_exit=1)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(python, [self.portable_command])
+        self.assertEqual(sequence, ['python3 ' + self.portable_command])
+
+    def test_shard_failure_is_preserved_after_successful_prerequisites(self):
+        status, calls, python, sequence = self.run_target('example/root\n', shard_exit=1)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root'])
+        self.assertEqual(python, [self.portable_command, self.shard_command])
+        self.assertEqual(sequence, [
+            'python3 ' + self.portable_command, 'go list ./...',
+            'go test -race -timeout 60m example/root', 'python3 ' + self.shard_command,
+        ])
 
 
 if __name__ == '__main__':

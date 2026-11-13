@@ -1,0 +1,32 @@
+on:
+  workflow_call:
+    inputs:
+      value: {type: string, required: true}
+      operation_id: {type: string, required: true}
+jobs:
+  capture:
+    container:
+      image: python:3.13-slim
+      files: [client.py, helper.py]
+    steps:
+      - id: capture
+        argv: [python3, -B, /actions/helper.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema:
+          type: object
+          properties:
+            value: {type: string}
+            operation_id: {type: string}
+          required: [value, operation_id]
+          additionalProperties: false
+        output-schema:
+          type: object
+          properties:
+            value: {type: string}
+            fingerprint: {type: string}
+          required: [value, fingerprint]
+          additionalProperties: false
+        input:
+          value: ${{ inputs.value }}
+          operation_id: ${{ inputs.operation_id }}

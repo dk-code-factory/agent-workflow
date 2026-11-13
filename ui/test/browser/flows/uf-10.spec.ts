@@ -16,4 +16,8 @@ test('canvas connections create dependencies and reject cycles', async ({ page }
   await expect.poll(() => page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.test.needs)).toEqual(['build']);
   await connect('test', 'build'); await expect(first.getByRole('alert')).toContainText('cycle');
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.needs)).toBeUndefined();
+  const jobs = await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs);
+  expect(jobs.build.steps).toEqual([{ argv: ['echo'] }]);
+  expect(jobs.test.steps).toEqual([{ argv: ['echo'] }]);
+  expect(jobs.test.needs).toEqual(['build']);
 });

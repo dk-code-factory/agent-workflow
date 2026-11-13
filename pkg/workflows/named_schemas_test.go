@@ -21,15 +21,17 @@ jobs:
   review:
     steps:
       - id: first
-        uses: agent/reviewer
+        uses: agent/run
         with:
           prompt: Review
           output: {format: json, schema: Review, repair-attempts: 0}
+          agent: reviewer.toml
       - id: second
-        uses: agent/reviewer
+        uses: agent/run
         with:
           prompt: Review again
           output: {schema: Review}
+          agent: reviewer.toml
 `
 
 func TestNamedSchemasAcceptEquivalentIntegerBounds(t *testing.T) {
@@ -86,23 +88,18 @@ func TestNamedSchemasReuseAndInlineEquivalence(t *testing.T) {
 	root := t.TempDir()
 	writeWorkflow(t, root, "main.yml", namedReviewWorkflow)
 	var calls atomic.Int32
-	e := Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		index := calls.Add(1)
 		if req.Output == nil || len(req.Output.Schema) == 0 || (index == 1 && req.Output.RepairAttempts != 0) || (index == 2 && req.Output.RepairAttempts != 1) {
 			return nil, errors.New("named contract was not supplied to runner")
 		}
 		return map[string]any{"text": `{"approved":true}`}, nil
-	})}
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	})})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || calls.Load() != 2 || run.Jobs["review"].Steps["second"].Outputs["structured"].(map[string]any)["approved"] != true {
 		t.Fatalf("named execution: %+v %v calls=%d", run, err, calls.Load())
 	}
-	calls.Store(0)
-	writeWorkflow(t, root, "main.yml", strings.ReplaceAll(namedReviewWorkflow, "uses: agent/reviewer", "agent: reviewer"))
-	run, err = e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
-	if err != nil || calls.Load() != 2 || run.Jobs["review"].Steps["second"].Outputs["structured"].(map[string]any)["approved"] != true {
-		t.Fatalf("concise named execution: %+v %v calls=%d", run, err, calls.Load())
-	}
+
 }
 
 func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {
@@ -127,10 +124,10 @@ func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {
 			root := t.TempDir()
 			writeWorkflow(t, root, "main.yml", strings.Replace(namedReviewWorkflow, tc.old, tc.replacement, 1))
 			var calls atomic.Int32
-			_, err := (&Executor{WorkspaceDir: root, Agents: agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+			_, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 				calls.Add(1)
 				return map[string]any{}, nil
-			})}).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			})})).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || !strings.Contains(err.Error(), tc.diagnostic) || calls.Load() != 0 {
 				t.Fatalf("want %q before effects, got %v calls=%d", tc.diagnostic, err, calls.Load())
 			}
@@ -152,14 +149,14 @@ func TestNamedSchemasReusableScope(t *testing.T) {
 	child := "on: {workflow_call: {}}\n" + namedReviewWorkflow
 	writeWorkflow(t, root, "child.yml", child)
 	var calls atomic.Int32
-	e := Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
+	e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, Agents: agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		if req.Output.Schema["type"] != "object" {
 			return nil, errors.New("caller schema shadowed callee")
 		}
 		return map[string]any{"text": `{"approved":true}`}, nil
-	})}
-	if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil || calls.Load() != 2 {
+	})})
+	if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err != nil || calls.Load() != 2 {
 		t.Fatal(err, calls.Load())
 	}
 	writeWorkflow(t, root, "child.yml", "on: {workflow_call: {}}\n"+namedReviewWorkflow[strings.Index(namedReviewWorkflow, "jobs:"):])
@@ -181,14 +178,14 @@ func TestNamedSchemasResumeKeepsAdmittedContract(t *testing.T) {
 		return map[string]any{"text": `{"approved":true}`}, nil
 	}))
 	ctx := context.Background()
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusFailed || calls.Load() != 2 {
 		t.Fatal(run, err, calls.Load())
 	}
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", strings.Replace(namedReviewWorkflow, "type: object", "type: string", 1))
 	// A fresh executor reads the durable definition snapshot, not the changed file.
-	fresh := &Executor{WorkspaceDir: e.WorkspaceDir, Store: store, Agents: e.Agents}
-	done, err := fresh.Resume(ctx, run.ID, nil, true)
+	fresh := nativeTestExecutor(t, &Executor{WorkspaceDir: e.WorkspaceDir, Store: store, Agents: e.Agents})
+	done, err := nativeTestExecutor(t, fresh).Resume(ctx, run.ID, nil, true)
 	if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 3 {
 		t.Fatalf("resume: %+v %v calls=%d", done, err, calls.Load())
 	}

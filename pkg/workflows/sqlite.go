@@ -23,22 +23,24 @@ const RunStatusNeedsAttention = "needs_attention"
 // Snapshot is the admitted definition closure and nonsecret execution context.
 // Credentials are resolved again on resume; values never belong here.
 type Snapshot struct {
-	ActionContracts map[string]ActionContract `json:"application_actions,omitempty"`
-	Execution       runtimeexec.Policy        `json:"execution,omitempty"`
-	Metadata        map[string]any            `json:"metadata,omitempty"`
-	Version         int                       `json:"version"`
-	Definitions     map[string]*Workflow      `json:"definitions"`
-	Hashes          map[string]string         `json:"hashes"`
-	Inputs          map[string]any            `json:"inputs,omitempty"`
-	Event           map[string]any            `json:"event,omitempty"`
-	SecretRefs      map[string]string         `json:"secret_refs,omitempty"`
-	RequestID       string                    `json:"request_id,omitempty"`
-	RequiredSecrets []string                  `json:"required_secrets,omitempty"`
-	Roles           json.RawMessage           `json:"roles,omitempty"`
-	Parallel        int                       `json:"parallel"`
+	CredentialAliases map[string]string         `json:"credential_aliases,omitempty"`
+	ActionContracts   map[string]ActionContract `json:"application_actions,omitempty"`
+	Execution         runtimeexec.Policy        `json:"execution,omitempty"`
+	Metadata          map[string]any            `json:"metadata,omitempty"`
+	Version           int                       `json:"version"`
+	Definitions       map[string]*Workflow      `json:"definitions"`
+	Hashes            map[string]string         `json:"hashes"`
+	Inputs            map[string]any            `json:"inputs,omitempty"`
+	Event             map[string]any            `json:"event,omitempty"`
+	SecretRefs        map[string]string         `json:"secret_refs,omitempty"`
+	RequestID         string                    `json:"request_id,omitempty"`
+	RequiredSecrets   []string                  `json:"required_secrets,omitempty"`
+	Roles             json.RawMessage           `json:"roles,omitempty"`
+	Parallel          int                       `json:"parallel"`
 }
 
 type Attempt struct {
+	AgentTask        *AgentTaskDispatch `json:"agent_task,omitempty"`
 	Conversation     *ConversationState `json:"conversation,omitempty"`
 	InputFingerprint string             `json:"input_fingerprint,omitempty"`
 	Phase            string             `json:"phase,omitempty"`
@@ -140,7 +142,7 @@ func newID() string { // crypto/rand is shared with the executor's admission hel
 	return randomID()
 }
 func snapshotFor(all map[string]*Workflow, req RunRequest, roles json.RawMessage, parallel int) (Snapshot, error) {
-	s := Snapshot{RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
+	s := Snapshot{CredentialAliases: req.credentialAliases, RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
 	s.Execution = req.Execution
 	s.ActionContracts = req.actionContracts
 	for k, w := range all {
@@ -188,6 +190,12 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO runs(id,status,record,snapshot,updated,origin_id,generation,owner,admitted) VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano), originID(r, snap), r.Generation, r.Owner, time.Now().UTC().UnixNano()); err != nil {
+		return err
+	}
+	if err = s.linkTaskGroup(ctx, tx, r, snap); err != nil {
+		return err
+	}
+	if err = s.linkHelperAssets(ctx, tx, r, snap); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO executions(run_id,generation,retry_uncertain,admitted,status,record) VALUES(?,?,0,?,?,?)", r.ID, r.Generation, time.Now().UTC().UnixNano(), r.Status, b); err != nil {
@@ -365,8 +373,9 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 	if (phase == "orchestration" || phase == "conversation") && last.Conversation != nil {
 		a.Conversation = last.Conversation
 	}
-	if schemaPhase(last.Phase) {
+	if schemaPhase(last.Phase) && (fingerprint == "" || last.InputFingerprint == fingerprint) {
 		a.Phase = last.Phase
+		a.AgentTask = last.AgentTask
 		a.TaskAttemptID = last.TaskAttemptID
 		a.TaskOutputs = last.TaskOutputs
 		a.RepairCount = last.RepairCount

@@ -74,7 +74,7 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
-Concise YAML agent steps use `agent: ROLE` and a top-level string `prompt`, with optional `with` settings such as `model`, `message`, `workspace`, and `output`. Imported concise steps use the normal agent inspector and graph labels; prompt and role edits preserve the concise spelling. Changing between agents retains prompts and options. Converting to a command or controller action confirms discarded fields and removes incompatible shorthand. The browser rejects competing `agent`/`uses` or `prompt`/`with.prompt` declarations; top-level `prompt` requires `agent` or `conversation`. Prompt expressions participate in reference diagnostics, renames, and result wiring; the agent role remains a literal identifier.
+Agent tasks use `uses: agent/run` with `with.agent` naming a native Codex TOML definition or an expression returning an opaque agent reference. The inspector edits the definition reference, prompt, typed input, output contract, and all six ordered hook lists. Conversion review, Undo/Redo, and export preserve these declarations. Removed shorthand and role targets produce diagnostics. See [native agent tasks](../docs/AGENT_TASKS.md).
 
 Choose **Conversation** to author a bounded conversation among 2–16 declared
 roles. **Participants (YAML)** lists role IDs; **Starter** defaults to the first,
@@ -166,7 +166,7 @@ Host definitions change labels and authoring forms; they do not register runner 
 
 ```ts
 const actions = [{
-  uses: 'agent/claude',
+  uses: 'agent/run',
   label: 'Reviewer',
   fields: [{ key: 'model', label: 'Review model', type: 'text' }],
   renderInspector(element, context) {

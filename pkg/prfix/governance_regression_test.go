@@ -52,8 +52,8 @@ func TestMutatingClaimsRecaptureTheirResourcesAndPreferences(t *testing.T) {
 			req.Options["tasks"] = []any{map[string]any{"skill": "custom:fix"}, map[string]any{"skill": "custom:other"}}
 			req.Authorizations = map[string]Authorization{"iterate": {"fix", "Fix and publish this PR.", "chat:fix"}}
 			req.Adapters = map[string]Adapter{
-				"custom:fix":   {Identity: "custom:fix", Version: "v1", Kind: tc.kind, Writes: []string{"code.txt"}, Resources: []string{own}, Procedure: [][]Pass{{{ID: "fix", Role: "leaf", Assignment: "Fix only the assigned scope.", Evidence: []string{"original"}}}}},
-				"custom:other": {Identity: "custom:other", Version: "v1", Kind: "inspection", Resources: []string{other}, Procedure: [][]Pass{{{ID: "read", Role: "leaf", Assignment: "Read this independent resource.", Evidence: []string{"original"}}}}},
+				"custom:fix":   {Identity: "custom:fix", Version: "v1", Kind: tc.kind, Writes: []string{"code.txt"}, Resources: []string{own}, Procedure: [][]Pass{{{ID: "fix", Role: "codex", Assignment: "Fix only the assigned scope.", Evidence: []string{"original"}}}}},
+				"custom:other": {Identity: "custom:other", Version: "v1", Kind: "inspection", Resources: []string{other}, Procedure: [][]Pass{{{ID: "read", Role: "codex", Assignment: "Read this independent resource.", Evidence: []string{"original"}}}}},
 			}
 			prepared, err := Prepare(context.Background(), root, provider, req)
 			if err != nil {

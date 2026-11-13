@@ -1,0 +1,5 @@
+# Required by the stock CLI configuration format; this example calls no agent.
+agents:
+  unused:
+    provider: codex-cli
+    execution: {mode: local}

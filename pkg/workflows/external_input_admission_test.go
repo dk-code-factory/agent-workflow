@@ -23,9 +23,9 @@ func TestInputContinuationBlockedOldestMakesBoundedProgress(t *testing.T) {
 			e, s := durableExecutor(t, `jobs:
   decide:
     steps:
-      - uses: agent/a
+      - uses: agent/run
         continue-on-error: true
-        with: {prompt: preparation}
+        with: {prompt: preparation, agent: a.toml}
       - uses: input/wait
         with: {prompt: q, evidence-id: e}
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
@@ -36,7 +36,7 @@ func TestInputContinuationBlockedOldestMakesBoundedProgress(t *testing.T) {
 			}))
 			var runs []*Run
 			for i := 0; i < 2; i++ {
-				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 				if err != nil || run.Status != RunStatusWaiting {
 					t.Fatal(run, err)
 				}
@@ -77,13 +77,17 @@ func TestInputContinuationBlockedOldestMakesBoundedProgress(t *testing.T) {
 			if _, err = s.QueueResume(ctx, blocked.ID, "", false, slots); err == nil || err.Error() != diagnostic {
 				t.Fatal("explicit retry guard weakened", err)
 			}
-			done, err := e.Resume(ctx, later.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(ctx, later.ID, nil, false)
 			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 2 {
 				t.Fatal("unrelated continuation replayed preparation", done, err, calls.Load())
 			}
-			done, err = e.Resume(ctx, blocked.ID, nil, true)
+			done, err = nativeTestExecutor(t, e).Resume(ctx, blocked.ID, nil, true)
 			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 3 {
 				t.Fatal("acknowledged retry did not retain answer", done, err, calls.Load())
+			}
+			gate = inputGate(t, s, blocked.ID)
+			if gate.State != "consumed" || gate.Answer == nil || string(gate.Answer.Value) != `"approved"` || len(gate.History) != 3 || gate.History[1].State != "accepted" {
+				t.Fatal("explicit task retry changed the accepted answer", gate)
 			}
 		})
 	}
@@ -94,7 +98,7 @@ func TestInputContinuationOnlyKnownGuardsPublishAttention(t *testing.T) {
 		t.Run(guard, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -302,7 +306,7 @@ func TestInputContinuationPartialAnswersRemainWaiting(t *testing.T) {
   a: {steps: [{uses: input/wait, with: {prompt: a, evidence-id: e}}]}
   b: {steps: [{uses: input/wait, with: {prompt: b, evidence-id: e}}]}
 `, nil)
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +384,7 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 	})
 	t.Run("existing v10 opens without mutation then owned repair", func(t *testing.T) {
 		e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-		run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+		run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -487,7 +491,7 @@ func TestInputContinuationEligibilityIndexMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.Close()
-		if _, err = s.db.Exec(`DROP TABLE worker_waits; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9`); err != nil {
+		if _, err = s.db.Exec(dropTaskStateFixtureSchema + "DROP TABLE worker_waits; " + `DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9`); err != nil {
 			t.Fatal(err)
 		}
 		lock, err := ownership.Own(s.Dir)
@@ -527,7 +531,7 @@ func TestInputGateRunIndexCoversRetention(t *testing.T) {
 	e, s := durableExecutor(t, `jobs: {left: {uses: workflows/child.yml}, right: {uses: workflows/child.yml}}`, nil)
 	writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
 jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`)
-	closure, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	closure, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +604,7 @@ func TestInputGateRequiredIndexesRepairCurrentBackup(t *testing.T) {
 		t.Run(missing, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			first, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			first, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -626,7 +630,7 @@ func TestInputGateRequiredIndexesRepairCurrentBackup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			current, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			current, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}

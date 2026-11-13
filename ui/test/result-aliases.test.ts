@@ -8,10 +8,10 @@ const workflow = {
   on: { workflow_call: { outputs: { answer: { value: '${{ jobs.review.steps.analyze.approved }}' } } } },
   jobs: {
     review: { steps: [
-      { id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } } } } },
-      { id: 'finish', agent: 'claude', prompt: '${{ steps.analyze.approved }}' },
+      {id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } } }, prompt: 'Review'}},
+      {id: 'finish', uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ steps.analyze.approved }}'}},
     ] },
-    summarize: { needs: ['review'], steps: [{ agent: 'claude', prompt: '${{ needs.review.steps.analyze.details.reason }}' }] },
+    summarize: { needs: ['review'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ needs.review.steps.analyze.details.reason }}'}}] },
   },
 };
 
@@ -20,8 +20,8 @@ describe('named step result references', () => {
     const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
     doc.renameStep('review', 0, 'inspect'); doc.renameJob('review', 'check');
     const snapshot = doc.getSnapshot();
-    expect(snapshot.workflow!.jobs.check.steps![1].prompt).toBe('${{ steps.inspect.approved }}');
-    expect(snapshot.workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.check.steps.inspect.details.reason }}');
+    expect(snapshot.workflow!.jobs.check.steps![1].with!.prompt).toBe('${{ steps.inspect.approved }}');
+    expect(snapshot.workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.check.steps.inspect.details.reason }}');
     expect(snapshot.workflow!.on).toMatchObject({ workflow_call: { outputs: { answer: { value: '${{ jobs.check.steps.inspect.approved }}' } } } });
     expect(snapshot.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     doc.undo(); doc.undo(); expect(doc.getSnapshot().source).toBe(JSON.stringify(workflow));
@@ -29,17 +29,18 @@ describe('named step result references', () => {
   it('does not confuse a cross-job step output with an explicit job output', () => {
     const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
     doc.setField(['jobs', 'review', 'outputs', 'text'], 'declared');
-    doc.setField(['jobs', 'summarize', 'steps', 0, 'prompt'], '${{ needs.review.outputs.text }} ${{ needs.review.steps.analyze.outputs.text }}');
+    doc.setField(['jobs', 'summarize', 'steps', 0, 'with', 'prompt'], '${{ needs.review.outputs.text }} ${{ needs.review.steps.analyze.outputs.text }}');
     doc.renameEntry(['jobs', 'review', 'outputs', 'text'], 'report');
-    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.outputs.report }} ${{ needs.review.steps.analyze.outputs.text }}');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.review.outputs.report }} ${{ needs.review.steps.analyze.outputs.text }}');
     doc.renameStep('review', 0, 'inspect');
-    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.outputs.report }} ${{ needs.review.steps.inspect.outputs.text }}');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.review.outputs.report }} ${{ needs.review.steps.inspect.outputs.text }}');
   });
   it('preserves implicit step identity through reorder and includes dependent references in deletion review', () => {
-    const doc = new WorkflowDocument({ source: 'jobs: {review: {steps: [{argv: [echo]}, {argv: [echo]}]}, summarize: {needs: review, steps: [{agent: claude, prompt: "${{ needs.review.steps.step_1.text }}"}]}}' });
+    const doc = new WorkflowDocument({ source: `jobs: { review: { steps: [ { argv: [ echo ] }, { argv: [ echo ] } ] }, summarize: { needs: review, steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: "\${{ needs.review.steps.step_1.text }}" } } ] } }
+` });
     doc.moveStep('review', 0, 1);
     expect(doc.getSnapshot().workflow!.jobs.review.steps!.map(step => step.id)).toEqual(['step_2', 'step_1']);
-    expect(doc.deletionImpact('review', 1)).toContainEqual(['jobs', 'summarize', 'steps', 0, 'prompt']);
+    expect(doc.deletionImpact('review', 1)).toContainEqual(['jobs', 'summarize', 'steps', 0, 'with', 'prompt']);
     expect(() => doc.deleteStep('review', 1)).toThrow('confirmation');
     doc.deleteStep('review', 1, true);
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', message: 'Unknown step "step_1" of job "review"' }));
@@ -61,9 +62,9 @@ describe('named step result references', () => {
     ['unknown dependency step', 'needs.review.steps.absent.text', 'summarize', 0],
   ])('diagnoses %s at its consuming field', (_label, expression, job, index) => {
     const value = structuredClone(workflow);
-    Object.assign(value.jobs, { isolated: { steps: [{ agent: 'claude', prompt: 'Read' }] } });
+    Object.assign(value.jobs, { isolated: { steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] } });
     const doc = new WorkflowDocument({ source: JSON.stringify(value) });
-    const path = ['jobs', job, 'steps', index, 'prompt'];
+    const path = ['jobs', job, 'steps', index, 'with', 'prompt'];
     doc.setField(path, '${{ ' + expression + ' }}');
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path, severity: 'error' }));
   });
@@ -91,11 +92,11 @@ describe('named step result references', () => {
         { id: 'command', argv: ['echo', 'ready'] },
         { id: 'shell', run: 'echo ready', shell: 'sh' },
         { id: 'controller', uses: 'workspace/create' },
-        { id: 'legacy', uses: 'agent/claude', with: { prompt: 'Review', output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } } } },
-        { id: 'concise', agent: 'claude', prompt: 'Summarize' },
-        { id: 'consume', agent: 'claude', prompt: 'Read' },
+        {id: 'legacy', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Review', output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } }}},
+        {id: 'concise', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Summarize'}},
+        {id: 'consume', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}},
       ] },
-      consumer: { needs: ['build'], steps: [{ agent: 'claude', prompt: 'Read' }] },
+      consumer: { needs: ['build'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
     } }));
     expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     for (const [suggestions, prefix] of [
@@ -109,6 +110,26 @@ describe('named step result references', () => {
       for (const id of ['command', 'shell', 'controller']) expect(suggestions).not.toContain(`${prefix}.${id}.text`);
     }
     expect(expressionSuggestions(parsed.workflow, 'build', 5)).toContain('steps.command.outputs.stdout');
+  });
+  it.each([false, true])('offers explicit helper outputs in every scope with named schema=%s', named => {
+    const schema = { type: 'object', properties: { head: { type: 'string' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } };
+    const helper = { id: 'helper', argv: ['helper'], protocol: 'action-v1' as const, effect: 'read_only' as const, 'input-schema': { type: 'object' }, 'output-schema': named ? 'Output' : schema };
+    const parsed = parseWorkflow(JSON.stringify({ schemas: { Output: schema }, jobs: {
+      build: { container: 'ubuntu:24.04', steps: [helper, { argv: ['echo', 'ready'] }] },
+      consumer: { needs: ['build'], steps: [{ argv: ['echo', 'ready'] }] },
+    } }));
+    expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(stepResultPaths(helper, parsed.workflow!.schemas)).toEqual(['outputs.head', 'outputs.details', 'outputs.details.reason', 'outputs.status']);
+    for (const [suggestions, base] of [
+      [expressionSuggestions(parsed.workflow, 'build', 1), 'steps.helper'],
+      [expressionSuggestions(parsed.workflow, 'consumer', 0), 'needs.build.steps.helper'],
+      [expressionSuggestions(parsed.workflow), 'jobs.build.steps.helper'],
+    ] as const) {
+      expect(suggestions).toEqual(expect.arrayContaining([`${base}.outputs.head`, `${base}.outputs.details.reason`, `${base}.outputs.status`]));
+      expect(suggestions).not.toContain(`${base}.head`);
+      expect(suggestions).not.toContain(`${base}.details.reason`);
+    }
+    expect(expressionSuggestions(parsed.workflow, 'consumer', 0, undefined, 'needs.build.steps.helper.outputs.details.r')).toEqual(['needs.build.steps.helper.outputs.details.reason']);
   });
   it('keeps data roots and quoted expressions distinct from cross-job step references', () => {
     expect(references("${{ 'needs.review.steps.analyze.text' == needs.review.steps.analyze.outputs.structured.status }}")).toEqual([
@@ -135,27 +156,27 @@ describe('named step result references', () => {
     expect(mapReferences('${{' + body + '}}', ref => referenceText({ ...ref, ...(ref.scope === 'steps' ? { id: 'inspect' } : { step: 'inspect' }) }))).toBe(
       "${{  'steps.analyze.$value and needs.review.steps.analyze.é' == steps.inspect.$value and not needs.review.steps.inspect.with space  }}");
     const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
-    doc.setField(['jobs', 'review', 'steps', 1, 'prompt'], '${{ steps.analyze.outputsé }} ${{ steps.analyze.0.é }}');
-    doc.setField(['jobs', 'summarize', 'steps', 0, 'prompt'], '${{ needs.review.steps.analyze.with space }}');
+    doc.setField(['jobs', 'review', 'steps', 1, 'with', 'prompt'], '${{ steps.analyze.outputsé }} ${{ steps.analyze.0.é }}');
+    doc.setField(['jobs', 'summarize', 'steps', 0, 'with', 'prompt'], '${{ needs.review.steps.analyze.with space }}');
     doc.renameStep('review', 0, 'inspect');
-    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].prompt).toBe('${{ steps.inspect.outputsé }} ${{ steps.inspect.0.é }}');
-    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.steps.inspect.with space }}');
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].with!.prompt).toBe('${{ steps.inspect.outputsé }} ${{ steps.inspect.0.é }}');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.review.steps.inspect.with space }}');
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
   });
   it.each(['\u0085', '\u00a0', '\u2007', '\u202f'])('tracks runner whitespace %j through rename, deletion review and Undo', space => {
     const prompt = '${{' + space + 'steps.analyze.outputs.text' + space + '}}';
     const condition = space + '${{' + space + 'not ' + space + 'steps.analyze.text' + space + '}}' + space;
     const doc = new WorkflowDocument({ source: JSON.stringify(workflow) });
-    doc.setField(['jobs', 'review', 'steps', 1, 'prompt'], prompt);
+    doc.setField(['jobs', 'review', 'steps', 1, 'with', 'prompt'], prompt);
     doc.setField(['jobs', 'review', 'steps', 1, 'if'], condition);
     const source = doc.getSnapshot().source;
     expect(references(prompt)).toEqual([expect.objectContaining({ id: 'analyze', output: 'text', offset: space.length })]);
     expect(references(condition, true)).toEqual([expect.objectContaining({ id: 'analyze', tail: '.text', offset: space.length + 4 + space.length })]);
     expect(doc.deletionImpact('review', 0)).toEqual(expect.arrayContaining([
-      ['jobs', 'review', 'steps', 1, 'prompt'], ['jobs', 'review', 'steps', 1, 'if'],
+      ['jobs', 'review', 'steps', 1, 'with', 'prompt'], ['jobs', 'review', 'steps', 1, 'if'],
     ]));
     doc.renameStep('review', 0, 'inspect');
-    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].prompt).toBe(prompt.replace('analyze', 'inspect'));
+    expect(doc.getSnapshot().workflow!.jobs.review.steps![1].with!.prompt).toBe(prompt.replace('analyze', 'inspect'));
     expect(doc.getSnapshot().workflow!.jobs.review.steps![1].if).toBe(condition.replace('analyze', 'inspect'));
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
     doc.setField(['jobs', 'review', 'steps', 0, 'if'], condition);
@@ -171,7 +192,7 @@ describe('named step result references', () => {
     doc.setField(['jobs', 'review', 'if'], 'steps.analyze.with space');
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['jobs', 'review', 'if'] }));
     doc.setField(['jobs', 'review', 'if'], 'steps.analyze.status');
-    doc.setField(['jobs', 'review', 'steps', 0, 'prompt'], '${{ "steps.finish.$value" }} plain steps.finish.é');
+    doc.setField(['jobs', 'review', 'steps', 0, 'with', 'prompt'], '${{ "steps.finish.$value" }} plain steps.finish.é');
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
   });
   it.each([
@@ -264,24 +285,24 @@ describe('named step result references', () => {
   });
   it('resolves named output schemas for local, dependency and workflow completion', () => {
     const value = structuredClone(workflow);
-    const schema = value.jobs.review.steps[0].with!.output.schema;
+    const schema = value.jobs.review.steps[0].with!.output!.schema;
     const named = { ...value, schemas: { Review: schema } };
-    Object.assign(named.jobs.review.steps[0].with!.output, { schema: 'Review' });
+    Object.assign(named.jobs.review.steps[0].with!.output!, { schema: 'Review' });
     const parsed = parseWorkflow(JSON.stringify(named));
     expect(expressionSuggestions(parsed.workflow, 'review', 1)).toContain('steps.analyze.details.reason');
     expect(expressionSuggestions(parsed.workflow, 'summarize', 0)).toContain('needs.review.steps.analyze.approved');
     expect(expressionSuggestions(parsed.workflow)).toContain('jobs.review.steps.analyze.details.reason');
   });
   it('bounds shared-schema suggestions before expansion in root and dependency inspectors while keeping typed paths reachable', () => {
-    const producer = (id: string) => ({ id, agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } });
+    const producer = (id: string) => ({id, uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}});
     const dependencies = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`producer${index}`, { steps: [producer(`result${index}`)] }]));
     const parsed = parseWorkflow(JSON.stringify({
       schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
       jobs: {
         producer: { steps: Array.from({ length: 100 }, (_, index) => producer(`result${index}`)) },
         ...dependencies,
-        consumer: { needs: ['producer'], steps: [{ agent: 'claude', prompt: 'Read' }] },
-        wide: { needs: Object.keys(dependencies), steps: [{ agent: 'claude', prompt: 'Read' }] },
+        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+        wide: { needs: Object.keys(dependencies), steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
       },
     }));
     expect(parsed.usable).toBe(true);
@@ -309,7 +330,7 @@ describe('named step result references', () => {
       return Reflect.get(target, key);
     } });
     const schemas = { Shared: { type: 'object', properties } };
-    const producer = { agent: 'claude', with: { output: { schema: 'Shared' } } };
+    const producer = {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }}};
     expect(stepResultPaths(producer, schemas)).toHaveLength(200);
     expect(reads).toBeLessThan(250);
     reads = 0;
@@ -320,8 +341,8 @@ describe('named step result references', () => {
     const parsed = parseWorkflow(JSON.stringify({
       schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`$field${index}`, {}])) } },
       jobs: {
-        producer: { steps: Array.from({ length: 200 }, (_, index) => ({ id: `result${index}`, agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } })) },
-        consumer: { needs: ['producer'], steps: [{ agent: 'claude', prompt: 'Read' }] },
+        producer: { steps: Array.from({ length: 200 }, (_, index) => ({id: `result${index}`, uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}})) },
+        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
       },
     }));
     expect(parsed.usable).toBe(true);
@@ -356,17 +377,19 @@ describe('named step result references', () => {
     ['wrong root', 'jobs.producer.steps.analyze.text', true],
   ])('checks %s references inside named schemas in the consuming step context', (_name, expression, invalid) => {
     const parsed = parseWorkflow(JSON.stringify({ schemas: { Result: { type: 'string', enum: ['${{ ' + expression + ' }}'] } }, jobs: {
-      producer: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Produce' }] },
+      producer: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Produce'}}] },
       consumer: { needs: ['producer'], steps: [
-        { id: 'first', agent: 'claude', prompt: 'First' },
-        { id: 'consume', agent: 'claude', prompt: 'Consume', with: { output: { schema: 'Result' } } },
-        { id: 'last', agent: 'claude', prompt: 'Last' },
+        {id: 'first', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'First'}},
+        {id: 'consume', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Result' }, prompt: 'Consume'}},
+        {id: 'last', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Last'}},
       ] },
     } }));
     expect(parsed.diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(invalid);
   });
   it('rewrites concise references in shared named contracts and dependent declarations together', () => {
-    const doc = new WorkflowDocument({ source: 'schemas: {Shared: {type: string, enum: ["${{ steps.local.text }}"]}, Dependent: {type: string, enum: ["${{ needs.review.steps.local.text }}"]}}\njobs: {review: {steps: [{id: local, agent: claude, prompt: Produce}, {agent: claude, prompt: Consume, with: {output: {schema: Shared}}}]}, second: {steps: [{id: local, agent: claude, prompt: Produce}, {agent: claude, prompt: Consume, with: {output: {schema: Shared}}}]}, summarize: {needs: review, steps: [{agent: claude, prompt: Summarize, with: {output: {schema: Dependent}}}]}}' });
+    const doc = new WorkflowDocument({ source: `schemas: { Shared: { type: string, enum: [ "\${{ steps.local.text }}" ] }, Dependent: { type: string, enum: [ "\${{ needs.review.steps.local.text }}" ] } }
+jobs: { review: { steps: [ { id: local, uses: agent/run, with: { agent: claude.toml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.toml, prompt: Consume }, uses: agent/run } ] }, second: { steps: [ { id: local, uses: agent/run, with: { agent: claude.toml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.toml, prompt: Consume }, uses: agent/run } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Dependent }, agent: claude.toml, prompt: Summarize }, uses: agent/run } ] } }
+` });
     const original = doc.getSnapshot().source;
     doc.renameStep('review', 0, 'renamed');
     const snapshot = doc.getSnapshot();
@@ -385,11 +408,11 @@ describe('direct named result wiring', () => {
     const value = structuredClone(workflow); value.jobs.summarize.needs = [];
     const original = JSON.stringify(value);
     const doc = new WorkflowDocument({ source: original });
-    const request = { target: ['jobs', 'summarize', 'steps', 0, 'prompt'], producer: 'review', source: { kind: 'result' as const, step: 0, field: 'details.reason' }, selection: { start: 0, end: value.jobs.summarize.steps[0].prompt.length } };
+    const request = { target: ['jobs', 'summarize', 'steps', 0, 'with', 'prompt'], producer: 'review', source: { kind: 'result' as const, step: 0, field: 'details.reason' }, selection: { start: 0, end: value.jobs.summarize.steps[0].with!.prompt.length } };
     const preview = doc.previewJobResult(request);
     expect(preview.declaration).toBeUndefined(); expect(doc.getSnapshot().source).toBe(original);
     doc.applyJobResult(preview);
-    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].prompt).toBe('${{ needs.review.steps.analyze.details.reason }}');
+    expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.review.steps.analyze.details.reason }}');
     expect(doc.getSnapshot().workflow!.jobs.review.outputs).toBeUndefined();
     expect(doc.getSnapshot().workflow!.jobs.summarize.needs).toEqual(['review']);
     expect(() => doc.applyJobResult(preview)).toThrow('document changed');

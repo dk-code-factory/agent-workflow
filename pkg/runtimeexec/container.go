@@ -29,6 +29,8 @@ type ContainerOptions struct {
 	Bridge                 bool
 	CredentialFile         string
 	CredentialEnv          string
+	// Environment contains explicit workload assignments, separate from the host runtime environment.
+	Environment []string
 }
 
 func RuntimePath(policy Policy) (string, error) {
@@ -108,6 +110,9 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 		return nil, err
 	}
 	args := []string{"create", "--interactive", "--name", owner.Name, "--pull=never", "--restart=no", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=256", "--memory=4g", "--cpus=2", "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m", "--workdir", "/workspace"}
+	if policy.NetworkMode != "" {
+		args = append(args, "--network", policy.NetworkMode)
+	}
 	keys := make([]string, 0, len(owner.Labels))
 	for key := range owner.Labels {
 		keys = append(keys, key)
@@ -199,6 +204,9 @@ func BuildContainer(cmd *exec.Cmd, policy Policy, options ContainerOptions, owne
 	}
 	if options.CredentialFile != "" {
 		args = append(args, "--env", "AGENT_WORKFLOW_AUTH_FILE=/state/auth.json")
+	}
+	for _, assignment := range options.Environment {
+		args = append(args, "--env", assignment)
 	}
 	child := append([]string(nil), cmd.Args...)
 	if options.Bridge {

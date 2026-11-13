@@ -93,7 +93,7 @@ func validateResultReferences(w *Workflow) error {
 				if err != nil {
 					return fmt.Errorf("%s.%s.with.output: %w", path, sid, err)
 				}
-				for field, value := range map[string]any{"if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
+				for field, value := range map[string]any{"input": step.Input, "env": step.Env, "if": step.If, "with": step.With, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory} {
 					if err := walkResultReferences(value, field == "if", func(parts []string) error {
 						if len(parts) > 1 && parts[0] == "steps" {
 							if !local[parts[1]] {
@@ -112,7 +112,7 @@ func validateResultReferences(w *Workflow) error {
 				for _, entry := range []struct {
 					name  string
 					steps []Step
-				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+				}{{"onResult", step.OnResult}, {"onComplete", step.OnComplete}, {"onIncomplete", step.OnIncomplete}, {"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
 					if err := handlers(entry.steps, local, path+"."+sid+"."+entry.name); err != nil {
 						return err
 					}
@@ -141,7 +141,7 @@ func validateResultReferences(w *Workflow) error {
 					}
 					with["output"] = output
 				}
-				for field, value := range map[string]any{"if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory, "prompt": conversationPrompt(step)} {
+				for field, value := range map[string]any{"input": step.Input, "env": step.Env, "if": step.If, "with": with, "argv": step.Argv, "run": step.Run, "working-directory": step.WorkingDirectory, "prompt": conversationPrompt(step)} {
 					if err := check(value, fmt.Sprintf("%s.steps.%s.%s", prefix, sid, field), id, available, field == "if"); err != nil {
 						return err
 					}
@@ -149,7 +149,7 @@ func validateResultReferences(w *Workflow) error {
 				for _, entry := range []struct {
 					name  string
 					steps []Step
-				}{{"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
+				}{{"onResult", step.OnResult}, {"onComplete", step.OnComplete}, {"onIncomplete", step.OnIncomplete}, {"onError", step.OnError}, {"onFailure", step.OnFailure}, {"finally", step.Finally}} {
 					if err := handlers(entry.steps, available, prefix+".steps."+sid+"."+entry.name); err != nil {
 						return err
 					}
@@ -238,6 +238,12 @@ func walkResultReferences(value any, bare bool, check func([]string) error) erro
 		}
 		for _, body := range bodies {
 			if err := walkResultExpression(body, check); err != nil {
+				return err
+			}
+		}
+	case map[string]string:
+		for _, item := range value {
+			if err := walkResultReferences(item, false, check); err != nil {
 				return err
 			}
 		}

@@ -15,7 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestRunAndStatusWithBothCLIProcesses(t *testing.T) {
+func TestRunAndStatusWithNativeCodexTasks(t *testing.T) {
 	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"} {
 		t.Setenv(key, "")
 	}
@@ -30,19 +30,33 @@ func TestRunAndStatusWithBothCLIProcesses(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), source, 0600); err != nil {
 		t.Fatal(err)
 	}
-	agents := map[string]clirunner.Agent{}
-	for _, name := range []string{"claude", "codex"} {
-		payload := `{"type":"result","subtype":"success","result":"claude result"}`
-		if name == "codex" {
-			payload = "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"codex result\"}}\n{\"type\":\"turn.completed\"}"
-		}
-		path := filepath.Join(root, "fake-"+name)
-		body := "#!/bin/sh\ncat >/dev/null\ncat <<'PAYLOAD'\n" + payload + "\nPAYLOAD\n"
-		if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+	for _, name := range []string{"review_correctness", "review_security", "task"} {
+		path := filepath.Join(root, "workflows", "agents", name+".toml")
+		os.MkdirAll(filepath.Dir(path), 0700)
+		if err := os.WriteFile(path, []byte("name='"+name+"'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		agents[name] = clirunner.Agent{Provider: name + "-cli", Command: path}
 	}
+	path := filepath.Join(root, "fake-codex")
+	fake := `#!/usr/bin/env python3
+import json,sys
+if '--version' in sys.argv: print('codex-cli 0.167.0'); sys.exit(0)
+for line in sys.stdin:
+    f=json.loads(line); method=f.get('method'); i=f.get('id')
+    def send(x): print(json.dumps(x),flush=True)
+    if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.0 (fixture)'}})
+    elif method in ('account/login/start','turn/interrupt'): send({'id':i,'result':{}})
+    elif method in ('thread/start','thread/resume'): send({'id':i,'result':{'thread':{'id':'fixture-thread'}}})
+    elif method=='turn/start':
+        send({'id':i,'result':{'turn':{'id':'turn-1'}}})
+        send({'method':'item/completed','params':{'threadId':'fixture-thread','turnId':'turn-1','item':{'type':'agentMessage','text':'fixture result'}}})
+        send({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'turn-1','status':'completed'}}})
+`
+	if err := os.WriteFile(path, []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKFLOW_FIXTURE_CODEX_KEY", "fixture-local-key")
+	agents := map[string]clirunner.Agent{"codex": {Provider: "codex-app-server", Command: path, Authentication: clirunner.Authentication{Mode: "api-key", CredentialEnv: "WORKFLOW_FIXTURE_CODEX_KEY"}}}
 	config, err := yaml.Marshal(clirunner.Config{Agents: agents})
 	if err != nil {
 		t.Fatal(err)
@@ -59,11 +73,11 @@ func TestRunAndStatusWithBothCLIProcesses(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != workflows.RunStatusSucceeded || run.Outputs["summary"] != "claude result" {
+	if run.Status != workflows.RunStatusSucceeded || run.Outputs["summary"] != "fixture result" {
 		t.Fatalf("bad run: %+v", run)
 	}
-	if run.Jobs["codex_review"].Outputs["findings"] != "codex result" {
-		t.Fatal("Codex result lost")
+	if run.Jobs["security_review"].Outputs["findings"] != "fixture result" {
+		t.Fatal("Security review result lost")
 	}
 	stdout.Reset()
 	if err := command(context.Background(), []string{"status", "--workspace", root, run.ID}, &stdout, &stderr); err != nil {

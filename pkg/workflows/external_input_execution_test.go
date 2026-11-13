@@ -68,8 +68,8 @@ func TestExternalInputInterruptRetainsIndependentFailure(t *testing.T) {
 			defer cancel()
 			e, s := durableExecutor(t, `jobs:
   question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  failure: {steps: [{uses: agent/a, with: {prompt: failure}}]}
-  active: {steps: [{uses: agent/a, with: {prompt: active}}]}
+  failure: {steps: [{uses: agent/run, with: {prompt: failure, agent: a.toml}}]}
+  active: {steps: [{uses: agent/run, with: {prompt: active, agent: a.toml}}]}
 `, agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
 				if req.Prompt == "failure" {
 					return nil, errors.New("independent failure diagnostic")
@@ -99,7 +99,7 @@ func TestExternalInputInterruptRetainsIndependentFailure(t *testing.T) {
 				}
 				return nil
 			}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || !strings.Contains(err.Error(), "independent failure diagnostic") || run.Status != RunStatusFailed || run.FailureClass == "canceled" || !strings.Contains(run.Error, "independent failure diagnostic") {
 				t.Fatalf("failure erased: %+v %v", run, err)
 			}
@@ -138,9 +138,9 @@ func testExternalInputOrderedGateCommit(t *testing.T, nested bool) {
 jobs:
   x:
     steps:
-      - {id: before, uses: agent/a, with: {prompt: before}}
+      - {id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}
       - {id: question, uses: input/wait, with: {prompt: q, evidence-id: e}}
-      - {id: after, uses: agent/a, with: {prompt: after}}
+      - {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}
 `)
 			wrapper := &executionBoundaryJournal{SQLiteStore: s}
 			wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
@@ -157,7 +157,7 @@ jobs:
 				return nil
 			}
 			e.Store = wrapper
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if run == nil || err != nil || run.Status != RunStatusInterrupted || run.Error != "" || run.FailureClass != "" || !run.FinishedAt.IsZero() || run.Jobs["review"].Status != RunStatusInterrupted {
 				t.Fatalf("pure wait interruption reported failure: %+v %v", run, err)
 			}
@@ -201,7 +201,7 @@ jobs:
 					t.Fatal(err)
 				}
 			}
-			done, err := e.Resume(context.Background(), run.ID, nil, retry)
+			done, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, retry)
 			if mode == "uncertain" || mode == "canceled" || mode == "independent-failure" {
 				if err == nil || calls.Load() != 1 {
 					t.Fatalf("unsafe child resumed: %+v %v calls=%d", done, err, calls.Load())
@@ -297,11 +297,11 @@ func testExternalInputUnsafeChild(t *testing.T, nested bool) {
 			source := `on: {workflow_call: {}}
 jobs:
   question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}
+  independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
 `
 			if mode == "no-gate" {
 				source = `on: {workflow_call: {}}
-jobs: {independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}}
+jobs: {independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}}
 `
 			}
 			if nested {
@@ -348,7 +348,7 @@ jobs: {independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}}
 				return interrupt(ctx, r.OriginID, r.Generation)
 			}
 			e.Store = wrapper
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run == nil || run.Status != RunStatusNeedsAttention || run.Error == "" {
 				t.Fatalf("unsafe child reported pure interruption: %+v %v", run, err)
 			}
@@ -364,7 +364,7 @@ jobs: {independent: {steps: [{uses: agent/a, with: {prompt: effect}}]}}
 				t.Fatal("unsafe outcome invalidated question")
 			}
 			if mode == "uncertain" || mode == "no-gate" {
-				if _, err := e.Resume(context.Background(), run.ID, nil, false); err == nil {
+				if _, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false); err == nil {
 					t.Fatal("uncertain attempt resumed without acknowledgement")
 				}
 			}
@@ -387,9 +387,11 @@ func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				started := make(chan struct{})
-				job := `{steps: [{uses: agent/a, with: {prompt: effect}}]}`
+				job := `{steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
+`
 				if boundary == "repeat" {
-					job = `{repeat: {max-attempts: 2, until: 'iteration.number == 2'}, steps: [{uses: agent/a, with: {prompt: effect}}]}`
+					job = `{repeat: {max-attempts: 2, until: 'iteration.number == 2'}, steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
+`
 				}
 				if boundary == "reusable" {
 					job = `{uses: workflows/child.yml}`
@@ -403,7 +405,7 @@ func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
 					return nil, errors.Join(cause.err, ctx.Err())
 				}))
 				if boundary == "reusable" {
-					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {effect: {steps: [{uses: agent/a, with: {prompt: effect}}]}}")
+					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {effect: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}}\n")
 				}
 				wrapper := &executionBoundaryJournal{SQLiteStore: s}
 				wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
@@ -419,7 +421,7 @@ func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
 					return nil
 				}
 				e.Store = wrapper
-				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 				if run == nil || run.Status != cause.status {
 					t.Fatalf("incorrect outcome: %+v %v", run, err)
 				}
@@ -469,13 +471,13 @@ func TestExternalInputRepeatedOrderedInterruptions(t *testing.T) {
 jobs:
   x:
     steps:
-      - {uses: agent/a, with: {prompt: before}}
+      - {uses: agent/run, with: {prompt: before, agent: a.toml}}
       - {id: q1, uses: input/wait, with: {prompt: one, evidence-id: e1}}
-      - {uses: agent/a, with: {prompt: middle-one}}
+      - {uses: agent/run, with: {prompt: middle-one, agent: a.toml}}
       - {id: q2, uses: input/wait, with: {prompt: two, evidence-id: e2}}
-      - {uses: agent/a, with: {prompt: middle-two}}
+      - {uses: agent/run, with: {prompt: middle-two, agent: a.toml}}
       - {id: q3, uses: input/wait, with: {prompt: three, evidence-id: e3}}
-      - {uses: agent/a, with: {prompt: after}}
+      - {uses: agent/run, with: {prompt: after, agent: a.toml}}
 `)
 			wrapper := &executionBoundaryJournal{SQLiteStore: s}
 			e.Store = wrapper
@@ -495,9 +497,9 @@ jobs:
 				}
 				var err error
 				if index == 0 {
-					run, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+					run, err = nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 				} else {
-					run, err = e.Resume(ctx, run.ID, nil, false)
+					run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 				}
 				cancel()
 				if err != nil || run == nil || run.Status != RunStatusInterrupted || run.Error != "" {
@@ -530,7 +532,7 @@ jobs:
 				// Unanswered resume and another pause preserve this gate without admitting
 				// another execution owner or reserving another item outcome.
 				generation := run.Generation
-				unanswered, err := e.Resume(context.Background(), run.ID, nil, false)
+				unanswered, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 				if err != nil || unanswered.Status != RunStatusWaiting || unanswered.Generation != generation {
 					t.Fatalf("unanswered resume: %+v %v", unanswered, err)
 				}
@@ -543,7 +545,7 @@ jobs:
 				answerGate(t, s, gate)
 			}
 			wrapper.afterGate = nil
-			done, err := e.Resume(context.Background(), run.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 4 {
 				t.Fatalf("completion: %+v %v calls=%d", done, err, calls.Load())
 			}
@@ -589,8 +591,8 @@ jobs:
 func TestExternalInputDeadlineOutcomeCompatibility(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	e := &Executor{}
-	definitions := map[string]*Workflow{"main": {Jobs: map[string]Job{"x": {Steps: []Step{{Uses: "agent/a"}}}}}}
+	e := nativeTestExecutor(t, &Executor{})
+	definitions := map[string]*Workflow{"main": {Jobs: map[string]Job{"x": {Steps: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}}}}}
 	run, err := e.execute(ctx, "main", RunRequest{Ref: "main"}, definitions, make(chan struct{}, 1), 0, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || run == nil || run.Status != RunStatusCanceled || run.FailureClass != "timeout" {
 		t.Fatalf("deadline run outcome changed: %+v %v", run, err)
@@ -665,9 +667,9 @@ jobs:
 					}
 					var err error
 					if index == 0 {
-						run, err = e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+						run, err = nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 					} else {
-						run, err = e.Resume(ctx, run.ID, nil, false)
+						run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 					}
 					cancel()
 					if err != nil || run == nil || run.Status != RunStatusInterrupted || run.Error != "" {
@@ -744,7 +746,7 @@ jobs:
 						}
 					}
 					generation := run.Generation
-					unanswered, err := e.Resume(context.Background(), run.ID, nil, false)
+					unanswered, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 					if err != nil || unanswered.Status != RunStatusWaiting || unanswered.Generation != generation {
 						t.Fatalf("unanswered: %+v %v", unanswered, err)
 					}
@@ -757,7 +759,7 @@ jobs:
 					answerGate(t, s, gate)
 				}
 				wrapper.afterGate = nil
-				done, err := e.Resume(context.Background(), run.ID, nil, false)
+				done, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 				if err != nil || done.Status != RunStatusSucceeded || calls.Load() != int32(total+total/3) {
 					t.Fatalf("completion: %+v %v calls=%d", done, err, calls.Load())
 				}
@@ -826,14 +828,14 @@ func TestExternalInputOrderedCancelAtGateCommit(t *testing.T) {
 				return nil
 			}
 			e.Store = wrapper
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if run == nil || run.Status != RunStatusCanceled {
 				t.Fatalf("explicit Cancel escalated: %+v %v", run, err)
 			}
 			if gate := inputGate(t, s, run.ID); gate.State != "canceled" {
 				t.Fatal("Cancel lost gate history", gate)
 			}
-			if _, err := e.Resume(context.Background(), run.ID, nil, false); err == nil {
+			if _, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false); err == nil {
 				t.Fatal("canceled gate resumed")
 			}
 		})
@@ -865,7 +867,7 @@ func TestExternalInputNestedInterruptedEvidenceDrift(t *testing.T) {
 				return nil
 			}
 			e.Store = wrapper
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run == nil || run.Status != RunStatusInterrupted || calls.Load() != 1 {
 				t.Fatalf("initial: %+v %v calls=%d", run, err, calls.Load())
 			}
@@ -884,7 +886,7 @@ func TestExternalInputNestedInterruptedEvidenceDrift(t *testing.T) {
 				}
 			}
 			registerTestAction(t, e, spec)
-			resumed, err := e.Resume(context.Background(), run.ID, nil, false)
+			resumed, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if !errors.Is(err, ErrActionIntegrity) || resumed == nil || resumed.Status != RunStatusNeedsAttention || calls.Load() != 1 || inputGate(t, s, run.ID).State != "accepted" {
 				t.Fatalf("unsafe nested answer consumed: %+v %v calls=%d", resumed, err, calls.Load())
 			}
@@ -906,7 +908,7 @@ func TestExternalInputOrderedCancelAtAcceptedConsumption(t *testing.T) {
 					if progression == "repeat" {
 						spec += ", repeat: {max-attempts: 2, until: 'iteration.number == 2'}"
 					}
-					source := "jobs:\n  review: {" + spec + "}\n  dependent:\n    needs: review\n    steps: [{uses: agent/a, with: {prompt: root-dependent}}]\n"
+					source := "jobs:\n  review: {" + spec + "}\n  dependent:\n    needs: review\n    steps: [{uses: agent/run, with: {agent: a.toml, prompt: root-dependent}}]\n"
 					e, s := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 						calls.Add(1)
 						return map[string]any{}, nil
@@ -921,12 +923,12 @@ jobs:
   question:
     steps:
       - {uses: input/wait, with: {prompt: q, evidence-id: e}}
-      - {uses: agent/a, with: {prompt: dependent-step}}
+      - {uses: agent/run, with: {prompt: dependent-step, agent: a.toml}}
   dependent:
     needs: question
-    steps: [{uses: agent/a, with: {prompt: dependent-job}}]
+    steps: [{uses: agent/run, with: {prompt: dependent-job, agent: a.toml}}]
 `)
-					run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+					run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 					if err != nil || run.Status != RunStatusWaiting {
 						t.Fatal(run, err)
 					}
@@ -939,7 +941,7 @@ jobs:
 						}
 						return s.RequestCancelGeneration(ctx, run.ID, current.Generation)
 					}}
-					canceled, err := e.Resume(ctx, run.ID, nil, false)
+					canceled, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 					want := RunStatusCanceled
 					if cause != nil && (progression == "ordered" || errors.Is(cause, process.ErrCleanup) || errors.Is(cause, ErrActionIntegrity)) {
 						want = RunStatusNeedsAttention
@@ -976,7 +978,7 @@ jobs:
 					if gate := inputGate(t, s, run.ID); gate.State != "canceled" || gate.Answer == nil {
 						t.Fatal("Cancel consumed/lost answer", gate)
 					}
-					if _, err := e.Resume(ctx, run.ID, nil, false); err == nil {
+					if _, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false); err == nil {
 						t.Fatal("canceled gate resumed")
 					}
 				})
@@ -999,7 +1001,7 @@ func TestExternalInputNestedConsumedInterruption(t *testing.T) {
         with: {value: after}
 `)
 			registerTestAction(t, e, readSpec(&calls))
-			run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusWaiting || run.Jobs["review"].Status != RunStatusWaiting {
 				t.Fatal(run, err)
 			}
@@ -1023,7 +1025,7 @@ func TestExternalInputNestedConsumedInterruption(t *testing.T) {
 				return nil
 			}
 			e.Store = wrapper
-			stopped, err := e.Resume(ctx, run.ID, nil, false)
+			stopped, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			want := RunStatusInterrupted
 			if lifecycle {
 				want = RunStatusCanceled
@@ -1041,7 +1043,7 @@ func TestExternalInputNestedConsumedInterruption(t *testing.T) {
 				}
 			}
 			e.Store = s
-			done, err := e.Resume(context.Background(), run.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if err != nil || done.Status != RunStatusSucceeded || calls.Load() != 2 {
 				t.Fatalf("consumed checkpoint replayed: %+v %v calls=%d", done, err, calls.Load())
 			}

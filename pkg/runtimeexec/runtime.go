@@ -23,6 +23,7 @@ import (
 type Policy struct {
 	NetworkRuntime string             `yaml:"network-runtime"`
 	Network        *network.Reference `yaml:"-" json:",omitempty"`
+	NetworkMode    string             `yaml:"network" json:",omitempty"`
 	Mode           string             `yaml:"mode"`
 	Image          string             `yaml:"image"`
 	Runtime        string             `yaml:"runtime"`
@@ -36,6 +37,12 @@ func (p Policy) Validate() error {
 	return p.ValidateFor(runtime.GOOS)
 }
 func (p Policy) ValidateFor(goos string) error {
+	if p.NetworkMode != "" && p.NetworkMode != "none" && p.NetworkMode != "bridge" {
+		return fmt.Errorf("container network must be none or bridge")
+	}
+	if p.NetworkMode != "" && (p.NetworkRuntime != "" || p.Network != nil) {
+		return fmt.Errorf("container network cannot override network-runtime")
+	}
 	if p.NetworkRuntime != "" {
 		if goos != "linux" {
 			return fmt.Errorf("network-runtime requires Linux/rootful Podman")
@@ -67,7 +74,7 @@ func (p Policy) ValidateFor(goos string) error {
 	if p.Mode != "container" && p.Cleanup == "strict" && goos == "darwin" {
 		return fmt.Errorf("strict descendant cleanup on macOS requires container execution")
 	}
-	if p.Mode != "container" && (p.Image != "" || p.Runtime != "" || p.Writable || p.UID != nil || p.GID != nil) {
+	if p.Mode != "container" && (p.Image != "" || p.Runtime != "" || p.NetworkMode != "" || p.Writable || p.UID != nil || p.GID != nil) {
 		return fmt.Errorf("container parameters require execution.mode: container")
 	}
 	if p.Mode == "container" && p.Image == "" {
@@ -80,6 +87,7 @@ func (p Policy) ValidateFor(goos string) error {
 }
 
 type Record struct {
+	ExecID         string              `json:"exec_id,omitempty"`
 	Network        *network.Reference  `json:"network_runtime,omitempty"`
 	ID             string              `json:"id"`
 	RunID          string              `json:"run_id"`
@@ -124,13 +132,14 @@ func NewID() string {
 }
 
 type Invocation struct {
-	Record        Record
-	binding       Binding
-	dir           string
-	stopHeartbeat context.CancelFunc
-	heartbeatDone chan struct{}
-	mu            sync.Mutex
-	finalized     bool
+	Record                   Record
+	binding                  Binding
+	dir                      string
+	stopHeartbeat            context.CancelFunc
+	heartbeatDone            chan struct{}
+	mu                       sync.Mutex
+	finalized                bool
+	lifetimeUID, lifetimeGID *int
 }
 
 // StorageError identifies a runtime state persistence failure while retaining its diagnostic.
@@ -165,6 +174,19 @@ func (i *Invocation) Save(ctx context.Context, state string) error {
 	return i.binding.Journal.UpdateInvocation(ctx, i.Record)
 }
 func (i *Invocation) Directory() string { return i.dir }
+
+func (i *Invocation) setLifetimeOwner(uid, gid int) error {
+	if os.Getuid() != 0 {
+		return nil
+	}
+	if err := os.Chown(i.dir, uid, gid); err != nil {
+		return err
+	}
+	i.lifetimeUID = &uid
+	i.lifetimeGID = &gid
+	return nil
+}
+
 func (i *Invocation) StartHeartbeat() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	i.stopHeartbeat = cancel
@@ -176,6 +198,11 @@ func (i *Invocation) StartHeartbeat() error {
 		tmp := filepath.Join(i.dir, "lease.partial")
 		if err := os.WriteFile(tmp, data, 0600); err != nil {
 			return err
+		}
+		if i.lifetimeUID != nil {
+			if err := os.Chown(tmp, *i.lifetimeUID, *i.lifetimeGID); err != nil {
+				return err
+			}
 		}
 		return os.Rename(tmp, filepath.Join(i.dir, "lease"))
 	}
@@ -213,6 +240,10 @@ func (i *Invocation) StopHeartbeat() {
 func PinPolicy(ctx context.Context, p Policy) (Policy, error) {
 	if err := p.Validate(); err != nil {
 		return p, err
+	}
+	if p.Mode == "container" {
+		uid, gid := containerIdentity(p)
+		p.UID, p.GID = &uid, &gid
 	}
 	if p.NetworkRuntime == "" {
 		return p, nil

@@ -35,8 +35,27 @@ type LaunchOptions struct {
 	Guardian               GuardianAsset
 	Workspace, State, Root string
 	Command, Env           []string
+	WorkingDir             string
 	Actions                string
 	EngineState            string
+	TaskStateDir           string
+}
+
+func containerIdentity(p Policy) (int, int) {
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		uid = 65532
+	}
+	if gid == 0 {
+		gid = 65532
+	}
+	if p.UID != nil {
+		uid = *p.UID
+	}
+	if p.GID != nil {
+		gid = *p.GID
+	}
+	return uid, gid
 }
 
 func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (containerapi.CreateRequest, error) {
@@ -52,20 +71,11 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 	if o.Guardian.Platform != o.Image.OS+"/"+o.Image.Architecture {
 		return containerapi.CreateRequest{}, fmt.Errorf("guardian platform %q does not match admitted image platform %s/%s", o.Guardian.Platform, o.Image.OS, o.Image.Architecture)
 	}
-	uid, gid := os.Getuid(), os.Getgid()
-	if uid == 0 {
-		uid = 65532
+	uid, gid := containerIdentity(o.Policy)
+	q := containerapi.CreateRequest{Name: owner.Name, Image: o.Image.ID, User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), WorkingDir: "/workspace", Labels: owner.Labels, Entrypoint: []string{MountedGuardian}, Command: append([]string{"__container_workload_guardian_v1", "/engine-lifetime/lease", owner.Labels["agent-workflow.token"], "--"}, o.Command...), KeepID: o.Selection.Transport == containerapi.PodmanCLI && o.Selection.Endpoint == "", Network: o.Policy.NetworkMode, Env: []string{"HOME=/state/home", "TMPDIR=/tmp", "AGENT_WORKFLOW_WORKSPACE_WRITABLE=" + strconv.FormatBool(o.Policy.Writable)}}
+	if o.WorkingDir != "" {
+		q.WorkingDir = o.WorkingDir
 	}
-	if gid == 0 {
-		gid = 65532
-	}
-	if o.Policy.UID != nil {
-		uid = *o.Policy.UID
-	}
-	if o.Policy.GID != nil {
-		gid = *o.Policy.GID
-	}
-	q := containerapi.CreateRequest{Name: owner.Name, Image: o.Image.ID, User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), WorkingDir: "/workspace", Labels: owner.Labels, Entrypoint: []string{MountedGuardian}, Command: append([]string{"__container_workload_guardian_v1", "/engine-lifetime/lease", owner.Labels["agent-workflow.token"], "--"}, o.Command...), KeepID: o.Selection.Transport == containerapi.PodmanCLI && o.Selection.Endpoint == "", Env: []string{"HOME=/state/home", "TMPDIR=/tmp", "AGENT_WORKFLOW_WORKSPACE_WRITABLE=" + strconv.FormatBool(o.Policy.Writable)}}
 	for _, value := range o.Env {
 		key, _, ok := strings.Cut(value, "=")
 		if !ok || key == "" || key == "AGENT_WORKFLOW_WORKSPACE_WRITABLE" || strings.HasPrefix(key, "AGENT_WORKFLOW_") {
@@ -175,6 +185,19 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 			return q, err
 		}
 	}
+	if o.TaskStateDir != "" {
+		info, err := os.Lstat(o.TaskStateDir)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0022 != 0 {
+			return q, fmt.Errorf("task-state mount requires a real directory without group/world write permission")
+		}
+		entries, err := os.ReadDir(o.TaskStateDir)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "rpc.sock" || entries[0].Type()&os.ModeSocket == 0 {
+			return q, fmt.Errorf("task-state mount must contain only its RPC socket")
+		}
+		if err = bind(o.TaskStateDir, "/engine-task-state", true); err != nil {
+			return q, err
+		}
+	}
 	if o.Policy.Network != nil {
 		return q, fmt.Errorf("typed container launch with network-runtime is not supported yet")
 	}
@@ -226,6 +249,21 @@ func LaunchContainer(ctx context.Context, o LaunchOptions) (session *ContainerSe
 		r.Close()
 		_ = i.Save(context.WithoutCancel(ctx), "cleaned")
 		return nil, err
+	}
+	ids := strings.Split(q.User, ":")
+	uid, _ := strconv.Atoi(ids[0])
+	gid, _ := strconv.Atoi(ids[1])
+	if err = i.setLifetimeOwner(uid, gid); err != nil {
+		r.Close()
+		return nil, err
+	}
+	if os.Getuid() == 0 {
+		for _, path := range []string{o.State, filepath.Join(o.State, "home")} {
+			if err = os.Chown(path, uid, gid); err != nil {
+				r.Close()
+				return nil, err
+			}
+		}
 	}
 	session = &ContainerSession{Runtime: r, Invocation: i, Owner: owner}
 	defer func() {

@@ -7,15 +7,16 @@ jobs:
   review:
     imported: keep
     steps:
-      - uses: agent/claude
-        with: {prompt: Review} # keep producer
+      - uses: agent/run
+        with: { prompt: Review, agent: claude.toml } # keep producer
   summarize:
     steps:
       - id: summary
-        uses: agent/claude
+        uses: agent/run
         with:
           model: keep # keep model
           prompt: 'Summarize: '
+          agent: claude.toml
 `;
 const request: JobResultRequest = { target: ['jobs', 'summarize', 'steps', 0, 'with', 'prompt'], producer: 'review', source: { kind: 'step', step: 0, output: 'text', name: 'report' } };
 describe('guided job results', () => {
@@ -30,7 +31,7 @@ describe('guided job results', () => {
     const jobs = doc.getSnapshot().workflow!.jobs;
     expect(jobs.review.outputs).toEqual({ report: '${{ steps.step_1.outputs.text }}' });
     expect(jobs.summarize.needs).toEqual(['review']);
-    expect(jobs.summarize.steps![0].with).toEqual({ model: 'keep', prompt: preview.value });
+    expect(jobs.summarize.steps![0].with).toEqual({ agent: 'claude.toml', model: 'keep', prompt: preview.value });
     expect(jobs.review.imported).toBe('keep');
     expect(doc.getSnapshot().source).toContain('# keep model');
     expect(doc.getSnapshot().source).toContain('# keep producer');

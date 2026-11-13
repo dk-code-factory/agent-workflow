@@ -7,10 +7,11 @@ iterations, worker mailboxes, isolated Git workspaces, and GitHub publication.
 Embedding Go applications can also [register typed application actions](docs/REGISTERED_ACTIONS.md)
 with durable provenance, checkpoint validation, and receipt-based mutation recovery.
 
-The [PR-fix application](docs/PR_FIX.md) materializes dk-workflows 5.2.0 PR
-maintenance as deterministic YAML, with a separate private ledger and bounded
-managed leaves. Its [parity matrix](docs/PR_FIX_PARITY.md) records deterministic
-evidence, including guarded native-failure acknowledgement and recovery.
+The [portable PR maintenance example](examples/pr-fix/README.md) uses ordinary
+YAML and container-backed Python helpers with the stock CLI. The controller owns
+native agent sessions and recovery; the example owns PR policy, retained
+allowances, evidence checks and guarded publication receipts. Its [guide](docs/PR_FIX.md)
+documents explicit setup, recovery and changes from the earlier Go application.
 
 **Release status: implementation candidate, not yet production certified.** See
 [release evidence and outstanding gates](docs/RELEASE.md). Live evidence is
@@ -32,10 +33,10 @@ make build
 
 Flags precede the workflow reference. `--workspace DIR` selects a workspace
 containing `agents.yml` and `workflows/`. `--config FILE` selects a configuration
-relative to that workspace. Existing workflow syntax and successful `text`,
-`response`, and `usage` outputs remain supported. New run/result and event
-records carry a version; provider terminal status, version, and queue timing are
-recorded without changing those legacy outputs.
+relative to that workspace. Agent tasks use the canonical `agent/run` interface;
+the former `agent:` shorthand and `agent/<role>` actions are rejected. Successful
+`text`, `response`, structured results and `usage` outputs remain available.
+Provider terminal status, version and queue timing are also recorded.
 
 `run` starts a workspace controller when necessary, admits the request durably,
 and waits for its result. Disconnecting the client or reaching its `--timeout`
@@ -178,6 +179,14 @@ See [operator setup, plugin coverage, forwarding and recovery](docs/NETWORK_RUNT
 
 ### Containers
 
+Workflows can declare shared `jobs.<id>.container` images and sibling
+`uses: docker://IMAGE` steps. Ordinary Ubuntu/Python images receive the packaged
+Linux guardian automatically. Optional `action-v1` helpers use inline/named
+schemas, durable lifecycle recovery and retained workflow-local files. See
+[container authoring and recovery](docs/CONTAINER_WORKFLOWS.md) and the
+[portable examples](examples/container-workflows/README.md).
+
+
 Session backends can select:
 
 ```yaml
@@ -233,6 +242,7 @@ agent-workflow status RUN_ID
 agent-workflow list
 agent-workflow logs --follow RUN_ID
 agent-workflow attempts RUN_ID
+agent-workflow task-state RUN_ID
 agent-workflow cancel RUN_ID
 agent-workflow resume --retry-uncertain RUN_ID
 agent-workflow resume --request-id recovery-1 --retry-uncertain --detach RUN_ID
@@ -243,6 +253,13 @@ agent-workflow cleanup RUN_ID
 ```
 
 `status`, `list`, `logs`, and artifact inspection work without the controller.
+Container helpers can opt into durable logical claims, allowances and absolute
+deadlines with `run --task-group GROUP`. Replacement runs must supply the same
+explicit group; resume retains its admitted group. `task-state RUN_ID` inspects
+that group's retained state without starting the controller. See
+[task state](docs/TASK_STATE.md) for the scoped Python client, reconciliation,
+continuation provenance and cleanup contract.
+
 Each supervised invocation is journaled with its originating generation and
 logical/physical identity. Containers are created inert, their identity is
 committed, then attached-started with stdin/stdout intact. Startup and background
@@ -284,9 +301,9 @@ retain full results. HTTP list endpoints opt into pagination with `limit` or
 `cursor`; calls without these parameters and existing Go list methods retain
 their legacy array shapes.
 
-Existing schema-1 through schema-8 databases upgrade transactionally when the controller (or a
+Existing schema-1 through schema-12 databases upgrade transactionally when the controller (or a
 foreground execution/cleanup command) holds the workspace lock. The upgrade
-retains `.agent-workflow/state.pre-v7.db`, a consistent database-only backup
+retains `.agent-workflow/state.pre-v13.db`, a consistent database-only backup
 including committed WAL records. Verify upgraded inspection and deterministic
 execution before manually removing this backup. Inspection opens storage read
 only and asks for an explicit controller upgrade when the schema is older;
@@ -356,7 +373,9 @@ use an explicit uncertain-retry acknowledgement. Restored mailboxes are
 quarantined and pending entries are retained as interrupted, requiring a new
 explicit send rather than replay.
 
-Database-only backup preserves records. Session recovery also requires matching
+Database-only backup preserves records and immutable helper manifests. Portable
+helper recovery also requires the referenced `assets/` files; `bundle` includes
+verified committed assets and preserves executable modes. Session recovery also requires matching
 managed workspaces and engine-owned provider state. Recovery bundles contain
 those engine-owned paths and exclude native credential files and references.
 They are private sensitive archives, not publication artifacts. Restore files at
@@ -398,22 +417,27 @@ jobs:
   review:
     steps:
       - id: decision
-        agent: reviewer
-        prompt: Review the change.
+        uses: agent/run
         with:
+          agent: reviewer.toml
+          prompt: Review the change.
           output:
             format: json
             schema:
               type: object
               properties: {approved: {type: boolean}}
               required: [approved]
-      - agent: reporter
-        prompt: 'Approved: ${{ steps.decision.approved }}'
+      - uses: agent/run
+        with:
+          agent: reporter.toml
+          prompt: 'Approved: ${{ steps.decision.approved }}'
   publish:
     needs: [review]
     steps:
-      - agent: reporter
-        prompt: 'Review: ${{ needs.review.steps.decision.text }}'
+      - uses: agent/run
+        with:
+          agent: reporter.toml
+          prompt: 'Review: ${{ needs.review.steps.decision.text }}'
 ```
 
 `steps.<id>.<field>` reads a field from the validated structured object, including
@@ -548,46 +572,37 @@ completion recovers a lost parent/item checkpoint without repeating its work.
 Schema upgrades use the existing exclusive lock and private pre-upgrade backup.
 Legacy JSON stores cannot execute iteration workflows.
 
-### Concise YAML agent steps
+### Native agent tasks
 
-Inside a job, `agent: ROLE` and top-level `prompt` offer an alternative to
-`uses: agent/ROLE` and `with.prompt`:
+Use `agent/run` with a native Codex TOML definition. Paths resolve relative to
+this workflow; the configured `codex` runtime must use `codex-app-server`.
 
 ```yaml
 jobs:
   review:
     steps:
       - id: review
-        agent: reviewer
-        prompt: |
-          Review the change for correctness and missing tests.
-          Task: ${{ inputs.task }}
+        uses: agent/run
         with:
-          model: sonnet
+          agent: ../.codex/agents/reviewer.toml
+          prompt: Review the change.
+          input: {focus: correctness}
           output:
             format: json
+            repair-attempts: 0
             schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
 ```
 
-Declare the `reviewer` role in `agents.yml` as usual. The role name is a literal
-identifier; both `agent` and `prompt` must be YAML strings. Quote date-like
-prompts such as `prompt: "2026-11-06"` so YAML treats them as strings. The other
-supported task options (`message`, `model`, `workspace`, and `output`) stay under `with`.
-An `agent` step may instead use the existing `with.prompt` or `with.message`
-form when top-level `prompt` is absent. Top-level `prompt` requires `agent` or
-`conversation`.
-Declaring both `agent` and `uses`, or both `prompt` and `with.prompt`, is rejected
-even when their values match. Nonempty command fields cannot combine with an
-agent call; empty or null command fields remain inactive in either authoring form.
+Definitions support `name`, `description`, `developer_instructions`, `model`, and
+`model_reasoning_effort`. Admission captures the definition and effective runtime
+settings. An explicit definition creates an independent agent; use
+`${{ steps.review.outputs.agent }}` as another task's `with.agent` to continue
+its session. Identity survives retries and execution generations.
 
-The shorthand resolves to the existing agent operation before admission. Role
-permissions, `${{ ... }}` interpolation, literal input data, structured-output
-validation and repair, step/job outputs, and durable recovery follow the same
-rules. For example, the result remains available at
-`${{ steps.review.outputs.structured.approved }}`. Jobs, dependencies, reusable
-workflow calls, and legacy `uses` steps retain their existing syntax. Admitted
-runs retain their resolved definition even when the source YAML changes later.
-The YAML editor preserves and edits either authoring form.
+See [agent tasks and event hooks](docs/AGENT_TASKS.md) for the supported TOML
+subset, typed inputs, completion verification, six ordered hook lists, and
+recovery rules. Quote date-like prompts such as `"2026-11-06"`. Removed forms
+`agent: ROLE` and `uses: agent/ROLE` are rejected.
 
 Structured output uses native schemas on session backends and strict-object
 contracts on current CLI backends, followed by engine validation.
@@ -616,12 +631,14 @@ schemas:
 jobs:
   review:
     steps:
-      - uses: agent/reviewer
+      - uses: agent/run
         with:
+          agent: reviewer.toml
           prompt: Review the change.
           output: {format: json, schema: Review, repair-attempts: 0}
-      - uses: agent/reviewer
+      - uses: agent/run
         with:
+          agent: reviewer.toml
           prompt: Review the tests.
           output: {schema: Review}
 ```
@@ -655,11 +672,12 @@ admission remains a host check.
 
 [develop.yml](workflows/develop.yml) runs planning, bounded implementation/test/
 review cycles through [develop-iteration.yml](workflows/develop-iteration.yml),
-final checks and two final reviews, and GitHub publication. It uses separate `planner`, `builder`, `reviewer_claude`, and `reviewer_codex`
-roles; choose their backends explicitly in your configuration. The example
-configuration gives the builder write access and the reviewers read-only/plan
-permissions. Managed SDK/container policies are available when stronger isolation
-is required.
+final checks and two final reviews, and GitHub publication. Its native Codex
+definitions separate planning, implementation, correctness review and security
+review instructions. All tasks use the configured `codex` runtime and its shared
+security policy. To run the implementation example, deliberately configure that
+runtime with `sandbox: workspace-write`; the default configuration is read-only.
+Definition instructions do not establish separate sandbox permissions.
 
 Enable publication only for a deliberate allowlisted repository:
 
@@ -862,8 +880,8 @@ and Chromium checks as PRs and main pushes.
 
 Live tests and publication pilots are separate from deterministic tests and
 require explicit budgets and a disposable repository.
-Shared hosting, Windows runtime support, cron/webhook dispatch, native-definition
-import, automatic conflict resolution, and automatic merge remain outside scope.
+Shared hosting, Windows runtime support, cron/webhook dispatch, non-Codex native agent
+definitions, automatic conflict resolution, and automatic merge remain outside scope.
 
 The original schema/expression/output foundations came from PicoClaw; see
 [NOTICE](NOTICE) and [LICENSE](LICENSE). Runtime bindings and orchestration are

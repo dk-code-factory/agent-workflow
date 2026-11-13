@@ -26,7 +26,7 @@ type Runtime struct {
 	observationContext   context.Context
 }
 type ActionInput struct {
-	Worker     string   `json:"worker,omitempty"`
+	Agent      string   `json:"agent,omitempty"`
 	Receipt    *Receipt `json:"receipt,omitempty"`
 	Plan       string   `json:"plan"`
 	Occurrence string   `json:"occurrence,omitempty"`
@@ -42,22 +42,23 @@ type IntentRef struct {
 	ID string `json:"id"`
 }
 type ActionOutput struct {
-	Round    int         `json:"round"`
-	Receipt  *Receipt    `json:"receipt,omitempty"`
-	Claim    string      `json:"claim"`
-	Invoke   bool        `json:"invoke"`
-	Settled  bool        `json:"settled"`
-	Recheck  bool        `json:"recheck"`
-	Cycle    string      `json:"cycle"`
-	Worker   string      `json:"worker"`
-	Prompt   string      `json:"prompt"`
-	Complete bool        `json:"complete"`
-	Ready    bool        `json:"ready"`
-	Report   string      `json:"report"`
-	Items    []IntentRef `json:"items"`
-	Repair   bool        `json:"repair"`
-	Deferred bool        `json:"deferred"`
-	State    string      `json:"state"`
+	Agent     string         `json:"agent,omitempty"`
+	TaskInput map[string]any `json:"task_input,omitempty"`
+	Round     int            `json:"round"`
+	Receipt   *Receipt       `json:"receipt,omitempty"`
+	Claim     string         `json:"claim"`
+	Invoke    bool           `json:"invoke"`
+	Settled   bool           `json:"settled"`
+	Recheck   bool           `json:"recheck"`
+	Cycle     string         `json:"cycle"`
+	Prompt    string         `json:"prompt"`
+	Complete  bool           `json:"complete"`
+	Ready     bool           `json:"ready"`
+	Report    string         `json:"report"`
+	Items     []IntentRef    `json:"items"`
+	Repair    bool           `json:"repair"`
+	Deferred  bool           `json:"deferred"`
+	State     string         `json:"state"`
 }
 
 func output() ActionOutput { return ActionOutput{Items: []IntentRef{}} }
@@ -109,11 +110,11 @@ func (r *Runtime) plan(in ActionInput) (Plan, error) {
 	return p, nil
 }
 func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
-	names := []string{"review_admit", "cycle", "claim", "worker_spawn", "worker_send", "worker_wait", "finish", "status", "commit", "intents", "publish", "ci", "reserve", "completion", "receipt", "candidates", "ci_classify", "close", "worker_recover", "worker_adopt", "worker_acknowledge", "turn_state", "check_prepare", "review_request_inspect", "review_request_dispose", "reply_inspect", "reply_dispose"}
+	names := []string{"task_prepare", "task_result", "review_admit", "cycle", "claim", "finish", "status", "commit", "intents", "publish", "ci", "reserve", "completion", "receipt", "candidates", "ci_classify", "close", "turn_state", "check_prepare", "review_request_inspect", "review_request_dispose", "reply_inspect", "reply_dispose"}
 	for _, name := range names {
 		name := name
 		effect := workflows.ActionExternalMutation
-		if name == "cycle" || name == "worker_wait" || name == "status" || name == "intents" || name == "completion" || name == "candidates" || name == "ci" || name == "ci_classify" || name == "turn_state" || name == "check_prepare" || name == "review_request_inspect" || name == "reply_inspect" {
+		if name == "task_prepare" || name == "cycle" || name == "status" || name == "intents" || name == "completion" || name == "candidates" || name == "ci" || name == "ci_classify" || name == "turn_state" || name == "check_prepare" || name == "review_request_inspect" || name == "reply_inspect" {
 			effect = workflows.ActionReadOnly
 		}
 		spec := workflows.ActionSpec[ActionInput, ActionOutput]{Implementation: Implementation + "/" + name, Effect: effect}
@@ -343,27 +344,22 @@ func (r *Runtime) handle(ctx context.Context, name string, ac workflows.ActionCo
 		return r.reviewAdmission(ctx, p, in)
 	case "claim":
 		return r.claim(ctx, p, ac, in)
-	case "worker_recover":
-		return r.workerRecover(ctx, p, ac, in)
-	case "worker_adopt":
-		return r.workerAdopt(ctx, p, in)
-	case "worker_acknowledge":
-		_, out, e := r.workerAcknowledge(ctx, p, ac, in, true)
-		return out, e
 	case "turn_state":
 		return r.turnState(ctx, p, in)
 	case "check_prepare":
 		return r.prepareCheck(ctx, p, in)
-	case "worker_spawn":
-		return r.workerSpawn(ctx, p, in)
-	case "worker_send":
-		return r.workerSend(ctx, p, in)
-	case "worker_wait":
-		return r.workerWait(ctx, p, in)
+	case "task_prepare":
+		return r.taskPrepare(ctx, p, in)
+	case "task_result":
+		return r.taskResult(ctx, p, ac, in)
 	case "finish":
 		return r.finish(ctx, p, in)
 	case "status":
-		return r.status(ctx, p, in)
+		out, err := r.status(ctx, p, in)
+		if err == nil && !out.Complete {
+			_, _, err = r.workerAcknowledge(ctx, p, ac, in, true)
+		}
+		return out, err
 	case "commit":
 		return r.commit(ctx, p, in)
 	case "intents":

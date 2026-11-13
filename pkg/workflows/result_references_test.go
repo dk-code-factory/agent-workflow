@@ -92,17 +92,23 @@ jobs:
     repeat: {max-attempts: 2, until: steps.review.approved}
     steps:
       - id: review
-        agent: reviewer
-        prompt: Review
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: Review
       - id: use
-        agent: consumer
-        prompt: '${{ steps.review.text }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: '${{ steps.review.text }}'
   consumer:
     needs: [producer]
     steps:
       - id: use
-        agent: consumer
-        prompt: '${{ needs.producer.steps.review.approved }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: '${{ needs.producer.steps.review.approved }}'
 `
 	for _, test := range []struct{ name, old, replacement, diagnostic string }{
 		{"valid", "", "", ""},
@@ -148,7 +154,7 @@ jobs:
 		})
 	}
 	for _, producer := range []string{"uses: workflows/child.yml", "uses: workflows/child.yml\n    for-each: {items: ['${{ steps.missing.text }}'], key: item}"} {
-		w, err := Parse([]byte("jobs:\n  producer:\n    " + producer + "\n  consumer:\n    needs: [producer]\n    steps:\n      - agent: consumer\n        prompt: '${{ needs.producer.steps.private.text }}'\n"))
+		w, err := Parse([]byte("jobs:\n  producer:\n    " + producer + "\n  consumer:\n    needs: [producer]\n    steps:\n      - uses: agent/run\n        with:\n          agent: consumer.toml\n          prompt: '${{ needs.producer.steps.private.text }}'\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,12 +216,12 @@ func TestConciseReferencesInNamedSchemas(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			w := &Workflow{Schemas: map[string]map[string]any{"Result": {"type": "string", "enum": []any{"${{ " + test.expression + " }}"}}}, Jobs: map[string]Job{
-				"producer": {Steps: []Step{{ID: "result", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}}}},
-				"other":    {Steps: []Step{{ID: "result", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}}}},
+				"producer": {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}}}},
+				"other":    {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}}}},
 				"main": {Needs: []string{"producer"}, Steps: []Step{
-					{ID: "first", Uses: "agent/reviewer", With: map[string]any{"prompt": "Produce"}},
-					{ID: "consumer", Uses: "agent/reviewer", With: map[string]any{"prompt": "Consume", "output": map[string]any{"schema": "Result"}}},
-					{ID: "last", Uses: "agent/reviewer", With: map[string]any{"prompt": "Later"}},
+					{ID: "first", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}},
+					{ID: "consumer", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Consume", "output": map[string]any{"schema": "Result"}}},
+					{ID: "last", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Later"}},
 				}},
 			}}
 			err := Validate(w)
@@ -238,8 +244,6 @@ jobs:
   producer:
     steps:
       - id: review
-        agent: reviewer
-        prompt: Review
         with:
           output:
             format: json
@@ -247,15 +251,22 @@ jobs:
               type: object
               required: [approved]
               properties: {approved: {type: boolean}}
+          agent: reviewer.toml
+          prompt: Review
+        uses: agent/run
       - id: local
-        agent: consumer
-        prompt: 'local=${{ steps.review.approved }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: 'local=${{ steps.review.approved }}'
   consumer:
     needs: [producer]
     steps:
       - id: combine
-        agent: consumer
-        prompt: 'decision=${{ needs.producer.steps.review.approved }}, local=${{ needs.producer.steps.local.text }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: 'decision=${{ needs.producer.steps.review.approved }}, local=${{ needs.producer.steps.local.text }}'
 `
 	ctx := context.Background()
 	calls := map[string]int{}
@@ -278,14 +289,14 @@ jobs:
 			return nil, errors.New("unexpected prompt: " + req.Prompt)
 		}
 	}))
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Jobs["producer"].Status != RunStatusSucceeded {
 		t.Fatalf("expected consumer failure: %#v %v", run, err)
 	}
 	// Resume uses the admitted source and retained structured results after restart.
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", "jobs: {}")
-	restarted := &Executor{WorkspaceDir: e.WorkspaceDir, Agents: e.Agents, Store: store}
-	run, err = restarted.Resume(ctx, run.ID, nil, true)
+	restarted := nativeTestExecutor(t, &Executor{WorkspaceDir: e.WorkspaceDir, Agents: e.Agents, Store: store})
+	run, err = nativeTestExecutor(t, restarted).Resume(ctx, run.ID, nil, true)
 	if err != nil || run.Outputs["answer"] != "combined" || calls["Review"] != 1 || calls["local=true"] != 1 || calls["decision=true, local=local result"] != 2 {
 		t.Fatalf("resume lost result identity: run=%#v calls=%v err=%v", run, calls, err)
 	}
@@ -299,9 +310,9 @@ func TestInvalidConciseReferenceHasNoProviderEffects(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			definition := Workflow{Jobs: map[string]Job{"x": {Steps: []Step{
-				{Uses: "agent/reviewer", With: map[string]any{"prompt": "before"}},
-				{Uses: "agent/reviewer", If: expression, With: map[string]any{"prompt": "consume"}},
-				{ID: "later", Uses: "agent/reviewer", With: map[string]any{"prompt": "later"}},
+				{Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "before"}},
+				{Uses: "agent/run", If: expression, With: map[string]any{"agent": "reviewer.toml", "prompt": "consume"}},
+				{ID: "later", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "later"}},
 			}}}}
 			source, err := json.Marshal(definition)
 			if err != nil {
@@ -311,7 +322,7 @@ func TestInvalidConciseReferenceHasNoProviderEffects(t *testing.T) {
 				t.Error("invalid reference reached provider")
 				return nil, errors.New("invalid reference reached provider")
 			}))
-			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+			if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 				t.Fatalf("bad admission error: %v", err)
 			}
 		})
@@ -400,21 +411,25 @@ jobs:
     repeat: {max-attempts: 2, until: "steps.review.text == '2'"}
     steps:
       - id: review
-        agent: reviewer
-        prompt: 'attempt=${{ iteration.number }}'
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: 'attempt=${{ iteration.number }}'
   consumer:
     needs: [producer]
     steps:
       - id: use
-        agent: consumer
-        prompt: '${{ needs.producer.steps.review.text }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: '${{ needs.producer.steps.review.text }}'
 `
 	var prompts []string
 	e, _ := durableExecutor(t, source, agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
 		prompts = append(prompts, request.Prompt)
 		return map[string]any{"text": strings.TrimPrefix(request.Prompt, "attempt=")}, nil
 	}))
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil || run.Outputs["answer"] != "2" || !reflect.DeepEqual(prompts, []string{"attempt=1", "attempt=2", "2"}) {
 		t.Fatalf("final repeated result lost: prompts=%v run=%#v err=%v", prompts, run, err)
 	}
@@ -427,12 +442,16 @@ func TestUnavailableConciseResultsStopConsumer(t *testing.T) {
   producer:
     steps:
       - id: review
-        agent: reviewer
-        prompt: review
         continue-on-error: true
+        uses: agent/run
+        with:
+          agent: reviewer.toml
+          prompt: review
       - id: consumer
-        agent: consumer
-        prompt: 'decision=${{ steps.review.approved }}'
+        uses: agent/run
+        with:
+          agent: consumer.toml
+          prompt: 'decision=${{ steps.review.approved }}'
 `
 			definition := source
 			if scenario == "skipped" {
@@ -450,7 +469,7 @@ func TestUnavailableConciseResultsStopConsumer(t *testing.T) {
 				}
 				return map[string]any{"text": "unstructured"}, nil
 			}))
-			_, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+			_, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || !strings.Contains(err.Error(), "steps.review.approved") || (scenario == "skipped" && calls != 0) || (scenario != "skipped" && calls != 1) {
 				t.Fatalf("unavailable result accepted: calls=%d err=%v", calls, err)
 			}

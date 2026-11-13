@@ -25,6 +25,9 @@ func parallelIterationExecutor(t *testing.T, concurrency, capacity int, runner A
 	source := strings.Replace(iterationSource, "      key: item.id", fmt.Sprintf("      key: item.id\n      concurrency: %d", concurrency), 1)
 	writeWorkflow(t, e.WorkspaceDir, "main.yml", source)
 	e.Slots = make(chan struct{}, capacity)
+	// The durable native-task scheduler must use the same capacity as the
+	// iteration executor after this fixture overrides its serial default.
+	nativeTestExecutor(t, e)
 	return e, s
 }
 
@@ -324,7 +327,7 @@ func TestParallelIterationRestartKeepsCompletedAndGuardsInterrupted(t *testing.T
 	}
 	resumeCtx, resumeCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer resumeCancel()
-	run, err = e.Resume(resumeCtx, run.ID, nil, true)
+	run, err = nativeTestExecutor(t, e).Resume(resumeCtx, run.ID, nil, true)
 	if err != nil || !run.Jobs["review"].Complete {
 		t.Fatal(run, err)
 	}
@@ -446,8 +449,8 @@ jobs:
         with: {prompt: 'Continue?', evidence-id: retained}
       - id: run
         if: inputs.task != 'gate'
-        uses: agent/reviewer
-        with: {prompt: '${{ inputs.task }}'}
+        uses: agent/run
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
 `)
 				if nested {
 					writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
@@ -479,8 +482,8 @@ jobs:
 jobs:
   work:
     steps:
-      - uses: agent/reviewer
-        with: {prompt: '${{ inputs.task }}'}
+      - uses: agent/run
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
 `)
 				}
 				wrapper := &executionBoundaryJournal{SQLiteStore: s}

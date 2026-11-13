@@ -18,7 +18,7 @@ func (e *Executor) executeStepSequence(ctx context.Context, steps []Step, prefix
 		}
 		result, err := e.executeDeclaredStep(ctx, step, path, ec, req, slots)
 		ec.Steps[step.ID] = result
-		if err != nil && (isStepBlock(step) || req.ordered || !step.ContinueOnError || hardExecutionFailure(err)) {
+		if err != nil && (isStepBlock(step) || !step.ContinueOnError || hardExecutionFailure(err) || (req.ordered && !e.observedNativeTaskFailure(ctx, step, result, ec))) {
 			return result.Status, err
 		}
 		if result.Status == RunStatusWaiting && err == nil {
@@ -58,6 +58,9 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	}
 	if step.Conversation != nil {
 		return e.executeConversationStep(ctx, step, ec, req, slots)
+	}
+	if step.Protocol == ContainerActionV1 {
+		return e.executeContainerAction(ctx, step, ec, slots)
 	}
 	if hasLifecycle(step) {
 		return e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)

@@ -40,6 +40,17 @@ func TestInterruptedRetentionResumesWithoutLosingOwnership(t *testing.T) {
 			if err = os.MkdirAll(other, 0700); err != nil {
 				t.Fatal(err)
 			}
+			for _, part := range []string{"assets", "containers"} {
+				for _, origin := range []string{run, strings.Repeat("f", 32)} {
+					dir := filepath.Join(r.Store.Dir, part, origin)
+					if err = os.MkdirAll(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.WriteFile(filepath.Join(dir, "owned"), []byte(origin), 0400); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			interrupted := false
 			r.retentionHook = func(_ string, state string) error {
 				if state == boundary && !interrupted {
@@ -75,6 +86,14 @@ func TestInterruptedRetentionResumesWithoutLosingOwnership(t *testing.T) {
 			}
 			if _, err = os.Stat(other); err != nil {
 				t.Fatal("another origin's state was removed", err)
+			}
+			for _, part := range []string{"assets", "containers"} {
+				if _, err = os.Stat(filepath.Join(r.Store.Dir, part, run)); !os.IsNotExist(err) {
+					t.Fatal("origin assets retained", err)
+				}
+				if _, err = os.Stat(filepath.Join(r.Store.Dir, part, strings.Repeat("f", 32), "owned")); err != nil {
+					t.Fatal("other run assets removed", err)
+				}
 			}
 			plan, err := r.Store.Retention(ctx, run)
 			if err != nil || plan.State != "complete" {

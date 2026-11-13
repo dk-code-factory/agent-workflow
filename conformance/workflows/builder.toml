@@ -1,0 +1,3 @@
+name = "builder"
+description = "Implement a workflow task."
+developer_instructions = "Implement the supplied plan in the assigned workspace and run deterministic checks. Respect the result contract and do not publish changes."

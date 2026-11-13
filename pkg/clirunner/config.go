@@ -23,6 +23,7 @@ var roleIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 type Execution struct {
 	NetworkRuntime string             `yaml:"network-runtime"`
 	Network        *network.Reference `yaml:"-" json:",omitempty"`
+	NetworkMode    string             `yaml:"network" json:",omitempty"`
 	Cleanup        string             `yaml:"cleanup"`
 	UID            *int               `yaml:"uid"`
 	GID            *int               `yaml:"gid"`
@@ -36,7 +37,7 @@ type Execution struct {
 }
 
 func (e Execution) policy() runtimeexec.Policy {
-	return runtimeexec.Policy{NetworkRuntime: e.NetworkRuntime, Network: e.Network, Mode: e.Mode, Image: e.Image, Runtime: e.Runtime, Writable: e.Writable, Cleanup: e.Cleanup, UID: e.UID, GID: e.GID}
+	return runtimeexec.Policy{NetworkRuntime: e.NetworkRuntime, Network: e.Network, NetworkMode: e.NetworkMode, Mode: e.Mode, Image: e.Image, Runtime: e.Runtime, Writable: e.Writable, Cleanup: e.Cleanup, UID: e.UID, GID: e.GID}
 }
 
 type Authentication struct {
@@ -107,8 +108,12 @@ func LoadConfig(path string) (Config, error) {
 	for id, agent := range cfg.Agents {
 		if agent.Execution.Mode == "" && agent.Execution.Image == "" && agent.Execution.Runtime == "" && !agent.Execution.Writable && agent.Execution.UID == nil && agent.Execution.GID == nil {
 			cleanup := agent.Execution.Cleanup
+			networkMode := agent.Execution.NetworkMode
 			selected, ref := agent.Execution.NetworkRuntime, agent.Execution.Network
 			agent.Execution = cfg.Execution
+			if networkMode != "" {
+				agent.Execution.NetworkMode = networkMode
+			}
 			if selected != "" {
 				agent.Execution.NetworkRuntime = selected
 				agent.Execution.Network = ref

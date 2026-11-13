@@ -1,0 +1,11 @@
+name: Wrapped capture
+on:
+  workflow_call:
+    inputs:
+      repository: {type: string, required: true}
+    outputs:
+      head: {value: '${{ jobs.inner.outputs.head }}'}
+jobs:
+  inner:
+    uses: ./workflows/capture.yml
+    with: {repository: '${{ inputs.repository }}'}

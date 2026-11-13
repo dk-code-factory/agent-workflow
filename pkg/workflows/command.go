@@ -3,6 +3,7 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,9 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
+
+type commandEnvKey struct{}
+type commandInputKey struct{}
 
 const MaxCommandOutput = 16 << 20
 
@@ -32,6 +36,26 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 }
 
 func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionContext, slots chan struct{}) (map[string]any, error) {
+	env, err := renderCommandEnv(step.Env, ec)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, commandEnvKey{}, env)
+	if ec.Hook && step.Run != "" {
+		scriptContext := ec
+		scriptContext.NoShellEvent = true
+		for _, match := range expressionPattern.FindAllStringSubmatch(step.Run, -1) {
+			value, err := renderString(match[0], scriptContext)
+			if err != nil {
+				return nil, err
+			}
+			_, object := value.(map[string]any)
+			_, array := value.([]any)
+			if object || array {
+				return nil, fmt.Errorf("script hooks receive event JSON on stdin; event interpolation into shell scripts is unsupported")
+			}
+		}
+	}
 	argv := make([]string, 0, len(step.Argv))
 	for _, a := range step.Argv {
 		v, err := renderString(a, ec)
@@ -53,9 +77,13 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if !ok {
 			return nil, fmt.Errorf("run must render to a string")
 		}
-		argv = []string{step.Shell, "-c", script}
+		shell := step.Shell
+		if shell == "" && ctx.Value(jobContainerKey{}) != nil {
+			shell = "sh"
+		}
+		argv = []string{shell, "-c", script}
 	}
-	if len(argv) == 0 || argv[0] == "" {
+	if !isDockerStep(step) && (len(argv) == 0 || argv[0] == "") {
 		return nil, fmt.Errorf("command requires executable")
 	}
 	if step.Timeout != "" {
@@ -67,6 +95,40 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
+	if step.WorkingDirectory != "" {
+		v, err := renderString(step.WorkingDirectory, ec)
+		if err != nil {
+			return nil, err
+		}
+		var ok bool
+		step.WorkingDirectory, ok = v.(string)
+		if !ok {
+			return nil, fmt.Errorf("working-directory must render to a string")
+		}
+	}
+	input, err := renderValue(step.With["input"], ec)
+	if err != nil {
+		return nil, err
+	}
+	if ec.Hook {
+		input = ec.Event
+	}
+	var inputJSON []byte
+	if input != nil {
+		inputJSON, err = json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+		inputJSON = append(inputJSON, '\n')
+	}
+	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
+		ctx = context.WithValue(ctx, commandInputKey{}, inputJSON)
+		out, err := e.executeContainerCommand(ctx, step, argv, slots)
+		if err != nil {
+			return out, err
+		}
+		return validateCommandOutput(out, step, ec)
+	}
 	queued := time.Now()
 	select {
 	case slots <- struct{}{}:
@@ -76,22 +138,18 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	defer func() { <-slots }()
 	queueTime := time.Since(queued).Milliseconds()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if inputJSON != nil {
+		cmd.Stdin = bytes.NewReader(inputJSON)
+	}
+	if len(env) > 0 && e.CommandExecution.Mode != "container" {
+		cmd.Env = append(os.Environ(), env...)
+	}
+
 	dir := step.WorkingDirectory
 	if dir == "" {
 		dir = e.WorkspaceDir
-	} else {
-		v, err := renderString(dir, ec)
-		if err != nil {
-			return nil, err
-		}
-		var ok bool
-		dir, ok = v.(string)
-		if !ok {
-			return nil, fmt.Errorf("working-directory must render to a string")
-		}
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(e.WorkspaceDir, dir)
-		}
+	} else if !filepath.IsAbs(dir) {
+		dir = filepath.Join(e.WorkspaceDir, dir)
 	}
 	cmd.Dir = dir
 	cmd.WaitDelay = 2 * time.Second
@@ -106,7 +164,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		if err := os.MkdirAll(filepath.Join(state, "home"), 0700); err != nil {
 			return nil, err
 		}
-		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir})
+		cleanup, superviseErr = runtimeexec.PrepareContainer(ctx, cmd, e.CommandExecution, runtimeexec.ContainerOptions{Workspace: dir, State: state, Root: e.WorkspaceDir, Environment: env})
 	} else {
 		cleanup, superviseErr = runtimeexec.SupervisePolicy(ctx, cmd, e.CommandExecution)
 	}
@@ -122,7 +180,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 			return nil, err
 		}
 	}
-	err := cmd.Run()
+	err = cmd.Run()
 	code := -1
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
@@ -139,6 +197,25 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 	}
 	if err != nil {
 		return out, fmt.Errorf("command failed: %w", err)
+	}
+	return validateCommandOutput(out, step, ec)
+}
+
+func validateCommandOutput(out map[string]any, step Step, ec expressionContext) (map[string]any, error) {
+	output, err := renderValue(step.With["output"], ec)
+	if err != nil {
+		return out, err
+	}
+	contract, err := ParseAgentOutputContract(output)
+	if err != nil {
+		return out, err
+	}
+	if contract != nil {
+		validated := ValidateAgentStructuredOutput(out["stdout"].(string), contract)
+		if !validated.Valid {
+			return out, fmt.Errorf("invalid command structured output: %s", validated.Error)
+		}
+		out["structured"] = validated.Structured
 	}
 	return out, nil
 }

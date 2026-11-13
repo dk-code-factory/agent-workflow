@@ -17,7 +17,7 @@ describe('advisory reference dependencies', () => {
   ])('$name', ({ needs, prompt, condition, warnings, errors }) => {
     const result = parseWorkflow(JSON.stringify({ jobs: {
       producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
-      consumer: { needs, if: condition, steps: [{ uses: 'agent/claude', with: { prompt } }] },
+      consumer: { needs, if: condition, steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt}}] },
     } }));
     const advisory = result.diagnostics.filter(d => d.code === 'expression-dependency');
     expect(advisory).toHaveLength(warnings);
@@ -32,7 +32,7 @@ describe('advisory reference dependencies', () => {
     const result = parseWorkflow(JSON.stringify({ jobs: {
       first: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
       second: { outputs: { text: 'world' }, steps: [{ argv: ['echo'] }] },
-      consumer: { if: format === 'wrapped' ? '${{ ' + condition + ' }}' : condition, steps: [{ uses: 'agent/claude', with: { prompt: expression.repeat(200) } }] },
+      consumer: { if: format === 'wrapped' ? '${{ ' + condition + ' }}' : condition, steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: expression.repeat(200)}}] },
     } }));
     const warnings = result.diagnostics.filter(d => d.code === 'expression-dependency');
     expect(warnings).toHaveLength(4);
@@ -63,7 +63,7 @@ describe('advisory reference dependencies', () => {
   it('normalizes dependencies a bounded number of times for repeated references', () => {
     const source = JSON.stringify({ jobs: {
       producer: { outputs: { text: 'hello' }, steps: [{ argv: ['echo'] }] },
-      consumer: { needs: Array(100).fill('producer'), steps: [{ uses: 'agent/claude', with: { prompt: '${{ needs.producer.outputs.text }}'.repeat(200) } }] },
+      consumer: { needs: Array(100).fill('producer'), steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ needs.producer.outputs.text }}'.repeat(200)}}] },
     } });
     const trim = String.prototype.trim;
     let normalizations = 0;
@@ -93,12 +93,80 @@ describe('runner compatibility', () => {
     const result = parseWorkflow('jobs:\n  build:\n    surprise: true\n    steps: [{argv: [echo]}]\n');
     expect(result.diagnostics[0]).toMatchObject({ code: 'unknown-field', path: ['jobs', 'build', 'surprise'], location: { line: 3 } });
   });
+  it.each(['[helpers/, config.json]', '[]'])('accepts job helper-file list %s without parser errors', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(result.usable).toBe(true);
+    expect(parseWorkflow(result.doc!.toString()).workflow).toEqual(result.workflow);
+  });
+  it.each(['helpers/', '[{path: helpers/}]', '[[helpers/]]', '{path: helpers/}'])('rejects invalid job helper-file shape %s', files => {
+    const result = parseWorkflow(`jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`);
+    expect(result.diagnostics.some(d => d.source === 'parser' && d.code === 'shape' && d.path.join('.').startsWith('jobs.build.container.files'))).toBe(true);
+  });
+  it.each(['container', 'step'])('preserves runner scalar filenames in %s files through visual edits', location => {
+    const files = '[123, true, FALSE, 01, 0xA, 1.0, 2024-01-01, !!int 010, !!binary aGVscGVyLnB5, !!binary aMOpbHAucHk=, !!binary 77u/aGVscGVyLnB5]';
+    const source = location === 'container'
+      ? `jobs: {build: {container: {image: ubuntu, files: ${files}}, steps: [{argv: [echo]}]}}`
+      : `jobs: {build: {steps: [{uses: docker://ubuntu, files: ${files}}]}}`;
+    const document = new WorkflowDocument({ source });
+    const expected = ['123', 'true', 'FALSE', '01', '0xA', '1.0', '2024-01-01', '010', 'helper.py', 'hélp.py', '\uFEFFhelper.py'];
+    const paths = () => location === 'container'
+      ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
+      : document.getSnapshot().workflow!.jobs.build.steps![0].files;
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(paths()).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(paths()).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+  });
+  it.each(['container', 'step'])('retains invalid UTF-8 source for repair in %s files', location => {
+    const source = location === 'container'
+      ? 'jobs: {build: {container: {image: ubuntu, files: [!!binary /w==]}, steps: [{argv: [echo]}]}}'
+      : 'jobs: {build: {steps: [{uses: docker://ubuntu, files: [!!binary /w==]}]}}';
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().stale).toBe(true);
+    expect(document.getSnapshot().diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(true);
+    document.setSource(source.replace('/w==', 'aGVscGVyLnB5'));
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    const files = location === 'container'
+      ? (document.getSnapshot().workflow!.jobs.build.container as { files: string[] }).files
+      : document.getSnapshot().workflow!.jobs.build.steps![0].files;
+    expect(files).toEqual(['helper.py']);
+  });
+  it.each([
+    { declaration: '', expected: undefined },
+    { declaration: ', files: null', expected: null },
+    { declaration: ', files: []', expected: [] },
+    { declaration: ', files: [null]', expected: [] },
+  ])('preserves Docker inheritance or replacement for "$declaration"', ({ declaration, expected }) => {
+    const source = `jobs: {build: {container: {image: ubuntu, files: [helpers/]}, steps: [{uses: docker://ubuntu${declaration}}]}}`;
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+  });
+  it('keeps null job and ordinary-step helper declarations absent to the runner', () => {
+    const document = new WorkflowDocument({ source: 'jobs: {build: {container: {image: ubuntu, files: null}, steps: [{argv: [echo], files: null}]}}' });
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(document.getSnapshot().diagnostics).toEqual([]);
+    expect((document.getSnapshot().workflow!.jobs.build.container as { files: null }).files).toBeNull();
+    expect(document.getSnapshot().workflow!.jobs.build.steps![0].files).toBeNull();
+  });
 });
 
 
 describe('Go scalar string decoding', () => {
   it('decodes legacy boolean spelling for typed flags without changing raw parameters', () => {
-    const result = parseWorkflow('jobs: {test: {continue-on-error: "no", steps: [{uses: agent/claude, continue-on-error: YES, with: {prompt: off}}]}}');
+    const result = parseWorkflow(`jobs: { test: { continue-on-error: "no", steps: [ { uses: agent/run, continue-on-error: YES, with: { prompt: off, agent: claude.toml } } ] } }
+`);
     expect(result.diagnostics).toEqual([]);
     expect(result.workflow!.jobs.test['continue-on-error']).toBe(false);
     expect(result.workflow!.jobs.test.steps![0]['continue-on-error']).toBe(true);
@@ -238,14 +306,17 @@ describe('Go null collection decoding', () => {
     expect(document.getSnapshot().workflow!.jobs.test.steps).toHaveLength(1);
   });
   it('does not reinterpret null values inside untyped action parameters', () => {
-    const result = parseWorkflow('jobs: {test: {steps: [{uses: agent/claude, with: {prompt: [one, null, two]}}]}}');
+    const result = parseWorkflow(`jobs: { test: { steps: [ { uses: agent/run, with: { prompt: [ one, null, two ], agent: claude.toml } } ] } }
+`);
     expect(result.workflow!.jobs.test.steps![0].with!.prompt).toEqual(['one', null, 'two']);
   });
 });
 
 describe('typed null scalar decoding', () => {
   it('returns Go zero values with accurate types and preserves runtime meaning through edits', () => {
-    const source = 'name: null\njobs: {build: {needs: null, continue-on-error: null, outputs: {result: null}, repeat: null, steps: [{id: null, run: null, uses: agent/claude, with: {prompt: ok}}]}}';
+    const source = `name: null
+jobs: { build: { needs: null, continue-on-error: null, outputs: { result: null }, repeat: null, steps: [ { id: null, run: null, uses: agent/run, with: { prompt: ok, agent: claude.toml } } ] } }
+`;
     const document = new WorkflowDocument({ source });
     const workflow = document.getSnapshot().workflow!;
     expect(workflow.name).toBe(''); expect(workflow.jobs.build.needs).toEqual([]);
@@ -268,5 +339,26 @@ describe('tagged legacy boolean round trips', () => {
     expect(document.getSnapshot().diagnostics).toEqual([]);
     expect(document.getSnapshot().workflow!.jobs).toEqual(before!.jobs);
     expect(document.getSnapshot().workflow!.on).toEqual(before!.on);
+  });
+});
+
+
+describe('native task turn allowance', () => {
+  it.each([['010', 8], ['1_0', 10], ['0xA', 10], ['0b+10', 2], ['1_0.0', 10], ['1e1', 10]])('retains runner allowance %s through unrelated edits', (token, allowance) => {
+    const source = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: ${token}}}]}}`;
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    document.setField(['name'], 'Keep admitted allowance');
+    expect(document.getSnapshot().workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    const reparsed = parseWorkflow(document.getSnapshot().source);
+    expect(reparsed.workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+  });
+
+  it.each([[5, true], [0, false], [-1, false], [1.5, false], ['5', false], [2147483648, false]])('validates literal allowance %s', (turns, valid) => {
+    const parsed = parseWorkflow(JSON.stringify({ jobs: { review: { steps: [{ uses: 'agent/run', with: { agent: 'reviewer.toml', prompt: 'Review', turns } }] } } }));
+    expect(parsed.diagnostics.some(d => d.severity === 'error' && d.path.at(-1) === 'turns')).toBe(!valid);
   });
 });

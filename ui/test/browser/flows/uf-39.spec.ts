@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 import { open, snapshot, field, job } from './harness';
 
 test('declare producer output and insert it in dependent prompt', async ({ page }) => {
-  const ui = await open(page, 'jobs: {review: {steps: [{id: analyze, uses: agent/claude, with: {prompt: Review}}]}, summarize: {steps: [{id: summary, uses: agent/claude, with: {prompt: Summarize}}]}}');
+  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.toml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: Summarize, agent: claude.toml } } ] } }
+`);
   await job(page, 'review'); await ui.getByText('Job outputs', { exact: true }).click();
   await ui.getByRole('button', { name: 'Add output', exact: true }).click();
   await field(page, 'Identifier: output', 'report'); await field(page, 'Output value: report', '${{ steps.analyze.outputs.text }}');
@@ -16,7 +17,8 @@ test('declare producer output and insert it in dependent prompt', async ({ page 
 });
 
 test('preview and cancel result wiring, then apply and Undo the complete transaction', async ({ page }) => {
-  const ui = await open(page, 'jobs: {review: {steps: [{id: analyze, uses: agent/claude, with: {prompt: Review}}]}, summarize: {steps: [{id: summary, uses: agent/claude, with: {prompt: "Summarize: ", model: keep}}]}}');
+  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.toml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: "Summarize: ", model: keep, agent: claude.toml } } ] } }
+`);
   await job(page, 'summarize');
   await ui.getByRole('button', { name: '1. summary', exact: true }).click();
   const before = (await snapshot(page)).source;
@@ -40,13 +42,14 @@ test('preview and cancel result wiring, then apply and Undo the complete transac
   const jobs = (await snapshot(page)).workflow.jobs;
   expect(jobs.review.outputs).toEqual({ report: '${{ steps.analyze.outputs.text }}' });
   expect(jobs.summarize.needs).toEqual(['review']);
-  expect(jobs.summarize.steps[0].with).toEqual({ prompt: 'Summarize: ${{ needs.review.outputs.report }}', model: 'keep' });
+  expect(jobs.summarize.steps[0].with).toEqual({ agent: 'claude.toml', prompt: 'Summarize: ${{ needs.review.outputs.report }}', model: 'keep' });
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
 });
 
 test('existing outputs are reusable and changed documents require a new preview', async ({ page }) => {
-  const ui = await open(page, 'jobs: {review: {outputs: {report: "${{ steps.analyze.outputs.text }}"}, steps: [{id: analyze, argv: [echo]}]}, summarize: {steps: [{uses: agent/claude, with: {prompt: Summary}}]}}');
+  const ui = await open(page, `jobs: { review: { outputs: { report: "\${{ steps.analyze.outputs.text }}" }, steps: [ { id: analyze, argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.toml } } ] } }
+`);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
   await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).click();
   const picker = ui.getByRole('dialog');
@@ -69,7 +72,8 @@ test('existing outputs are reusable and changed documents require a new preview'
 
 
 test('Escape closes the native result dialog and restores field focus without editing', async ({ page }) => {
-  const ui = await open(page, 'jobs: {review: {steps: [{argv: [echo]}]}, summarize: {steps: [{uses: agent/claude, with: {prompt: Summary}}]}}');
+  const ui = await open(page, `jobs: { review: { steps: [ { argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.toml } } ] } }
+`);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
   const before = (await snapshot(page)).source;
   await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).focus(); await page.keyboard.press('Enter');
@@ -80,7 +84,9 @@ test('Escape closes the native result dialog and restores field focus without ed
 });
 
 test('named step result wiring inserts a nested field without declaring a job output', async ({ page }) => {
-  const ui = await open(page, 'schemas: {Review: {type: object, properties: {details: {type: object, properties: {reason: {type: string}}}}}}\njobs: {review: {steps: [{id: analyze, agent: claude, prompt: Review, with: {output: {schema: Review}}}]}, summarize: {steps: [{id: summary, agent: claude, prompt: "Read: "}]}}');
+  const ui = await open(page, `schemas: { Review: { type: object, properties: { details: { type: object, properties: { reason: { type: string } } } } } }
+jobs: { review: { steps: [ { id: analyze, with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { agent: claude.toml, prompt: "Read: " } } ] } }
+`);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. summary', exact: true }).click();
   const prompt = ui.getByLabel('Prompt', { exact: true });
   await prompt.focus(); await prompt.press('ControlOrMeta+End');
@@ -98,7 +104,7 @@ test('named step result wiring inserts a nested field without declaring a job ou
   await expect(prompt).toBeFocused();
   const jobs = (await snapshot(page)).workflow.jobs;
   expect(jobs.review.outputs).toBeUndefined(); expect(jobs.summarize.needs).toEqual(['review']);
-  expect(jobs.summarize.steps[0].prompt).toBe('Read: ${{ needs.review.steps.analyze.details.reason }}');
+  expect(jobs.summarize.steps[0].with.prompt).toBe('Read: ${{ needs.review.steps.analyze.details.reason }}');
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
 });
@@ -107,8 +113,8 @@ test('named result picker bounds schema fields and typed prefixes reach a later 
   const source = JSON.stringify({
     schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
     jobs: {
-      review: { steps: [{ id: 'analyze', agent: 'claude', prompt: 'Review', with: { output: { schema: 'Shared' } } }] },
-      summarize: { steps: [{ id: 'summary', agent: 'claude', prompt: 'Read' }] },
+      review: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}}] },
+      summarize: { steps: [{id: 'summary', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
     },
   });
   const ui = await open(page, source);
@@ -124,7 +130,7 @@ test('named result picker bounds schema fields and typed prefixes reach a later 
   await picker.getByRole('button', { name: 'Preview result wiring', exact: true }).click();
   await expect(picker.getByLabel('Result wiring preview', { exact: true })).toContainText('${{ needs.review.steps.analyze.field999 }}');
   await picker.getByRole('button', { name: 'Apply job result', exact: true }).click();
-  expect((await snapshot(page)).workflow.jobs.summarize.steps[0].prompt).toContain('${{ needs.review.steps.analyze.field999 }}');
+  expect((await snapshot(page)).workflow.jobs.summarize.steps[0].with.prompt).toContain('${{ needs.review.steps.analyze.field999 }}');
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(source);
 });

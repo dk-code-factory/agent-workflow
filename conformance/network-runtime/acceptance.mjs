@@ -2,7 +2,7 @@
 // unpredictable owned name; cleanup never prunes or resets shared Podman state.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readlinkSync, readdirSync, chmodSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, readFileSync, readlinkSync, readdirSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -207,11 +207,16 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   run('git', ['init', '-q', '--initial-branch=fixture', dir]);
   run('git', ['-C', dir, '-c', 'user.name=Runtime Fixture', '-c', 'user.email=runtime-fixture@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'Initialize disposable runtime fixture']);
   writeFileSync(join(dir, 'agents.yml'), `execution:\n  network-runtime: ${name}\nagents:\n  fixture:\n    provider: codex-cli\n    command: ${fixture}\n    sandbox: read-only\n`);
-  writeFileSync(join(dir, 'workflows/local.yml'), `on: {workflow_call: {}}\njobs:\n  test:\n    steps:\n      - id: command\n        argv: [${JSON.stringify(fixture)}, network, ${name}-command]\n      - id: agent\n        uses: agent/fixture\n        with:\n          prompt: ${name}-agent\n`);
-  run(workflow, ['run', '--foreground', '--workspace', dir, 'workflows/local.yml']);
+  const codexWrapper = join(dir, 'fake-codex');
+  const shellFixture = "'" + fixture.replaceAll("'", "'\\''") + "'";
+  writeFileSync(codexWrapper, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.167.0'; exit 0; fi\nexec ${shellFixture} app-server\n`, { mode: 0o700 });
+  appendFileSync(join(dir, 'agents.yml'), `  codex:\n    provider: codex-app-server\n    command: ${codexWrapper}\n    authentication: {mode: api-key, credential-env: AW21_FIXTURE_KEY}\n`);
+  writeFileSync(join(dir, 'workflows/fixture.toml'), "name='fixture'\ndescription='Disposable network fixture'\ndeveloper_instructions='Execute the disposable fixture.'\n");
+  writeFileSync(join(dir, 'workflows/local.yml'), `on: {workflow_call: {}}\njobs:\n  test:\n    steps:\n      - id: command\n        argv: [${JSON.stringify(fixture)}, network, ${name}-command]\n      - id: agent\n        uses: agent/run\n        with:\n          agent: fixture.toml\n          prompt: ${name}-agent\n`);
+  run(workflow, ['run', '--foreground', '--workspace', dir, 'workflows/local.yml'], { env: { ...process.env, AW21_FIXTURE_KEY: 'model-free-fixture' } });
   // Doctor's configured executable probes must cross the actual root member path.
   run('git', ['-C', dir, 'rev-parse', '--verify', 'HEAD']);
-  const doctor = JSON.parse(run(workflow, ['doctor', '--workspace', dir]));
+  const doctor = JSON.parse(run(workflow, ['doctor', '--workspace', dir], { env: { ...process.env, AW21_FIXTURE_KEY: 'model-free-fixture' } }));
   assert.equal(doctor.backends.fixture.native_cached_login, true);
   assert(doctor.backends.fixture.version.includes(identity.netns));
   assert(doctor.backends.fixture.version.includes(ref.endpoint));

@@ -16,26 +16,29 @@ var (
 )
 
 type expressionContext struct {
-	Literal         bool
-	Failed          map[string]any
-	Error           map[string]any
-	Item            any
-	Ordered         bool
-	Attempt         *Attempt
-	RunID           string
-	JobID           string
-	IterationNumber int
-	Metadata        map[string]any
-	Iteration       map[string]any
-	Inputs          map[string]any
-	Private         map[string]any
-	Secrets         map[string]string
-	Event           map[string]any
-	Steps           map[string]StepExecution
-	Needs           map[string]JobExecution
-	Jobs            map[string]JobExecution
-	Delivery        Delivery
-	Session         string
+	CredentialAliases map[string]string
+	Hook              bool
+	NoShellEvent      bool
+	Literal           bool
+	Failed            map[string]any
+	Error             map[string]any
+	Item              any
+	Ordered           bool
+	Attempt           *Attempt
+	RunID             string
+	JobID             string
+	IterationNumber   int
+	Metadata          map[string]any
+	Iteration         map[string]any
+	Inputs            map[string]any
+	Private           map[string]any
+	Secrets           map[string]string
+	Event             map[string]any
+	Steps             map[string]StepExecution
+	Needs             map[string]JobExecution
+	Jobs              map[string]JobExecution
+	Delivery          Delivery
+	Session           string
 }
 
 func renderValue(value any, ctx expressionContext) (any, error) {
@@ -257,6 +260,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 	case "secrets":
 		cur = stringMapAny(ctx.Secrets)
 	case "event":
+		if ctx.NoShellEvent {
+			return nil, fmt.Errorf("script hooks receive event JSON on stdin; event interpolation into shell scripts is unsupported")
+		}
 		cur = ctx.Event
 	case "steps":
 		if len(parts) < 2 {
@@ -265,6 +271,9 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		step, ok := ctx.Steps[parts[1]]
 		if !ok {
 			return nil, fmt.Errorf("step %q not found", parts[1])
+		}
+		if value, handled, err := lookupStepFailure(path, step, parts[2:]); handled {
+			return value, err
 		}
 		if len(parts) > 2 && parts[2] != "" && !legacyStepField(parts[2]) {
 			return lookupStepResult(path, step, parts[2:])
@@ -338,6 +347,9 @@ func lookupJobStepResult(path string, job JobExecution, parts []string) (any, er
 // Aliases are views of retained results, never separately persisted values.
 // Metadata keeps its legacy meaning even when a structured result has the same key.
 func lookupStepResult(path string, step StepExecution, parts []string) (any, error) {
+	if value, handled, err := lookupStepFailure(path, step, parts); handled {
+		return value, err
+	}
 	var value any
 	if legacyStepField(parts[0]) {
 		value = map[string]any{"outputs": step.Outputs, "status": step.Status, "error": step.Error}
@@ -365,6 +377,22 @@ func lookupStepResult(path string, step StepExecution, parts []string) (any, err
 		}
 	}
 	return value, nil
+}
+
+// Failure classifications belong to the engine even when a provider's
+// structured output uses the same names. Explicit fields leave the legacy
+// whole-step metadata object unchanged.
+func lookupStepFailure(path string, step StepExecution, parts []string) (any, bool, error) {
+	if len(parts) == 0 || parts[0] != "failure_class" && parts[0] != "unsafe_failure_class" {
+		return nil, false, nil
+	}
+	if len(parts) != 1 {
+		return nil, true, fmt.Errorf("%s: failure classification is a string", path)
+	}
+	if parts[0] == "unsafe_failure_class" {
+		return step.UnsafeFailureClass, true, nil
+	}
+	return step.FailureClass, true, nil
 }
 
 func stringMapAny(values map[string]string) map[string]any {

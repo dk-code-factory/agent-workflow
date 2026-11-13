@@ -217,6 +217,10 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 			if err != nil || run.Status != workflows.RunStatusSucceeded || requests.Load() != 2 {
 				t.Fatalf("completion contract failed: run=%+v requests=%d err=%v", run, requests.Load(), err)
 			}
+			usage, usageErr := store.Usage(ctx, run.ID)
+			if usageErr != nil || usage.Summary.InputTokens == nil || *usage.Summary.InputTokens < 16 || usage.Summary.OutputTokens == nil || !usage.Summary.Complete || usage.Summary.CostUSD == nil {
+				t.Fatalf("SDK conversation observations did not reach durable accounting: %+v %v", usage, usageErr)
+			}
 			got, _ := json.Marshal(run.Jobs["solve"].Steps["solution"].Outputs["structured"])
 			expected := tc.first
 			switch tc.name {

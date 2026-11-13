@@ -22,6 +22,7 @@ type fakeRuntimeObject struct {
 	} `json:"Config"`
 	Argv      []string
 	Workspace string
+	Env       []string
 }
 
 // This subprocess implements the public runtime CLI contract, never Docker or
@@ -98,6 +99,13 @@ func TestInvocationRuntimeFixture(t *testing.T) {
 				if target == "/workspace" {
 					object.Workspace = source
 				}
+			case "--env":
+				index++
+				assignment := args[index]
+				if !strings.Contains(assignment, "=") {
+					assignment += "=" + os.Getenv(assignment)
+				}
+				object.Env = append(object.Env, assignment)
 			case "--entrypoint":
 				for next := index + 3; next < len(args); next++ {
 					if args[next] == "--" {
@@ -140,6 +148,7 @@ func TestInvocationRuntimeFixture(t *testing.T) {
 		}
 		cmd := exec.Command(object.Argv[0], object.Argv[1:]...)
 		cmd.Dir = object.Workspace
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, object.Env...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -179,7 +188,7 @@ func containerExecutorFixture(t *testing.T, mode string) (*Executor, *SQLiteStor
 
 func TestContainerCommandCreatesBeforeStartAndCleansVerifiedIdentity(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatalf("container command: %+v %v", run, err)
 	}
@@ -195,9 +204,37 @@ func TestContainerCommandCreatesBeforeStartAndCleansVerifiedIdentity(t *testing.
 	}
 }
 
+func TestContainerCommandForwardsOnlyExplicitStepEnvironment(t *testing.T) {
+	for _, explicitProvider := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit-provider=%t", explicitProvider), func(t *testing.T) {
+			for _, key := range []string{"UNRELATED_WORKFLOW_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL"} {
+				t.Setenv(key, "ambient-private-"+key)
+			}
+			e, _, _ := containerExecutorFixture(t, "")
+			source := `jobs: {x: {steps: [{argv: [sh, -c, 'printf "%s|%s|%s|%s|%s|%s|%s|%s" "$TOKEN" "$PLAIN" "$UNRELATED_WORKFLOW_TOKEN" "$HOME" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$CLAUDE_CODE_OAUTH_TOKEN" "$ANTHROPIC_BASE_URL"'], env: {TOKEN: '${{ secrets.token }}', PLAIN: ready, HOME: /workload-home}}]}}`
+			providerValue := ""
+			if explicitProvider {
+				source = strings.Replace(source, "PLAIN: ready", "OPENAI_API_KEY: '${{ secrets.token }}', PLAIN: ready", 1)
+				providerValue = "[REDACTED]"
+			}
+			if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows/main.yml"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": "explicit-private-token"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "[REDACTED]|ready||/workload-home|" + providerValue + "|||"
+			if got := run.Jobs["x"].Steps["step_1"].Outputs["stdout"]; got != want {
+				t.Fatalf("explicit environment was lost or ambient environment leaked: %q", got)
+			}
+		})
+	}
+}
+
 func TestLostCreateResponseNeverStartsWork(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "lost-create-response")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -211,7 +248,7 @@ func TestLostCreateResponseNeverStartsWork(t *testing.T) {
 
 func TestRuntimeOutageRetainsUncertaintyAndRecoversWhenAvailable(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "outage-after-start")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -234,7 +271,7 @@ func TestRuntimeOutageRetainsUncertaintyAndRecoversWhenAvailable(t *testing.T) {
 
 func TestForeignContainerLabelsAreNeverRemoved(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "wrong-label")
-	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run.Status != RunStatusNeedsAttention {
 		t.Fatal(run, err)
 	}
@@ -278,7 +315,7 @@ func TestContainerCannotStartBeforeIdentityCommit(t *testing.T) {
 
 func TestChangedRuntimeIdentityCannotProveAbsence(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "outage-after-start")
-	run, _ := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, _ := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err := os.Remove(filepath.Join(runtime, "offline")); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +332,7 @@ func TestChangedRuntimeIdentityCannotProveAbsence(t *testing.T) {
 
 func TestCommandExecutionPolicyIsPinnedAcrossResume(t *testing.T) {
 	e, store, runtime := containerExecutorFixture(t, "")
-	run, err := e.Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Prepare(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +341,7 @@ func TestCommandExecutionPolicyIsPinnedAcrossResume(t *testing.T) {
 		t.Fatal("command policy was not admitted", snapshot.Execution, err)
 	}
 	e.CommandExecution = runtimeexec.Policy{} // changing current configuration cannot weaken admission
-	result, err := e.Resume(context.Background(), run.ID, nil, false)
+	result, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 	if err != nil || result.Status != RunStatusSucceeded {
 		t.Fatal(result, err)
 	}

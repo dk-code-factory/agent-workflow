@@ -48,7 +48,7 @@ func TestInputLifecycleCancellationRecoversBoundaries(t *testing.T) {
 					return nil
 				}}
 			}
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if boundary == "queued" || boundary == "consumed" {
 				if err != nil || run.Status != RunStatusWaiting {
 					t.Fatal(run, err)
@@ -68,7 +68,7 @@ func TestInputLifecycleCancellationRecoversBoundaries(t *testing.T) {
 					}
 				} else {
 					e.Store = &lifecycleConsumeJournal{SQLiteStore: s, afterConsume: func(ExternalInputGate) { cancel() }}
-					run, err = e.Resume(ctx, run.ID, nil, false)
+					run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 				}
 			}
 			if run == nil || run.Status != RunStatusCanceled || run.FailureClass != "canceled" || calls.Load() != 1 {
@@ -106,7 +106,7 @@ func TestInputLifecycleCancellationRecoversBoundaries(t *testing.T) {
 			if err = reopened.QueueInputContinuations(context.Background(), 128); err != nil {
 				t.Fatal(err)
 			}
-			done, err := e.Resume(context.Background(), run.ID, nil, false)
+			done, err := nativeTestExecutor(t, e).Resume(context.Background(), run.ID, nil, false)
 			if err != nil || done.Status != RunStatusSucceeded || done.Generation != generation+1 || calls.Load() != 3 {
 				t.Fatal("restart replayed/lost continuation", done, err, calls.Load())
 			}
@@ -123,7 +123,7 @@ func TestInputLifecycleRecoveryPreservesUnsafeAndControls(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +208,7 @@ func TestInputLifecycleRetentionProtectsRecoverableHistory(t *testing.T) {
 			e, s := durableExecutor(t, `jobs: {call: {uses: workflows/child.yml}}`, nil)
 			writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
 jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -360,7 +360,7 @@ func TestInputPauseSignalSuppressesOnlyPureDenial(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -396,7 +396,7 @@ func TestInputPauseSignalSuppressesOnlyPureDenial(t *testing.T) {
 				}
 				return signal
 			}}
-			result, err := e.Resume(ctx, run.ID, nil, false)
+			result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 			want := RunStatusInterrupted
 			if genuine != nil {
 				want = RunStatusFailed
@@ -423,7 +423,7 @@ func TestInputLifecycleRecoveryRechecksLateControls(t *testing.T) {
 		t.Run(control, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +478,7 @@ func TestInputLifecycleConsumedRetentionAdmissionWindow(t *testing.T) {
 				e, s := durableExecutor(t, `jobs: {call: {uses: workflows/child.yml}}`, nil)
 				writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
 jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`)
-				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 				if err != nil {
 					t.Fatal(err)
 				}

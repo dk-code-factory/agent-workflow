@@ -133,7 +133,7 @@ func TestLegacyLimitsHooksAndNumericPersonalAccounts(t *testing.T) {
 func TestDefaultOrderAndNestedReviewerAdapters(t *testing.T) {
 	root, provider, req := fixture(t)
 	reviewer := func(id string) Adapter {
-		return Adapter{Identity: id, Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "leaf", Assignment: "Review the specified diff only.", Evidence: []string{"original"}}}}}
+		return Adapter{Identity: id, Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "codex", Assignment: "Review the specified diff only.", Evidence: []string{"original"}}}}}
 	}
 	req.Options = map[string]any{}
 	configFile(t, "", map[string]any{"skill_defaults": map[string]any{"dk-workflows:dk-pr-reviewers-run": map[string]any{"options": map[string]any{"reviewers": []any{map[string]any{"skill": "custom:outer", "options": map[string]any{"reviewers": []any{map[string]any{"skill": "custom:inner"}}}}}}}}})
@@ -209,7 +209,7 @@ func TestAdapterIdentityRoleAndOwnershipBlockBeforeDispatch(t *testing.T) {
 	if _, e := Prepare(context.Background(), root, provider, req); e == nil || !strings.Contains(e.Error(), "unavailable") {
 		t.Fatal("unknown native role admitted", e)
 	}
-	adapter.Procedure[0][0].Role = "leaf"
+	adapter.Procedure[0][0].Role = "codex"
 	adapter.Identity = "custom:other"
 	req.Adapters["custom:review"] = adapter
 	if _, e := Prepare(context.Background(), root, provider, req); e == nil || !strings.Contains(e.Error(), "declared identity") {

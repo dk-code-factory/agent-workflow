@@ -33,7 +33,7 @@ func TestConversationLifecycleCombinationsRejectBeforeEffects(t *testing.T) {
 			e, _ := durableExecutor(t, source, runner)
 			ready := false
 			e.Ready = func(context.Context) error { ready = true; return nil }
-			if _, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "conversations cannot own or appear inside lifecycle handlers") || ready || runner.calls.Load() != 0 {
+			if _, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "conversations cannot own or appear inside lifecycle handlers") || ready || runner.calls.Load() != 0 {
 				t.Fatalf("unsupported combination reached effects: ready=%v calls=%d err=%v", ready, runner.calls.Load(), err)
 			}
 		})
@@ -82,12 +82,12 @@ jobs:
 	// processes to finish under race instrumentation on slower CI runners.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 	if err == nil || run == nil || run.FailureClass != "storage" || runner.calls.Load() != 1 {
 		t.Fatalf("lost block completion: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
 	}
 	e.Store = store
-	run, err = e.Resume(ctx, run.ID, nil, false)
+	run, err = nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
 	if err != nil || run == nil || run.Status != RunStatusSucceeded || runner.calls.Load() != 1 {
 		t.Fatalf("combined recovery replayed work: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,11 +91,21 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 			case "account/login/start":
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
 			case "thread/start", "thread/resume":
+				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS") == "1" {
+					if frame.Params["model"] != "definition-model" || !strings.Contains(fmt.Sprint(frame.Params["baseInstructions"]), "Definition instructions.") {
+						os.Exit(4)
+					}
+				}
 				if frame.Params["approvalPolicy"] != "never" {
 					os.Exit(3)
 				}
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"thread": map[string]string{"id": "thread-1"}}})
 			case "turn/start":
+				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS") == "1" {
+					if frame.Params["effort"] != "high" || !strings.Contains(fmt.Sprint(frame.Params["input"]), "9007199254740993") {
+						os.Exit(5)
+					}
+				}
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"turn": map[string]string{"id": "turn-1"}}})
 				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_INTERRUPT") != "" {
 					_ = encoder.Encode(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1"}}})
@@ -104,6 +115,14 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 				_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "background-thread", "turn": map[string]string{"id": "background-turn", "status": "completed"}}})
 				_ = encoder.Encode(map[string]any{"method": "future/event", "params": map[string]any{}})
 				_ = encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "item": map[string]string{"type": "agentMessage", "text": "done"}}})
+				if failure := os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_FAILURE"); failure != "" {
+					message := "ordinary provider rejection"
+					if failure == "authentication" {
+						message = "401 invalid OAuth token"
+					}
+					_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "failed", "error": map[string]string{"message": message}}}})
+					continue
+				}
 				_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": "turn-1", "status": "completed"}}})
 			case "turn/interrupt":
 				_ = os.WriteFile("interrupt-observed", []byte("yes"), 0600)
@@ -219,5 +238,62 @@ func TestCodexGracefulInterruptionRetainsPartialUsage(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(root, "interrupt-observed")); err != nil {
 		t.Fatal("provider interrupt handshake was not sent", err)
+	}
+}
+
+func TestNativeCodexDefinitionSettingsAndTypedInput(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	fake := filepath.Join(root, "fake-codex")
+	script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1 AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS=1\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
+	if err = os.WriteFile(fake, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKFLOW_NATIVE_FIXTURE_KEY", "local-fixture-key")
+	runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"codex": {Provider: "codex-app-server", Command: fake, Authentication: Authentication{Mode: "api-key", CredentialEnv: "WORKFLOW_NATIVE_FIXTURE_KEY"}}}}}
+	definition := &workflows.AgentDefinition{Name: "native", Description: "Fixture", DeveloperInstructions: "Definition instructions.", Model: "definition-model", ReasoningEffort: "high"}
+	admitted, err := runner.AdmitNativeTask(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "codex", Prompt: "Task", Definition: admitted, Input: map[string]any{"number": json.Number("9007199254740993")}}}, nil)
+	if err != nil || result.Outputs["text"] != "done" {
+		t.Fatal(result, err)
+	}
+	for _, role := range []Agent{{Provider: "claude-sdk"}, {Provider: "codex-app-server", Tools: []string{}}, {Provider: "codex-app-server", MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}}}} {
+		runner.Config.Agents["codex"] = role
+		if _, err = runner.AdmitNativeTask(definition); err == nil {
+			t.Fatal("unsupported runtime accepted", role)
+		}
+	}
+}
+
+func TestNativeCodexTerminalFailureClassificationAndPartialResult(t *testing.T) {
+	for _, kind := range []string{"provider", "authentication"} {
+		t.Run(kind, func(t *testing.T) {
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			fake := filepath.Join(root, "fake-codex")
+			script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1\nexport AGENT_WORKFLOW_FAKE_APP_SERVER_FAILURE=" + kind + "\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
+			if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("WORKFLOW_TERMINAL_FIXTURE_KEY", "local-fixture-key")
+			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"codex": {Provider: "codex-app-server", Command: fake, Authentication: Authentication{Mode: "api-key", CredentialEnv: "WORKFLOW_TERMINAL_FIXTURE_KEY"}}}}}
+			result, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "codex", Prompt: "Task"}}, nil)
+			want := "provider_failure"
+			if kind == "authentication" {
+				want = "authentication"
+			}
+			if err == nil || workflows.FailureClass(err) != want || result.Outputs["text"] != "done" || result.SessionID != "thread-1" || result.ProviderStatus != "failed" {
+				t.Fatalf("terminal evidence or classification changed: %+v %v", result, err)
+			}
+		})
 	}
 }

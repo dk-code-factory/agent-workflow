@@ -233,7 +233,7 @@ function EditorSurface({ store }: { store: WorkflowDocument }) {
       select: step => choose({ job: jobID, step }), toggle: () => store.setLayout({ ...store.layout, collapsed: { ...store.layout.collapsed, [jobID]: !(Object.hasOwn(store.layout.collapsed, jobID) && store.layout.collapsed[jobID]) } }) },
   }));
   const edges: Edge[] = Object.entries(w?.jobs ?? {}).flatMap(([jobID, job]) => dependencies(job).filter(dep => Object.hasOwn(w!.jobs, dep)).map(dep => ({ id: `${dep}->${jobID}`, source: dep, target: jobID, markerEnd: { type: MarkerType.ArrowClosed } })));
-  const templates = [{ label: 'Agent', step: { uses: `agent/${options.agents?.[0]?.id ?? 'claude'}`, with: { prompt: '' } } }, ...defaultTemplates, ...(options.agents ?? []).map(agent => ({ label: agent.label ?? agent.id, step: { uses: `agent/${agent.id}`, with: { prompt: '' } } })), ...(options.actions ?? []).map(action => ({ label: action.label, step: { uses: action.uses, with: {} } }))];
+  const templates = [{ label: 'Agent', step: { uses: 'agent/run', with: { agent: '', prompt: '' } } }, ...defaultTemplates, ...(options.actions ?? []).map(action => ({ label: action.label, step: { uses: action.uses, with: {} } }))];
   const beginDeletion = (next: PendingDeletion) => {
     returnFocus.current = document.activeElement as HTMLElement | null;
     setDeletion(next);

@@ -762,7 +762,7 @@ func TestFailureAcknowledgementPreservesUnicodeAndNULText(t *testing.T) {
 }
 
 func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
-	for _, mode := range []string{"owner", "generation", "message", "empty_evidence", "finalizing", "queued", "needs_attention", "storage", "authentication", "action_integrity", "canceled", "timeout", "prerequisite"} {
+	for _, mode := range []string{"owner", "generation", "message_generation", "message", "empty_evidence", "finalizing", "queued", "needs_attention", "storage", "authentication", "action_integrity", "canceled", "timeout", "prerequisite"} {
 		t.Run(mode, func(t *testing.T) {
 			m, req, msg := failureFixture(t)
 			switch mode {
@@ -770,6 +770,12 @@ func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
 				req.Owner += "stale"
 			case "generation":
 				req.Generation++
+			case "message_generation":
+				msg.Generation--
+				raw, _ := json.Marshal(msg)
+				if _, err := m.Store.db.Exec("UPDATE messages SET record=? WHERE id=?", raw, msg.ID); err != nil {
+					t.Fatal(err)
+				}
 			case "message":
 				req.MessageID = "other-message"
 			case "empty_evidence":
@@ -975,5 +981,128 @@ func TestFailureAcknowledgementRollsBackReceiptFailure(t *testing.T) {
 	}
 	if _, err = m.AcknowledgeFailure(failureTestContext(t), req); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestObservedTaskFailureAcknowledgesOnlySelectedMessageWithQueuedSuccessor(t *testing.T) {
+	m, wait := waitFixture(t)
+	session := &nativeTaskFixture{respond: func(req SessionRequest) (map[string]any, error) {
+		if req.Prompt == "first" {
+			return map[string]any{"text": "partial"}, ErrProviderFailure
+		}
+		return map[string]any{"text": "successor"}, nil
+	}}
+	m.Factory = func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
+		return session, nil, nil, nil
+	}
+	ctx := failureTestContext(t)
+	next, err := m.Send(ctx, wait.RunID, wait.WorkerID, "successor", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, _ := startMessageWait(t, m, wait)
+	serveWorkers(t, m)
+	result := awaitMessageWait(t, observed)
+	if result.err != nil || result.message.Status != RunStatusFailed {
+		t.Fatal(result)
+	}
+	run, _, err := m.Store.Load(ctx, wait.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := WorkerFailureRequest{RunID: run.ID, WorkerID: wait.WorkerID, MessageID: wait.MessageID, Owner: run.Owner, Generation: run.Generation, RequestID: "task-observed", Reason: "pipeline observed failure", Evidence: "authoritative-error"}
+	if _, err = m.AcknowledgeFailure(ctx, request); err == nil {
+		t.Fatal("whole-worker disposition accepted a queued successor")
+	}
+	if _, err = m.acknowledgeFailure(ctx, request, wait.OperationID); err != nil {
+		t.Fatal("observed message could not settle independently:", err)
+	}
+	successor, err := m.WaitMessage(ctx, WorkerWaitRequest{RunID: run.ID, WorkerID: wait.WorkerID, MessageID: next.ID, OperationID: "successor-wait", Deadline: wait.Deadline})
+	if err != nil || successor.Status != RunStatusSucceeded || successor.Result.Outputs["text"] != "successor" {
+		t.Fatal("queued successor did not complete", successor, err)
+	}
+	messages, err := m.Messages(ctx, run.ID, wait.WorkerID)
+	if err != nil || len(messages) != 2 || messages[0].FailureAcknowledgement == nil || messages[1].FailureAcknowledgement != nil {
+		t.Fatal("acknowledgement selected wrong message", messages, err)
+	}
+	if err = m.StopRun(ctx, run.ID); err != nil {
+		t.Fatal("settled failure blocked finalization", err)
+	}
+}
+
+func TestObservedTaskFailureRejectsStaleOwnersAndFutureMessages(t *testing.T) {
+	for _, mode := range []string{"owner", "generation", "future_message"} {
+		t.Run(mode, func(t *testing.T) {
+			manager, req, msg := failureFixture(t)
+			ctx := failureTestContext(t)
+			if mode == "future_message" {
+				msg.Generation++
+				raw, err := json.Marshal(msg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = manager.Store.db.ExecContext(ctx, "UPDATE messages SET record=? WHERE id=?", raw, msg.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wait := WorkerWaitRequest{RunID: req.RunID, WorkerID: req.WorkerID, MessageID: msg.ID, OperationID: "observed-error", Deadline: time.Now().Add(5 * time.Second)}
+			if _, err := manager.WaitMessage(ctx, wait); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "owner":
+				req.Owner += "stale"
+			case "generation":
+				req.Generation++
+			}
+			if _, err := manager.acknowledgeFailure(ctx, req, wait.OperationID); err == nil {
+				t.Fatal("authoritative wait bypassed current ownership or message generation")
+			}
+			messages, err := manager.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || messages[0].FailureAcknowledgement != nil {
+				t.Fatal("rejected observation changed the failure", messages, err)
+			}
+		})
+	}
+}
+
+func TestObservedTaskFailureStillRequiresSelectedEffectsToSettle(t *testing.T) {
+	for _, kind := range []string{"invocation", "tool"} {
+		t.Run(kind, func(t *testing.T) {
+			manager, req, msg := failureFixture(t)
+			ctx := failureTestContext(t)
+			wait := WorkerWaitRequest{RunID: req.RunID, WorkerID: req.WorkerID, MessageID: msg.ID, OperationID: "observed-error", Deadline: time.Now().Add(5 * time.Second)}
+			if _, err := manager.acknowledgeFailure(ctx, req, wait.OperationID); err == nil {
+				t.Fatal("missing authoritative receipt accepted")
+			}
+			if _, err := manager.WaitMessage(ctx, wait); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "invocation" {
+				rec := runtimeexec.Record{ID: "selected-process", RunID: req.RunID, Owner: req.Owner, Generation: req.Generation, LogicalID: msg.ID, State: "running", Kind: "worker"}
+				if err := manager.Store.AdmitInvocation(ctx, rec); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := manager.Store.db.ExecContext(ctx, "INSERT INTO tool_calls VALUES(?,?,?,?,?,?,?,?,?)", req.RunID, req.Generation, msg.ID, "write", "external", "write", "pin", "uncertain", []byte(`{}`)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := manager.acknowledgeFailure(ctx, req, wait.OperationID); err == nil {
+				t.Fatal("selected task's unsettled effect acknowledged")
+			}
+			if kind == "invocation" {
+				if _, err := manager.Store.db.ExecContext(ctx, "UPDATE invocations SET state='cleaned' WHERE run_id=?", req.RunID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := manager.Store.db.ExecContext(ctx, "UPDATE tool_calls SET status='completed' WHERE run_id=?", req.RunID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := manager.acknowledgeFailure(ctx, req, wait.OperationID); err != nil {
+				t.Fatal("settled selected task still blocked", err)
+			}
+		})
 	}
 }

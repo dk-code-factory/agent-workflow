@@ -31,7 +31,7 @@ func TestDiscoverUsesWorkspaceDefinitionsDirectory(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			e := &Executor{WorkspaceDir: " " + root + " ", DefinitionsDir: test.definitions}
+			e := nativeTestExecutor(t, &Executor{WorkspaceDir: " " + root + " ", DefinitionsDir: test.definitions})
 			const ref = "workflows/nested/workspace.yaml"
 			if _, err := e.Load(ref); err != nil {
 				t.Fatalf("load workspace definition: %v", err)
@@ -51,7 +51,7 @@ func TestDiscoverRejectsInvalidDefinitionsDirectory(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{".", "..", "../outside", filepath.Join(root, "absolute")} {
 		t.Run(dir, func(t *testing.T) {
-			e := &Executor{WorkspaceDir: root, DefinitionsDir: dir}
+			e := nativeTestExecutor(t, &Executor{WorkspaceDir: root, DefinitionsDir: dir})
 			if _, err := e.Discover(); err == nil {
 				t.Fatal("discovery accepted an invalid definitions directory")
 			}
@@ -66,7 +66,7 @@ func TestDiscoverUsesCurrentDirectoryForEmptyWorkspace(t *testing.T) {
 	t.Chdir(t.TempDir())
 	writeWorkflow(t, ".", "main.yml", "jobs: {main: {steps: [{argv: [echo, ok]}]}}")
 	for _, workspace := range []string{"", "  ", "."} {
-		got, err := (&Executor{WorkspaceDir: workspace}).Discover()
+		got, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: workspace})).Discover()
 		if err != nil || len(got) != 1 || got[0].Ref != "workflows/main.yml" || got[0].Error != "" {
 			t.Fatalf("workspace %q: definitions=%+v error=%v", workspace, got, err)
 		}
@@ -80,7 +80,7 @@ func TestDiscoverRetainsDefinitionErrorsAndSkipsSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "workflows", "valid.yml"), filepath.Join(root, "workflows", "link.yml")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := (&Executor{WorkspaceDir: root}).Discover()
+	got, err := (nativeTestExecutor(t, &Executor{WorkspaceDir: root})).Discover()
 	if err != nil {
 		t.Fatal(err)
 	}

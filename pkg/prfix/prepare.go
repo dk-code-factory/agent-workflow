@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 
-	workflowassets "github.com/dk-code-factory/agent-workflow"
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
@@ -73,8 +72,8 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 	if !validText(req.Instructions) {
 		return Prepared{}, fmt.Errorf("retain the exact user instruction with --instruction")
 	}
-	if req.Role == "" {
-		return Prepared{}, fmt.Errorf("explicit managed leaf role required")
+	if req.Role != "codex" || req.Config.Agents["codex"].Provider != "codex-app-server" {
+		return Prepared{}, fmt.Errorf("PR-fix agent tasks require the codex runtime with provider codex-app-server")
 	}
 	adapters := BuiltinAdapters(req.Role)
 	for k, a := range req.Adapters {
@@ -180,10 +179,13 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 		if e != nil {
 			return Prepared{}, e
 		}
-		if !caps.Sessions || !caps.Resume || !caps.ManagedPolicy {
+		if !caps.Sessions || !caps.Resume {
 			return Prepared{}, fmt.Errorf("role %s lacks managed sessions/resume/policy required by checklist follow-ups", role)
 		}
 		agent := req.Config.Agents[role]
+		if role != "codex" || agent.Provider != "codex-app-server" || agent.Tools != nil || len(agent.MCPGrants) > 0 {
+			return Prepared{}, fmt.Errorf("PR-fix requires the native Codex runtime without unsupported managed tool subsets")
+		}
 		if agent.Limits.MaxTurns > 0 && agent.Limits.MaxTurns < 5 {
 			return Prepared{}, fmt.Errorf("role %s turn limit cannot support admitted checklist turns", role)
 		}
@@ -241,12 +243,12 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 		}
 	}
 	templates := map[string]string{}
-	entries, e := workflowassets.Examples.ReadDir("workflows/pr-fix/v1")
+	entries, e := legacyExamples.ReadDir("testdata/workflows/pr-fix/v1")
 	if e != nil {
 		return Prepared{}, e
 	}
 	for _, entry := range entries {
-		b, e := workflowassets.Examples.ReadFile("workflows/pr-fix/v1/" + entry.Name())
+		b, e := legacyExamples.ReadFile("testdata/workflows/pr-fix/v1/" + entry.Name())
 		if e != nil {
 			return Prepared{}, e
 		}
@@ -257,6 +259,8 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 	if e != nil {
 		return Prepared{}, e
 	}
+	definition := []byte("name = 'prfix'\ndescription = 'Execute one retained PR maintenance assignment.'\ndeveloper_instructions = 'Follow the supplied retained assignment, policies, claims and publication boundaries. Return original evidence and explicit completion. Do not coordinate workers or bypass application publication gates.'\n")
+	p.Sources["agent_definition"] = digest(string(definition))
 	p.Sources["reader"] = digest(string(reader))
 	p.Fingerprint = digest(p)
 	old, e := l.Plan(ctx, p.LogicalRun)
@@ -281,6 +285,10 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 	}
 	if len(definitions) > 128 {
 		return Prepared{}, fmt.Errorf("plan exceeds engine closure limit of 128 definitions (%d)", len(definitions))
+	}
+
+	if e = writeImmutable(filepath.Join(root, filepath.FromSlash(dir), "prfix.toml"), definition); e != nil {
+		return Prepared{}, e
 	}
 	for ref, b := range definitions {
 		w, e := workflows.Parse(b)
@@ -550,12 +558,12 @@ func callJob(ref string, needs []string, with map[string]any) workflows.Job {
 func generate(p Plan, planPath, dir string) (map[string][]byte, error) {
 	defs := map[string][]byte{}
 	// Copy templates into this immutable closure and rewrite only local refs.
-	entries, e := workflowassets.Examples.ReadDir("workflows/pr-fix/v1")
+	entries, e := legacyExamples.ReadDir("testdata/workflows/pr-fix/v1")
 	if e != nil {
 		return nil, e
 	}
 	for _, entry := range entries {
-		b, e := workflowassets.Examples.ReadFile("workflows/pr-fix/v1/" + entry.Name())
+		b, e := legacyExamples.ReadFile("testdata/workflows/pr-fix/v1/" + entry.Name())
 		if e != nil {
 			return nil, e
 		}

@@ -73,7 +73,11 @@ func TestChecklistEnvelopeAdmissionCoversSameSessionBoundary(t *testing.T) {
 	_, _, _ = executeFixture(t, root, provider, prepared, &fakeSession{assignmentHook: func(b []byte) { original = append([]byte{}, b...) }})
 	plan, _ := ReadPlan(prepared.Plan)
 	o, _ := plan.Occurrence("completion")
-	overhead := len(checklistPrompt(original, o, o.MaxChecks)) - len(original)
+	envelope, err := nativeTaskEnvelope(original, strings.Repeat("c", 64), o.MaxChecks, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overhead := len(envelope) - len(original)
 	target := (1 << 20) - overhead - 256
 	req.Instructions += strings.Repeat("x", target-len(original))
 	prepared, err = Prepare(context.Background(), root, provider, req)
@@ -394,7 +398,7 @@ func TestUnacceptedInspectionCannotWeakenRetainedReplyObligation(t *testing.T) {
 	root, provider, req := fixture(t)
 	provider.ev.Comments = []map[string]any{{"id": float64(9), "body": "Please reply when verified.", "user": map[string]any{"login": "author"}}}
 	req.Options["tasks"] = []any{map[string]any{"skill": "dk-workflows:dk-pr-feedback-read"}, map[string]any{"skill": "custom:optional-inspection", "required": false}, map[string]any{"skill": "dk-workflows:dk-pr-feedback-reply"}}
-	req.Adapters = map[string]Adapter{"custom:optional-inspection": {Identity: "custom:optional-inspection", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "inspect", Role: "leaf", Assignment: "Inspect current discussion.", Evidence: []string{"original"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:optional-inspection": {Identity: "custom:optional-inspection", Version: "v1", Kind: "inspection", Procedure: [][]Pass{{{ID: "inspect", Role: "codex", Assignment: "Inspect current discussion.", Evidence: []string{"original"}}}}}}
 	prepared, err := Prepare(context.Background(), root, provider, req)
 	if err != nil {
 		t.Fatal(err)
@@ -426,5 +430,39 @@ func TestUnacceptedInspectionCannotWeakenRetainedReplyObligation(t *testing.T) {
 	complete, blockers, err := runtime.coverage(context.Background(), p, live)
 	if err != nil || complete || !strings.Contains(strings.Join(blockers, " "), "explicit no-reply authority required") {
 		t.Fatal("required reply was bypassed", complete, blockers, err)
+	}
+}
+
+func TestPreparationKeepsControllerRoleSnapshotAndScopedTaskAllowance(t *testing.T) {
+	for _, limit := range []int{0, 8} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			root, provider, req := fixture(t)
+			agent := req.Config.Agents["codex"]
+			agent.Limits.MaxTurns = limit
+			req.Config.Agents["codex"] = agent
+			prepared, err := Prepare(context.Background(), root, provider, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if digest(prepared.Roles) != digest(jsonBytes(req.Config)) {
+				t.Fatal("preparation changed controller role snapshot")
+			}
+			// Controller admission uses its own unchanged config, not the prepared role blob.
+			admitted := prepared
+			admitted.Roles = jsonBytes(req.Config)
+			executor, run, _ := executeFixture(t, root, provider, admitted, &fakeSession{})
+			if run.Status != workflows.RunStatusSucceeded {
+				t.Fatal("unchanged controller config failed claim", run.Error)
+			}
+			workers, err := executor.Workers.List(context.Background(), run.ID)
+			if err != nil || len(workers) == 0 {
+				t.Fatal("no native task worker", err)
+			}
+			for _, worker := range workers {
+				if worker.TaskTurns != 5 || worker.Remaining < 0 || worker.Remaining >= 5 {
+					t.Fatal("per-task allowance was not retained", worker)
+				}
+			}
+		})
 	}
 }

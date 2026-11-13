@@ -14,15 +14,15 @@ import { dependencies, identifier, mapping, hasAgentResult } from './validation'
 import { containingStep, stepEntries } from './step-tree';
 export const expressionSuggestionLimit = 200;
 export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, prefix = '', limit = expressionSuggestionLimit): string[] {
-  if (limit <= 0 || !hasAgentResult(step)) return [];
-  const result = 'text'.startsWith(prefix) ? ['text'] : [];
+  if (limit <= 0 || !hasAgentResult(step) && step.protocol !== 'action-v1') return [];
+  const result = hasAgentResult(step) && 'text'.startsWith(prefix) ? ['text'] : [];
   const contract = step.with?.output;
-  const rawSchema = mapping(contract) ? contract.schema : undefined;
+  const rawSchema = step.protocol === 'action-v1' ? step['output-schema'] : mapping(contract) ? contract.schema : undefined;
   const schema = typeof rawSchema === 'string' ? schemas[rawSchema] : rawSchema;
   const visit = (value: unknown, parent = '') => {
     if (result.length >= limit || !mapping(value) || !mapping(value.properties)) return;
     for (const key in value.properties) {
-      if (!Object.hasOwn(value.properties, key) || !identifier.test(key) || !parent && ['text', 'outputs', 'status', 'error'].includes(key)) continue;
+      if (!Object.hasOwn(value.properties, key) || !identifier.test(key) || !parent && ['text', 'outputs', 'status', 'error', 'failure_class', 'unsafe_failure_class'].includes(key)) continue;
       const path = parent ? `${parent}.${key}` : key;
       if (path.startsWith(prefix)) result.push(path);
       if (result.length >= limit) return;
@@ -30,7 +30,7 @@ export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, p
       if (result.length >= limit) return;
     }
   };
-  visit(schema);
+  visit(schema, step.protocol === 'action-v1' ? 'outputs' : '');
   return result;
 }
 export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path, prefix = ''): string[] {
@@ -41,10 +41,10 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
   const addStep = (step: Step, base: string) => {
     const start = base + '.';
-    if (hasAgentResult(step) && (start.startsWith(prefix) || prefix.startsWith(start))) {
+    if ((hasAgentResult(step) || step.protocol === 'action-v1') && (start.startsWith(prefix) || prefix.startsWith(start))) {
       const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
       const contract = step.with?.output;
-      const schema = mapping(contract) ? contract.schema : undefined;
+      const schema = step.protocol === 'action-v1' ? step : mapping(contract) ? contract.schema : undefined;
       let byPrefix = schemaPaths.get(schema);
       if (!byPrefix) schemaPaths.set(schema, byPrefix = new Map());
       let fields = byPrefix.get(fieldPrefix);
@@ -61,7 +61,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   for (const id of Object.keys(callable?.inputs ?? {})) if (add(`inputs.${id}`)) return result;
   const job = jobID ? workflow.jobs[jobID] : undefined;
   const handler = path !== undefined && inHandlerPath(path);
-  if (handler) for (const value of ['failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
+  if (handler) for (const value of ['event.type', 'event.agent', 'event.result', 'event.verification', 'event.error', 'event.source', 'failed.id', 'failed.uses', 'failed.prompt', 'error.message', 'error.class']) if (add(value)) return result;
   for (const dep of job ? dependencies(job) : Object.keys(workflow.jobs)) {
     const producer = workflow.jobs[dep];
     for (const output of Object.keys(producer?.outputs ?? {})) if (add(`${job ? 'needs' : 'jobs'}.${dep}.outputs.${output}`)) return result;
@@ -75,7 +75,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
     for (const [id, { step }] of completedSteps(workflow, path!)) {
       const base = `steps.${id}`;
       if (addStep(step, base)) return result;
-      for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+      for (const output of ['agent', 'complete', 'text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
     }
     return result;
   }
@@ -85,7 +85,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
     if (consumer && !consumer.available.has(id)) continue;
     const base = `steps.${id}`;
     if ((conciseLocal || consumer) && addStep(step, base)) return result;
-    for (const output of ['text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
+    for (const output of ['agent', 'complete', 'text', 'structured', 'exit_code', 'stdout', 'stderr', 'path', 'commit']) if (add(`${base}.outputs.${output}`)) return result;
   }
   return result;
 }

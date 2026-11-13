@@ -25,8 +25,29 @@ blocks new execution through the existing invocation journal.
 The typed policy builder enforces a non-root user, read-only root filesystem,
 dropped capabilities, no privilege escalation, PID/memory/CPU bounds, private
 `/tmp`, explicit environment values, and permitted workspace/private-state mounts.
-Networking defaults to `none`. The initial typed launcher explicitly rejects
-`network-runtime`; the existing network-contained launcher remains supported.
+Networking defaults to `none`. An operator can enable ordinary outbound
+container networking with `execution.network: bridge` in `agents.yml`:
+
+```yaml
+execution:
+  mode: container
+  image: ghcr.io/example/python-tools@sha256:FULL_IMAGE_DIGEST
+  runtime: docker
+  network: bridge
+  writable: true
+```
+
+The policy applies to shared job containers and standalone Docker steps and is
+retained in their admitted contract. `network` accepts only `none` or `bridge`;
+host networking, other containers' namespaces and named networks are rejected.
+Provider roles can declare `execution: {mode: local}` to use their host runtime
+instead of inheriting this container policy. Existing provider/command container
+launches keep their runtime's default network when the option is omitted and
+honor an explicit value when supplied.
+
+`network` cannot be combined with `network-runtime`. The typed launcher still
+explicitly rejects `network-runtime`; the existing network-contained launcher
+remains supported.
 Runtime sockets and ambient provider credentials are not mounted or forwarded.
 
 An independent host guardian watches a private controller lifetime pipe and can
@@ -43,11 +64,229 @@ whose platform differs from the admitted image before creating a container.
 `make build` builds both variants
 for development. Releases include and independently verify both variants.
 
-The following stages add GitHub-style job-container/Docker-step authoring,
-structured helper recovery and retained helper bundles. The runtime foundation
-alone does not enable that YAML syntax. Reusable-workflow calls and the existing
-typed Go action API are unchanged by this stage.
+Structured helpers and retained helper bundles use the same owned runtime.
+Existing typed Go actions remain supported.
 
 Deterministic tests use fake Docker HTTP APIs, fake Podman executables and
 private temporary directories. Actual Docker/provider/publication conformance
 is separate and opt-in.
+
+## Shared job containers and Docker steps
+
+```yaml
+jobs:
+  build:
+    runs-on: local
+    container:
+      image: ubuntu:24.04
+    steps:
+      - run: echo ready > /tmp/build-status
+      - run: cat /tmp/build-status
+      - uses: docker://ubuntu:24.04
+        with:
+          entrypoint: /bin/sh
+          args: '-c "echo separate container"'
+```
+
+`container: ubuntu:24.04` is equivalent to the image mapping above. Admission
+resolves locally available tags to immutable image content IDs and retains the
+selected endpoint, daemon, platform and guardian. Execution never pulls images.
+`runs-on` supports `local` only; `ubuntu-latest` is explicitly unsupported.
+
+Commands share a lazily created job container through each job iteration. `run`
+defaults to `sh` inside that container; explicit shells are respected. A Docker
+step uses a sibling container, the same permitted workspace mount, and separate
+private state and `/tmp`. Image ENTRYPOINT and CMD are preserved unless
+`with.entrypoint` replaces the executable or `with.args` replaces CMD. Arguments
+support single/double quotes and backslash escaping, preserving empty arguments
+and whitespace, with no variable expansion, command substitution or globbing.
+Docker overrides and image selections are static.
+
+The first runnable command acquires one capacity slot for the job. Sequential
+execs and sibling steps reuse it. Every exec is recorded before effects and runs
+under its own descendant supervisor and heartbeat. Cancellation stops that
+command's heartbeat; unconfirmed cleanup blocks later execution. Job teardown
+verifies container absence before terminal job completion and releases capacity.
+
+Shared job containers initially support sequential command/Docker steps and
+sequence blocks. Parallel blocks, waits, providers and other action targets must
+use a separate job. A reusable-call job cannot also declare a container: the
+called workflow owns that selection, including nested reusable calls.
+
+After owner loss, cleanup must be verified before another container is created.
+An unfinished shared job that already completed ordinary commands requires a new
+run: completed commands are never replayed to reconstruct transient state.
+Structured helpers can recover through validated durable checkpoints without
+reconstructing transient container state.
+
+In the editor, **Job container image**, **Docker entrypoint** and **Docker
+arguments** support source-preserving edits, export and Undo/Redo. Converting a
+job into a reusable call reviews removal of its container. Docker image changes
+retain command overrides; conversion to another step kind reviews their removal.
+
+## Structured helpers
+
+A command in a job container, or a Docker step, can opt into the engine's durable
+JSON lifecycle:
+
+```yaml
+schemas:
+  CaptureOutput:
+    type: object
+    properties: {head: {type: string}}
+    required: [head]
+    additionalProperties: false
+jobs:
+  capture:
+    container: ghcr.io/example/python-tools:local
+    steps:
+      - id: current
+        argv: [python3, /opt/helpers/capture.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema:
+          type: object
+          properties: {repository: {type: string}}
+          required: [repository]
+          additionalProperties: false
+        output-schema: CaptureOutput
+        input: {repository: "."}
+        env: {TOKEN: '${{ secrets.token }}'}
+```
+
+Both schema fields require an object schema, either inline or a name in the
+owning workflow's `schemas` map. Names remain names in admitted definitions.
+Unsupported schema keywords are rejected. Effects are explicitly `read_only`
+or `external_mutation`. Omitted business `input` defaults to `{}`. Business data
+renders once, preserving JSON numbers, arrays, objects, booleans, null and literal
+expression-looking strings supplied by a whole expression. Commands and container
+settings are static; structured commands cannot interpolate inputs or secrets.
+Structured helpers cannot own or appear inside ordinary command lifecycle
+handlers.
+
+The engine sends exactly one JSON request on stdin. The helper writes exactly one
+JSON response on stdout and diagnostics on stderr. Requests and responses are
+limited to 1 MiB each; diagnostics are limited to 4 MiB. Extra documents, unknown
+response fields, wrong versions/phases, oversized streams and nonzero exits fail
+the phase. The configured timeout applies to each phase (default five minutes).
+Recovery requests include input, bindings and the retained result within the same
+1 MiB limit. The engine checks that combined budget before execution and durable
+completion, reserving space for future ownership metadata. Oversized results fail
+without releasing an admitted mutation for replay; recovery still requires
+authoritative reconciliation. Keep bindings and results compact or use references
+to application-owned evidence.
+
+Every request has `protocol: "action-v1"`, `phase`, the original action `context`,
+the current `runtime_owner` (run ID and generation), and schema-validated `input`.
+Checkpoint phases also receive `checkpoint: {bindings, result}`. The context
+contains stable operation key, original run/job/step/iteration, attempt identity
+and generation. Current runtime ownership stays separate on recovery.
+
+Responses always repeat `protocol` and `phase`. The phase contracts are:
+
+| Phase | Response fields | Application behavior |
+| --- | --- | --- |
+| `bindings` | `capabilities`, `read_only_phases`, `bindings` | Read-only capture of stable resource bindings |
+| `execute` | `result: {output, evidence?, receipt?}` | Perform the declared operation |
+| `validate_checkpoint` | `valid: true` | Read-only verification of retained output/evidence/receipts |
+| `reconcile` | `outcome`, `proof`, and `result` when completed | Read-only observation of an uncertain mutation |
+
+Bindings must advertise `bindings`, `execute`, and `validate_checkpoint` in
+`capabilities`, and `bindings`/`validate_checkpoint` in `read_only_phases`.
+Mutation helpers must also advertise read-only `reconcile`. Reconciliation returns
+`completed`, `no_effect`, or `unknown`; completed/no-effect outcomes need non-null
+proof. Unknown observations are journaled and block another mutation attempt.
+A valid JSON response alone does not prove that an external effect completed.
+
+Helpers use the existing action journal: admission precedes execution, validated
+completion precedes dependents, and all retained checkpoints are validated before
+successful job/reusable-child shortcuts. Repeated/reusable calls retain distinct
+logical operation identities. Lost responses or completion commits reconcile
+without blindly replaying effects. Fully completed runs acquire a separate owned
+validation execution before launching any verification container.
+
+Execution phases can use the shared job container. Binding, validation and
+reconciliation phases use independent containers with the same admitted image,
+command and policy. All phases have invocation records, current ownership,
+capacity, deadlines and verified cleanup. Do not use transient `/tmp` or `/state`
+as durable evidence: receipts and bindings belong to application-owned resources.
+
+`env` is an explicit mapping on command/Docker steps. Ordinary command values may
+render expressions; structured helper values are static strings or a direct
+`${{ secrets.NAME }}` reference. Declare/forward credentials through the existing
+reusable-workflow secret interface. Only symbolic credential aliases are retained;
+values resolve for the current execution and remain outside snapshots, contracts
+and identity fingerprints. Existing redaction applies to results and diagnostics.
+Environment declarations never interpolate credentials into the pinned command.
+
+The editor's **Helper protocol and environment** section supports protocol,
+effect, input and both schema forms. Export preserves names and mappings, and
+following steps receive suggestions from structured output schemas. Business
+fields use explicit output paths such as `${{ steps.current.outputs.head }}`;
+dependency references use `${{ needs.capture.steps.current.outputs.head }}`.
+
+
+## Retained workflow-local helper files
+
+```yaml
+jobs:
+  capture:
+    container:
+      image: python-git:local
+      files: [helpers/]
+    steps:
+      - argv: [python3, -B, /actions/helpers/capture.py]
+        protocol: action-v1
+        effect: read_only
+        input-schema: {type: object}
+        output-schema: {type: object}
+      - uses: docker://python-git:local
+        # Omit files to inherit the job bundle, or replace it explicitly:
+        files: [alternate_helpers/]
+        with: {entrypoint: python3, args: '-B /actions/alternate_helpers/report.py'}
+```
+
+`container.files` and Docker-step `files` are engine extensions, resolved relative
+to the owning workflow definition. Only declared regular files and recursive
+directories are captured. Paths normalize without traversal; absolute paths,
+symlinks, special files and conflicting duplicate destinations fail admission.
+Each bundle is bounded to 32 MiB and 4,096 files. Nested Python imports and
+executable bits are preserved (read-only 0444 or executable 0555 in storage).
+A Docker step inherits the job bundle unless it supplies its own replacement;
+`files: []` explicitly replaces it with an empty bundle.
+
+Image-baked helpers require no `files` declaration. Bundled helpers mount at
+`/actions` read-only in every lifecycle phase, including standalone recovery
+containers. Commands, protocol, schemas, effect, resolved runtime policy, immutable
+image, guardian checksum/platform and bundle content digest define the admitted
+implementation contract. Tags and guardian installation paths are not content
+identities. Moving a release can supply the exact same verified guardian binary.
+
+Admission stages and fsyncs helper content before committing a snapshot and
+immutable database manifest/reference. Assets live under the originating run's
+`assets/<origin>/<digest>/` directory; this version does not deduplicate across
+runs. Resume uses that retained bundle even if workspace helpers or YAML change
+or disappear. Missing files, extra files, changed modes, corrupt checksums or
+missing database references block execution and completed checkpoint reuse.
+Owned startup recovery removes marked abandoned staging directories and
+uncommitted bundles while preserving other runs' committed assets.
+
+Schema v12 adds immutable asset manifests and run references under the existing
+exclusive ownership and retained pre-upgrade backup process. Recovery bundles
+include verified referenced assets. Database-only backups include manifests and
+checkpoints but omit helper bytes: portable recovery requires the database plus
+referenced asset files, the retained local image, and the matching guardian.
+Retention journals removal of only the originating run's assets and private
+container state before deleting database references; interrupted removal resumes.
+
+The editor provides **Job helper files (YAML)** and **Docker helper files (YAML)**,
+preserving scalar/mapping images, export, reviewed conversion and Undo/Redo.
+Complete [portable examples](../examples/container-workflows/README.md) include
+nested reusable calls, a capture helper, a simulated mutation, recursive imports,
+all lifecycle phases and explicit credential injection.
+
+Supported workload platforms are Linux amd64 and arm64 on Linux/macOS hosts with
+a compatible local Docker daemon or selected Podman store. Other image platforms
+and unsupported runtime/transport choices fail admission. Actual container and
+provider conformance remains an explicitly selected check; the normal test suite
+uses fake APIs, local Python helpers and disposable SQLite storage.

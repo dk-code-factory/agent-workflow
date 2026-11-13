@@ -199,9 +199,9 @@ func testFinalizerDuties(t *testing.T, customCI bool) {
 	root, provider, req := fixture(t)
 	req.Options = nil
 	configFile(t, "", map[string]any{"skill_defaults": map[string]any{"dk-workflows:dk-pr-reviewers-run": map[string]any{"options": map[string]any{"reviewers": []any{map[string]any{"skill": "custom:review"}}}}}})
-	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "required", Role: "leaf", Assignment: "Review the pinned request and diff.", Evidence: []string{"original"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "required", Role: "codex", Assignment: "Review the pinned request and diff.", Evidence: []string{"original"}}}}}}
 	if customCI {
-		a := BuiltinAdapters("leaf")["dk-workflows:dk-ci"]
+		a := BuiltinAdapters("codex")["dk-workflows:dk-ci"]
 		a.Identity = "custom:ci"
 		req.Adapters[a.Identity] = a
 		req.Options = map[string]any{"finalizers": []any{"dk-workflows:dk-commit-split", "dk-workflows:dk-pr-decisions", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-feedback-reply", "custom:ci", "dk-workflows:dk-pr-publish"}}
@@ -270,7 +270,7 @@ func testFinalizerDuties(t *testing.T, customCI bool) {
 func TestOriginalFindingSurvivesEmptyChecklistOutputAndGetsSourcedDisposition(t *testing.T) {
 	root, provider, req := fixture(t)
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}, map[string]any{"skill": "dk-workflows:dk-pr-feedback-address"}}
-	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "leaf", Assignment: "Review only the pinned diff.", Evidence: []string{"original"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "codex", Assignment: "Review only the pinned diff.", Evidence: []string{"original"}}}}}}
 	prepared, e := Prepare(context.Background(), root, provider, req)
 	if e != nil {
 		t.Fatal(e)
@@ -317,8 +317,8 @@ func TestLaterConfiguredWorkFinishesBeforeAffectedReviewRepeats(t *testing.T) {
 	root, provider, req := fixture(t)
 	req.Options["tasks"] = []any{map[string]any{"skill": "custom:review"}, map[string]any{"skill": "dk-workflows:dk-pr-feedback-address"}, map[string]any{"skill": "custom:tail"}}
 	req.Adapters = map[string]Adapter{
-		"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "review", Role: "leaf", Assignment: "Review this exact diff.", Evidence: []string{"original"}}}}},
-		"custom:tail":   {Identity: "custom:tail", Version: "v1", Kind: "inspection", Cacheable: true, Procedure: [][]Pass{{{ID: "tail", Role: "leaf", Assignment: "Inspect only this final configured duty.", Evidence: []string{"original"}}}}},
+		"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "review", Role: "codex", Assignment: "Review this exact diff.", Evidence: []string{"original"}}}}},
+		"custom:tail":   {Identity: "custom:tail", Version: "v1", Kind: "inspection", Cacheable: true, Procedure: [][]Pass{{{ID: "tail", Role: "codex", Assignment: "Inspect only this final configured duty.", Evidence: []string{"original"}}}}},
 	}
 	prepared, e := Prepare(context.Background(), root, provider, req)
 	if e != nil {

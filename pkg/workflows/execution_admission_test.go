@@ -70,7 +70,7 @@ func TestResumeRestoresAutomaticallyAdmittedRoles(t *testing.T) {
 					calls.Add(1)
 					return map[string]any{"model": saved.Model, "text": "retained-provider-secret"}, nil
 				}), check: func(ids []string) error {
-					if !reflect.DeepEqual(ids, []string{"builder"}) || saved.Network != current {
+					if !reflect.DeepEqual(ids, []string{"codex"}) || saved.Network != current {
 						return errors.New("retained runtime identity changed")
 					}
 					return nil
@@ -79,8 +79,8 @@ func TestResumeRestoresAutomaticallyAdmittedRoles(t *testing.T) {
 			shared := &automaticRolesRunner{roles: raw, factory: factory, AgentRunner: agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 				return nil, errors.New("shared unpinned runner used")
 			})}
-			e, journal := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/builder, with: {prompt: hi}}]}}", shared)
-			run, err := e.Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
+			e, journal := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: builder.toml}}]}}\n", shared)
+			run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,6 +94,7 @@ func TestResumeRestoresAutomaticallyAdmittedRoles(t *testing.T) {
 				t.Fatal(err)
 			}
 			liveRaw := append(json.RawMessage(nil), shared.roles...)
+			admittedRunner := e.Agents
 			switch scenario {
 			case "explicit-precedence":
 				e.RoleRunner = factory
@@ -106,11 +107,11 @@ func TestResumeRestoresAutomaticallyAdmittedRoles(t *testing.T) {
 			case "changed-identity":
 				current = live.Network
 			}
-			result, err := e.Resume(ctx, run.ID, nil, false)
-			if len(received) != 2 || !bytes.Equal(received[1], snap.Roles) || !bytes.Equal(received[0], raw) {
+			result, err := nativeTestExecutor(t, e).Resume(ctx, run.ID, nil, false)
+			if len(received) < 2 || !bytes.Equal(received[1], snap.Roles) || !bytes.Equal(received[0], raw) {
 				t.Fatalf("factory did not receive retained roles: %q", received)
 			}
-			if shared.admissions != 1 || e.Agents != shared || !bytes.Equal(shared.roles, liveRaw) || e.Roles != nil {
+			if shared.admissions != 1 || e.Agents != admittedRunner || !bytes.Equal(shared.roles, liveRaw) || e.Roles != nil {
 				t.Fatal("resume re-admitted roles or mutated the shared executor/runner")
 			}
 			if scenario == "factory-error" || scenario == "changed-identity" {

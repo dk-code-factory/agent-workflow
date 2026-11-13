@@ -5,7 +5,8 @@ agents:
     permission-mode: dontAsk
 
   codex:
-    provider: codex-cli
+    provider: codex-app-server
+    authentication: {mode: native}
     sandbox: read-only
   planner:
     provider: claude-cli

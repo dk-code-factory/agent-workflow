@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,7 +144,7 @@ func fixture(t *testing.T) (string, *fakeProvider, PrepareRequest) {
 	ev.Metadata.Base.SHA = sha
 	ev.Metadata.Base.Ref = "main"
 	provider := &fakeProvider{ev: ev, ci: CIObservation{Checks: []CICheck{{ID: "1", Name: "test", Status: "completed", Conclusion: "success"}}}}
-	req := PrepareRequest{PR: ev.Metadata.URL, Role: "leaf", Instructions: "Fix this PR with deterministic checks.", Options: map[string]any{"tasks": []any{}, "finalizers": []any{}}, Config: clirunner.Config{Agents: map[string]clirunner.Agent{"leaf": {Provider: "claude-sdk"}}}, Capabilities: func(string) (workflows.ProviderCapabilities, error) {
+	req := PrepareRequest{PR: ev.Metadata.URL, Role: "codex", Instructions: "Fix this PR with deterministic checks.", Options: map[string]any{"tasks": []any{}, "finalizers": []any{}}, Config: clirunner.Config{Agents: map[string]clirunner.Agent{"codex": {Provider: "codex-app-server"}}}, Capabilities: func(string) (workflows.ProviderCapabilities, error) {
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true}, nil
 	}}
 	return root, provider, req
@@ -202,7 +203,7 @@ func TestUnavailableOptionalAndUnsupportedControlsBlock(t *testing.T) {
 			root, provider, req := fixture(t)
 			req.Options["tasks"] = []any{tc.call}
 			if tc.adapter {
-				req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "leaf", Assignment: "Review only correctness.", Evidence: []string{"source-coverage"}}}}}}
+				req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "correctness", Role: "codex", Assignment: "Review only correctness.", Evidence: []string{"source-coverage"}}}}}}
 			}
 			_, e := Prepare(context.Background(), root, provider, req)
 			if e == nil || !strings.Contains(e.Error(), tc.want) {
@@ -330,9 +331,6 @@ func (f *fakeSession) Capabilities(string) (workflows.ProviderCapabilities, erro
 	return workflows.ProviderCapabilities{Sessions: true, Resume: true, ManagedPolicy: true, Interrupt: true}, nil
 }
 func (f *fakeSession) RunTurn(ctx context.Context, req workflows.SessionRequest, _ func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
-	if err := RestoreSession(ctx, f.root, &req); err != nil {
-		return workflows.SessionResult{}, err
-	}
 	var assignment struct {
 		Occurrence         Occurrence           `json:"occurrence"`
 		PublicationPayload *Intent              `json:"publication_payload"`
@@ -342,17 +340,25 @@ func (f *fakeSession) RunTurn(ctx context.Context, req workflows.SessionRequest,
 		Checklist          []ChecklistItem      `json:"checklist"`
 		Assignment         json.RawMessage      `json:"assignment"`
 	}
-	if e := json.Unmarshal([]byte(req.Prompt), &assignment); e != nil {
+	raw := []byte(req.Prompt)
+	followupTask := false
+	if input, ok := req.Input.(map[string]any); ok {
+		if data, ok := input["assignment"]; ok {
+			raw = jsonBytes(data)
+			followupTask = fmt.Sprint(input["round"]) != "0"
+		}
+	}
+	if e := json.Unmarshal(raw, &assignment); e != nil {
 		return workflows.SessionResult{}, e
 	}
-	followup := len(assignment.Assignment) > 0 && assignment.Assignment[0] == '{'
-	if followup {
+	followup := followupTask || len(assignment.Assignment) > 0 && assignment.Assignment[0] == '{'
+	if len(assignment.Assignment) > 0 && assignment.Assignment[0] == '{' {
 		if e := json.Unmarshal(assignment.Assignment, &assignment); e != nil {
 			return workflows.SessionResult{}, e
 		}
 	}
 	if f.assignmentHook != nil {
-		f.assignmentHook([]byte(req.Prompt))
+		f.assignmentHook(raw)
 	}
 	f.mu.Lock()
 	if f.calls == nil {
@@ -401,7 +407,7 @@ func (f *fakeSession) RunTurn(ctx context.Context, req workflows.SessionRequest,
 	if f.failAfterReport != nil {
 		if err := f.failAfterReport(assignment.Occurrence); err != nil {
 			result.Status = workflows.RunStatusFailed
-			return result, err
+			return result, fmt.Errorf("%w: %v", workflows.ErrProviderFailure, err)
 		}
 	}
 	return result, nil
@@ -417,7 +423,7 @@ func executeFixture(t *testing.T, root string, provider interface {
 	provider.replaceWorkerService(nil)
 	// Race-instrumented SQLite snapshots make the full default plan substantially
 	// slower than individual recovery fixtures; keep a deadline below make test's.
-	timeout := 10 * time.Minute
+	timeout := 30 * time.Minute
 	if session.failureTimeout > 0 {
 		timeout = session.failureTimeout
 	}
@@ -470,7 +476,7 @@ func executeFixture(t *testing.T, root string, provider interface {
 	if e = runtime.Register(registry); e != nil {
 		t.Fatal(e)
 	}
-	ex := &workflows.Executor{WorkspaceDir: root, Store: store, Slots: slots, Capacity: capacity, Roles: prepared.Roles, ApplicationActions: registry, MaxParallel: 1, BeforeFinalize: workers.StopRun}
+	ex := &workflows.Executor{WorkspaceDir: root, Agents: session, Workers: workers, Store: store, Slots: slots, Capacity: capacity, Roles: prepared.Roles, ApplicationActions: registry, MaxParallel: 1, BeforeFinalize: workers.StopRun}
 	run, e := ex.Prepare(ctx, workflows.RunRequest{Ref: prepared.Workflow, Inputs: prepared.Inputs})
 	if e != nil {
 		t.Fatal(e)
@@ -527,7 +533,7 @@ func TestEmptyPlanExecutesManagedLiveGateWithSameSessionFollowup(t *testing.T) {
 func TestRepeatedParallelReviewPassesHaveDistinctClaims(t *testing.T) {
 	root, provider, req := fixture(t)
 	req.Options["tasks"] = []any{map[string]any{"skill": "dk-workflows:dk-pr-reviewers-run", "options": map[string]any{"reviewers": []any{map[string]any{"skill": "custom:review"}, map[string]any{"skill": "custom:review"}}}}}
-	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "standards", Role: "leaf", Assignment: "Review documented standards.", Evidence: []string{"standards"}}, {ID: "spec", Role: "leaf", Assignment: "Review originating spec.", Evidence: []string{"spec"}}}}}}
+	req.Adapters = map[string]Adapter{"custom:review": {Identity: "custom:review", Version: "v1", Kind: "review", Cacheable: true, Procedure: [][]Pass{{{ID: "standards", Role: "codex", Assignment: "Review documented standards.", Evidence: []string{"standards"}}, {ID: "spec", Role: "codex", Assignment: "Review originating spec.", Evidence: []string{"spec"}}}}}}
 	prepared, e := Prepare(context.Background(), root, provider, req)
 	if e != nil {
 		t.Fatal(e)
@@ -568,7 +574,7 @@ func TestRepeatedParallelReviewPassesHaveDistinctClaims(t *testing.T) {
 }
 
 func TestLostLifecycleCheckpointsReconcileWithoutDuplicateWorkers(t *testing.T) {
-	for _, operation := range []string{"claim", "worker_spawn", "worker_send", "finish", "close"} {
+	for _, operation := range []string{"claim", "task_prepare", "task_result", "finish", "close"} {
 		t.Run(operation, func(t *testing.T) {
 			root, provider, req := fixture(t)
 			prepared, e := Prepare(context.Background(), root, provider, req)
@@ -637,4 +643,15 @@ func TestUncertainPublicationAndReceiptCheckpointNeverDuplicateWrite(t *testing.
 			}
 		})
 	}
+}
+
+func (f *fakeSession) RunAgent(context.Context, workflows.AgentRequest) (map[string]any, error) {
+	return nil, fmt.Errorf("native task must use sessions")
+}
+func (f *fakeSession) WorkerLimits(string) (workflows.WorkerLimits, error) {
+	return workflows.WorkerLimits{MaxTurns: 5}, nil
+}
+func (f *fakeSession) AdmitNativeTask(def *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
+	copy := *def
+	return &copy, nil
 }

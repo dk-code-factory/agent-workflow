@@ -18,6 +18,23 @@ func (f providerFunc) RunAgent(ctx context.Context, req workflows.AgentRequest) 
 	return f(ctx, req)
 }
 
+func (f providerFunc) AdmitNativeTask(d *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
+	c := *d
+	return &c, nil
+}
+func (f providerFunc) Capabilities(string) (workflows.ProviderCapabilities, error) {
+	return workflows.ProviderCapabilities{Sessions: true, Resume: true}, nil
+}
+func (f providerFunc) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	id := q.SessionID
+	if id == "" {
+		id = "fixture-" + q.ParentWorkerID
+	}
+	emit(workflows.ProviderEvent{Type: "session", SessionID: id})
+	out, err := f.RunAgent(ctx, q.AgentRequest)
+	return workflows.SessionResult{SessionID: id, Status: workflows.RunStatusSucceeded, Outputs: out}, err
+}
+
 // This is credential-free: real Git and Go commands, fake model turns, and a
 // fake GitHub process backed by a local bare remote. It exercises the published
 // example, including a failed first iteration and parent/child workspace scope.
@@ -36,6 +53,22 @@ func TestDevelopmentWorkflowFixesDefectAndPublishesOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err = os.WriteFile(filepath.Join(r.Root, "workflows", name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	definitions, err := os.ReadDir(filepath.Join("..", "..", "workflows", "agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range definitions {
+		if err := os.MkdirAll(filepath.Join(r.Root, "workflows", "agents"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join("..", "..", "workflows", "agents", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(r.Root, "workflows", "agents", entry.Name()), b, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,6 +137,18 @@ func TestDevelopmentWorkflowFixesDefectAndPublishesOnce(t *testing.T) {
 		return map[string]any{"text": "Correct Add and verify its test"}, nil
 	})
 	executor := &workflows.Executor{WorkspaceDir: r.Root, Store: r.Store, Actions: r, Agents: agents, MaxParallel: 4}
+	workers := &workflows.WorkerManager{Store: r.Store, Factory: func(context.Context, string, string, []string) (workflows.SessionRunner, []string, map[string]string, error) {
+		return agents, nil, nil, nil
+	}}
+	if err := workers.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	workerCtx, stop := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); workers.Serve(workerCtx) }()
+	defer func() { stop(); <-workerDone }()
+	executor.Workers = workers
+	executor.BeforeFinalize = workers.StopRun
 	admitted, err := executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/develop.yml", Inputs: map[string]any{"task": "Fix Add", "check": "go test ./...", "title": "Fix Add"}})
 	if err != nil {
 		t.Fatal(err)
