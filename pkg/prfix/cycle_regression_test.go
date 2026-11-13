@@ -141,7 +141,7 @@ func TestConcurrentControllersDispatchOnePublication(t *testing.T) {
 }
 
 func TestPublicationLockCancellationAndRelease(t *testing.T) {
-	root := t.TempDir()
+	root := fixtureDirectory(t)
 	runtime := &Runtime{Root: root}
 	unlock, err := runtime.lockPublication(context.Background())
 	if err != nil {

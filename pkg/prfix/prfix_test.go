@@ -99,13 +99,24 @@ func (f *fakeProvider) Reconcile(_ context.Context, i Intent) (string, Receipt, 
 	}
 	return "no_effect", Receipt{i.ID, i.Kind, i.PR.URL, i.Head, jsonObject(map[string]bool{"absent": true}), []string{"fake read-only absence"}}, nil
 }
+func fixtureDirectory(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func fixture(t *testing.T) (string, *fakeProvider, PrepareRequest) {
 	t.Helper()
 	ctx := context.Background()
 	// Supervision re-execs this test binary for each local command. Retain race
 	// instrumentation and failure reporting without its per-child exit delay.
 	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
-	outer := t.TempDir()
+	// Application state rejects symlinked ancestors. Use the physical temporary
+	// root rather than macOS's /var alias, keeping that containment check intact.
+	outer := fixtureDirectory(t)
 	root := filepath.Join(outer, "repo")
 	if e := os.Mkdir(root, 0700); e != nil {
 		t.Fatal(e)
