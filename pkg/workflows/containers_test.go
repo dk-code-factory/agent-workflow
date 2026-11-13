@@ -133,7 +133,7 @@ type workflowDocker struct {
 	commandContext        context.Context
 	commandTimeout        time.Duration
 	imageReferences       []string
-	helper                func([]string, []byte, []string) ([]byte, []byte, int, bool)
+	helper                func(context.Context, []string, []byte, []string) ([]byte, []byte, int, bool)
 	t                     *testing.T
 	mu                    sync.Mutex
 	containers            map[string]*fakeContainer
@@ -152,8 +152,22 @@ type workflowDocker struct {
 }
 
 func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, dir string, env []string) ([]byte, []byte, int) {
+	c.mu.Lock()
+	if c.commandsClosed {
+		c.mu.Unlock()
+		return nil, []byte("container was removed"), 127
+	}
+	c.commands.Add(1)
+	c.mu.Unlock()
+	defer c.commands.Done()
+	timeout := d.commandTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.commandContext, timeout)
+	defer cancel()
 	if d.helper != nil {
-		if out, logs, code, handled := d.helper(argv, input, env); handled {
+		if out, logs, code, handled := d.helper(ctx, argv, input, env); handled {
 			return out, logs, code
 		}
 	}
@@ -182,20 +196,6 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 	if len(args) == 0 {
 		return nil, []byte("no command"), 127
 	}
-	c.mu.Lock()
-	if c.commandsClosed {
-		c.mu.Unlock()
-		return nil, []byte("container was removed"), 127
-	}
-	c.commands.Add(1)
-	c.mu.Unlock()
-	defer c.commands.Done()
-	timeout := d.commandTimeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(c.commandContext, timeout)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	process.Configure(cmd)
 	cmd.WaitDelay = time.Second
@@ -569,6 +569,102 @@ func TestWorkflowDockerBlockedCommand(t *testing.T) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWorkflowDockerRemovalCancelsAndJoinsHandledHelper(t *testing.T) {
+	_, _, d := containerExecutor(t)
+	created := httptest.NewRecorder()
+	d.serve(created, httptest.NewRequest(http.MethodPost, "/containers/create?name=handled-fixture", strings.NewReader(`{}`)))
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status=%d: %s", created.Code, created.Body.String())
+	}
+	d.mu.Lock()
+	c := d.containers["handled-fixture"]
+	d.mu.Unlock()
+	entered, canceled, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	d.helper = func(ctx context.Context, _ []string, _ []byte, _ []string) ([]byte, []byte, int, bool) {
+		select {
+		case <-entered:
+			return nil, nil, 0, true
+		default:
+		}
+		close(entered)
+		select {
+		case <-ctx.Done():
+			close(canceled)
+		case <-release:
+			return nil, nil, 0, true
+		}
+		// Cancellation may still require subprocess Wait or retained-state cleanup.
+		<-release
+		return nil, nil, 0, true
+	}
+	go func() {
+		defer close(finished)
+		d.command(c, []string{"handled"}, nil, d.workspace, nil)
+	}()
+	removed := make(chan int, 1)
+	removalFinished := make(chan struct{})
+	removalLaunched := false
+	// Independently release/join the callback even if the fixture under test
+	// neither cancels nor waits for it. A failure must not strand teardown.
+	t.Cleanup(func() {
+		c.cancelCommands()
+		unblock()
+		select {
+		case <-finished:
+		case <-time.After(3 * time.Second):
+			t.Error("handled helper did not join during independent cleanup")
+		}
+		if removalLaunched {
+			select {
+			case <-removalFinished:
+			case <-time.After(3 * time.Second):
+				t.Error("container removal did not join during independent cleanup")
+			}
+		}
+	})
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handled helper did not start")
+	}
+	removalLaunched = true
+	go func() {
+		defer close(removalFinished)
+		response := httptest.NewRecorder()
+		d.serve(response, httptest.NewRequest(http.MethodDelete, "/containers/"+c.id, nil))
+		removed <- response.Code
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("container removal did not cancel its handled helper")
+	}
+	select {
+	case <-removed:
+		t.Fatal("container removal returned before handled helper cleanup finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case code := <-removed:
+		if code != http.StatusNoContent {
+			t.Fatalf("remove status=%d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("container removal did not join handled helper cleanup")
+	}
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handled command did not return after container removal")
+	}
+	if _, _, code := d.command(c, []string{"handled-after-removal"}, nil, d.workspace, nil); code != 127 {
+		t.Fatalf("removed container admitted another handled helper: code=%d", code)
 	}
 }
 

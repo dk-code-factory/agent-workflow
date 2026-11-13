@@ -298,7 +298,7 @@ func TestTaskStatePythonHelperThroughFakeContainers(t *testing.T) {
 			var tokens []string
 			var validations int
 			directories := map[string]bool{}
-			docker.helper = func(_ []string, input []byte, _ []string) ([]byte, []byte, int, bool) {
+			docker.helper = func(_ context.Context, _ []string, input []byte, _ []string) ([]byte, []byte, int, bool) {
 				var request struct {
 					TaskState *taskStateDescriptor `json:"task_state"`
 					Phase     string               `json:"phase"`

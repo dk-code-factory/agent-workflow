@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"gopkg.in/yaml.v3"
 )
@@ -363,7 +364,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	var lostResponse, reconciled atomic.Bool
 	var lostKey string
 	var lossMu sync.Mutex
-	docker.helper = func(argv []string, input []byte, environment []string) ([]byte, []byte, int, bool) {
+	docker.helper = func(ctx context.Context, argv []string, input []byte, environment []string) ([]byte, []byte, int, bool) {
 		if len(argv) == 0 || argv[len(argv)-1] != "turn_result" {
 			return nil, nil, 0, false
 		}
@@ -384,10 +385,11 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		if hook.Phase != "execute" || !lostResponse.CompareAndSwap(false, true) {
 			return nil, nil, 0, false
 		}
-		commandContext, cancelCommand := context.WithTimeout(t.Context(), 20*time.Second)
+		commandContext, cancelCommand := context.WithTimeout(ctx, 20*time.Second)
 		defer cancelCommand()
 		command := exec.CommandContext(commandContext, "python3", "-B", filepath.Join(closure, "helpers", "action.py"), "turn_result")
 		command.Dir, command.Env, command.Stdin = root, append(os.Environ(), environment...), bytes.NewReader(input)
+		process.Configure(command)
 		command.WaitDelay = time.Second
 		output, executeErr := command.CombinedOutput()
 		if executeErr != nil {

@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -46,7 +47,7 @@ type protocolHookCall struct {
 	env                 []string
 }
 
-func (f *protocolFixture) call(argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
+func (f *protocolFixture) call(_ context.Context, argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
 	if len(argv) == 0 || argv[0] != "helper" {
 		return nil, nil, 0, false
 	}

@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -11,8 +12,8 @@ import (
 func checkProtocolWireSizes(t *testing.T, d *workflowDocker) {
 	t.Helper()
 	helper := d.helper
-	d.helper = func(argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
-		stdout, stderr, code, handled := helper(argv, input, env)
+	d.helper = func(ctx context.Context, argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
+		stdout, stderr, code, handled := helper(ctx, argv, input, env)
 		if handled && (len(input) > 1<<20 || len(stdout) > 1<<20) {
 			t.Errorf("individual helper frame exceeded 1 MiB: request=%d response=%d", len(input), len(stdout))
 		}
@@ -134,8 +135,8 @@ func TestStructuredHelperCredentialsDetachCallerMaps(t *testing.T) {
 			f.mu.Unlock()
 			caller := map[string]string{"token": "admitted-secret"}
 			var changed sync.Once
-			d.helper = func(argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
-				stdout, stderr, code, handled := f.call(argv, input, env)
+			d.helper = func(ctx context.Context, argv []string, input []byte, env []string) ([]byte, []byte, int, bool) {
+				stdout, stderr, code, handled := f.call(ctx, argv, input, env)
 				var request struct{ Phase string }
 				if json.Unmarshal(input, &request) == nil && request.Phase == "bindings" {
 					changed.Do(func() { caller["token"] = "changed-after-admission" })

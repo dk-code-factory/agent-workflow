@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -12,7 +13,7 @@ func TestSharedContainerOrdinaryCommandJSONInputAndOutput(t *testing.T) {
 		t.Run(map[bool]string{true: "valid", false: "invalid"}[valid], func(t *testing.T) {
 			e, _, d := containerExecutor(t)
 			var captured []byte
-			d.helper = func(argv []string, input []byte, _ []string) ([]byte, []byte, int, bool) {
+			d.helper = func(_ context.Context, argv []string, input []byte, _ []string) ([]byte, []byte, int, bool) {
 				if len(argv) != 1 || argv[0] != "capture-json" {
 					return nil, nil, 0, false
 				}
