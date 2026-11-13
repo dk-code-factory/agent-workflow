@@ -13,12 +13,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/dk-code-factory/agent-workflow/internal/testutil"
 )
 
 // All tests use a disposable Unix socket. No Docker process or image is used.
 func fakeDocker(t *testing.T, handler http.HandlerFunc) Selection {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "docker.sock")
+	socket := filepath.Join(testutil.SocketDir(t), "docker.sock")
 	l, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)

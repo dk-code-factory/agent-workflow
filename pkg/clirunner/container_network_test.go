@@ -3,6 +3,7 @@ package clirunner
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -31,13 +32,17 @@ agents:
 }
 
 func TestContainerNetworkCannotBypassGlobalManagedRuntime(t *testing.T) {
+	want := "cannot override network-runtime"
+	if runtime.GOOS != "linux" {
+		want = "network-runtime requires Linux/rootful Podman"
+	}
 	for _, mode := range []string{"none", "bridge"} {
 		path := filepath.Join(t.TempDir(), "agents.yml")
 		data := "execution: {network-runtime: team}\nagents:\n  codex: {provider: codex-app-server, execution: {mode: container, image: fixture, network: " + mode + "}}\n"
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "cannot override network-runtime") {
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("managed route overridden with %q: %v", mode, err)
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/internal/testutil"
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
@@ -512,7 +513,7 @@ func containerExecutor(t *testing.T) (*Executor, *SQLiteStore, *workflowDocker) 
 	t.Cleanup(func() { store.Close() })
 	commandContext, cancelCommands := context.WithCancel(t.Context())
 	d := &workflowDocker{t: t, commandContext: commandContext, root: root, workspace: workspace, containers: map[string]*fakeContainer{}, execs: map[string]*fakeExec{}}
-	socket := filepath.Join(t.TempDir(), "api.sock")
+	socket := filepath.Join(testutil.SocketDir(t), "api.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
