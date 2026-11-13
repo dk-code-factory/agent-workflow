@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ type portablePrepared struct {
 	Config     string `json:"config"`
 }
 
-func portableFixturePrepare(t *testing.T, root, instructions string) portablePrepared {
+func portableFixturePrepare(t *testing.T, root, instructions string, settings ...map[string]any) portablePrepared {
 	t.Helper()
 	request := map[string]any{
 		"pr": "https://github.com/fixture/repository/pull/1", "instructions": instructions,
@@ -121,6 +122,9 @@ func portableFixturePrepare(t *testing.T, root, instructions string) portablePre
 			"kind": "review", "definition": "reviewer", "assignment": "Inspect file.txt and report sourced findings.",
 			"checklist": []any{map[string]any{"id": "inspect", "text": "Inspect the changed source."}},
 		}},
+	}
+	if len(settings) != 0 {
+		request["settings"] = settings[0]
 	}
 	input, err := json.Marshal(request)
 	if err != nil {
@@ -134,6 +138,23 @@ func portableFixturePrepare(t *testing.T, root, instructions string) portablePre
 		t.Fatalf("prepare did not return an admitted closure: %s (%v)", out, err)
 	}
 	return prepared
+}
+
+type portableInterruptedSession struct {
+	*nativeTaskFixture
+	first   atomic.Bool
+	entered chan SessionRequest
+}
+
+func (f *portableInterruptedSession) RunTurn(ctx context.Context, request SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+	if f.first.CompareAndSwap(false, true) {
+		session := "session-" + request.ParentWorkerID
+		emit(ProviderEvent{Type: "session", SessionID: session})
+		f.entered <- request
+		<-ctx.Done()
+		return SessionResult{SessionID: session, Status: RunStatusInterrupted}, ctx.Err()
+	}
+	return f.nativeTaskFixture.RunTurn(ctx, request, emit)
 }
 
 func portableFixtureAssignment(input any) map[string]any {
@@ -158,6 +179,14 @@ func portableFixtureAssignment(input any) map[string]any {
 }
 
 func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *testing.T) {
+	// Fake container guardians are subprocesses of this instrumented binary.
+	// Keep race detection enabled without paying its exit sleep for every hook.
+	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	t.Setenv("GIT_TEMPLATE_DIR", t.TempDir())
 	e, store, docker := containerExecutor(t)
 	docker.commandTimeout = 15 * time.Second
 	root := e.WorkspaceDir
@@ -274,10 +303,11 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		body, err := json.Marshal(report)
 		return map[string]any{"text": string(body)}, err
 	}}
-	e.Agents = fake
+	runner := &portableInterruptedSession{nativeTaskFixture: fake, entered: make(chan SessionRequest, 1)}
+	e.Agents = runner
 	e.Capacity = &Capacity{Slots: e.Slots}
 	manager := &WorkerManager{Store: store, Slots: e.Slots, Capacity: e.Capacity, Factory: func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
-		return fake, nil, nil, nil
+		return runner, nil, nil, nil
 	}}
 	if err := manager.Init(t.Context()); err != nil {
 		t.Fatal(err)
@@ -289,7 +319,80 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	defer cancel()
 	secrets := map[string]string{"github_token": "deterministic-fixture-token"}
 	request := RunRequest{Ref: prepared.Workflow, Inputs: map[string]any{"plan": prepared.Plan}, Secrets: secrets}
-	run, err := e.Run(ctx, request)
+	firstContext, interrupt := context.WithCancel(ctx)
+	defer interrupt()
+	type outcome struct {
+		run *Run
+		err error
+	}
+	firstResult := make(chan outcome, 1)
+	go func() {
+		run, err := e.Run(firstContext, request)
+		firstResult <- outcome{run, err}
+	}()
+	var interrupted SessionRequest
+	select {
+	case interrupted = <-runner.entered:
+		interrupt()
+	case <-time.After(30 * time.Second):
+		t.Fatal("portable native session did not start")
+	}
+	var stopped outcome
+	select {
+	case stopped = <-firstResult:
+	case <-time.After(10 * time.Second):
+		t.Fatal("interrupted portable run did not join")
+	}
+	if stopped.run == nil || stopped.err == nil {
+		t.Fatalf("session interruption was not exercised: %+v", stopped)
+	}
+	messages, loadErr := manager.Messages(ctx, stopped.run.ID, interrupted.ParentWorkerID)
+	if loadErr != nil || len(messages) != 1 || messages[0].Status != RunStatusInterrupted || messages[0].Result.SessionID == "" {
+		t.Fatalf("original session did not retain an interrupted message: %+v %v", messages, loadErr)
+	}
+	var lostResponse, reconciled atomic.Bool
+	var lostKey string
+	var lossMu sync.Mutex
+	docker.helper = func(argv []string, input []byte, environment []string) ([]byte, []byte, int, bool) {
+		if len(argv) == 0 || argv[len(argv)-1] != "turn_result" {
+			return nil, nil, 0, false
+		}
+		var hook struct {
+			Phase   string `json:"phase"`
+			Context struct {
+				Operation string `json:"operation_key"`
+			} `json:"context"`
+		}
+		if json.Unmarshal(input, &hook) != nil {
+			return nil, []byte("invalid portable hook input"), 1, true
+		}
+		if hook.Phase == "reconcile" {
+			lossMu.Lock()
+			reconciled.Store(hook.Context.Operation == lostKey)
+			lossMu.Unlock()
+		}
+		if hook.Phase != "execute" || !lostResponse.CompareAndSwap(false, true) {
+			return nil, nil, 0, false
+		}
+		commandContext, cancelCommand := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancelCommand()
+		command := exec.CommandContext(commandContext, "python3", "-B", filepath.Join(closure, "helpers", "action.py"), "turn_result")
+		command.Dir, command.Env, command.Stdin = root, append(os.Environ(), environment...), bytes.NewReader(input)
+		command.WaitDelay = time.Second
+		output, executeErr := command.CombinedOutput()
+		if executeErr != nil {
+			return nil, output, 1, true
+		}
+		lossMu.Lock()
+		lostKey = hook.Context.Operation
+		lossMu.Unlock()
+		return nil, []byte("injected portable helper response loss after retained application result"), 1, true
+	}
+	run, err := e.Resume(ctx, stopped.run.ID, secrets, true)
+	if err == nil || !lostResponse.Load() {
+		t.Fatalf("portable helper response loss was not exercised: run=%+v error=%v", run, err)
+	}
+	run, err = e.Resume(ctx, stopped.run.ID, secrets, true)
 	if err != nil || run.Status != RunStatusSucceeded {
 		status := "not admitted"
 		if run != nil {
@@ -305,6 +408,9 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	}
 	if reviewed[0] != failedAgent || turns[failedAgent] != 3 {
 		t.Fatalf("eligible failure did not retain its original agent through retry and checklist: failed=%s reviewed=%v turns=%v", failedAgent, reviewed, turns)
+	}
+	if !reconciled.Load() || len(fake.requests) == 0 || fake.requests[0].ParentWorkerID != interrupted.ParentWorkerID || fake.requests[0].SessionID != messages[0].Result.SessionID {
+		t.Fatalf("original interruption or lost effect was not reconciled: interrupted=%+v calls=%+v reconciled=%v", interrupted, fake.requests, reconciled.Load())
 	}
 	mu.Lock()
 	originalCalls := len(fake.requests)
@@ -327,5 +433,16 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	}
 	if len(fake.requests) <= originalCalls {
 		t.Fatal("changed instructions reused stale review coverage")
+	}
+	previousCalls := len(fake.requests)
+	configured := portableFixturePrepare(t, root, "Review the changed governing instructions.", map[string]any{"scope": "changed configuration"})
+	if configured.LogicalRun != changed.LogicalRun || configured.Plan == changed.Plan {
+		t.Fatal("changed settings did not preserve logical budgets and create a new plan", changed, configured)
+	}
+	if _, err = e.Run(ctx, RunRequest{Ref: configured.Workflow, Inputs: map[string]any{"plan": configured.Plan}, Secrets: secrets}); err != nil {
+		t.Fatal("changed configuration replacement:", err)
+	}
+	if len(fake.requests) <= previousCalls {
+		t.Fatal("changed configuration reused stale review coverage")
 	}
 }
