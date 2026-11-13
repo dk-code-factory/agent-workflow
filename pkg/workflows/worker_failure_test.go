@@ -762,7 +762,7 @@ func TestFailureAcknowledgementPreservesUnicodeAndNULText(t *testing.T) {
 }
 
 func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
-	for _, mode := range []string{"owner", "generation", "message", "empty_evidence", "finalizing", "queued", "needs_attention", "storage", "authentication", "action_integrity", "canceled", "timeout", "prerequisite"} {
+	for _, mode := range []string{"owner", "generation", "message_generation", "message", "empty_evidence", "finalizing", "queued", "needs_attention", "storage", "authentication", "action_integrity", "canceled", "timeout", "prerequisite"} {
 		t.Run(mode, func(t *testing.T) {
 			m, req, msg := failureFixture(t)
 			switch mode {
@@ -770,6 +770,12 @@ func TestFailureAcknowledgementRejectsUnsafeAndStaleRequests(t *testing.T) {
 				req.Owner += "stale"
 			case "generation":
 				req.Generation++
+			case "message_generation":
+				msg.Generation--
+				raw, _ := json.Marshal(msg)
+				if _, err := m.Store.db.Exec("UPDATE messages SET record=? WHERE id=?", raw, msg.ID); err != nil {
+					t.Fatal(err)
+				}
 			case "message":
 				req.MessageID = "other-message"
 			case "empty_evidence":
@@ -1021,6 +1027,42 @@ func TestObservedTaskFailureAcknowledgesOnlySelectedMessageWithQueuedSuccessor(t
 	}
 	if err = m.StopRun(ctx, run.ID); err != nil {
 		t.Fatal("settled failure blocked finalization", err)
+	}
+}
+
+func TestObservedTaskFailureRejectsStaleOwnersAndFutureMessages(t *testing.T) {
+	for _, mode := range []string{"owner", "generation", "future_message"} {
+		t.Run(mode, func(t *testing.T) {
+			manager, req, msg := failureFixture(t)
+			ctx := failureTestContext(t)
+			if mode == "future_message" {
+				msg.Generation++
+				raw, err := json.Marshal(msg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = manager.Store.db.ExecContext(ctx, "UPDATE messages SET record=? WHERE id=?", raw, msg.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wait := WorkerWaitRequest{RunID: req.RunID, WorkerID: req.WorkerID, MessageID: msg.ID, OperationID: "observed-error", Deadline: time.Now().Add(5 * time.Second)}
+			if _, err := manager.WaitMessage(ctx, wait); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "owner":
+				req.Owner += "stale"
+			case "generation":
+				req.Generation++
+			}
+			if _, err := manager.acknowledgeFailure(ctx, req, wait.OperationID); err == nil {
+				t.Fatal("authoritative wait bypassed current ownership or message generation")
+			}
+			messages, err := manager.Messages(ctx, req.RunID, req.WorkerID)
+			if err != nil || len(messages) != 1 || messages[0].FailureAcknowledgement != nil {
+				t.Fatal("rejected observation changed the failure", messages, err)
+			}
+		})
 	}
 }
 

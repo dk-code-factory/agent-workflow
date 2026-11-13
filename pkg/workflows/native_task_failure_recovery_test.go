@@ -169,3 +169,80 @@ func TestNativeContinuedFailureExplicitNextCoordinateKeepsSession(t *testing.T) 
 		t.Fatal("explicit retry did not retain the original session", fixture.requests)
 	}
 }
+
+func TestNativeContinuedFailureLostAcknowledgementRetainsObservation(t *testing.T) {
+	for _, failure := range []struct {
+		name string
+		err  error
+	}{
+		{"usage_exhausted", ErrUsageExhausted},
+		{"provider_failure", ErrProviderFailure},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			e, store, fixture := agentTaskFixture(t, `jobs:
+  native:
+    outputs:
+      failure_class: '${{ steps.task.failure_class }}'
+    steps:
+      - id: task
+        uses: agent/run
+        continue-on-error: true
+        with: {agent: reviewer.toml, prompt: work, turns: 8}
+  disposition:
+    needs: native
+    steps:
+      - argv: [true]
+`, func(SessionRequest) (map[string]any, error) {
+				return map[string]any{"text": "original partial analysis"}, failure.err
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			// Lose acknowledgement and completion writes after the authoritative
+			// terminal wait, leaving the original attempt uncheckpointed.
+			_, err := store.db.ExecContext(ctx, `CREATE TRIGGER lose_failure_ack BEFORE UPDATE ON messages WHEN json_extract(CAST(NEW.record AS TEXT),'$.failure_acknowledgement') IS NOT NULL BEGIN SELECT RAISE(ABORT,'lost failure acknowledgement'); END`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || run == nil || !strings.Contains(err.Error(), "lost checkpoint write") {
+				t.Fatalf("did not fault completion: run=%+v err=%v", run, err)
+			}
+			workers, err := e.Workers.List(ctx, run.ID)
+			if err != nil || len(workers) != 1 {
+				t.Fatal(workers, err)
+			}
+			messages, err := e.Workers.Messages(ctx, run.ID, workers[0].ID)
+			if err != nil || len(messages) != 1 || messages[0].FailureClass != failure.name || messages[0].FailureAcknowledgement != nil {
+				t.Fatalf("fault did not preserve an unacknowledged terminal failure: %+v %v", messages, err)
+			}
+			original := messages[0]
+			if _, err = store.db.ExecContext(ctx, "DROP TRIGGER lose_failure_ack"); err != nil {
+				t.Fatal(err)
+			}
+			e.Store = store
+			resumed, err := e.Resume(ctx, run.ID, nil, true)
+			if err != nil || resumed.Status != RunStatusSucceeded {
+				t.Fatalf("resume: %+v %v", resumed, err)
+			}
+			result := resumed.Jobs["native"].Steps["task"]
+			if result.Status != RunStatusFailed || result.FailureClass != failure.name || result.Error != original.Error || result.Outputs["text"] != "original partial analysis" || resumed.Jobs["disposition"].Status != RunStatusSucceeded {
+				t.Fatal("downstream lost the original continued failure", resumed.Jobs)
+			}
+			retained, err := e.Workers.Messages(ctx, run.ID, workers[0].ID)
+			if err != nil || len(retained) != 1 || !nativeTaskFailureAcknowledged(retained[0]) || retained[0].Generation != original.Generation || retained[0].Generation == resumed.Generation {
+				t.Fatal("recovery lost the original failure identity", retained, err)
+			}
+			retained[0].FailureAcknowledgement = nil
+			if !reflect.DeepEqual(original, retained[0]) {
+				t.Fatal("acknowledgement rewrote the original failure", retained, original)
+			}
+			fixture.mu.Lock()
+			calls := len(fixture.requests)
+			fixture.mu.Unlock()
+			if calls != 1 {
+				t.Fatalf("recovery retried before YAML disposition: %d calls", calls)
+			}
+		})
+	}
+}

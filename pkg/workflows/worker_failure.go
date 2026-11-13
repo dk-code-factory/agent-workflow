@@ -106,11 +106,15 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if err = decodeJSONWithNumbers(raw, &msg); err != nil {
 		return zero, err
 	}
-	if msg.Generation != req.Generation || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || (msg.UnsafeFailureClass != "" && !(waitOperation != "" && msg.UnsafeFailureClass == "canceled" && msg.FailureClass != "canceled")) || !acknowledgeableFailure(msg.FailureClass) {
+	// The current execution owner can observe an older task's retained wait
+	// receipt after recovery. Controller dispositions still require matching
+	// generations; observation never changes the original message identity.
+	generationMatches := msg.Generation == req.Generation || (waitOperation != "" && msg.Generation < req.Generation)
+	if !generationMatches || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || (msg.UnsafeFailureClass != "" && !(waitOperation != "" && msg.UnsafeFailureClass == "canceled" && msg.FailureClass != "canceled")) || !acknowledgeableFailure(msg.FailureClass) {
 		return zero, fmt.Errorf("native failure is not a settled ordinary failure in this execution")
 	}
 	if prior := msg.FailureAcknowledgement; prior != nil {
-		if prior.RequestID != req.RequestID || prior.MessageID != req.MessageID || prior.Generation != req.Generation || prior.Reason != req.Reason || prior.Evidence != req.Evidence {
+		if prior.RequestID != req.RequestID || prior.MessageID != req.MessageID || prior.Generation != msg.Generation || prior.Reason != req.Reason || prior.Evidence != req.Evidence {
 			return zero, fmt.Errorf("conflicting failure acknowledgement")
 		}
 		return *prior, nil
@@ -138,7 +142,7 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if pending != 0 {
 		return zero, ErrUncertainTool
 	}
-	ack := WorkerFailureAcknowledgement{RequestID: req.RequestID, MessageID: msg.ID, Generation: req.Generation, Reason: req.Reason, Evidence: req.Evidence, AcknowledgedAt: time.Now().UTC()}
+	ack := WorkerFailureAcknowledgement{RequestID: req.RequestID, MessageID: msg.ID, Generation: msg.Generation, Reason: req.Reason, Evidence: req.Evidence, AcknowledgedAt: time.Now().UTC()}
 	msg.FailureAcknowledgement = &ack
 	raw, err = json.Marshal(msg)
 	if err != nil {
