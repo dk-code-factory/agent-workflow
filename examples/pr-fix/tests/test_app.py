@@ -1,11 +1,13 @@
 """Application acceptance, session continuity, allowances and controlled Git."""
 import copy
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
@@ -393,11 +395,16 @@ class AppTests(unittest.TestCase):
         report = self.fixture.report(changes=[{"path": name, "before": None,
             "after": hashlib.sha256((self.root / name).read_bytes()).hexdigest()}], commit_message="Add literal fixture path")
         parent = git(self.root, "rev-parse", "HEAD")
-        accepted = self.accept(claim, report, agent=FIXER)
+        private_home = self.root / ".git" / "private-helper-home"
+        private_home.mkdir()
+        with patch.dict(os.environ, {"HOME": str(private_home)}):
+            accepted = self.accept(claim, report, agent=FIXER)
         self.assertTrue(accepted["complete"])
         committed = git(self.root, "rev-parse", "HEAD")
         self.assertNotEqual(committed, parent)
         self.assertEqual(git(self.root, "rev-parse", "HEAD^"), parent)
+        self.assertEqual(git(self.root, "show", "-s", "--format=%an <%ae>|%cn <%ce>", "HEAD"),
+                         "Fixture <fixture@example.invalid>|Fixture <fixture@example.invalid>")
         self.assertEqual(git(self.root, "show", "HEAD:" + name), "exact intended file")
         row = self.ledger.db.execute("SELECT * FROM local_commits WHERE id=?", (claim["claim"],)).fetchone()
         self.assertEqual(row["head"], committed)

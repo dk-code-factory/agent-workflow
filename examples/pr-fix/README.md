@@ -39,6 +39,11 @@ works. The sample's zero digest is a placeholder that must be replaced; no
 PR-specific Dockerfile or host Python is necessary. Run preparation and the controller as the same non-root
 workspace owner. Native agents use the configured host Codex app-server runtime.
 
+Writing plans also require repository-local `user.name` and `user.email`; helper
+containers do not inherit host-global Git identity. Configure the intended commit
+identity as shown in the [guide](../../docs/PR_FIX.md#setup-and-preparation) before
+preparation. Read-only plans do not need it.
+
 ## Prepare and run
 
 Commit the example files in the working repository first. Make a private request

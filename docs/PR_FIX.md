@@ -20,6 +20,18 @@ linked worktrees whose `.git` is a file. Commit the copied example definitions
 before preparation, and start with a clean worktree. Preserve the exact original
 request and explicitly stage effective settings in the request JSON.
 
+Writing plans need a repository-local commit identity. Set the intended author
+and committer in this clone before preparation:
+
+```sh
+git config --local user.name 'Your Name'
+git config --local user.email 'your-address@example.com'
+```
+
+Helper containers have a private home and do not inherit the host's global Git
+configuration or author/committer environment. Preparation rejects writing plans
+without valid local values; read-only plans do not need a commit identity.
+
 Install the stock binary, Docker and the configured Codex app-server runtime.
 The helper image must already be available locally under a digest-pinned
 reference or immutable local content ID and contain Python 3.11 or newer, Git,

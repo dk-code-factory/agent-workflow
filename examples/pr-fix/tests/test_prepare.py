@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -69,6 +70,36 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(config["execution"]["network"], "bridge")
         self.assertEqual(config["agents"]["codex"]["provider"], "codex-app-server")
         self.assertEqual(config["agents"]["codex"]["execution"], {"mode": "local"})
+
+    def test_writer_preparation_requires_local_identity_despite_host_defaults(self):
+        self.request["options"]["tasks"] = ["dk-workflows:dk-pr-feedback-address"]
+        global_config = self.root / ".git" / "host-global-config"
+        global_config.write_text('[user]\nname = Host User\nemail = host@example.invalid\n')
+        for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid")):
+            git(self.root, "config", "--local", "--unset", key)
+            try:
+                with self.subTest(key=key), patch.dict(os.environ, {
+                    "GIT_CONFIG_GLOBAL": str(global_config),
+                    "GIT_AUTHOR_NAME": "Host Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
+                    "GIT_COMMITTER_NAME": "Host Committer", "GIT_COMMITTER_EMAIL": "committer@example.invalid",
+                }), self.assertRaisesRegex(ValueError, "repository-local Git user.name and user.email"):
+                    self.prepare()
+            finally:
+                git(self.root, "config", "--local", key, value)
+
+    def test_read_only_plan_does_not_require_git_commit_identity(self):
+        git(self.root, "config", "--local", "--unset", "user.name")
+        git(self.root, "config", "--local", "--unset", "user.email")
+        _, plan = self.prepare()
+        self.assertEqual(plan["tasks"], [])
+
+    def test_writer_preparation_uses_local_identity_with_private_home(self):
+        self.request["options"]["tasks"] = ["dk-workflows:dk-pr-feedback-address"]
+        private_home = self.root / ".git" / "private-helper-home"
+        private_home.mkdir()
+        with patch.dict(os.environ, {"HOME": str(private_home)}):
+            _, plan = self.prepare()
+        self.assertTrue(any(task["writes"] for task in plan["tasks"]))
 
     def test_review_plan_has_unique_tasks_independent_verifier_and_session_continuation(self):
         self.request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"], "finalizers": [],

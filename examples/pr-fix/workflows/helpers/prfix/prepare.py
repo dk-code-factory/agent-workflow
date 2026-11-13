@@ -286,6 +286,24 @@ def _helper_manifest(source):
     return result
 
 
+def _validate_commit_identity(root):
+    from .capture import run
+    # Helpers have a private HOME and receive no host Git identity overrides.
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("GIT_CONFIG", "GIT_AUTHOR", "GIT_COMMITTER")) and key != "EMAIL"}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    try:
+        for key in ("user.name", "user.email"):
+            text(run(root, ["git", "config", "--local", "--get", key],
+                     env=env, limit=4096).decode("utf-8"), key)
+        for variable in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+            run(root, ["git", "-c", "user.useConfigOnly=true", "var", variable],
+                env=env, limit=4096)
+    except (RuntimeError, ValueError, UnicodeError) as error:
+        raise ValueError("writing tasks require valid repository-local Git user.name and user.email; "
+                         "configure both before preparation") from error
+
+
 @contextmanager
 def staged_closure(final):
     final.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -485,6 +503,8 @@ def prepare(root, request, provider=None):
                            1 if stage["kind"] == "ci" else 0 for stage in stages)
     if len(tasks) > 40 or native_per_cycle * limits["review_cycles"] > min(64, worker_limit or 64):
         raise ValueError("portable plan exceeds bounded engine worker admission")
+    if any(task["writes"] for task in tasks):
+        _validate_commit_identity(root)
     from .capture import GitHub, capture
     provider = provider or GitHub(root)
     plan["snapshot"] = capture(root, provider, plan, clean=True)
