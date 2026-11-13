@@ -20,7 +20,7 @@ import (
 func TestImmutablePublicationConcurrentAndInterruptedWriters(t *testing.T) {
 	dir := os.Getenv("PRFIX_IMMUTABLE_WRITER_FIXTURE")
 	if dir == "" {
-		dir = t.TempDir()
+		dir = fixtureDirectory(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		// Filesystem operations cannot be cancelled in-process. CommandContext
