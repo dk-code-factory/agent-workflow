@@ -148,6 +148,32 @@ class PrepareTests(unittest.TestCase):
                 with self.subTest(skill=skill, control=control), self.assertRaisesRegex(ValueError, "unsupported|only"):
                     self.prepare(request)
 
+    def test_unsupported_merge_methods_fail_before_capture_or_state_creation(self):
+        self.request["authorizations"]["merge"] = {
+            "request_id": "merge-fixture", "instruction": "Merge this PR when ready.", "source": "user:fixture"}
+        for method in ("rebase", "", None, False, [], {}):
+            request = copy.deepcopy(self.request)
+            request["options"]["merge_method"] = method
+            with self.subTest(method=method), patch.object(self.fixture, "capture", wraps=self.fixture.capture) as capture:
+                with self.assertRaisesRegex(ValueError, "merge_method.*merge.*squash"):
+                    self.prepare(request)
+                capture.assert_not_called()
+                self.assertFalse((self.root / core.STATE).exists())
+                self.assertFalse((self.root / core.GENERATED).exists())
+
+    def test_supported_merge_methods_retain_authorized_merge_jobs(self):
+        self.request["authorizations"]["merge"] = {
+            "request_id": "merge-fixture", "instruction": "Merge this PR when ready.", "source": "user:fixture"}
+        for method in ("merge", "squash"):
+            request = copy.deepcopy(self.request)
+            request["options"]["merge_method"] = method
+            with self.subTest(method=method):
+                result, plan = self.prepare(request)
+                self.assertEqual(plan["options"]["merge_method"], method)
+                main = json.loads((self.root / result["workflow"]).read_text())
+                self.assertIn("merge_proposal", main["jobs"])
+                self.assertIn("merge", main["jobs"])
+
     def test_worker_admission_counts_every_retained_cycle(self):
         request = copy.deepcopy(self.request)
         request["options"] = {"tasks": ["dk-workflows:dk-pr-reviewers-run"], "finalizers": [],

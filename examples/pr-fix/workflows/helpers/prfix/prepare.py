@@ -370,6 +370,8 @@ def prepare(root, request, provider=None):
                        "ci_timeout_seconds", "ci_classifications", "ci_exceptions", "before_cycle", "after_cycle"}
     if set(options) - allowed_options:
         raise ValueError("unsupported portable option: " + ", ".join(sorted(set(options) - allowed_options)))
+    if options.get("merge_method", "merge") not in ("merge", "squash"):
+        raise ValueError("merge_method supports merge/squash only")
     limits = {"review_cycles": 5, "retries_per_task": 1, "ci_repairs_per_cycle": 5, "ci_reruns_per_head": 3,
               **options.get("limits", {})}
     bounds = {"review_cycles": (1, 10), "retries_per_task": (0, 1), "ci_repairs_per_cycle": (0, 5), "ci_reruns_per_head": (0, 3)}

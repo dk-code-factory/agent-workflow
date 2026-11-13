@@ -267,7 +267,9 @@ this live completion gate and cannot establish merge readiness without the
 required review evidence. A separately authorized merge is proposed only after
 readiness, receives its own audience assessment and repeats the live gates just
 before dispatch. The supported merge receipts bind merge/squash to the exact
-original head, target and method-specific commit parents.
+original head, target and method-specific commit parents. `options.merge_method`
+defaults to `merge`; preparation rejects values other than `merge` or `squash`
+before capturing the PR or creating application state.
 
 ## State, backup and compatibility
 
