@@ -20,8 +20,10 @@ jobs: {build: {container: ubuntu:24.04, steps: [{id: helper, argv: [helper]}, {i
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   const exported = await downloadText(page); expect(exported).toContain('output-schema: Output');
   expect(parse(exported).jobs.build.steps[0].input).toEqual(input);
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('output-schema'); await dialog.dismiss(); });
+  let removalMessage = '';
+  page.once('dialog', async dialog => { removalMessage = dialog.message(); await dialog.dismiss(); });
   await ui.getByLabel('Protocol', { exact: true }).selectOption('');
+  expect(removalMessage).toContain('output-schema');
   expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual(helper);
   page.once('dialog', dialog => dialog.accept());
   await ui.getByLabel('Protocol', { exact: true }).selectOption('');

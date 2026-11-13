@@ -129,8 +129,10 @@ test('edit native definitions and typed input while retaining six visible hook l
   await ui.getByRole('button',{name:'Redo',exact:true}).click();
   expect((await snapshot(page)).source).toBe(edited.source);
   const exported=await downloadText(page);expect(exported).toBe(edited.source);
-  page.once('dialog',async dialog=>{expect(dialog.message()).toContain('onResult');await dialog.accept();});
+  let conversionMessage = '';
+  page.once('dialog',async dialog=>{conversionMessage = dialog.message();await dialog.accept();});
   await ui.getByLabel('Step type',{exact:true}).selectOption('argv');
+  expect(conversionMessage).toContain('onResult');
   expect((await snapshot(page)).workflow.jobs.review.steps[0].onResult).toBeUndefined();
   await ui.getByRole('button',{name:'Undo',exact:true}).click();expect((await snapshot(page)).source).toBe(edited.source);
 });
