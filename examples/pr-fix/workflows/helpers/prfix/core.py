@@ -185,6 +185,7 @@ class Ledger:
         if path.is_symlink():
             raise ValueError("ledger must not be a symlink")
         self.read_only = read_only
+        self.root = root
         self.logical_run = logical_run
         self.db = sqlite3.connect(path.as_uri() + ("?mode=ro" if read_only else "?mode=rwc"),
                                   uri=True, isolation_level=None, timeout=15)
@@ -325,5 +326,18 @@ def writer_lease(root, logical_run, claim, *, acquire=False, release=False):
     except BaseException:
         database.rollback()
         raise
+    finally:
+        database.close()
+
+
+def verify_writer_lease(root, logical_run, claim):
+    path = owned_directory(root, STATE) / "workspace-writer.sqlite"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("original writer ownership is unavailable")
+    database = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=15)
+    try:
+        owner = database.execute("SELECT logical_run,claim_id FROM writer WHERE singleton=1").fetchone()
+        if owner != (logical_run, claim):
+            raise ValueError("original writer ownership changed")
     finally:
         database.close()

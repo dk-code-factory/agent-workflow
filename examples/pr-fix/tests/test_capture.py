@@ -28,6 +28,7 @@ class Fixture:
         git(root, "init", "-b", "main")
         git(root, "config", "user.email", "fixture@example.invalid")
         git(root, "config", "user.name", "Fixture")
+        git(root, "config", "commit.gpgsign", "false")
         (root / "file.txt").write_text("base\n")
         (root / "AGENTS.md").write_text("Keep evidence.\n")
         git(root, "add", ".")
@@ -100,13 +101,16 @@ class CaptureTests(unittest.TestCase):
 
     def test_changed_instructions_configuration_and_selected_resources_invalidate(self):
         task = {"id": "review", "definition_digest": "definition", "resources": ["rules"]}
-        self.fixture.plan["resources"] = {"rules": "a", "other": "a"}
+        (self.root / ".gitignore").write_text("rules\nother\n")
+        (self.root / "rules").write_text("a")
+        (self.root / "other").write_text("a")
+        self.fixture.plan["resources"] = {"rules": "prepared", "other": "prepared"}
         first = self.capture()
-        self.fixture.plan["resources"]["other"] = "b"
+        (self.root / "other").write_text("b")
         self.fixture.plan["options"]["tasks"] = ["another"]
         sibling = self.capture()
         self.assertEqual(module.fingerprint(first, task), module.fingerprint(sibling, task))
-        self.fixture.plan["resources"]["rules"] = "b"
+        (self.root / "rules").write_text("b")
         self.assertNotEqual(module.fingerprint(first, task), module.fingerprint(self.capture(), task))
         self.fixture.plan["instructions"] = "New exact user instruction."
         self.assertNotEqual(first["instructions"], self.capture()["instructions"])

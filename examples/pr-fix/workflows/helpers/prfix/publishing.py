@@ -9,7 +9,7 @@ import copy
 import re
 
 from .core import artifact, auth, bounded_json, canonical, digest, read_artifact, text
-from .publication import Publication, PublicationError
+from .publication import Publication, PublicationError, repository_merge_requirements
 
 
 _AGENT = re.compile(r"agent_[a-f0-9]{32}")
@@ -55,7 +55,7 @@ def _source(root, provider, ledger, plan, reference, *, snapshot=None, audience_
     if claim["state"] != "complete" or claim["report"] != reference or claim["coverage"] != row["fingerprint"]:
         raise PublicationError("publication source is not the accepted final report for its claim")
     snapshot = snapshot if snapshot is not None else app._snapshot(root, provider, plan)
-    if row["fingerprint"] != app._fingerprint(snapshot, task):
+    if row["fingerprint"] != app._fingerprint(snapshot, task, ledger):
         raise PublicationError("publication source no longer covers the current inputs")
     if not app.verify_report(root, task, report):
         raise PublicationError("publication source checklist is incomplete")
@@ -320,6 +320,8 @@ def readiness(root, provider, ledger, plan, inputs=None):
             result["blockers"].append("PR head or target changed during readiness verification")
         if meta.get("state") != "open" or meta.get("merged") or meta.get("draft") or meta.get("mergeable_state") != "clean":
             result["blockers"].append("live PR merge requirements are not satisfied")
+        requirements = repository_merge_requirements(provider, plan["pr"], meta, snapshot["head"])
+        result["evidence"].append("sha256:" + digest(requirements))
         result["ready"] = bool(covered["complete"] and result["clean_review"] and result["verified"] and not result["blockers"])
     except Exception as error:
         result["blockers"].append(str(error))

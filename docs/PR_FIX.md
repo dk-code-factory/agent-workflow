@@ -113,7 +113,11 @@ not replace its role settings. Resume unfinished original work before replacing
 its runtime.
 
 The generated runtime uses local `codex-app-server` agent execution and
-container-backed Python helpers. Helper containers use explicit bridge networking;
+container-backed Python helpers. The sample sets `runtime.sandbox` to
+`workspace-write` so native writing tasks can edit their assigned source files.
+An omitted sandbox defaults to read-only and cannot run the writing tasks;
+helper-container write access does not change native agent permissions.
+Helper containers use explicit bridge networking;
 the engine still pins their immutable image and retained helper bundle. Native
 agent waits use the controller's durable mailbox mechanism and release execution
 capacity. Containers finish their operation before YAML dispatches an agent.

@@ -152,13 +152,21 @@ def handle(operation, request, root=None, provider=None):
         if valid and operation == "claim" and checkpoint["output"].get("invoke"):
             retained = app._claim(ledger, checkpoint["output"]["claim"])
             assignment = read_artifact(root, retained["assignment"])
-            if retained["state"] != "complete":
+            if retained["state"] not in {"complete", "optional_failed"}:
                 current = app._snapshot(root, provider, plan)
-                current_fingerprint = app._fingerprint(current, assignment["task"])
+                if assignment["task"]["writes"]:
+                    from prfix.core import verify_writer_lease
+                    verify_writer_lease(root, plan["logical_run"], retained["id"])
+                    valid = current["local_head"] == assignment["snapshot"]["local_head"] and current["head"] == assignment["snapshot"]["head"]
+                    # The original writer may have unfinished edits. Its final
+                    # report must still account for all bytes before acceptance.
+                    current = {**current, **{key: assignment["snapshot"][key] for key in ("local_tree", "diff")}}
+                current_fingerprint = app._fingerprint(current, assignment["task"], ledger)
                 payload = assignment.get("payload", {})
                 if payload:
                     current_fingerprint = digest([current_fingerprint, payload])
-                valid = current_fingerprint == retained["fingerprint"]
+                current_fingerprint = digest([current_fingerprint, assignment["invocation"]])
+                valid = valid and current_fingerprint == retained["fingerprint"]
         if valid and operation == "completion":
             from prfix.publishing import readiness
             current = readiness(root, provider, ledger, plan)

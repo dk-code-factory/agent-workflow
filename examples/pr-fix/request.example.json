@@ -10,6 +10,7 @@
     "audience": "examples/pr-fix/workflows/agents/audience.toml"
   },
   "runtime": {
+    "sandbox": "workspace-write",
     "authentication": {"mode": "native"}
   },
   "options": {

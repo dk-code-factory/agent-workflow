@@ -507,6 +507,7 @@ def capture(root, provider, plan, *, clean=False):
                if k not in ("tasks", "finalizers", "reviewers", "limits")}
     discussion = {"title": metadata.get("title"), "body": metadata.get("body"),
                   **{k: observed[k] for k in ("comments", "reviews", "inline", "threads")}}
+    resources = resource_digests(root, plan.get("resources", {}))
     result = {"pr": pr, "head": head, "target": target, "base": base,
               "local_head": local_head, **trees, "author": author["login"],
               "author_id": author["id"], "viewer": viewer["login"], "actor_id": viewer["id"],
@@ -517,9 +518,9 @@ def capture(root, provider, plan, *, clean=False):
               "history": hashlib.sha256(history).hexdigest(), "discussion": digest(discussion),
               "instructions": digest({"request": plan["instructions"], "repository": instruction_files}),
               "settings": digest({"options": options, "settings": plan.get("settings", {})}),
-              "resources": digest(plan.get("resources", {})),
+              "resources": digest(resources),
               "definitions": digest(plan.get("definitions", {})),
-              "resource_digests": _decode(canonical(plan.get("resources", {}))),
+              "resource_digests": resources,
               "definition_digests": _decode(canonical(plan.get("definitions", {}))),
               "status_fingerprint": hashlib.sha256(status).hexdigest(),
               "dirty": bool(status),
@@ -528,6 +529,31 @@ def capture(root, provider, plan, *, clean=False):
     if status:
         result["local_tree"] = digest({"head_tree": trees["local_tree"], "diff": result["diff"],
                                       "status": status.hex()})
+    return result
+
+
+def resource_digests(root, resources):
+    result = {}
+    for name in resources:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("resources must be workspace-relative")
+        path = root / relative
+        for parent in [path, *path.parents]:
+            if parent == root:
+                break
+            if parent.is_symlink():
+                raise ValueError("resources must not traverse symlinks")
+        if not path.is_file() or path.stat().st_size > 4 << 20:
+            raise ValueError("resources must be bounded regular files")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("resources must be regular files")
+            content = stream.read((4 << 20) + 1)
+        if len(content) > 4 << 20:
+            raise ValueError("resource exceeds byte bound")
+        result[name] = hashlib.sha256(content).hexdigest()
     return result
 
 

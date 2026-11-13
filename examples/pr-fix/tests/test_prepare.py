@@ -53,6 +53,15 @@ class PrepareTests(unittest.TestCase):
         main = json.loads((directory / "main.yml").read_text())
         self.assertIn("completion", main["jobs"])
         self.assertEqual(main["jobs"]["completion"]["steps"][0]["argv"][-1], "completion")
+
+    def test_sample_native_write_policy_reaches_generated_runtime(self):
+        sample = json.loads((Path(__file__).resolve().parents[1] / "request.example.json").read_text())
+        self.request["runtime"] = sample["runtime"]
+        self.request["options"]["tasks"] = ["dk-workflows:dk-pr-feedback-address"]
+        result, plan = self.prepare()
+        self.assertTrue(any(task["writes"] for task in plan["tasks"]))
+        configuration = json.loads((self.root / result["config"]).read_text())
+        self.assertEqual(configuration["agents"]["codex"]["sandbox"], "workspace-write")
         config = json.loads((self.root / result["config"]).read_text())
         self.assertEqual(config["execution"]["image"], self.request["image"])
         self.assertEqual(config["execution"]["network"], "bridge")

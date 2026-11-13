@@ -125,9 +125,15 @@ def _snapshot(root, provider, plan):
     return snapshot
 
 
-def _fingerprint(snapshot, task):
+def _fingerprint(snapshot, task, ledger=None):
     from .capture import fingerprint
-    return fingerprint(snapshot, task)
+    result = fingerprint(snapshot, task)
+    if ledger is not None and task["kind"] in {"verification", "fix"} and task["id"] != "ci_repair":
+        originals = candidates(ledger.root, ledger, None)
+        verification = [dict(row) for row in ledger.db.execute(
+            "SELECT reference,report FROM accepted_reports WHERE kind='verification' ORDER BY rowid")] if task["kind"] == "fix" else []
+        result = digest([result, originals, verification])
+    return result
 
 
 def _claims(ledger, task=None):
@@ -140,7 +146,7 @@ def _claims(ledger, task=None):
 
 
 def _current(ledger, snapshot, task):
-    wanted = _fingerprint(snapshot, task)
+    wanted = _fingerprint(snapshot, task, ledger)
     rows = ledger.db.execute("SELECT * FROM claims WHERE task=? AND state='complete' AND coverage=? ORDER BY rowid DESC",
                              (task["id"], wanted)).fetchall()
     return dict(rows[0]) if rows else None
@@ -173,7 +179,7 @@ def prepare_claim(root, provider, ledger, plan, inputs):
     task = _task(plan, inputs["task"])
     snapshot = _snapshot(root, provider, plan)
     payload = inputs.get("payload", {})
-    fingerprint = digest([_fingerprint(snapshot, task), payload]) if payload else _fingerprint(snapshot, task)
+    fingerprint = digest([_fingerprint(snapshot, task, ledger), payload]) if payload else _fingerprint(snapshot, task, ledger)
     unfinished = ledger.db.execute("SELECT id FROM claims WHERE task=? AND state IN ('claimed','incomplete') LIMIT 1", (task["id"],)).fetchone()
     if unfinished:
         raise ValueError("unfinished logical claim for original task: resume its originating engine execution")
@@ -181,7 +187,9 @@ def prepare_claim(root, provider, ledger, plan, inputs):
     if current:
         return {"claim": current["id"], "invoke": False, "complete": True,
                 "prompt": "", "task_input": {}, "report": current["report"]}
-    key = "claim_" + digest([plan["logical_run"], task["id"], fingerprint])
+    invocation = ledger.db.execute("SELECT count(*) FROM claims WHERE task=?", (task["id"],)).fetchone()[0]
+    fingerprint = digest([fingerprint, invocation])
+    key = "claim_" + digest([plan["logical_run"], task["id"], fingerprint, invocation])
     writer_lease(root, plan["logical_run"], key)
     findings = candidates(root, ledger, plan)
     if task["id"] == "finding_fix":
@@ -194,6 +202,7 @@ def prepare_claim(root, provider, ledger, plan, inputs):
                   "snapshot": snapshot, "instructions": plan["instructions"],
                   "settings": plan.get("settings", {}), "findings": findings,
                   "payload": payload,
+                  "invocation": invocation,
                   "authorization": plan.get("authorizations", {}),
                   "report_contract": "Source evidence is {id,path,sha256}; checklist evidence names these IDs. "
                   "Do not publish, commit, coordinate stages or start provider processes. "
@@ -307,9 +316,16 @@ def accept(root, provider, ledger, plan, inputs):
     if task["writes"] and report.get("changes") and complete:
         _commit(root, ledger, claim["id"], task, report, assignment["snapshot"])
         snapshot = _snapshot(root, provider, plan)
+    elif task["writes"] and complete and (snapshot.get("local_tree") != assignment["snapshot"].get("local_tree")
+            or snapshot.get("local_head") != assignment["snapshot"].get("local_head")):
+        raise ValueError("writer changed the workspace without a complete changed-file manifest")
     elif not task["writes"] and snapshot.get("local_tree") != assignment["snapshot"].get("local_tree"):
         raise ValueError("read-only task changed the workspace")
-    coverage = _fingerprint(snapshot, task)
+    settled_optional = not complete and not task["required"] and round_number == 3
+    if settled_optional and task["writes"] and (snapshot.get("local_tree") != assignment["snapshot"].get("local_tree")
+            or snapshot.get("local_head") != assignment["snapshot"].get("local_head")):
+        raise ValueError("incomplete optional writer has unresolved source effects")
+    coverage = _fingerprint(snapshot, task, ledger)
     with ledger.transaction():
         old = ledger.db.execute("SELECT agent,report FROM submissions WHERE claim_id=? AND round=?",
                                 (claim["id"], round_number)).fetchone()
@@ -319,11 +335,11 @@ def accept(root, provider, ledger, plan, inputs):
         ledger.db.execute("INSERT OR IGNORE INTO submissions VALUES(?,?,?,?)",
                           (claim["id"], round_number, agent, encoded))
         ledger.db.execute("UPDATE claims SET state=?,agent=?,report=?,coverage=? WHERE id=?",
-                          ("complete" if complete else "incomplete", agent, reference, coverage, claim["id"]))
+                          ("complete" if complete else "optional_failed" if settled_optional else "incomplete", agent, reference, coverage, claim["id"]))
         if complete:
             ledger.db.execute("INSERT OR IGNORE INTO accepted_reports VALUES(?,?,?,?,?,?)",
                               (reference, task["id"], task["kind"], coverage, agent, encoded))
-    if complete and task["writes"]:
+    if (complete or settled_optional) and task["writes"]:
         writer_lease(root, plan["logical_run"], claim["id"], release=True)
     return {"claim": claim["id"], "complete": complete, "agent": agent,
             "settled": complete or not task["required"] and round_number == 3,

@@ -60,7 +60,7 @@ class PublishingTests(unittest.TestCase):
     def accepted(self, key, report=None, agent=PRODUCER):
         task = next(t for t in self.plan["tasks"] if t["id"] == key)
         report = report or self.report()
-        fingerprint = app._fingerprint(self.snapshot, task)
+        fingerprint = app._fingerprint(self.snapshot, task, self.ledger)
         claim = "claim_" + key
         reference = artifact(self.root, {"claim": claim, "agent": agent, "round": 0, "report": report})
         self.ledger.db.execute("INSERT INTO claims(id,task,fingerprint,state,agent,assignment,report,coverage) VALUES(?,?,?,'complete',?,?,?,?)",
@@ -205,6 +205,27 @@ class PublishingTests(unittest.TestCase):
             stale = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
             self.assertFalse(stale["ready"])
             self.assertTrue(any("another head" in item for item in stale["blockers"]))
+
+    def test_readiness_checks_graphql_requirements_without_publication(self):
+        self.accepted("description")
+        self.accepted("review")
+        self.accepted("finding_verification", agent=VERIFIER)
+        original = copy.deepcopy(self.provider.merge_state)
+        with patch.object(app, "coverage", side_effect=lambda *args: copy.deepcopy(self.covered)):
+            for fields in ({"mergeStateStatus": "BLOCKED"}, {"mergeable": "CONFLICTING"},
+                           {"reviewDecision": "CHANGES_REQUESTED"}, {"headRefOid": "c" * 40}):
+                with self.subTest(fields=fields):
+                    self.provider.merge_state = {**original, **fields}
+                    result = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
+                    self.assertFalse(result["ready"], result)
+                    self.assertTrue(any("merge requirements" in item for item in result["blockers"]))
+            self.provider.merge_state = {**original, "reviewDecision": None}
+            self.assertTrue(publishing.readiness(self.root, self.provider, self.ledger, self.plan)["ready"])
+            with patch.object(self.provider, "request", side_effect=OSError("requirements unavailable")):
+                result = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
+                self.assertFalse(result["ready"])
+                self.assertIn("requirements unavailable", result["blockers"])
+        self.assertEqual(self.provider.writes, [])
 
     def test_controlled_commit_receipt_supplies_exact_push_before_other_proposals(self):
         self.plan["tasks"][0]["writes"] = True

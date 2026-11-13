@@ -30,6 +30,7 @@ class AppFixture:
         git(root, "init", "--initial-branch=main")
         git(root, "config", "user.email", "fixture@example.invalid")
         git(root, "config", "user.name", "Fixture")
+        git(root, "config", "commit.gpgsign", "false")
         (root / "code.py").write_text("value = 1\n")
         (root / "AGENTS.md").write_text("Preserve exact source evidence and do not publish without authority.\n")
         git(root, "add", ".")
@@ -147,6 +148,62 @@ class AppTests(unittest.TestCase):
         self.assertEqual(retained[0]["text"], "Retained original defect")
         self.assertEqual(retained[0]["agent"], REVIEWER)
         self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM submissions").fetchone()[0], 2)
+
+    def test_completed_writer_rejects_missing_or_empty_manifest(self):
+        claim = self.claim("finding_fix")
+        (self.root / "code.py").write_text("value = 3\n")
+        for values in ({}, {"changes": []}):
+            with self.subTest(values=values), self.assertRaisesRegex(ValueError, "changed-file manifest"):
+                self.accept(claim, self.fixture.report(**values), agent=FIXER)
+        self.assertEqual(app._claim(self.ledger, claim["claim"])["state"], "claimed")
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM accepted_reports").fetchone()[0], 0)
+        with self.assertRaisesRegex(ValueError, "original writer"):
+            self.claim()
+
+    def test_exhausted_optional_writer_releases_fence_only_without_changes(self):
+        writer = next(task for task in self.plan["tasks"] if task["id"] == "finding_fix")
+        writer["required"] = False
+        claim = self.claim(writer["id"])
+        report = self.fixture.report(complete=False)
+        report["checklist"][-1]["status"] = "incomplete"
+        (self.root / "code.py").write_text("value = 3\n")
+        with self.assertRaisesRegex(ValueError, "unresolved source effects"):
+            self.accept(claim, report, agent=FIXER, round=3)
+        (self.root / "code.py").write_text("value = 2\n")
+        self.assertTrue(self.accept(claim, report, agent=FIXER, round=3)["settled"])
+        self.assertEqual(app._claim(self.ledger, claim["claim"])["state"], "optional_failed")
+        self.assertTrue(self.claim()["invoke"])
+        again = self.claim(writer["id"])
+        self.assertTrue(again["invoke"])
+        self.assertNotEqual(again["claim"], claim["claim"])
+
+    def test_noncacheable_task_can_repeat_after_a_completed_invocation(self):
+        self.review["cacheable"] = False
+        first = self.claim()
+        self.accept(first)
+        second = self.claim()
+        self.assertTrue(second["invoke"])
+        self.assertNotEqual(first["claim"], second["claim"])
+        self.accept(second, agent=VERIFIER)
+        self.assertEqual(len(app._claims(self.ledger, self.review["id"])), 2)
+
+    def test_later_review_findings_invalidate_verification_and_fix_coverage(self):
+        self.accept(self.claim())
+        self.accept(self.claim("finding_verification"), agent=VERIFIER)
+        self.accept(self.claim("finding_fix"), agent=FIXER)
+        second_review = copy.deepcopy(self.review)
+        second_review["id"] += "_second"
+        self.plan["tasks"].append(second_review)
+        self.accept(self.claim(second_review["id"]), self.fixture.report(findings=[
+            {"id": "R2", "text": "Later independently found defect", "sources": ["source"]}]))
+        verification = self.claim("finding_verification")
+        self.assertTrue(verification["invoke"])
+        finding = verification["task_input"]["findings"][0]
+        disposition = {"finding_id": finding["id"], "status": "confirmed", "sources": ["source"], "reason": "Current independent source verification"}
+        self.accept(verification, self.fixture.report(dispositions=[disposition]), agent=VERIFIER)
+        fix = self.claim("finding_fix")
+        self.assertTrue(fix["invoke"])
+        self.assertEqual(fix["task_input"]["findings"], verification["task_input"]["findings"])
 
     def test_independent_verifier_must_account_for_every_original_finding(self):
         finding = self.original_finding()

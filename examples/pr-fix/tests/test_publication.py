@@ -397,7 +397,7 @@ class PublicationTests(unittest.TestCase):
         source, remote = self.root / "checkout", self.root / "remote.git"
         source.mkdir()
         def git(root, *args):
-            result = subprocess.run(["git", *args], cwd=root, stdout=subprocess.PIPE,
+            result = subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=root, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, check=True, timeout=10)
             return result.stdout.decode().strip()
         git(self.root, "init", "--bare", str(remote))

@@ -135,6 +135,34 @@ class ActionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "helper closure differs"):
             self.handle("coverage", "bindings")
 
+    def test_original_writer_checkpoint_accepts_edits_but_retains_governing_and_owner_bindings(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"]["tasks"] = ["local:writer"]
+        request["adapters"]["local:writer"] = {"kind": "synchronization", "writes": True,
+            "definition": "fixer", "assignment": "Synchronize the exact assigned source."}
+        request["authorizations"] = {"iterate": {"request_id": "writer", "instruction": "Fix locally", "source": "chat:writer"}}
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        inputs = {"task": self.plan["tasks"][0]["id"]}
+        claimed = self.handle("claim", "execute", inputs, key="writer-before-native")
+        (self.root / "code.py").write_text("value = 3\n")
+        def validate():
+            return self.handle("claim", "validate_checkpoint", inputs, key="writer-before-native", checkpoint=claimed["result"])["valid"]
+        self.assertTrue(validate())
+        instructions = self.root / "AGENTS.md"
+        original = instructions.read_bytes()
+        instructions.write_text("Changed governing instruction\n")
+        self.assertFalse(validate())
+        instructions.write_bytes(original)
+        self.assertTrue(validate())
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.root / ".pr-fix-state" / "workspace-writer.sqlite")) as database:
+            database.execute("UPDATE writer SET claim_id='another-claim'")
+            database.commit()
+        with self.assertRaisesRegex(ValueError, "writer ownership changed"):
+            validate()
+
     def test_selected_completion_is_distinct_from_merge_readiness(self):
         completed = self.handle("completion", "execute")
         self.assertTrue(completed["result"]["output"]["complete"])

@@ -444,19 +444,8 @@ def prepare(root, request, provider=None):
         task["runtime_fingerprint"] = digest(runtime)
     if options.get("before_cycle") or options.get("after_cycle"):
         raise ValueError("portable cycle hooks require explicit task placement; legacy hook stores are not imported")
-    for name in request.get("resources", []):
-        relative = Path(text(name, "resource path"))
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("resources must be workspace-relative")
-        path = root / relative
-        for parent in [path, *path.parents]:
-            if parent == root:
-                break
-            if parent.is_symlink():
-                raise ValueError("resources must not traverse symlinks")
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 << 20:
-            raise ValueError("resources must be bounded regular files")
-        plan["resources"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    from .capture import resource_digests
+    plan["resources"] = resource_digests(root, request.get("resources", []))
     if any(name not in plan["resources"] for task in tasks for name in task["resources"]):
         raise ValueError("adapter resource is undeclared")
     if len(tasks) > 40:

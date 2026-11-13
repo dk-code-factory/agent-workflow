@@ -24,6 +24,20 @@ class UncertainEffect(PublicationError):
     pass
 
 
+def repository_merge_requirements(provider, pr, metadata, head):
+    if metadata.get("mergeable") is not True or metadata.get("mergeable_state") != "clean" or metadata.get("draft"):
+        raise PublicationError("repository merge requirements are not currently satisfied")
+    query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isDraft mergeable mergeStateStatus reviewDecision}}}"
+    response = provider.request("POST", "graphql", {"query": query, "variables": {
+        "owner": pr["owner"], "name": pr["name"], "number": pr["number"]}})
+    if response.get("errors"):
+        raise PublicationError("repository merge requirements unavailable")
+    actual = response.get("data", {}).get("repository", {}).get("pullRequest", {})
+    if actual.get("headRefOid") != head or actual.get("isDraft") is not False or actual.get("mergeable") != "MERGEABLE" or actual.get("mergeStateStatus") != "CLEAN" or actual.get("reviewDecision") == "CHANGES_REQUESTED":
+        raise PublicationError("repository merge requirements changed or remain unsatisfied")
+    return actual
+
+
 KINDS = {
     "push", "rewrite", "edit_pr", "reply", "reply_inline", "resolve_thread",
     "split_push", "split_pr", "request_review", "ci_rerun", "merge",
@@ -513,19 +527,7 @@ class Publication:
         if ci.get("head") != intent["head"] or ci.get("success") is not True:
             raise PublicationError("merge requires fresh exact-head successful CI")
         _strings(evidence.get("evidence"), "live readiness evidence")
-        meta = ev["metadata"]
-        if meta.get("mergeable") is not True or meta.get("mergeable_state") != "clean" or meta.get("draft"):
-            raise PublicationError("repository merge requirements are not currently satisfied")
-        # REST clean alone does not encode review policy reliably. The transport
-        # must also expose the exact GraphQL merge state for repository rules.
-        query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isDraft mergeable mergeStateStatus reviewDecision}}}"
-        response = self._request("POST", "graphql", {"query": query, "variables": {
-            "owner": self.pr["owner"], "name": self.pr["name"], "number": self.pr["number"]}})
-        if response.get("errors"):
-            raise PublicationError("repository merge requirements unavailable")
-        actual = response.get("data", {}).get("repository", {}).get("pullRequest", {})
-        if actual.get("headRefOid") != intent["head"] or actual.get("isDraft") is not False or actual.get("mergeable") != "MERGEABLE" or actual.get("mergeStateStatus") != "CLEAN" or actual.get("reviewDecision") == "CHANGES_REQUESTED":
-            raise PublicationError("repository merge requirements changed or remain unsatisfied")
+        repository_merge_requirements(self.provider, self.pr, ev["metadata"], intent["head"])
 
     def _gate(self, intent, ev, audience):
         if self._authorization(intent["kind"]) != intent["authorization"]:
