@@ -208,10 +208,11 @@ def prepare_claim(root, provider, ledger, plan, inputs):
                   "Do not publish, commit, coordinate stages or start provider processes. "
                   "Keep all original finding IDs and sources in disposition reports."}
     reference = artifact(root, assignment)
-    # A cycle is input-sensitive and shared by all review passes over those inputs.
+    # Reviewers share each input-sensitive round. A fresh invocation of a
+    # noncacheable reviewer consumes another round even when inputs are unchanged.
     # A new process, execution or generated plan never replenishes this ledger.
     if task["kind"] == "review":
-        cycle = digest([plan["review_contract"],
+        cycle = digest([plan["review_contract"], invocation,
                         [_fingerprint(snapshot, review) for review in plan["tasks"]
                          if review["kind"] == "review"]])
         ledger.reserve("review_cycles", cycle, plan["limits"]["review_cycles"])

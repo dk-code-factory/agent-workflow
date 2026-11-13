@@ -300,6 +300,7 @@ class AppTests(unittest.TestCase):
 
     def test_noncacheable_task_can_repeat_after_a_completed_invocation(self):
         self.review["cacheable"] = False
+        self.plan["limits"]["review_cycles"] = 2
         first = self.claim()
         self.accept(first)
         second = self.claim()
@@ -307,6 +308,22 @@ class AppTests(unittest.TestCase):
         self.assertNotEqual(first["claim"], second["claim"])
         self.accept(second, agent=VERIFIER)
         self.assertEqual(len(app._claims(self.ledger, self.review["id"])), 2)
+        self.assertEqual(self.ledger.db.execute("SELECT sum(amount) FROM reservations WHERE name='review_cycles'").fetchone()[0], 2)
+        with self.assertRaisesRegex(ValueError, "retained allowance exhausted"):
+            self.claim()
+
+    def test_fresh_noncacheable_reviewers_share_each_retained_round(self):
+        self.review["cacheable"] = False
+        second = {**self.review, "id": self.review["id"] + "_second"}
+        self.plan["tasks"].append(second)
+        self.plan["limits"]["review_cycles"] = 2
+        for round_number in (1, 2):
+            for task in (self.review, second):
+                self.accept(self.claim(task["id"]))
+            self.assertEqual(self.ledger.db.execute("SELECT sum(amount) FROM reservations WHERE name='review_cycles'").fetchone()[0], round_number)
+        for task in (self.review, second):
+            with self.assertRaisesRegex(ValueError, "retained allowance exhausted"):
+                self.claim(task["id"])
 
     def test_later_review_findings_invalidate_verification_and_fix_coverage(self):
         self.accept(self.claim())

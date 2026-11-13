@@ -179,6 +179,7 @@ class PrepareTests(unittest.TestCase):
         invalid += [{"timeout_seconds": value} for value in (0, 86401, True, None, "30", 1.5)]
         invalid += [{"classifications": value} for value in ({}, None, [False])]
         invalid += [{"exceptions": value} for value in (False, None, [False], {"entries": {}})]
+        invalid += [{"classifications": [{}]}, {"exceptions": [{}]}, {"exceptions": {"unknown": True}}]
         for selected in invalid:
             request = copy.deepcopy(self.request)
             request["options"]["tasks"] = ["dk-workflows:dk-ci"]

@@ -34,6 +34,54 @@ def _tuple(value):
     return tuple(str(value.get(k, "")) for k in ("head", "check_id", "run_id", "job_id", "attempt"))
 
 
+def _configured_object(value, allowed, required, label):
+    if not isinstance(value, dict) or set(value) - allowed:
+        raise ValueError("unsupported CI " + label + " fields")
+    for key in required:
+        text(value.get(key), "CI " + label + " " + key)
+
+
+def _configured_classification(value):
+    common = {"check_id", "run_id", "job_id", "attempt", "kind", "workflow", "job"}
+    _configured_object(value, common | {"test", "signature", "issue", "rule"},
+                       ("check_id", "kind", "workflow", "job"), "classification")
+    for key in ("run_id", "job_id"):
+        ident = value.get(key)
+        if type(ident) not in {str, int} or not str(ident).isdigit() or int(ident) < 1:
+            raise ValueError("CI classification requires an exact positive " + key)
+    _integer(value.get("attempt"), "CI classification attempt")
+    if value["kind"] == "flake":
+        if "rule" in value:
+            raise ValueError("CI flake cannot declare an exception rule")
+        for key in ("test", "signature", "issue"):
+            text(value.get(key), "CI flake " + key)
+        link = urlsplit(value["issue"])
+        if link.scheme != "https" or not link.netloc or link.query or link.fragment:
+            raise ValueError("CI flake requires a canonical HTTPS issue URL")
+    elif value["kind"] == "exception":
+        text(value.get("rule"), "CI exception rule")
+        if "issue" in value:
+            raise ValueError("CI exception cannot declare a flake issue")
+        for key in ("test", "signature"):
+            if key in value:
+                text(value[key], "CI exception " + key)
+    else:
+        raise ValueError("unsupported CI classification kind")
+
+
+def _configured_rule(value):
+    _configured_object(value, {"id", "kind", "workflow", "job", "reason", "test", "signature"},
+                       ("id", "kind", "workflow", "reason"), "exception")
+    if "job" in value:
+        text(value["job"], "CI exception job")
+    if value["kind"] == "test":
+        text(value.get("test"), "CI test exception test")
+        if "signature" in value:
+            text(value["signature"], "CI test exception signature")
+    elif value["kind"] != "pipeline" or {"test", "signature"} & value.keys():
+        raise ValueError("unsupported CI exception kind or test controls")
+
+
 def configuration(options):
     """Validate declared controls before admission or any CI observation."""
     selected = options.get("ci", {})
@@ -50,12 +98,22 @@ def configuration(options):
             candidates = values[classification_key]
             if not isinstance(candidates, list) or any(not isinstance(item, dict) for item in candidates):
                 raise ValueError("CI classifications must be an array of objects")
+            for candidate in candidates:
+                _configured_classification(candidate)
         if exception_key in values:
             rules = values[exception_key]
             if isinstance(rules, dict):
-                rules = rules.get("entries", [])
+                if set(rules) != {"entries"}:
+                    raise ValueError("CI exception wrapper requires only entries")
+                rules = rules["entries"]
             if not isinstance(rules, list) or any(not isinstance(item, dict) for item in rules):
                 raise ValueError("CI exceptions must contain an array of objects")
+            seen = set()
+            for rule in rules:
+                _configured_rule(rule)
+                if rule["id"] in seen:
+                    raise ValueError("duplicate CI exception ID")
+                seen.add(rule["id"])
     rules = selected.get("exceptions", options.get("ci_exceptions", []))
     return {"timeout_seconds": selected.get("timeout_seconds", options.get("ci_timeout_seconds", 1800)),
             "classifications": selected.get("classifications", options.get("ci_classifications", [])),

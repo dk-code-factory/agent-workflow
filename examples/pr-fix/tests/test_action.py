@@ -299,6 +299,45 @@ class ActionTests(unittest.TestCase):
             key="record-original-receipt", checkpoint=recorded["result"])["valid"])
         self.assertEqual(len(self.provider.writes), 1)
 
+    def test_publication_can_retry_after_read_only_no_effect_reconciliation(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"] = {"tasks": ["local:description"], "finalizers": [],
+                              "permissions": {"edit_pr": True}}
+        request["adapters"]["local:description"] = {"kind": "description", "writes": False,
+            "definition": "leaf", "assignment": "Prepare a sourced title edit."}
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        with self.ledger() as ledger:
+            claimed = app.prepare_claim(self.root, self.provider, ledger, self.plan,
+                                        {"task": self.plan["tasks"][0]["id"]})
+            app.accept(self.root, self.provider, ledger, self.plan,
+                {"claim": claimed["claim"], "agent": REVIEWER,
+                 "report": self.fixture.report(operations=[{"kind": "edit_pr", "head": self.fixture.head,
+                    "target": self.fixture.target, "payload": {"title": "Reviewed title"}}])})
+            proposal = publishing.publication_list(self.root, self.provider, ledger, self.plan, {})["items"][0]
+            prepared = publishing.publication_prepare(self.root, self.provider, ledger, self.plan, {"proposal": proposal})
+        inputs = {"id": prepared["id"], "agent": VERIFIER,
+                  "report": self.fixture.report(audience={"fingerprint": prepared["fingerprint"],
+                    "suitable": True, "audience": "PR participants", "evidence": ["source"]})}
+        with patch.object(self.provider, "capture", side_effect=OSError("temporary capture failure")):
+            with self.assertRaisesRegex(OSError, "temporary capture failure"):
+                self.handle("publication_execute", "execute", inputs)
+        before = self.state()
+        self.assertEqual(self.handle("publication_execute", "reconcile", inputs)["outcome"], "no_effect")
+        self.assertEqual(before, self.state())
+        self.assertEqual(self.provider.writes, [])
+        original_title = self.provider.ev["metadata"]["title"]
+        self.provider.ev["metadata"]["title"] = "Unrelated concurrent title"
+        self.assertEqual(self.handle("publication_execute", "reconcile", inputs)["outcome"], "unknown")
+        with self.assertRaisesRegex(ValueError, "remains unresolved"):
+            self.handle("publication_execute", "execute", inputs)
+        self.assertEqual(self.provider.writes, [])
+        self.provider.ev["metadata"]["title"] = original_title
+        completed = self.handle("publication_execute", "execute", inputs)
+        self.assertEqual(completed["result"]["output"]["receipt"]["kind"], "edit_pr")
+        self.handle("publication_execute", "execute", inputs)
+        self.assertEqual(len(self.provider.writes), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,29 @@ class Provider:
 
 
 class CITests(unittest.TestCase):
+    def test_configuration_validates_declared_rule_fields_without_live_evidence(self):
+        flake = candidate()
+        rule = {"id": "saved", "kind": "pipeline", "workflow": flake["workflow"],
+                "job": flake["job"], "reason": "Explicit policy"}
+        exemption = {key: value for key, value in dict(flake, kind="exception", rule="saved").items()
+                     if key not in {"issue", "test", "signature"}}
+        selected = {"classifications": [flake, exemption], "exceptions": {"entries": [rule]}}
+        self.assertEqual(ci.configuration({"ci": selected})["classifications"], [flake, exemption])
+        self.assertEqual(ci.configuration({"ci_exceptions": [dict(rule, kind="test", test="TestFlaky")]})["exceptions"][0]["test"], "TestFlaky")
+        invalid = [{"classifications": [dict(flake, attempt=True)]},
+                   {"classifications": [dict(flake, run_id=None)]},
+                   {"classifications": [dict(flake, test="")]},
+                   {"classifications": [dict(flake, unsupported=True)]},
+                   {"classifications": [dict(flake, kind="unknown")]},
+                   {"exceptions": [dict(rule, kind="test")]},
+                   {"exceptions": [dict(rule, reason="")]},
+                   {"exceptions": [rule, rule]},
+                   {"exceptions": {"entries": [], "unsupported": True}}]
+        for controls in invalid:
+            for options in ({"ci": controls}, {"ci_" + key: value for key, value in controls.items()}):
+                with self.subTest(options=options), self.assertRaisesRegex(ValueError, "CI"):
+                    ci.configuration(options)
+
     def test_empty_pending_failed_and_success_are_distinct(self):
         self.assertEqual(ci.classify({"head": HEAD, "checks": []})["status"], "pending")
         self.assertEqual(ci.classify(observation())["status"], "failed")

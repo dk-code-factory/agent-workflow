@@ -106,10 +106,18 @@ def handle(operation, request, root=None, provider=None):
                 result["evidence"]["artifact"] = saved["result"]
                 return {**response, "result": result}
             if saved:
-                raise ValueError("interrupted helper effect remains unresolved; reconcile original operation")
-            with ledger.transaction():
-                ledger.db.execute("INSERT INTO operations(id,kind,input,state) VALUES(?,?,?,?)",
-                                  (ident, operation, fingerprint, "uncertain"))
+                # Recheck service proof at execution time. Reconciliation hooks
+                # remain read-only, and unknown effects never authorize replay.
+                observed = None
+                if operation in {"publication_execute", "publication_record"}:
+                    from prfix.publishing import reconcile_operation
+                    observed = reconcile_operation(root, provider, ledger, plan, inputs)
+                if not observed or observed.get("outcome") != "no_effect":
+                    raise ValueError("interrupted helper effect remains unresolved; reconcile original operation")
+            else:
+                with ledger.transaction():
+                    ledger.db.execute("INSERT INTO operations(id,kind,input,state) VALUES(?,?,?,?)",
+                                      (ident, operation, fingerprint, "uncertain"))
             output = dispatch(operation, root, provider, ledger, plan, {**inputs, "_operation": ident})
             result = {"output": output, "evidence": {"operation": ident, "input": fingerprint}}
             reference = artifact(root, {"operation": ident, "input": fingerprint, "result": result})
