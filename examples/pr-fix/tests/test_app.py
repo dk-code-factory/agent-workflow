@@ -101,6 +101,41 @@ class AppTests(unittest.TestCase):
         self.accept(claim, self.fixture.report(findings=[{"id": "R1", "text": "A sourced original defect", "sources": ["source"]}]))
         return app.candidates(self.root, self.ledger, self.plan)[0]
 
+    def test_changed_ignored_review_resource_consumes_retained_cycle(self):
+        (self.root / ".git" / "info").mkdir(exist_ok=True)
+        with (self.root / ".git" / "info" / "exclude").open("a") as stream:
+            stream.write("\nrules\n")
+        (self.root / "rules").write_text("First governing resource\n")
+        request = copy.deepcopy(self.fixture.request)
+        request["resources"] = ["rules"]
+        request["adapters"]["local:review"]["resources"] = ["rules"]
+        request["options"]["limits"] = {"review_cycles": 1}
+        self.plan = read_artifact(self.root, prepare(self.root, request, self.provider)["plan"])
+        self.review = next(task for task in self.plan["tasks"] if task["kind"] == "review")
+        self.accept(self.claim())
+        first_tree = self.plan["snapshot"]["local_tree"]
+        (self.root / "rules").write_text("Changed governing resource\n")
+        self.plan = read_artifact(self.root, prepare(self.root, request, self.provider)["plan"])
+        self.assertEqual(self.plan["snapshot"]["local_tree"], first_tree)
+        self.assertIsNone(app._current(self.ledger, self.plan["snapshot"], self.review))
+        with self.assertRaisesRegex(ValueError, "retained allowance exhausted"):
+            self.claim()
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM claims").fetchone()[0], 1)
+        self.assertEqual(self.ledger.db.execute("SELECT sum(amount) FROM reservations WHERE name='review_cycles'").fetchone()[0], 1)
+
+    def test_independent_reviewers_share_one_cycle_for_the_same_inputs(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"]["tasks"].append("local:second")
+        request["options"]["limits"] = {"review_cycles": 1}
+        request["adapters"]["local:second"] = {**request["adapters"]["local:review"],
+                                              "assignment": "Independently inspect the exact same inputs."}
+        self.plan = read_artifact(self.root, prepare(self.root, request, self.provider)["plan"])
+        reviews = [task for task in self.plan["tasks"] if task["kind"] == "review"]
+        self.assertEqual(len(reviews), 2)
+        for task in reviews:
+            self.accept(self.claim(task["id"]))
+        self.assertEqual(self.ledger.db.execute("SELECT sum(amount) FROM reservations WHERE name='review_cycles'").fetchone()[0], 1)
+
     def test_incoming_discussion_during_turn_cannot_gain_report_coverage(self):
         claim = self.claim()
         self.provider.ev["comments"].append({"id": 88, "body": "New governing request", "user": {"id": 21}})

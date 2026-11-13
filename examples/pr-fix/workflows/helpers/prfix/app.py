@@ -211,8 +211,9 @@ def prepare_claim(root, provider, ledger, plan, inputs):
     # A cycle is input-sensitive and shared by all review passes over those inputs.
     # A new process, execution or generated plan never replenishes this ledger.
     if task["kind"] == "review":
-        cycle = digest([snapshot.get("local_tree"), snapshot.get("discussion"),
-                        plan["instructions"], plan.get("settings", {}), plan["review_contract"]])
+        cycle = digest([plan["review_contract"],
+                        [_fingerprint(snapshot, review) for review in plan["tasks"]
+                         if review["kind"] == "review"]])
         ledger.reserve("review_cycles", cycle, plan["limits"]["review_cycles"])
     if task["id"] == "ci_repair":
         latest = ledger.db.execute("SELECT * FROM ci_observations ORDER BY rowid DESC LIMIT 1").fetchone()
