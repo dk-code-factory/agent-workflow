@@ -3,10 +3,13 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,6 +176,71 @@ func TestTaskStateCapabilityRevocationCancelsAndJoinsPendingStoreRPC(t *testing.
 		}
 	case <-deadline.C:
 		t.Fatal("canceled RPC did not finish")
+	}
+}
+
+type taskStateGatedBody struct {
+	io.Reader
+	reading chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (b *taskStateGatedBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.reading) })
+	<-b.resume
+	return b.Reader.Read(p)
+}
+
+func TestTaskStateCapabilityRevocationRejectsPendingRequestBody(t *testing.T) {
+	s, store, _, ctx := taskStateEndpoint(t)
+	descriptor, revoke, err := s.capability(ctx, "execute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(revoke)
+	body := &taskStateGatedBody{
+		Reader:  strings.NewReader(`{"operation":"reserve","name":"reviews","operation_id":"partial-body","limit":1,"amount":1}`),
+		reading: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+	resume := sync.OnceFunc(func() { close(body.resume) })
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/v1", body)
+	request.Header.Set("Authorization", "Bearer "+descriptor.Token)
+	response := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() { s.ServeHTTP(response, request); close(finished) }()
+	t.Cleanup(func() {
+		resume()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("pending request handler did not finish")
+		}
+	})
+	select {
+	case <-body.reading:
+	case <-time.After(2 * time.Second):
+		t.Fatal("authenticated request did not begin reading its body")
+	}
+	revoked := make(chan struct{})
+	go func() { revoke(); close(revoked) }()
+	select {
+	case <-revoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation waited for an incomplete request body")
+	}
+	resume()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not finish after its body was released")
+	}
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("pending body retained revoked capability: %d", response.Code)
+	}
+	if _, err := store.TaskState(ctx, TaskStateRequest{Operation: "get_budget", Name: "reviews"}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pending request accessed the store after revocation: %v", err)
 	}
 }
 

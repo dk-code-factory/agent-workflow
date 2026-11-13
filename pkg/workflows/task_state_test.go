@@ -118,6 +118,7 @@ func TestTaskStateRestartAndUncertainClaimRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	original, ctx := taskStateRun(t, s, "recover")
 	claim := TaskStateRequest{Operation: "claim", Task: "mutate", Fingerprint: "input", OperationID: "original-effect"}
 	if !taskStateCall(t, s, ctx, claim).Dispatch {
@@ -229,6 +230,7 @@ func TestTaskStateBudgetConcurrencyContinuationAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	r, ctx := taskStateRun(t, s, "budgets")
 	var wg sync.WaitGroup
 	var mu sync.Mutex

@@ -124,7 +124,8 @@ func (s *taskStateService) capability(ctx context.Context, phase string) (*taskS
 		delete(s.caps, token)
 		s.mu.Unlock()
 		cancel()
-		// Joining the capability lock guarantees no RPC can outlive its hook.
+		// Join store operations; readers still decoding a body will reject the
+		// revoked capability before accessing the store.
 		c.mu.Lock()
 		c.revoked = true
 		c.mu.Unlock()

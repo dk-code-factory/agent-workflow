@@ -28,8 +28,10 @@ The bearer token is unique to the current hook and carries its captured executio
 owner. Requests cannot supply another group, owner or generation. Every store
 transaction verifies that the current execution still owns its admitted group,
 and writes also check cancellation/finalization. Tokens are revoked and their
-in-flight operations joined before a hook finishes. Shared job containers reuse
-the endpoint mount through their lifetime; each hook receives a fresh token.
+in-flight store operations joined before a hook finishes. Requests still reading
+their bodies reject the revoked capability before accessing the store. Shared job
+containers reuse the endpoint mount through their lifetime; each hook receives a
+fresh token.
 Standalone helper containers own a temporary endpoint for that hook. Endpoint
 tokens are ephemeral: the engine never adds their descriptor to snapshots,
 action identities, checkpoints or recovery bundles. Helpers must not echo or
