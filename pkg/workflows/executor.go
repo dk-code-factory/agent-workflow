@@ -76,6 +76,7 @@ type Executor struct {
 }
 
 type RunRequest struct {
+	TaskGroup         string
 	credentialAliases map[string]string
 	Execution         runtimeexec.Policy
 	RequestID         string
@@ -217,6 +218,9 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 		req.Metadata = map[string]any{}
 	}
 	req.Metadata["origin_run_id"] = req.runID
+	if err := admitTaskGroup(&req); err != nil {
+		return nil, err
+	}
 	req.actionContracts = e.actionContracts
 	ref, _ := CanonicalLocalRef(req.Ref)
 	limit := e.MaxParallel
@@ -275,6 +279,11 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			req.Metadata["origin_run_id"] = run.ID
 		}
 		run.OriginID = nativeString(req.Metadata, "origin_run_id")
+		if depth == 0 && nativeString(req.Metadata, "task_group") != "" {
+			// Foreground/library runs need the same concrete task-state owner
+			// identity that queued controller runs acquire through Claim.
+			run.Owner = randomID()
+		}
 		if journal, ok := e.Store.(Journal); ok {
 			snap, err := snapshotFor(all, req, e.Roles, e.MaxParallel)
 			if err != nil {

@@ -291,6 +291,7 @@ func cancelContainerCleanup(ctx context.Context) {
 }
 
 type jobContainerScope struct {
+	taskState      *taskStateService
 	failed         error
 	implementation *ContainerImplementation
 	session        *runtimeexec.ContainerSession
@@ -332,6 +333,7 @@ func (s *jobContainerScope) closeSession() error {
 }
 func (s *jobContainerScope) close(ctx context.Context) error {
 	err := s.closeSession()
+	err = errors.Join(err, s.taskState.close())
 	if err != nil {
 		// Cancel before releasing capacity even if cleanup uncertainty could not be journaled.
 		cancelContainerCleanup(ctx)
@@ -345,6 +347,9 @@ func (s *jobContainerScope) close(ctx context.Context) error {
 func (s *jobContainerScope) start(ctx context.Context) (returned error) {
 	if s.session != nil {
 		return nil
+	}
+	if err := s.ensureTaskState(ctx); err != nil {
+		return err
 	}
 	// Startup follows the command deadline; teardown owns the parent heartbeat.
 	parent := ctx
@@ -426,7 +431,17 @@ func (e *Executor) launchOptions(ctx context.Context, p *ContainerImplementation
 	if err != nil {
 		return runtimeexec.LaunchOptions{}, err
 	}
-	return runtimeexec.LaunchOptions{Actions: actions, Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}, nil
+	opts := runtimeexec.LaunchOptions{Actions: actions, Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}
+	service, _ := ctx.Value(taskStateServiceKey{}).(*taskStateService)
+	if service == nil {
+		if scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope); scope != nil {
+			service = scope.taskState
+		}
+	}
+	if service != nil {
+		opts.TaskStateDir = service.dir
+	}
+	return opts, nil
 }
 func containerWorkingDirectory(dir string) string {
 	if filepath.IsAbs(dir) {

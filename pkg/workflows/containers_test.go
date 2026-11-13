@@ -102,6 +102,7 @@ func TestContainerDeclarationScalarNormalization(t *testing.T) {
 type fakeContainer struct {
 	env                    []string
 	id, name, dir, actions string
+	taskStateDir           string
 	workingDir             string
 	labels                 map[string]string
 	argv                   []string
@@ -145,6 +146,19 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 	if d.helper != nil {
 		if out, logs, code, handled := d.helper(argv, input, env); handled {
 			return out, logs, code
+		}
+	}
+	if c.taskStateDir != "" && len(input) != 0 {
+		// Model the fixed socket bind for helpers executed as host subprocesses.
+		// Preserve business JSON bytes, which may contain literal path-looking data.
+		var request map[string]json.RawMessage
+		if json.Unmarshal(input, &request) == nil {
+			var descriptor taskStateDescriptor
+			if json.Unmarshal(request["task_state"], &descriptor) == nil && descriptor.Socket == taskStateMount+"/rpc.sock" {
+				descriptor.Socket = filepath.Join(c.taskStateDir, "rpc.sock")
+				request["task_state"], _ = json.Marshal(descriptor)
+				input, _ = json.Marshal(request)
+			}
 		}
 	}
 	args := append([]string(nil), argv...)
@@ -274,6 +288,9 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 		for _, m := range q.HostConfig.Mounts {
 			if m.Target == "/actions" {
 				c.actions = m.Source
+			}
+			if m.Target == taskStateMount {
+				c.taskStateDir = m.Source
 			}
 
 		}

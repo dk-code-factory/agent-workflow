@@ -360,7 +360,7 @@ func TestExternalInputV10MigrationAndRestore(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			ctx := context.Background()
 			e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}}`, nil)
-			if _, err := s.db.Exec("DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
+			if _, err := s.db.Exec(dropTaskStateFixtureSchema + "DROP TABLE run_helper_assets; DROP TABLE helper_assets; DROP TABLE input_gates; DROP TABLE input_controls; PRAGMA user_version=9"); err != nil {
 				t.Fatal(err)
 			}
 			lock, err := ownership.Own(s.Dir)

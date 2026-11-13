@@ -16,7 +16,7 @@ const inputRetentionProtectionQuery = `SELECT 1 FROM runs member JOIN runs origi
  AND (EXISTS(SELECT 1 FROM input_gates g WHERE g.origin_id=origin.id AND g.state IN ('pending','accepted'))
  OR (origin.status='canceled' AND json_extract(CAST(origin.record AS TEXT),'$.failure_class')='canceled'))))`
 
-const retentionDeleteRun = `DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted') AND NOT EXISTS(` + inputRetentionProtectionQuery + `)`
+const retentionDeleteRun = `DELETE FROM runs WHERE id=? AND status NOT IN ('running','queued','needs_attention','waiting','interrupted') AND NOT EXISTS(` + inputRetentionProtectionQuery + `) AND NOT EXISTS(SELECT 1 FROM task_claims WHERE owner_run=runs.id AND state IN ('claimed','unknown'))`
 
 func (s *SQLiteStore) checkInputRetention(ctx context.Context, id string) error {
 	var protected bool
@@ -54,6 +54,13 @@ func (s *SQLiteStore) OriginRuns(ctx context.Context, id string) ([]Run, error) 
 	}
 	out := []Run{}
 	for _, candidate := range runs {
+		var unresolved int
+		if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM task_claims WHERE owner_run=? AND state IN ('claimed','unknown')", candidate.ID).Scan(&unresolved); err != nil {
+			return nil, err
+		}
+		if unresolved > 0 {
+			return nil, fmt.Errorf("run %s retains unresolved logical task claims; reconcile before retention", candidate.ID)
+		}
 		if candidate.Status == RunStatusRunning || candidate.Status == RunStatusQueued || candidate.Status == RunStatusNeedsAttention || candidate.Status == RunStatusWaiting || candidate.Status == RunStatusInterrupted {
 			return nil, fmt.Errorf("run %s still requires execution or recovery", candidate.ID)
 		}

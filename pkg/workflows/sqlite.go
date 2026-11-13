@@ -191,6 +191,9 @@ func (s *SQLiteStore) Admit(ctx context.Context, r *Run, snap Snapshot) error {
 	if _, err = tx.ExecContext(ctx, "INSERT INTO runs(id,status,record,snapshot,updated,origin_id,generation,owner,admitted) VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Status, b, p, time.Now().UTC().Format(time.RFC3339Nano), originID(r, snap), r.Generation, r.Owner, time.Now().UTC().UnixNano()); err != nil {
 		return err
 	}
+	if err = s.linkTaskGroup(ctx, tx, r, snap); err != nil {
+		return err
+	}
 	if err = s.linkHelperAssets(ctx, tx, r, snap); err != nil {
 		return err
 	}

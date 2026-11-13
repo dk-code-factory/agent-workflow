@@ -62,12 +62,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow <pr-fix|run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow <pr-fix|run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|task-state|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
 		return nil
 	}
 	verb := args[0]
 	switch verb {
-	case "inputs", "answer", "interrupt", "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker", "tool-calls", "invocations", "usage", "backup", "restore", "bundle", "cleanup-status":
+	case "task-state", "inputs", "answer", "interrupt", "run", "validate", "status", "list", "logs", "attempts", "cancel", "resume", "controller", "doctor", "init", "export", "cleanup", "mcp", "stop", "worker", "tool-calls", "invocations", "usage", "backup", "restore", "bundle", "cleanup-status":
 	default:
 		return fmt.Errorf("unknown command %q", verb)
 	}
@@ -88,6 +88,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	workerParent := fs.String("parent", "", "parent worker ID")
 	workerTurns := fs.Int("turns", 0, "worker turn budget (default 32)")
 	workerRequest := fs.String("request-id", "", "durable start, resume, or mailbox request ID")
+	taskGroup := fs.String("task-group", "", "explicit durable logical task group for a new run")
 	workerPrompt := fs.String("message", "", "mailbox message")
 	gateID := fs.String("gate", "", "durable external-input gate ID")
 	evidenceID := fs.String("evidence-id", "", "pinned evidence identity")
@@ -115,6 +116,14 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	if *timeout < 0 {
 		return fmt.Errorf("timeout must not be negative")
+	}
+	if *taskGroup != "" {
+		if verb != "run" {
+			return fmt.Errorf("--task-group is only valid for run; resume retains its admitted group")
+		}
+		if err := workflows.ValidateTaskGroup(*taskGroup); err != nil {
+			return err
+		}
 	}
 	root, err := filepath.Abs(*workspace)
 	if err != nil {
@@ -182,7 +191,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if verb == "init" {
 		return initialize(root, stdout)
 	}
-	if verb == "inputs" || verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" || verb == "tool-calls" || verb == "invocations" || verb == "usage" || verb == "cleanup-status" {
+	if verb == "task-state" || verb == "inputs" || verb == "status" || verb == "export" || verb == "list" || verb == "logs" || verb == "attempts" || verb == "cleanup" || verb == "tool-calls" || verb == "invocations" || verb == "usage" || verb == "cleanup-status" {
 		var store *workflows.SQLiteStore
 		var err error
 		if verb == "cleanup" {
@@ -201,6 +210,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		defer store.Close()
 		switch verb {
+		case "task-state":
+			v, err := store.InspectTaskState(ctx, id)
+			if err != nil {
+				return err
+			}
+			return encode(v)
 		case "inputs":
 			v, err := store.Inputs(ctx, id)
 			if err != nil {
@@ -463,7 +478,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			ctx, cancel = context.WithTimeout(ctx, *timeout)
 			defer cancel()
 		}
-		run, runErr := executor.Run(ctx, workflows.RunRequest{Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
+		run, runErr := executor.Run(ctx, workflows.RunRequest{TaskGroup: *taskGroup, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
 		if run != nil {
 			if err = encode(run); err != nil {
 				return errors.Join(runErr, err)
@@ -524,6 +539,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		req.RequestID = *workerRequest
+		req.TaskGroup = *taskGroup
 		var run workflows.Run
 		if err = client.Call(ctx, "POST", "/runs", req, &run); err != nil {
 			return err

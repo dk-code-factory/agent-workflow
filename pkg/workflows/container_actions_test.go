@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -322,6 +323,47 @@ func TestContainerProtocolRejectsFramingVersionsAndLimits(t *testing.T) {
 		if _, err := b.Write([]byte("x")); err == nil || !b.overflow {
 			t.Fatal("unbounded protocol output")
 		}
+	}
+}
+
+func TestContainerRecoveryRequestReservesOnlyAdmittedCapability(t *testing.T) {
+	for _, group := range []string{"", "grouped"} {
+		t.Run("group="+group, func(t *testing.T) {
+			store := taskStateStore(t)
+			run, ctx := taskStateRun(t, store, group)
+			e := &Executor{Store: store}
+			ac := ActionContext{RunID: run.ID, JobID: "capture", StepID: "capture", AttemptID: strings.Repeat("a", 32), Attempt: 1, Generation: 1, OperationKey: strings.Repeat("k", 64)}
+			f := executionFence{id: strings.Repeat("0", 32), generation: math.MaxInt64}
+			input, bindings := json.RawMessage(`{}`), json.RawMessage(`{}`)
+			var descriptor *taskStateDescriptor
+			if group != "" {
+				descriptor = &taskStateDescriptor{Socket: taskStateMount + "/rpc.sock", Token: strings.Repeat("t", 64), Group: group}
+			}
+			result := ActionValue{Output: json.RawMessage(`{"value":""}`)}
+			empty, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result, descriptor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := strings.Repeat("x", (1<<20)-len(empty))
+			result.Output, err = json.Marshal(map[string]string{"value": value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := encodeContainerRequest(f, ac, "validate_checkpoint", input, bindings, result, descriptor)
+			if err != nil || len(wire) != 1<<20 {
+				t.Fatalf("boundary recovery request: %d bytes, %v", len(wire), err)
+			}
+			if err = e.validateContainerRecoveryRequest(ctx, ac, input, bindings, result); err != nil {
+				t.Fatalf("rejected recovery request that fits its actual descriptor: %v", err)
+			}
+			result.Output, err = json.Marshal(map[string]string{"value": value + "x"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = e.validateContainerRecoveryRequest(ctx, ac, input, bindings, result); err == nil {
+				t.Fatal("accepted recovery request over the wire limit")
+			}
+		})
 	}
 }
 func TestStructuredEnvCredentialsStayOutOfSnapshotsAndIdentities(t *testing.T) {

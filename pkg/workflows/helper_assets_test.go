@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -382,7 +383,7 @@ func TestHelperAssetsPortableRecoveryBundle(t *testing.T) {
 }
 func TestHelperAssetMigrationKeepsPreUpgradeBackup(t *testing.T) {
 	_, store, _ := containerExecutor(t)
-	if _, err := store.db.Exec("DROP TABLE run_helper_assets; DROP TABLE helper_assets; PRAGMA user_version=10"); err != nil {
+	if _, err := store.db.Exec(dropTaskStateFixtureSchema + "DROP TABLE run_helper_assets; DROP TABLE helper_assets; PRAGMA user_version=10"); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := ownership.Own(store.Dir)
@@ -393,7 +394,7 @@ func TestHelperAssetMigrationKeepsPreUpgradeBackup(t *testing.T) {
 	if err = store.Migrate(t.Context(), lock); err != nil {
 		t.Fatal(err)
 	}
-	backup, err := openBackupSource(t.Context(), filepath.Join(store.Dir, "state.pre-v11.db"))
+	backup, err := openBackupSource(t.Context(), filepath.Join(store.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion)))
 	if err != nil {
 		t.Fatal(err)
 	}

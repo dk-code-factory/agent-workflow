@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 11
+const schemaVersion = 12
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -81,6 +81,24 @@ const schemaV11 = `
 CREATE TABLE helper_assets(origin_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,id TEXT NOT NULL,manifest BLOB NOT NULL,PRIMARY KEY(origin_id,id));
 CREATE TABLE run_helper_assets(run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,asset_origin TEXT NOT NULL,asset_id TEXT NOT NULL,PRIMARY KEY(run_id,asset_origin,asset_id),FOREIGN KEY(asset_origin,asset_id) REFERENCES helper_assets(origin_id,id) ON DELETE CASCADE);
 CREATE TRIGGER helper_assets_immutable BEFORE UPDATE ON helper_assets BEGIN SELECT RAISE(ABORT,'helper asset manifests are immutable'); END;
+`
+
+const schemaV12 = `
+CREATE TABLE IF NOT EXISTS task_groups(id TEXT PRIMARY KEY,closed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS task_group_members(group_id TEXT NOT NULL REFERENCES task_groups(id),run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS task_group_members_group ON task_group_members(group_id);
+CREATE TABLE IF NOT EXISTS task_claims(group_id TEXT NOT NULL REFERENCES task_groups(id),task TEXT NOT NULL,fingerprint TEXT NOT NULL,operation_id TEXT NOT NULL,state TEXT NOT NULL,result_reference TEXT NOT NULL,evidence_fingerprint TEXT NOT NULL,owner_run TEXT NOT NULL,owner_generation INTEGER NOT NULL,owner TEXT NOT NULL,proof BLOB,PRIMARY KEY(group_id,operation_id));
+CREATE UNIQUE INDEX IF NOT EXISTS task_claims_active ON task_claims(group_id,task,fingerprint) WHERE state IN ('claimed','unknown','completed');
+CREATE TABLE IF NOT EXISTS task_budgets(group_id TEXT NOT NULL REFERENCES task_groups(id),name TEXT NOT NULL,initial_allowance INTEGER NOT NULL,allowance INTEGER NOT NULL,used INTEGER NOT NULL,PRIMARY KEY(group_id,name));
+CREATE TABLE IF NOT EXISTS task_deadlines(group_id TEXT NOT NULL REFERENCES task_groups(id),name TEXT NOT NULL,original_deadline TEXT NOT NULL,deadline TEXT NOT NULL,extensions INTEGER NOT NULL,PRIMARY KEY(group_id,name));
+CREATE TABLE IF NOT EXISTS task_state_requests(group_id TEXT NOT NULL REFERENCES task_groups(id),kind TEXT NOT NULL,id TEXT NOT NULL,record BLOB NOT NULL,PRIMARY KEY(group_id,kind,id));
+CREATE TRIGGER IF NOT EXISTS task_state_closed_cleanup AFTER DELETE ON task_group_members WHEN NOT EXISTS(SELECT 1 FROM task_group_members WHERE group_id=old.group_id) AND EXISTS(SELECT 1 FROM task_groups WHERE id=old.group_id AND closed=1)
+BEGIN
+ DELETE FROM task_claims WHERE group_id=old.group_id;
+ DELETE FROM task_budgets WHERE group_id=old.group_id;
+ DELETE FROM task_deadlines WHERE group_id=old.group_id;
+ DELETE FROM task_state_requests WHERE group_id=old.group_id;
+END;
 `
 
 const schemaV10InputIndexes = `
@@ -180,7 +198,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		}
 		return s.CleanupHelperStaging(ctx, owner)
 	}
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)
