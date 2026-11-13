@@ -261,6 +261,11 @@ func taskClaim(ctx context.Context, tx *sql.Tx, group string, f executionFence, 
 			return out, err
 		}
 	}
+	if req.EvidenceFingerprint != "" {
+		if err := taskIdentity(req.EvidenceFingerprint, "evidence_fingerprint"); err != nil {
+			return out, err
+		}
+	}
 	if req.Operation != "get_claim" {
 		if err := taskIdentity(req.OperationID, "operation_id"); err != nil {
 			return out, err

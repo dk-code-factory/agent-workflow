@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,6 +110,38 @@ func TestTaskStateClaimsAreAtomicAndReplayDoesNotDispatch(t *testing.T) {
 	}
 	if _, err := s.TaskState(ctx, TaskStateRequest{Operation: "claim", Task: "another", Fingerprint: "input1", OperationID: winner}); err == nil {
 		t.Fatal("operation identity rebound to another task")
+	}
+}
+
+func TestTaskStateRejectsInvalidEvidenceBeforeClaimDispatch(t *testing.T) {
+	for name, evidence := range map[string]string{
+		"oversized": strings.Repeat("e", 513),
+		"NUL":       "evidence\x00suffix",
+		"blank":     " \t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := taskStateStore(t)
+			_, ctx := taskStateRun(t, s, "evidence-validation")
+			req := TaskStateRequest{Operation: "claim", Task: "review", Fingerprint: "input", OperationID: "review-1", EvidenceFingerprint: evidence}
+			if _, err := s.TaskState(ctx, req); err == nil {
+				t.Fatal("invalid evidence accepted before dispatch")
+			}
+			req.EvidenceFingerprint = strings.Repeat("e", 512)
+			if !taskStateCall(t, s, ctx, req).Dispatch {
+				t.Fatal("rejected evidence consumed the claim's dispatch grant")
+			}
+			req.Operation, req.ResultReference = "complete", "artifact://review-1"
+			taskStateCall(t, s, ctx, req)
+			req.Operation = "get_claim"
+			req.EvidenceFingerprint = evidence
+			if _, err := s.TaskState(ctx, req); err == nil {
+				t.Fatal("invalid observation evidence accepted")
+			}
+			req.EvidenceFingerprint = strings.Repeat("e", 512)
+			if !taskStateCall(t, s, ctx, req).Reusable {
+				t.Fatal("maximum-length evidence did not authorize matching completion reuse")
+			}
+		})
 	}
 }
 
