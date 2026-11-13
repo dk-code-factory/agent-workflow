@@ -3,6 +3,7 @@ package testutil
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -20,5 +21,9 @@ func SocketDir(t *testing.T) string {
 			t.Error(err)
 		}
 	})
-	return dir
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
