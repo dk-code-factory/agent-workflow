@@ -147,13 +147,14 @@ func TestUncertainMetadataRecoveryRetainsOriginalActor(t *testing.T) {
 }
 
 func TestReviewRequestFailedResponseDiagnosticsSurviveInspection(t *testing.T) {
+	const secret = "PRFIX_TEST_PRIVATE_SECRET"
 	for _, tc := range []struct {
 		name, response, phase string
 		exit, status          int
 	}{
-		{"malformed response", "HTTP/2.0 200 OK\r\nSecret-Header: private\r\n\r\n{malformed\r\nbody", "response_parse", 0, 200},
-		{"HTTP failure", "HTTP/2.0 503 Unavailable\r\nSecret-Header: private\r\n\r\nprivate exception response", "http", 1, 503},
-		{"failed command without HTTP", "private transport response", "command", 7, 0},
+		{"malformed response", "HTTP/2.0 200 OK\r\nSecret-Header: " + secret + "\r\n\r\n{malformed\r\nbody", "response_parse", 0, 200},
+		{"HTTP failure", "HTTP/2.0 503 Unavailable\r\nSecret-Header: " + secret + "\r\n\r\n" + secret + " exception response", "http", 1, 503},
+		{"failed command without HTTP", secret + " transport response", "command", 7, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, provider, req := fixture(t)
@@ -164,7 +165,7 @@ func TestReviewRequestFailedResponseDiagnosticsSurviveInspection(t *testing.T) {
 			responses := recoveryAdapterResponses(provider)
 			var dispatched any = tc.response
 			if tc.phase == "command" {
-				dispatched = map[string]any{"__body": tc.response, "__stderr": "authorization: private credential", "__exit": tc.exit}
+				dispatched = map[string]any{"__body": tc.response, "__stderr": "authorization: " + secret + " credential", "__exit": tc.exit}
 			}
 			responses["repos/owner/repo/pulls/1/requested_reviewers"] = map[string]any{"__sequence": []any{map[string]any{"users": []any{}, "teams": []any{}}, dispatched}}
 			update := fakeGH(t, root, responses)
@@ -173,11 +174,11 @@ func TestReviewRequestFailedResponseDiagnosticsSurviveInspection(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			ctx = context.WithValue(ctx, dispatchContextKey{}, workflows.ActionContext{RunID: "engine-run", AttemptID: "attempt", OperationKey: "operation"})
-			if _, err := g.Execute(ctx, i); err == nil || !strings.Contains(err.Error(), "safe diagnostics retained") || strings.Contains(err.Error(), "private") {
+			if _, err := g.Execute(ctx, i); err == nil || !strings.Contains(err.Error(), "safe diagnostics retained") || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "Secret-Header") {
 				t.Fatal("failed response diagnostics not safely retained", err)
 			}
 			original, err := os.ReadFile(g.diagnosticPath(i, "historical-failure"))
-			if err != nil || strings.Contains(string(original), "private") || strings.Contains(string(original), "Secret-Header") {
+			if err != nil || strings.Contains(string(original), secret) || strings.Contains(string(original), "Secret-Header") {
 				t.Fatal(string(original), err)
 			}
 			if err := g.recordObservationFailure(i); err != nil {

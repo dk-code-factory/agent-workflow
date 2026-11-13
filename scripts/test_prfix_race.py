@@ -58,7 +58,7 @@ class MakeTestTargetTests(unittest.TestCase):
     shard_command = 'scripts/prfix_race.py --all --shards 4'
 
     def run_target(self, packages, discovery_exit=0, test_exit=0,
-                   portable_exit=0, shard_exit=0):
+                   portable_exit=0, shard_exit=0, target='test'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             go = root / 'go'
@@ -92,7 +92,7 @@ exit 1
                                SHARD_EXIT=str(shard_exit),
                                DISCOVERED_PACKAGES=packages, DISCOVERY_EXIT=str(discovery_exit),
                                TEST_EXIT=str(test_exit))
-            result = subprocess.run(['make', '--no-print-directory', '-s', '-f', str(ROOT / 'Makefile'), 'test'],
+            result = subprocess.run(['make', '--no-print-directory', '-s', '-f', str(ROOT / 'Makefile'), target],
                                     cwd=root, env=environment, capture_output=True, text=True, timeout=10)
             return (result.returncode,
                     go_calls.read_text().splitlines() if go_calls.exists() else [],
@@ -136,6 +136,17 @@ exit 1
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
             'go test -race -timeout 60m example/root',
+        ])
+
+    def test_core_runs_portable_and_non_prfix_packages_without_shards(self):
+        status, calls, python, sequence = self.run_target(
+            'example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n', target='test-core')
+        self.assertEqual(status, 0)
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root example/root/pkg/other'])
+        self.assertEqual(python, [self.portable_command])
+        self.assertEqual(sequence, [
+            'python3 ' + self.portable_command, 'go list ./...',
+            'go test -race -timeout 60m example/root example/root/pkg/other',
         ])
 
     def test_portable_failure_stops_before_package_discovery_and_go_suites(self):
