@@ -80,6 +80,17 @@ function runnerStrictInteger(node: Node | undefined): bigint | undefined {
   return integer !== undefined && integer >= -(1n << 63n) && integer <= (1n << 63n) - 1n ? integer : undefined;
 }
 
+function runnerTaskAllowance(node: unknown): number | undefined {
+  if (!isScalar(node) || (node.tag ? !['tag:yaml.org,2002:int', 'tag:yaml.org,2002:float'].includes(node.tag) : node.type !== 'PLAIN')) return undefined;
+  const source = node.source ?? '';
+  if (!/^[+\-0-9.]/.test(source)) return undefined;
+  const spelling = source.replaceAll('_', '').replace(/^0([bo])([+-])/, (_match, base: string, sign: string) => `${sign}0${base}`);
+  const integer = runnerIntegerSpelling(spelling);
+  if (integer !== undefined) return Number(integer);
+  if (node.tag === 'tag:yaml.org,2002:int' || !/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(spelling)) return undefined;
+  return Number(spelling);
+}
+
 // yaml.v3 decodes an int from YAML integer scalars or truncates floats toward
 // zero. Its resolver also recognizes the YAML 1.1 leading-zero octal form.
 function runnerInteger(value: unknown, source?: string): number | undefined {
@@ -483,7 +494,15 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
           if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path or agent reference', [...sp, 'with', 'agent']);
           for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
-          if (params.turns != null && (typeof params.turns !== 'number' || !Number.isInteger(params.turns) || params.turns < 1 || params.turns > 2147483647)) add('action', 'Agent turns must be a positive integer no greater than 2147483647', [...sp, 'with', 'turns']);
+          if (params.turns != null) {
+            const node = doc?.getIn([...sp, 'with', 'turns'], true);
+            const allowance = runnerTaskAllowance(node);
+            if (allowance === undefined || !Number.isInteger(allowance) || allowance < 1 || allowance > 2147483647) add('action', 'Agent turns must be a positive integer no greater than 2147483647', [...sp, 'with', 'turns']);
+            else {
+              step.with!.turns = allowance;
+              if (isScalar(node)) node.value = allowance;
+            }
+          }
           if (params.prompt == null && params.message == null) add('action', 'Agent requires prompt or message', [...sp, 'with']);
           if (params.output != null) add('host-schema', 'Structured output contract requires runner schema admission', [...sp, 'with', 'output'], undefined, 'host', 'info');
           if (mapping(params.output) && typeof params.output.schema === 'string' && !Object.hasOwn(w.schemas ?? {}, params.output.schema)) {

@@ -344,6 +344,19 @@ describe('tagged legacy boolean round trips', () => {
 
 
 describe('native task turn allowance', () => {
+  it.each([['010', 8], ['1_0', 10], ['0xA', 10], ['0b+10', 2], ['1_0.0', 10], ['1e1', 10]])('retains runner allowance %s through unrelated edits', (token, allowance) => {
+    const source = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: ${token}}}]}}`;
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    document.setField(['name'], 'Keep admitted allowance');
+    expect(document.getSnapshot().workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    const reparsed = parseWorkflow(document.getSnapshot().source);
+    expect(reparsed.workflow!.jobs.review.steps![0].with!.turns).toBe(allowance);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+  });
+
   it.each([[5, true], [0, false], [-1, false], [1.5, false], ['5', false], [2147483648, false]])('validates literal allowance %s', (turns, valid) => {
     const parsed = parseWorkflow(JSON.stringify({ jobs: { review: { steps: [{ uses: 'agent/run', with: { agent: 'reviewer.toml', prompt: 'Review', turns } }] } } }));
     expect(parsed.diagnostics.some(d => d.severity === 'error' && d.path.at(-1) === 'turns')).toBe(!valid);

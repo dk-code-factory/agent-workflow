@@ -137,6 +137,22 @@ test('edit native definitions and typed input while retaining six visible hook l
   await ui.getByRole('button',{name:'Undo',exact:true}).click();expect((await snapshot(page)).source).toBe(edited.source);
 });
 
+for (const [token, allowance] of [['010', 8], ['1_0', 10]] as const) test(`native turn allowance ${token} matches the runner through edits and history`, async ({ page }) => {
+  const source = `jobs: {review: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: ${token}}}]}}`;
+  const ui = await open(page, source);
+  await step(page, 'review agent/run');
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await expect(ui.getByLabel('Agent turn allowance', { exact: true })).toHaveValue(String(allowance));
+  await field(page, 'Prompt', 'Keep the admitted allowance');
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].with.turns).toBe(allowance);
+  expect(parse(await downloadText(page)).jobs.review.steps[0].with.turns).toBe(allowance);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  await expect(ui.getByLabel('Agent turn allowance', { exact: true })).toHaveValue(String(allowance));
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(parse(await downloadText(page)).jobs.review.steps[0].with.turns).toBe(allowance);
+});
+
 test('hook YAML edits preserve exact nested numeric input through prompt changes and export', async ({ page }) => {
   const hooks = ['onResult', 'onComplete', 'onIncomplete', 'onError', 'onFailure', 'finally'];
   const labels = ['Result verification steps (YAML)', 'Completion steps (YAML)', 'Incomplete steps (YAML)', 'Fallback steps (YAML)', 'Failure reporting steps (YAML)', 'Finalization steps (YAML)'];
