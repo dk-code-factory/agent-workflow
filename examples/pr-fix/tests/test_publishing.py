@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "help
 from prfix import app, publishing
 from prfix.core import Ledger, artifact, canonical, digest, identity
 from prfix.prepare import CHECKLIST
+from action import dispatch as application_dispatch
 from prfix.publication import PublicationError, UncertainEffect
 from test_publication import AUTH, BASE, HEAD, FakeGitHub
 
@@ -30,6 +31,8 @@ class PublishingTests(unittest.TestCase):
                      "options": {"permissions": {"reply_to_feedback": True, "edit_pr": True}},
                      "authorizations": {"iterate": AUTH, "merge": AUTH},
                      "tasks": [self.task("description", "description"), self.task("review", "review"), self.task("finding_verification", "verification")]}
+        self.plan.update(definitions={"audience": "audience-definition"}, helper_manifest={},
+                         limits={"retries_per_task": 1})
         self.ledger = Ledger(self.root, "fixture", self.pr["url"])
         self.addCleanup(self.ledger.close)
         self.provider = FakeGitHub()
@@ -148,6 +151,64 @@ class PublishingTests(unittest.TestCase):
             publishing.publication_execute(self.root, self.provider, self.ledger, self.plan,
                 {"id": prepared["id"], "agent": VERIFIER, "report": report})
         self.assertEqual(len(self.provider.writes), 1)
+
+    def test_audience_retains_claim_retry_and_checklist_before_publication(self):
+        _, _, prepared, report = self.setup_publication()
+        def dispatch(operation, **inputs):
+            return application_dispatch(operation, self.root, self.provider, self.ledger, self.plan,
+                {"publication": prepared["id"], **inputs})
+        claimed = dispatch("claim", task="publication_audience")
+        self.assertEqual(claimed["task_input"]["payload"]["fingerprint"], prepared["fingerprint"])
+        failed = {"claim": claimed["claim"], "agent": AUDIENCE, "status": "failed",
+                  "failure_class": "usage_exhausted", "unsafe_failure_class": "", "error": "retained usage limit"}
+        self.assertTrue(dispatch("turn_result", **failed)["retry"])
+        self.assertTrue(dispatch("turn_result", **failed)["retry"])
+        self.assertEqual(self.ledger.db.execute("SELECT SUM(amount) FROM reservations WHERE name=?",
+            ("native-retry:" + claimed["claim"],)).fetchone()[0], 1)
+        incomplete = copy.deepcopy(report)
+        incomplete["complete"] = False
+        incomplete["checklist"][0]["status"] = "incomplete"
+        observed = dispatch("turn_result", claim=claimed["claim"], agent=AUDIENCE,
+                            status="succeeded", report=incomplete, retried=True)
+        self.assertTrue(observed["checklist"])
+        check = dispatch("check_prepare", claim=claimed["claim"], agent=AUDIENCE, round=1)
+        self.assertEqual(check["task_input"]["claim"], claimed["claim"])
+        with self.assertRaisesRegex(ValueError, "original incomplete session"):
+            dispatch("check_prepare", claim=claimed["claim"], agent=VERIFIER, round=1)
+        with self.assertRaisesRegex(ValueError, "skip an original round"):
+            dispatch("check_prepare", claim=claimed["claim"], agent=AUDIENCE, round=2)
+        self.snapshot["settings"] = "changed"
+        with self.assertRaisesRegex(PublicationError, "no longer covers the current inputs"):
+            dispatch("check_prepare", claim=claimed["claim"], agent=AUDIENCE, round=1)
+        self.snapshot["settings"] = "settings"
+        self.assertTrue(dispatch("accept", claim=claimed["claim"], agent=AUDIENCE, report=report, round=1)["complete"])
+        final = dispatch("task_status", claim=claimed["claim"])
+        self.assertEqual((final["agent"], final["structured"]), (AUDIENCE, report))
+        publishing.publication_execute(self.root, self.provider, self.ledger, self.plan,
+            {"id": prepared["id"], "agent": final["agent"], "report": final["structured"]})
+        self.assertEqual(len(self.provider.writes), 1)
+
+    def test_audience_exhaustion_and_unsafe_failure_remain_blocking(self):
+        _, _, prepared, report = self.setup_publication()
+        def dispatch(operation, **inputs):
+            return application_dispatch(operation, self.root, self.provider, self.ledger, self.plan,
+                {"publication": prepared["id"], **inputs})
+        claimed = dispatch("claim", task="publication_audience")
+        with self.assertRaisesRegex(ValueError, "without eligible retained retry"):
+            dispatch("turn_result", claim=claimed["claim"], agent=AUDIENCE, status="failed",
+                failure_class="usage_exhausted", unsafe_failure_class="integrity", error="unsafe")
+        incomplete = {**report, "complete": False}
+        for number in range(4):
+            if number:
+                dispatch("check_prepare", claim=claimed["claim"], agent=AUDIENCE, round=number)
+            dispatch("accept", claim=claimed["claim"], agent=AUDIENCE, report=incomplete, round=number)
+        with self.assertRaisesRegex(ValueError, "allowance exceeded"):
+            dispatch("check_prepare", claim=claimed["claim"], agent=AUDIENCE, round=4)
+        with self.assertRaisesRegex(ValueError, "remains incomplete"):
+            dispatch("task_status", claim=claimed["claim"])
+        with self.assertRaisesRegex(ValueError, "unfinished logical claim"):
+            dispatch("claim", task="publication_audience")
+        self.assertEqual(self.provider.writes, [])
 
     def test_read_only_lost_response_reconciliation_cannot_commit_or_replay(self):
         _, _, prepared, report = self.setup_publication()

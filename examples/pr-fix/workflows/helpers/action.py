@@ -26,6 +26,10 @@ def verify_closure(root, plan):
 
 
 def dispatch(operation, root, provider, ledger, plan, inputs):
+    audience = inputs.get("publication", "")
+    if audience and operation in {"claim", "accept", "turn_result", "check_prepare", "task_status"}:
+        from prfix.publishing import audience_scope
+        plan, inputs = audience_scope(root, provider, ledger, plan, operation, inputs)
     if operation == "claim":
         return app.prepare_claim(root, provider, ledger, plan, inputs)
     if operation == "accept":
@@ -35,7 +39,11 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
     if operation == "extend":
         return ledger.extend(inputs["authorization"]["request_id"], inputs["name"], inputs["amount"], inputs["authorization"])
     if operation == "task_status":
-        return app.task_status(root, provider, ledger, plan, inputs)
+        result = app.task_status(root, provider, ledger, plan, inputs)
+        if audience:
+            retained = read_artifact(root, result["report"])
+            result.update(agent=retained["agent"], structured=retained["report"])
+        return result
     if operation == "check_prepare":
         claim = app._claim(ledger, inputs["claim"])
         if claim["agent"] != inputs["agent"] or claim["state"] != "incomplete":
@@ -187,6 +195,15 @@ def handle(operation, request, root=None, provider=None):
             if retained["state"] not in {"complete", "optional_failed"}:
                 assignment = read_artifact(root, retained["assignment"])
                 valid = app.continuation_current(root, provider, ledger, plan, retained, assignment)
+        if valid and inputs.get("publication") and operation in {"claim", "check_prepare", "turn_result"}:
+            retained = app._claim(ledger, checkpoint["output"]["claim"] if operation == "claim" else inputs["claim"])
+            if retained["state"] not in {"complete", "optional_failed"}:
+                from prfix.publishing import audience_scope
+                from prfix.publication import PublicationError
+                try:
+                    audience_scope(root, provider, ledger, plan, operation, inputs)
+                except (ValueError, KeyError, TypeError, PublicationError):
+                    valid = False
         if valid and operation == "completion":
             from prfix.publishing import readiness, completed_merge
             current = readiness(root, provider, ledger, plan)

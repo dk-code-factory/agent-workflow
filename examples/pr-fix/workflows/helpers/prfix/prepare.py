@@ -86,6 +86,25 @@ def interface(inputs, outputs=None):
     return {"workflow_call": result}
 
 
+def publication_context(workflow, required=False):
+    """Carry an exact audience intent through the ordinary task machinery."""
+    workflow["on"]["workflow_call"]["inputs"]["publication"] = {
+        "type": "string", **({"required": True} if required else {"default": ""})}
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("protocol") == "action-v1":
+                value["input"]["publication"] = expression("inputs.publication")
+            if str(value.get("uses", "")).endswith(("/retry.yml", "/continue.yml")):
+                value["with"]["publication"] = expression("inputs.publication")
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+    walk(workflow)
+    return workflow
+
+
 def native(agent, prompt, task_input):
     return {"id": "task", "uses": "agent/run", "with": {
         "agent": agent, "turns": 8, "prompt": prompt, "input": task_input,
@@ -177,16 +196,25 @@ def continue_workflow(image):
                 "round": expression("inputs.round")}, "accepted")], ["native"], {"complete": expression("steps.accepted.outputs.complete"), "settled": expression("steps.accepted.outputs.settled")})}}
 
 
-def publication_workflow(image):
+def audience_workflow(image, prefix):
+    workflow = leaf_workflow(image, prefix, {"id": "publication_audience", "definition": "audience"})
+    workflow["on"]["workflow_call"]["outputs"].update({
+        "agent": {"value": expression("jobs.status.outputs.agent")},
+        "report": {"value": expression("jobs.status.outputs.structured")}})
+    workflow["jobs"]["status"]["outputs"].update({key: expression("steps.status.outputs." + key)
+        for key in ("agent", "structured")})
+    return publication_context(workflow, required=True)
+
+
+def publication_workflow(image, prefix):
     plan = expression("inputs.plan")
     return {"name": "One exact publication intent, audience verdict and receipt", "on": interface(
         {"plan": "string", "proposal": "object"}, {"receipt": expression("jobs.publish.outputs.receipt")}), "jobs": {
             "prepare": container_job(image, [helper("publication_prepare", {"plan": plan, "proposal": expression("inputs.proposal")}, "intent")],
                 outputs={"intent": expression("steps.intent.outputs.intent"), "id": expression("steps.intent.outputs.id"), "fingerprint": expression("steps.intent.outputs.fingerprint")}),
-            "audience": {"needs": "prepare", "steps": [native("agents/audience.toml",
-                "Review this exact public payload for its audience. Return source-backed checklist and audience={fingerprint,suitable,evidence}. Do not publish or change payload.",
-                {"intent": expression("needs.prepare.outputs.intent"), "fingerprint": expression("needs.prepare.outputs.fingerprint"), "proposal": expression("inputs.proposal"), "checklist": CHECKLIST})],
-                "outputs": {"agent": expression("steps.task.outputs.agent"), "report": expression("steps.task.outputs.structured")}},
+            "audience": {"needs": "prepare", "uses": prefix + "/audience.yml",
+                "with": {"plan": plan, "cycle": 0, "publication": expression("needs.prepare.outputs.id")},
+                "secrets": {"github_token": expression("secrets.github_token")}},
             "publish": container_job(image, [helper("publication_execute", {"plan": plan,
                 "id": expression("needs.prepare.outputs.id"), "agent": expression("needs.audience.outputs.agent"),
                 "report": expression("needs.audience.outputs.report")}, "published"),
@@ -531,7 +559,8 @@ def prepare(root, request, provider=None):
             shutil.copytree(source, directory / "helpers", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             for key, value in definitions.items():
                 (directory / "agents" / (key + ".toml")).write_bytes(value)
-            documents = {"continue.yml": continue_workflow(image), "retry.yml": retry_workflow(image), "publication.yml": publication_workflow(image),
+            documents = {"continue.yml": publication_context(continue_workflow(image)), "retry.yml": publication_context(retry_workflow(image)),
+                         "publication.yml": publication_workflow(image, prefix), "audience.yml": audience_workflow(image, prefix),
                          "publication-barrier.yml": publication_barrier(image, prefix), "ci.yml": ci_workflow(image),
                          "ci-poll.yml": ci_poll_workflow(prefix)}
             for task in tasks:

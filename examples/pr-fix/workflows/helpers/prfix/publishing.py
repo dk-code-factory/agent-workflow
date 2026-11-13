@@ -234,6 +234,36 @@ def publication_execute(root, provider, ledger, plan, inputs):
     return {"id": saved["id"], "receipt": result}
 
 
+def audience_scope(root, provider, ledger, plan, operation, inputs):
+    """Bind ordinary retained task operations to one immutable public intent."""
+    from . import app
+    from .prepare import CHECKLIST
+    saved = _publication(root, provider, ledger, plan)._load(text(inputs["publication"], "audience publication"))
+    task = {"id": "publication_audience_" + digest([saved["id"], saved["fingerprint"]]),
+        "kind": "publication_audience", "definition": "audience",
+        "definition_digest": plan["definitions"]["audience"],
+        "implementation": digest(plan["helper_manifest"]),
+        "required": True, "writes": False, "cacheable": True, "head_sensitive": True,
+        "resources": [], "checklist": CHECKLIST,
+        "publication": {"id": saved["id"], "fingerprint": saved["fingerprint"]},
+        "assignment": "Review the exact public intent in payload for its audience. Return a source-backed checklist and audience={fingerprint,suitable,evidence}. Do not publish or change the payload."}
+    active = {**plan, "tasks": [task]}
+    observed = dict(inputs)
+    snapshot = app._snapshot(root, provider, plan)
+    for source in saved["intent"]["sources"]:
+        _source(root, provider, ledger, plan, source, snapshot=snapshot)
+    if operation == "claim":
+        if inputs.get("task") != "publication_audience":
+            raise PublicationError("audience claim requires its declared task")
+        observed.update(task=task["id"], payload={"intent": saved["intent"], "fingerprint": saved["fingerprint"]})
+    else:
+        claim = app._claim(ledger, inputs["claim"])
+        assignment = read_artifact(root, claim["assignment"])
+        if claim["task"] != task["id"] or assignment["task"] != task:
+            raise PublicationError("audience continuation differs from its original publication task")
+    return active, observed
+
+
 def _retained_audience(root, ledger, saved):
     row = ledger.db.execute("SELECT * FROM accepted_reports WHERE task=? AND kind='audience' ORDER BY rowid DESC LIMIT 1",
                             ("audience:" + saved["id"],)).fetchone()

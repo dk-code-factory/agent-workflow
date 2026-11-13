@@ -116,9 +116,11 @@ func portableFixturePrepare(t *testing.T, root, instructions string, settings ..
 	t.Helper()
 	request := map[string]any{
 		"pr": "https://github.com/fixture/repository/pull/1", "instructions": instructions,
-		"image":   "fixture/python-tools@sha256:" + strings.Repeat("a", 64),
-		"roles":   map[string]string{"leaf": "reviewer.toml", "reviewer": "reviewer.toml", "verifier": "reviewer.toml", "fixer": "reviewer.toml", "audience": "reviewer.toml"},
-		"options": map[string]any{"tasks": []any{map[string]any{"skill": "local:review"}}, "finalizers": []any{}, "reviewers": []any{}},
+		"image": "fixture/python-tools@sha256:" + strings.Repeat("a", 64),
+		"roles": map[string]string{"leaf": "reviewer.toml", "reviewer": "reviewer.toml", "verifier": "reviewer.toml", "fixer": "reviewer.toml", "audience": "reviewer.toml"},
+		"options": map[string]any{"tasks": []any{map[string]any{"skill": "local:review"}}, "finalizers": []any{}, "reviewers": []any{},
+			"permissions": map[string]any{"reply_to_feedback": true}},
+		"authorizations": map[string]any{"iterate": map[string]any{"request_id": "fixture", "instruction": "Review and reply to this fixture.", "source": "user:fixture"}},
 		"adapters": map[string]any{"local:review": map[string]any{
 			"kind": "review", "definition": "reviewer", "assignment": "Inspect file.txt and report sourced findings.",
 			"checklist": []any{map[string]any{"id": "inspect", "text": "Inspect the changed source."}},
@@ -255,6 +257,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	turns := map[string]int{}
 	var reviewed, verificationAgents []string
 	failedAgent := ""
+	audienceAgent := ""
 	sourceHash := sha256.Sum256([]byte("changed\n"))
 	fake := &nativeTaskFixture{respond: func(request SessionRequest) (map[string]any, error) {
 		mu.Lock()
@@ -275,7 +278,11 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 			failedAgent = request.ParentWorkerID
 			return map[string]any{"text": "retained partial analysis"}, ErrUsageExhausted
 		}
-		incomplete := kind == "review" && (turns[request.ParentWorkerID] == 1 || request.ParentWorkerID == failedAgent && turns[request.ParentWorkerID] == 2)
+		if kind == "publication_audience" && audienceAgent == "" {
+			audienceAgent = request.ParentWorkerID
+			return map[string]any{"text": "retained audience analysis"}, ErrUsageExhausted
+		}
+		incomplete := kind == "review" && (turns[request.ParentWorkerID] == 1 || request.ParentWorkerID == failedAgent && turns[request.ParentWorkerID] == 2) || kind == "publication_audience" && turns[request.ParentWorkerID] == 2
 		checks := []any{}
 		for _, raw := range task["checklist"].([]any) {
 			check := raw.(map[string]any)
@@ -293,6 +300,14 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		if kind == "review" {
 			reviewed = append(reviewed, request.ParentWorkerID)
 			report["findings"] = []any{map[string]any{"id": "candidate", "text": "Check the changed source against the fixture specification.", "sources": []string{"source"}}}
+			report["operations"] = []any{map[string]any{"kind": "reply", "head": head, "target": base,
+				"payload": map[string]any{"body": "Deterministic source-backed fixture reply."}}}
+		}
+		if kind == "publication_audience" {
+			if request.ParentWorkerID != audienceAgent {
+				return nil, fmt.Errorf("audience retry or checklist changed the original session")
+			}
+			report["audience"] = map[string]any{"fingerprint": assignment["payload"].(map[string]any)["fingerprint"], "suitable": true, "evidence": []string{"source"}}
 		}
 		if kind == "verification" {
 			verificationAgents = append(verificationAgents, request.ParentWorkerID)
@@ -435,6 +450,36 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	}
 	if len(fake.requests) != originalCalls {
 		t.Fatalf("unchanged recovery or replacement duplicated provider work: %d -> %d", originalCalls, len(fake.requests))
+	}
+	// Run the generated audience graph itself: the first turn fails eligibly,
+	// the retry is incomplete, and a same-session checklist turn completes it.
+	seedAudience := `import json,pathlib,sys
+from prfix import app,publishing
+from prfix.capture import GitHub
+from prfix.core import Ledger
+root=pathlib.Path.cwd(); plan=app.load_plan(root,sys.argv[1]); provider=GitHub(root)
+with Ledger(root,plan['logical_run'],plan['pr']['url']) as ledger:
+    proposal=publishing.publication_list(root,provider,ledger,plan,{})['items'][0]
+    print(json.dumps(publishing.publication_prepare(root,provider,ledger,plan,{'proposal':proposal})))
+`
+	seeded := portableFixtureCommand(t, root, []string{"python3", "-B", "-c", seedAudience, prepared.Plan}, nil,
+		[]string{"PYTHONPATH=" + filepath.Join(closure, "helpers")})
+	var intent struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(seeded, &intent); err != nil || intent.ID == "" {
+		t.Fatalf("audience fixture intent was not retained: %s %v", seeded, err)
+	}
+	audienceRun, err := e.Run(ctx, RunRequest{Ref: filepath.ToSlash(filepath.Join(filepath.Dir(prepared.Workflow), "audience.yml")),
+		Inputs: map[string]any{"plan": prepared.Plan, "cycle": 0, "publication": intent.ID}, Secrets: secrets})
+	if err != nil || audienceRun == nil || audienceRun.Status != RunStatusSucceeded {
+		t.Fatalf("generated audience checklist flow failed: run=%+v error=%v", audienceRun, err)
+	}
+	if audienceRun.Outputs["complete"] != true || audienceAgent == "" || turns[audienceAgent] != 3 {
+		t.Fatalf("audience graph lost its retained retry/checklist: outputs=%v agent=%s turns=%v", audienceRun.Outputs, audienceAgent, turns)
+	}
+	if report, ok := audienceRun.Outputs["report"].(map[string]any); !ok || report["complete"] != true {
+		t.Fatalf("audience graph did not expose its final accepted report: %v", audienceRun.Outputs)
 	}
 	changed := portableFixturePrepare(t, root, "Review the changed governing instructions.")
 	if changed.LogicalRun != prepared.LogicalRun || changed.Plan == prepared.Plan {
