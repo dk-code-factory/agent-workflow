@@ -193,19 +193,26 @@ func TestTaskStateTransportUngroupedRunHasNoEndpoint(t *testing.T) {
 }
 
 func TestTaskStatePythonHelperThroughFakeContainers(t *testing.T) {
-	for _, mode := range []string{"shared", "standalone"} {
+	for _, mode := range []string{"shared", "standalone", "shared-closed", "standalone-closed"} {
 		t.Run(mode, func(t *testing.T) {
+			closed := strings.HasSuffix(mode, "-closed")
+			mode = strings.TrimSuffix(mode, "-closed")
 			e, store, docker := containerExecutor(t)
 			var wireMu sync.Mutex
 			var tokens []string
+			var validations int
 			directories := map[string]bool{}
 			docker.helper = func(_ []string, input []byte, _ []string) ([]byte, []byte, int, bool) {
 				var request struct {
 					TaskState *taskStateDescriptor `json:"task_state"`
+					Phase     string               `json:"phase"`
 				}
 				if json.Unmarshal(input, &request) == nil && request.TaskState != nil {
 					wireMu.Lock()
 					tokens = append(tokens, request.TaskState.Token)
+					if request.Phase == "validate_checkpoint" {
+						validations++
+					}
 					docker.mu.Lock()
 					for _, container := range docker.containers {
 						if container.taskStateDir != "" {
@@ -221,6 +228,9 @@ func TestTaskStatePythonHelperThroughFakeContainers(t *testing.T) {
 				data, err := os.ReadFile(filepath.Join("..", "..", "examples", "task-state", "workflows", name))
 				if err != nil {
 					t.Fatal(err)
+				}
+				if closed && name == "helper.py" {
+					data = []byte(strings.Replace(string(data), `    return {"result":`, "    state.call(\"close_group\", request_id=\"finish\", instruction=\"close completed capture\", source=\"test\")\n    return {\"result\":", 1))
 				}
 				if err = os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows", name), data, 0600); err != nil {
 					t.Fatal(err)
@@ -257,12 +267,23 @@ func TestTaskStatePythonHelperThroughFakeContainers(t *testing.T) {
 			if _, err = e.Resume(t.Context(), run.ID, nil, false); err != nil {
 				t.Fatalf("owned read-only validation failed: %v", err)
 			}
+			wireMu.Lock()
+			validated := validations > 0
+			wireMu.Unlock()
+			if !validated {
+				t.Fatal("successful resume skipped the checkpoint validation hook")
+			}
 			second, err := e.Run(t.Context(), RunRequest{Ref: "workflows/test.yml", TaskGroup: "python-capture", Inputs: map[string]any{"value": "ready", "operation_id": "capture-1"}})
-			if err != nil {
+			if closed {
+				if err == nil || !strings.Contains(err.Error(), "permanently closed") {
+					t.Fatalf("closed group admitted replacement work: %v", err)
+				}
+				second = run
+			} else if err != nil {
 				t.Fatalf("replacement run did not reuse claim: %v", err)
 			}
 			observed, err = store.InspectTaskState(t.Context(), second.ID)
-			if err != nil || len(observed.Claims) != 1 || observed.Budgets[0].Used != 1 {
+			if err != nil || observed.Closed != closed || len(observed.Claims) != 1 || len(observed.Budgets) != 1 || observed.Budgets[0].Used != 1 {
 				t.Fatalf("replacement reset logical state: %+v %v", observed, err)
 			}
 			wireMu.Lock()

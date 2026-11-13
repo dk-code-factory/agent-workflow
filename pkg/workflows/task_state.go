@@ -99,6 +99,8 @@ func taskIdentity(value, field string) error {
 	return nil
 }
 
+type taskGroupValidationKey struct{}
+
 func (s *SQLiteStore) linkTaskGroup(ctx context.Context, tx *sql.Tx, run *Run, snap Snapshot) error {
 	raw, exists := snap.Metadata["task_group"]
 	if !exists {
@@ -119,7 +121,18 @@ func (s *SQLiteStore) linkTaskGroup(ctx context.Context, tx *sql.Tx, run *Run, s
 		return err
 	}
 	if closed {
-		return fmt.Errorf("task group %q is permanently closed", group)
+		// Only the engine's checkpoint validation may join a closed group, and
+		// only while the successfully completed original member still exists.
+		original, _ := ctx.Value(taskGroupValidationKey{}).(string)
+		var validation bool
+		if original != "" && original == run.OriginID && original != run.ID {
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM task_group_members m JOIN runs r ON r.id=m.run_id WHERE m.group_id=? AND m.run_id=? AND r.status=?)`, group, original, RunStatusSucceeded).Scan(&validation); err != nil {
+				return err
+			}
+		}
+		if !validation {
+			return fmt.Errorf("task group %q is permanently closed", group)
+		}
 	}
 	_, err := tx.ExecContext(ctx, "INSERT INTO task_group_members(group_id,run_id) VALUES(?,?)", group, run.ID)
 	return err

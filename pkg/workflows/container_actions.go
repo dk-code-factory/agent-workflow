@@ -506,7 +506,8 @@ func (e *Executor) validateCompletedContainerActions(ctx context.Context, origin
 	validation := &Run{ID: randomID(), OriginID: original.ID, Owner: randomID(), Generation: 1, Version: 1, WorkflowRef: original.WorkflowRef, Status: RunStatusRunning, StartedAt: time.Now().UTC(), Jobs: map[string]JobExecution{}}
 	validationSnapshot := snap
 	validationSnapshot.RequestID = ""
-	if err := journal.Admit(ctx, validation, validationSnapshot); err != nil {
+	admission := context.WithValue(ctx, taskGroupValidationKey{}, original.ID)
+	if err := journal.Admit(admission, validation, validationSnapshot); err != nil {
 		return err
 	}
 	owned := fenceContext(ctx, validation)

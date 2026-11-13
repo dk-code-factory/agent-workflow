@@ -131,9 +131,11 @@ while it remains open, including when no run currently references it. Close a
 group explicitly only after resolving its claims and stopping other active
 members. Owned retention can remove a closed group's detail records when its
 final member is cleaned; it retains a closed tombstone so the same group cannot
-be reused to reset its allowances. Application-owned result artifacts and provider
-receipts need their own retention policy; the service stores references, not
-their bytes.
+be reused to reset its allowances. Resuming an existing successful run can still
+validate its checkpoints against the closed group's retained state; validation
+does not reopen the group or permit task-state writes. Application-owned result
+artifacts and provider receipts need their own retention policy; the service
+stores references, not their bytes.
 
 Deterministic tests use disposable SQLite databases and fake runtime transport
 to cover concurrency, lost acknowledgements, restart, owner fencing, phase

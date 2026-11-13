@@ -382,6 +382,40 @@ func TestTaskStateRetentionPreservesGroupAndClosedTombstone(t *testing.T) {
 	}
 }
 
+func TestTaskStateClosedGroupValidationAdmission(t *testing.T) {
+	s := taskStateStore(t)
+	original, ctx := taskStateRun(t, s, "closed-validation")
+	taskStateCall(t, s, ctx, TaskStateRequest{Operation: "budget", Name: "reviews", Limit: 1})
+	taskStateCall(t, s, ctx, TaskStateRequest{Operation: "close_group", RequestID: "finish", Instruction: "finish", Source: "test"})
+	newValidation := func() *Run {
+		return &Run{ID: randomID(), OriginID: original.ID, Owner: randomID(), Generation: 1, Status: RunStatusRunning, Version: 1}
+	}
+	snapshot := Snapshot{Version: 1, Metadata: map[string]any{"task_group": "closed-validation"}}
+	validationCtx := context.WithValue(t.Context(), taskGroupValidationKey{}, original.ID)
+	if err := s.Admit(validationCtx, newValidation(), snapshot); err == nil {
+		t.Fatal("validation admitted before the original member succeeded")
+	}
+	original.Status = RunStatusSucceeded
+	if err := s.Save(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Admit(t.Context(), newValidation(), snapshot); err == nil {
+		t.Fatal("ordinary admission bypassed closure by copying the original run identity")
+	}
+	validation := newValidation()
+	if err := s.Admit(validationCtx, validation, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	owned := fenceContext(t.Context(), validation)
+	observed := taskStateCall(t, s, owned, TaskStateRequest{Operation: "get_budget", Name: "reviews"})
+	if observed.Budget.Limit != 1 || observed.Budget.Used != 0 {
+		t.Fatalf("validation lost retained state: %+v", observed)
+	}
+	if _, err := s.TaskState(owned, TaskStateRequest{Operation: "reserve", Name: "reviews", OperationID: "new", Limit: 1, Amount: 1}); err == nil {
+		t.Fatal("validation reopened closed task-state writes")
+	}
+}
+
 func TestTaskStateBackupMigrationAndReadOnlyInspection(t *testing.T) {
 	s := taskStateStore(t)
 	r, ctx := taskStateRun(t, s, "portable")
