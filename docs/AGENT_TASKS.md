@@ -129,3 +129,13 @@ available through `outputs.structured`. The legacy whole-step metadata object
 keeps its existing shape. Reading classifications grants no retry permission:
 the workflow must reserve its own retained allowance and explicitly select
 eligible failures, and engine cleanup and failure-observation guards still apply.
+
+For a task with `continue-on-error: true`, recovering a lost step completion
+returns the original terminal failure and its observation receipt to downstream
+YAML. Recovery preserves the original message, failure classification, partial
+output and acknowledgement generation; it does not retry that continued failure
+before downstream disposition runs. A retry selected by the workflow uses a
+subsequent `agent/run` coordinate with the original `outputs.agent` reference and
+the application's retained allowance. Explicit resume retries of tasks without
+`continue-on-error`, and original-session recovery of interrupted or canceled
+turns, retain their existing behavior.

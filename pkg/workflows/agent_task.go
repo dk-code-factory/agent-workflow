@@ -144,7 +144,11 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 			outputs["agent"] = reference
 			return outputs, err
 		}
-		if outcome.Status == RunStatusSucceeded || ec.Attempt.Number <= 1 || errors.Is(lookupErr, sql.ErrNoRows) {
+		// Continued failures belong to downstream YAML disposition. Losing the
+		// step checkpoint cannot substitute a provider retry before that stage
+		// observes the original result. Ordinary explicit resume retry semantics
+		// and original-session recovery after interruption remain unchanged.
+		if outcome.Status == RunStatusSucceeded || step.ContinueOnError && outcome.Status == RunStatusFailed || ec.Attempt.Number <= 1 || errors.Is(lookupErr, sql.ErrNoRows) {
 			break
 		}
 		if outcome.UnsafeFailureClass != "" && outcome.UnsafeFailureClass != "canceled" {
@@ -170,7 +174,22 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	outputs["queue_time_ms"] = outcome.QueueTimeMS
 	if outcome.Status != RunStatusSucceeded {
 		if outcome.Status == RunStatusFailed && (outcome.UnsafeFailureClass == "" || outcome.UnsafeFailureClass == "canceled") && acknowledgeableFailure(outcome.FailureClass) {
-			if _, ackErr := e.Workers.acknowledgeFailure(context.WithoutCancel(ctx), WorkerFailureRequest{RunID: owner, WorkerID: reference, MessageID: outcome.ID, Owner: fence.owner, Generation: fence.generation, RequestID: actionHash([]any{outcome.RequestID, "task-result-observed"}), Reason: "pipeline observed the durable task error", Evidence: actionHash(outcome.Result)}, operationID); ackErr != nil {
+			// Wait receipts freeze the result before acknowledgement. Reload only
+			// its observation receipt, preserving the original message generation.
+			current, loadErr := e.Workers.taskMessage(context.WithoutCancel(ctx), reference, operationID)
+			if loadErr != nil {
+				return outputs, loadErr
+			}
+			observed, retained := outcome, current
+			observed.FailureAcknowledgement, retained.FailureAcknowledgement = nil, nil
+			if actionHash(observed) != actionHash(retained) {
+				return outputs, fmt.Errorf("%w: authoritative task failure changed", ErrActionIntegrity)
+			}
+			if current.FailureAcknowledgement != nil {
+				if !nativeTaskFailureAcknowledged(current) {
+					return outputs, fmt.Errorf("%w: task failure observation receipt changed", ErrActionIntegrity)
+				}
+			} else if _, ackErr := e.Workers.acknowledgeFailure(context.WithoutCancel(ctx), WorkerFailureRequest{RunID: owner, WorkerID: reference, MessageID: outcome.ID, Owner: fence.owner, Generation: fence.generation, RequestID: actionHash([]any{outcome.RequestID, "task-result-observed"}), Reason: "pipeline observed the durable task error", Evidence: actionHash(outcome.Result)}, operationID); ackErr != nil {
 				return outputs, ackErr
 			}
 		}
@@ -390,17 +409,46 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 	if reference == "" {
 		return false
 	}
+	// A recovered physical attempt can refer to the original failed turn. Bind
+	// its exact retained dispatch rather than accepting any failure on this agent.
+	attempts, err := lifecycleAttempts(ctx, e.Store, ec.RunID)
+	if err != nil {
+		return false
+	}
+	var dispatch *AgentTaskDispatch
+	for _, attempt := range attempts {
+		if attempt.ID == result.AttemptID && attempt.RunID == ec.RunID && (ec.JobID == "" || attempt.JobID == ec.JobID) && (step.ID == "" || attempt.StepID == step.ID) {
+			dispatch = attempt.AgentTask
+			break
+		}
+	}
+	if dispatch == nil || dispatch.Reference != reference || dispatch.Operation == "" {
+		return false
+	}
 	messages, err := e.Workers.Messages(ctx, owner, reference)
 	if err != nil {
 		return false
 	}
+	operations := map[string]bool{dispatch.Operation: true}
 	for _, message := range messages {
-		ack := message.FailureAcknowledgement
-		if message.TaskAttemptID == result.AttemptID && message.Status == RunStatusFailed && message.FailureClass == result.FailureClass && message.Error == result.Error && message.UnsafeFailureClass == "" && ack != nil && ack.MessageID == message.ID && ack.Generation == message.Generation && ack.RequestID != "" {
+		if !operations[message.RequestID] {
+			continue
+		}
+		if (message.Status == "interrupted" || message.Status == RunStatusCanceled) && (message.UnsafeFailureClass == "" || message.UnsafeFailureClass == "canceled") {
+			operations[actionHash([]any{message.ID, "explicit-session-continuation"})] = true
+		}
+		if message.Status == RunStatusFailed && message.FailureClass == result.FailureClass && message.Error == result.Error && message.UnsafeFailureClass == "" &&
+			message.Prompt == dispatch.Input.Prompt && actionHash([]any{message.Input, message.Output, message.Model}) == actionHash([]any{dispatch.Input.Input, dispatch.Input.Output, dispatch.Input.Model}) && nativeTaskFailureAcknowledged(message) {
 			return true
 		}
 	}
 	return false
+}
+
+func nativeTaskFailureAcknowledged(message WorkerMessage) bool {
+	ack := message.FailureAcknowledgement
+	return ack != nil && ack.MessageID == message.ID && ack.Generation == message.Generation && !ack.AcknowledgedAt.IsZero() &&
+		ack.RequestID == actionHash([]any{message.RequestID, "task-result-observed"}) && ack.Reason == "pipeline observed the durable task error" && ack.Evidence == actionHash(message.Result)
 }
 
 // AgentTaskPrompt bounds the exact prompt sent to the provider, including typed input.
