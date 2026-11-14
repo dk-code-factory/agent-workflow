@@ -16,8 +16,9 @@ A stable version-tag push follows this order:
 2. Run the reusable credential-free `pre-release.yml`: native race/tests/vet on
    four platforms, filesystem fixtures, Docker/Podman checks, locked SDK fake
    gateway, three browser projects and the `Pre-release Required` aggregate.
-   Each platform's four PR-fix race shards run in separate jobs to avoid
-   contention between database-heavy recovery fixtures. Native jobs run
+   Each platform's eight PR-fix race shards run in separate jobs to avoid
+   contention and keep database-heavy suites within the package deadline.
+   Native jobs run
    `make test-core check build`; `make test` still includes every race shard.
 3. Build archives reproducibly and build, test and scan both worker images.
 4. In one Linux amd64 `pre-release` job, use the built binaries and exact scanned

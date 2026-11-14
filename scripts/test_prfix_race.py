@@ -16,13 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PRFixRaceTests(unittest.TestCase):
     def test_every_discovered_case_runs_in_exactly_one_shard(self):
-        names = parse_tests('TestZ\nExampleOutput\nFuzzInput\nTestA\nTestAA\nok  package 0.1s\n')
-        groups = [select_tests(names, shard, 4) for shard in range(4)]
-        self.assertEqual(sorted(name for group in groups for name in group), names)
-        for group in groups:
-            pattern = re.compile(run_pattern(group))
-            self.assertEqual([name for name in names if pattern.search(name)], group)
-            self.assertIsNone(pattern.search('TestAExtra'))
+        names = parse_tests('TestZ\nExampleOutput\nFuzzInput\nTestA\nTestAA\nTestB\nTestC\nTestD\nTestE\nok  package 0.1s\n')
+        for shards in [1, 4, 8]:
+            with self.subTest(shards=shards):
+                groups = [select_tests(names, shard, shards) for shard in range(shards)]
+                self.assertEqual(sorted(name for group in groups for name in group), names)
+                for group in groups:
+                    pattern = re.compile(run_pattern(group))
+                    self.assertEqual([name for name in names if pattern.search(name)], group)
+                    self.assertIsNone(pattern.search('TestAExtra'))
 
     def test_discovery_fails_closed(self):
         for output in ['', 'ok  package 0.1s\n', 'TestA\nTestA\n', 'TestA\nFAIL\n']:

@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64]
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
         include:
           - platform: linux/amd64
             runner: ubuntu-24.04
@@ -73,7 +73,7 @@ jobs:
       - name: Check complete Go dependency locks before tests
         run: make go-locks-check
       - name: Run selected PR-fix race tests
-        run: python3 scripts/prfix_race.py --shard ${{ matrix.shard }} --shards 4
+        run: python3 scripts/prfix_race.py --shard ${{ matrix.shard }} --shards 8
   workflow-validation:
     runs-on: ubuntu-24.04
     steps:
