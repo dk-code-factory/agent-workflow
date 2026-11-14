@@ -296,7 +296,9 @@ func TestUncertainReviewRequestNoResendRecoveryAndLostCheckpoint(t *testing.T) {
 	base.mu.Lock()
 	base.ev.Reviews = []map[string]any{{"id": 11, "state": "COMMENTED", "user": map[string]any{"login": "reviewer"}}}
 	base.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// This shared deadline covers recovery, injected checkpoint loss and the
+	// original plan's remaining finalizers under the concurrent race shards.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	ref := filepath.ToSlash(filepath.Join(filepath.Dir(prepared.Workflow), "review-request-recovery.yml"))
 	recovery, err := ex.Prepare(ctx, workflows.RunRequest{Ref: ref, Inputs: map[string]any{"plan": prepared.Plan, "intent": map[string]any{"id": "request-once"}}})

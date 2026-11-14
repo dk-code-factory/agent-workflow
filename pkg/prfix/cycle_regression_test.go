@@ -141,7 +141,7 @@ func TestConcurrentControllersDispatchOnePublication(t *testing.T) {
 }
 
 func TestPublicationLockCancellationAndRelease(t *testing.T) {
-	root := t.TempDir()
+	root := fixtureDirectory(t)
 	runtime := &Runtime{Root: root}
 	unlock, err := runtime.lockPublication(context.Background())
 	if err != nil {
@@ -348,11 +348,12 @@ func TestHistoricalResolutionDoesNotHideIncomingReopening(t *testing.T) {
 	}
 }
 
-// Only the verifier blocks; all other reads use disposable local fixtures.
+// Controlled observation/verifier failures use disposable local fixtures.
 type deadlineVerifier struct {
 	*fakeProvider
 	observed     chan time.Duration
 	liveObserved chan time.Duration
+	captureError error
 }
 
 func (p *deadlineVerifier) Capture(ctx context.Context, id Identity) (PREvidence, error) {
@@ -363,6 +364,10 @@ func (p *deadlineVerifier) Capture(ctx context.Context, id Identity) (PREvidence
 	select {
 	case p.liveObserved <- time.Until(deadline):
 	default:
+	}
+	if p.captureError != nil {
+		<-ctx.Done()
+		return PREvidence{}, p.captureError
 	}
 	return p.fakeProvider.Capture(ctx, id)
 }
@@ -434,4 +439,13 @@ func TestCIClassificationHonorsItsConfiguredDeadline(t *testing.T) {
 		// A bounded live read may consume the window before the verifier. In that
 		// case the classification deadline must precede the still-active parent.
 	}
+	t.Run("interrupted live read retains deadline and diagnostic", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		verifier.captureError = errors.New("interrupted local Git read")
+		_, err := runtime.classifyCI(ctx, p, ActionInput{Claim: claim})
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, verifier.captureError) || ctx.Err() != nil {
+			t.Fatal("live read lost classification deadline or diagnostic", err, ctx.Err())
+		}
+	})
 }

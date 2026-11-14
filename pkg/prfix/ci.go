@@ -2,6 +2,7 @@ package prfix
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -37,8 +38,8 @@ type CIVerifier interface {
 	VerifyCI(context.Context, Identity, string, []CIClassification, map[string]map[string]any) (CIProof, error)
 }
 
-func (r *Runtime) classifyCI(ctx context.Context, p Plan, in ActionInput) (ActionOutput, error) {
-	out := output()
+func (r *Runtime) classifyCI(ctx context.Context, p Plan, in ActionInput) (out ActionOutput, err error) {
+	out = output()
 	l, c, e := r.record(ctx, p, in)
 	if e != nil {
 		return out, e
@@ -58,6 +59,13 @@ func (r *Runtime) classifyCI(ctx context.Context, p Plan, in ActionInput) (Actio
 	timeout := ciSeconds(options, "classification_timeout_seconds", 60*time.Second)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// A canceled Git read can report an exit error rather than the context error.
+	// Retain both so callers still recognize the classification deadline.
+	defer func() {
+		if ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), err)
+		}
+	}()
 	if c.State != "complete" {
 		return out, fmt.Errorf("CI classification requires accepted native execution/checklist")
 	}

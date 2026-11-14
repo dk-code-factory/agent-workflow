@@ -26,6 +26,8 @@ jobs:
       - id: task
         uses: agent/run
         continue-on-error: true
+        # Durable lifecycle checkpoints need a bounded budget on slow race hosts.
+        handlerTimeout: 5m
         with:
           agent: ${{ steps.prepare.outputs.agent }}
           prompt: ${{ steps.prepare.outputs.prompt }}

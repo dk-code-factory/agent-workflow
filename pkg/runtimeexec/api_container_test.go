@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dk-code-factory/agent-workflow/internal/testutil"
 	"github.com/dk-code-factory/agent-workflow/pkg/containerapi"
 )
 
@@ -90,7 +91,7 @@ func TestBuildRequestRequiresGuardianForAdmittedImagePlatform(t *testing.T) {
 }
 
 func TestBuildRequestMountsOnlyTaskStateRPCDirectoryReadOnly(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.SocketDir(t)
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestAPILaunchJournalsIntentAndIDBeforeWorkloadAndCleansFailures(t *testing.
 			var mu sync.Mutex
 			var object *containerapi.Object
 			var started bool
-			socket := filepath.Join(t.TempDir(), "api.sock")
+			socket := filepath.Join(testutil.SocketDir(t), "api.sock")
 			listener, err := net.Listen("unix", socket)
 			if err != nil {
 				t.Fatal(err)
@@ -267,7 +268,7 @@ func TestAPILaunchJournalsIntentAndIDBeforeWorkloadAndCleansFailures(t *testing.
 }
 
 func TestTypedMountPolicyHidesEngineStateAndRejectsWorkspaceRuntimeSockets(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := testutil.SocketDir(t)
 	engine := filepath.Join(workspace, ".agent-workflow")
 	if err := os.MkdirAll(engine, 0700); err != nil {
 		t.Fatal(err)
@@ -301,7 +302,15 @@ func TestTypedMountPolicyHidesEngineStateAndRejectsWorkspaceRuntimeSockets(t *te
 	if err != nil || len(request.PrivatePaths) != 1 || request.PrivatePaths[0] != "/workspace/.agent-workflow" {
 		t.Fatal("nested masks were not collapsed", request.PrivatePaths, err)
 	}
-	o.Selection.Endpoint = "unix://" + filepath.Join(workspace, "runtime.sock")
+	// A selected runtime has a real socket, including when the workspace path
+	// enters through macOS's /var symlink.
+	socket := filepath.Join(workspace, "runtime.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	o.Selection.Endpoint = "unix://" + socket
 	if _, err = BuildRequest(o, owner, lifetime); err == nil {
 		t.Fatal("runtime socket inside workspace was exposed")
 	}

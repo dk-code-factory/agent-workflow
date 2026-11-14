@@ -29,11 +29,7 @@ jobs:
       - name: Check complete Go dependency locks before tests and packaging
         run: make go-locks-check
       - name: Test remaining Go packages, check and build
-        run: |
-          packages=$(go list ./... | sed '\|/pkg/prfix$|d')
-          test -n "$packages"
-          go test -race -timeout 60m $packages
-          make check build
+        run: make test-core check build
       - run: npm ci --prefix bridge/claude --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
       - run: go test ./pkg/clirunner -run 'TestSDK(Bridge|Broker|Conversation)AgainstFakeGateway' -count=1

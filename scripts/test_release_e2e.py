@@ -23,7 +23,7 @@ class CertificationTests(unittest.TestCase):
         self.commit, self.fingerprint = 'a'*40, 'b'*64
         self.env = {'GITHUB_RUN_ID': '100', 'GITHUB_RUN_ATTEMPT': '2'}
         self.report = {'candidate': self.commit, 'source_fingerprint': self.fingerprint, 'reviewed': False,
-                       'origin': {'repository': e2e.REPO, 'workflow': '.github/workflows/release.yml', 'ref': 'refs/tags/v0.2.0', 'run_id': '100', 'run_attempt': '1'},
+                       'origin': {'repository': e2e.REPO, 'workflow': '.github/workflows/release.yml', 'ref': 'refs/tags/v' + self.policy['version'], 'run_id': '100', 'run_attempt': '1'},
                        'records': [], 'runtime_recovery': [], 'images': {'amd64': 'sha256:'+'1'*64, 'arm64': 'sha256:'+'2'*64}}
         for row in self.policy['required_evidence']:
             if row['scenario'] == 'disposable-github-publication':
@@ -33,7 +33,7 @@ class CertificationTests(unittest.TestCase):
             versions = {provider: 'claude-agent-sdk@0.3.319' if provider == 'claude-sdk' else 'codex-cli 0.167.0' if provider.startswith('codex') else '2.1.323 (Claude Code)'}
             if row['scenario'].startswith('mixed-development-'):
                 versions['codex-app-server'] = 'codex_cli_rs/0.167.0 (Linux 6.11.0; x86_64)'
-            record = dict(row, engine={'commit': self.commit, 'source_fingerprint': self.fingerprint, 'version': '0.2.0', 'dirty': 'false'},
+            record = dict(row, engine={'commit': self.commit, 'source_fingerprint': self.fingerprint, 'version': self.policy['version'], 'dirty': 'false'},
                           assertions={a: True for a in scenario['assertions']}, provider_versions=versions,
                           invocations=[{'id': 'invocation-'+p, 'provider': p, 'version': v} for p,v in versions.items()],
                           configuration_fingerprint='c'*64, started='2026-11-13T00:00:00Z', finished='2026-11-13T00:01:00Z')

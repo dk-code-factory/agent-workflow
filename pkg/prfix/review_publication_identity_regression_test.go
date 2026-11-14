@@ -112,7 +112,8 @@ func TestLostPublishCheckpointPreservesHistoricalReplyReceipt(t *testing.T) {
 	}}
 	ex, run, runtime := executeFixture(t, root, provider, prepared, session, true)
 	propose = false
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Include the independently bounded recovery call and subsequent receipt checks.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	plan, err := ReadPlan(prepared.Plan)
 	if err != nil {

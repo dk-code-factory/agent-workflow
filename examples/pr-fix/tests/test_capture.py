@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 import git_fixture
 
@@ -175,6 +175,32 @@ class CaptureTests(unittest.TestCase):
             module.run(self.root, [sys.executable, "-c",
                 "import sys;sys.stderr.write('SECRET_CREDENTIAL');sys.exit(1)"])
         self.assertNotIn("SECRET_CREDENTIAL", str(failed.exception))
+
+    def test_exited_group_permission_race_preserves_output_limit_failure(self):
+        launch = subprocess.Popen
+        children = []
+
+        def start(*args, **kwargs):
+            child = launch(*args, **kwargs)
+            children.append(child)
+            return child
+
+        def exited_group(*args):
+            children[-1].wait(timeout=5)
+            raise PermissionError("exited process group")
+
+        with patch.object(module.subprocess, "Popen", side_effect=start), \
+                patch.object(module.os, "killpg", side_effect=exited_group):
+            with self.assertRaisesRegex(ValueError, "output exceeds"):
+                module.run(self.root, [sys.executable, "-c",
+                    "import sys;sys.stdout.write('x'*10000)"], limit=32)
+
+    def test_live_process_group_permission_failure_is_not_suppressed(self):
+        child = Mock(pid=123)
+        child.poll.return_value = None
+        with patch.object(module.os, "killpg", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                module._kill_process_group(child)
 
 
 class GitHubTests(unittest.TestCase):

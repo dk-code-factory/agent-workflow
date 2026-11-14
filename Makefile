@@ -1,14 +1,16 @@
-.PHONY: build test check dist
+.PHONY: build test test-core check dist
 build:
 	python3 scripts/build-guardians.py
 	go build -o bin/agent-workflow ./cmd/agent-workflow
 	go build -o bin/agent-workflow-runtime ./cmd/agent-workflow-runtime
-test: portable-prfix-test
+test: test-core
+	python3 scripts/prfix_race.py --all --shards 4
+# CI runs the PR-fix race shards in separate jobs to avoid resource contention.
+test-core: portable-prfix-test
 	@packages=$$(go list ./...) || exit $$?; \
 	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d') || exit $$?; \
 	test -n "$$packages" || { echo 'No non-PR-fix Go packages discovered' >&2; exit 1; }; \
 	go test -race -timeout 60m $$packages
-	python3 scripts/prfix_race.py --all --shards 4
 check: release-tooling-test portable-prfix-test
 	go vet ./...
 	go run ./cmd/agent-workflow validate workflows/parallel-review.yml

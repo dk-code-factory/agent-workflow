@@ -3,7 +3,7 @@
 `.github/workflows/release.yml` is the **sole supported publication mechanism**
 for public `dk-code-factory/agent-workflow`. Do not invoke the publisher locally
 or introduce another workflow that publishes. The current policy version is
-`v0.2.0`; production support remains Linux amd64, subject to complete evidence.
+`v0.2.1`; production support remains Linux amd64, subject to complete evidence.
 Linux arm64 and macOS live certification, API-key/gateway certification and
 Codex managed policy are outside this change.
 
@@ -16,6 +16,10 @@ A stable version-tag push follows this order:
 2. Run the reusable credential-free `pre-release.yml`: native race/tests/vet on
    four platforms, filesystem fixtures, Docker/Podman checks, locked SDK fake
    gateway, three browser projects and the `Pre-release Required` aggregate.
+   Each platform's eight PR-fix race shards run in separate jobs to avoid
+   contention and keep database-heavy suites within the package deadline.
+   Native jobs run
+   `make test-core check build`; `make test` still includes every race shard.
 3. Build archives reproducibly and build, test and scan both worker images.
 4. In one Linux amd64 `pre-release` job, use the built binaries and exact scanned
    distribution image for smoke/session E2E, then the full provider/runtime matrix.
@@ -113,7 +117,7 @@ Create and verify the maintainer-signed annotated version tag, then intentionall
 push it. Do not move an existing tag. Read-only candidate inspection is:
 
 ```sh
-python3 scripts/validate-release.py v0.2.0 --phase candidate
+python3 scripts/validate-release.py v0.2.1 --phase candidate
 ```
 
 `--offline` validates only local gates and never authorizes publication. Complete
@@ -173,13 +177,13 @@ Consumers should verify the signed tag, SHA256SUMS, manifest/provenance and immu
 release membership before extraction. For example:
 
 ```sh
-git verify-tag v0.2.0
-gh attestation verify agent-workflow-0.2.0-linux-amd64.tar.gz \
+git verify-tag v0.2.1
+gh attestation verify agent-workflow-0.2.1-linux-amd64.tar.gz \
   --repo dk-code-factory/agent-workflow \
   --signer-workflow dk-code-factory/agent-workflow/.github/workflows/release.yml \
-  --source-digest "$COMMIT" --signer-digest "$COMMIT" --source-ref refs/tags/v0.2.0 \
+  --source-digest "$COMMIT" --signer-digest "$COMMIT" --source-ref refs/tags/v0.2.1 \
   --bundle archive-provenance.jsonl
-gh release verify v0.2.0 --repo dk-code-factory/agent-workflow
+gh release verify v0.2.1 --repo dk-code-factory/agent-workflow
 ```
 
 Obtain `$COMMIT` from the verified tag. Verify `release-manifest.json` and images

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dk-code-factory/agent-workflow/internal/testutil"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
 
@@ -28,7 +29,7 @@ func TestStructuredContainerNetworkIsPinnedThroughCheckpointValidation(t *testin
 				e.CommandExecution = runtimeexec.Policy{Mode: "container", Runtime: "docker", Image: "fixture", NetworkMode: mode}
 				var mu sync.Mutex
 				var networks []string
-				listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "network.sock"))
+				listener, err := net.Listen("unix", filepath.Join(testutil.SocketDir(t), "network.sock"))
 				if err != nil {
 					t.Fatal(err)
 				}
