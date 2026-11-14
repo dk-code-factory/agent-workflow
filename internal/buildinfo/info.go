@@ -4,7 +4,7 @@ import "runtime"
 
 // Version is the single engine release version source. Commit/Dirty are injected
 // only by intentional artifact builds, never guessed from a running workspace.
-const Version = "0.2.1"
+const Version = "0.2.2"
 
 var Commit = "development"
 var Dirty = "unknown"

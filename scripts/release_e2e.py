@@ -70,7 +70,7 @@ def mask(value):
             print('::add-mask::' + s.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'), flush=True)
 
 def private_write(path, value):
-    with Path(path).open('x', opener=lambda p, flags: os.open(p, flags, 0o600)) as stream:
+    with open(path, 'x', opener=lambda p, flags: os.open(p, flags, 0o600)) as stream:
         stream.write(value)
 
 def setup(state, dist):
