@@ -1,9 +1,11 @@
 """Release E2E orchestration rejection tests. All providers/APIs/runtimes are fake."""
 import copy
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import time
 import unittest
@@ -91,6 +93,62 @@ class CertificationTests(unittest.TestCase):
         self.assertEqual(e2e.sanitized(record, [])['provider_versions']['claude-cli'], '2.1.323 (Claude Code)')
 
 class SetupTests(unittest.TestCase):
+    def test_private_write_is_exclusive_and_private_with_permissive_umask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'credential'
+            previous = os.umask(0)
+            try:
+                e2e.private_write(path, 'private-token')
+            finally:
+                os.umask(previous)
+            self.assertEqual(path.read_text(), 'private-token')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                e2e.private_write(path, 'replacement')
+            self.assertEqual(path.read_text(), 'private-token')
+            link = Path(directory) / 'credential-link'
+            link.symlink_to(path)
+            with self.assertRaises(FileExistsError):
+                e2e.private_write(link, 'replacement')
+            self.assertEqual(path.read_text(), 'private-token')
+
+    def test_setup_materializes_owned_state_from_matching_fake_archive(self):
+        version = json.loads((e2e.ROOT / 'release/policy.json').read_text())['version']
+        commit, fingerprint = 'a' * 40, 'b' * 64
+        origin = {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': e2e.REPO,
+                  'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/tags/v' + version,
+                  'GITHUB_WORKFLOW_REF': e2e.REPO + '/.github/workflows/release.yml@refs/tags/v' + version,
+                  'GITHUB_RUN_ID': '100', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': commit}
+        codex = {'tokens': {'access_token': 'fake-access-token', 'account_id': 'fake-account'}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state, dist = root / 'release-provider-e2e', root / 'dist'
+            dist.mkdir()
+            package_name = 'agent-workflow-' + version + '-linux-amd64'
+            data = json.dumps({'commit': commit, 'dirty': 'false', 'source_fingerprint': fingerprint}).encode()
+            with tarfile.open(dist / (package_name + '.tar.gz'), 'w:gz') as bundle:
+                member = tarfile.TarInfo(package_name + '/build.json')
+                member.size = len(data)
+                bundle.addfile(member, io.BytesIO(data))
+            with patch.dict(os.environ, dict(origin, CODEX_AUTH_JSON=json.dumps(codex), CLAUDE_CODE_OAUTH_TOKEN='fake-claude-token'), clear=True), \
+                 patch.object(e2e, 'git', return_value=commit), patch.object(e2e, 'source_fingerprint', return_value=fingerprint), \
+                 patch.object(e2e, 'mask'), patch.object(e2e.subprocess, 'run') as run:
+                e2e.setup(state, dist)
+                expected_origin = e2e.authorize()
+                with self.assertRaises(FileExistsError):
+                    e2e.setup(state, dist)
+            self.assertEqual(json.loads((state / 'codex/auth.json').read_text()), codex)
+            self.assertEqual((state / 'claude-token').read_text(), 'fake-claude-token')
+            self.assertEqual((state / 'package').read_text(), str(state / package_name))
+            for name in ['owner.json', 'origin.json']:
+                self.assertEqual(json.loads((state / name).read_text()), expected_origin)
+            for name in ['owner.json', 'origin.json', 'package', 'codex/auth.json', 'codex/config.toml', 'claude-token']:
+                self.assertEqual((state / name).stat().st_mode & 0o777, 0o600, name)
+            for name in ['', 'codex', 'claude', 'home']:
+                self.assertEqual((state / name).stat().st_mode & 0o777, 0o700, name)
+            run.assert_called_once_with(['npm', 'ci', '--prefix', str(state / package_name / 'bridge/claude'),
+                                         '--ignore-scripts', '--no-audit', '--no-fund'], check=True)
+
     def test_missing_invalid_expired_and_api_credentials_fail_without_login(self):
         import base64
         encode=lambda x: base64.urlsafe_b64encode(json.dumps(x).encode()).decode().rstrip('=')
