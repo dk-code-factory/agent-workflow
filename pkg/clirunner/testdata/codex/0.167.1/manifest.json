@@ -1,5 +1,5 @@
 {
-  "provider": "codex-cli 0.167.0",
+  "provider": "codex-cli 0.167.1",
   "source": "upstream CLI generate-json-schema --experimental",
   "documentation": "https://learn.chatgpt.com/docs/app-server",
   "bundle_sha256": "b86a3bfa0010a6d08cceb16bad190f4df8a2a77c385aaa6f8cecfb621e1669b0",

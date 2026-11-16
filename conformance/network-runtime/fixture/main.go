@@ -130,7 +130,7 @@ func run() error {
 			}
 			switch f.Method {
 			case "initialize":
-				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.167.0 (fixture)"}})
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.167.1 (fixture)"}})
 			case "account/login/start":
 				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{}})
 			case "thread/start", "thread/resume":

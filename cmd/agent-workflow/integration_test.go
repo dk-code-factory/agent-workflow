@@ -40,11 +40,11 @@ func TestRunAndStatusWithNativeCodexTasks(t *testing.T) {
 	path := filepath.Join(root, "fake-codex")
 	fake := `#!/usr/bin/env python3
 import json,sys
-if '--version' in sys.argv: print('codex-cli 0.167.0'); sys.exit(0)
+if '--version' in sys.argv: print('codex-cli 0.167.1'); sys.exit(0)
 for line in sys.stdin:
     f=json.loads(line); method=f.get('method'); i=f.get('id')
     def send(x): print(json.dumps(x),flush=True)
-    if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.0 (fixture)'}})
+    if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.1 (fixture)'}})
     elif method in ('account/login/start','turn/interrupt'): send({'id':i,'result':{}})
     elif method in ('thread/start','thread/resume'): send({'id':i,'result':{'thread':{'id':'fixture-thread'}}})
     elif method=='turn/start':

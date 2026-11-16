@@ -51,7 +51,7 @@ func TestDirectSmokeRoutesCLIProvidersWithoutNativeTasks(t *testing.T) {
 			version := "2.1.323"
 			if provider == "codex-cli" {
 				payload = "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"CONFORMANCE_OK\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}"
-				version = "codex-cli 0.167.0"
+				version = "codex-cli 0.167.1"
 			}
 			script := "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '" + version + "';exit;fi\ncat >/dev/null\nprintf '%s\\n' '" + payload + "'\n"
 			if err := os.WriteFile(command, []byte(script), 0700); err != nil {
@@ -188,16 +188,16 @@ func TestFixtureControllerNestedWorkersAtCapacityOne(t *testing.T) {
 	if err := os.MkdirAll(metadata, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(metadata, "package.json"), []byte(`{"version":"0.3.319"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(metadata, "package.json"), []byte(`{"version":"0.3.322"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	script := `
 import readline from 'node:readline';
 const emit=x=>process.stdout.write(JSON.stringify({version:2,...x})+'\n');
 let prompt='';
-const finish=()=>{emit({type:'result',session_id:'fixture',status:'succeeded',provider_version:'claude-agent-sdk@0.3.319',outputs:{text:'CONFORMANCE_OK',usage:{input_tokens:2,output_tokens:1}}});process.exit(0)};
+const finish=()=>{emit({type:'result',session_id:'fixture',status:'succeeded',provider_version:'claude-agent-sdk@0.3.322',outputs:{text:'CONFORMANCE_OK',usage:{input_tokens:2,output_tokens:1}}});process.exit(0)};
 const call=(id,tool,args)=>{emit({type:'tool_request',call_id:id,server:'engine',tool,arguments:args});emit({type:'blocked',call_ids:[id]})};
-emit({type:'hello',provider_version:'claude-agent-sdk@0.3.319'});
+emit({type:'hello',provider_version:'claude-agent-sdk@0.3.322'});
 for await(const line of readline.createInterface({input:process.stdin})){
  const f=JSON.parse(line);
  if(f.type==='turn_start'){

@@ -1,7 +1,7 @@
 {
   "go_toolchain": "go1.27.3",
-  "claude_sdk": "0.3.319",
-  "codex_cli": "0.167.0",
+  "claude_sdk": "0.3.322",
+  "codex_cli": "0.167.1",
   "guardian_protocol": "1",
   "bridge_protocol": "2",
   "go_image": "docker.io/library/golang@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0",
