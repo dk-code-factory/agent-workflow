@@ -32,9 +32,9 @@ class CertificationTests(unittest.TestCase):
                 continue
             scenario = json.loads((e2e.ROOT / 'conformance/scenarios' / (row['scenario']+'.json')).read_text())
             provider = row['provider']
-            versions = {provider: 'claude-agent-sdk@0.3.319' if provider == 'claude-sdk' else 'codex-cli 0.167.0' if provider.startswith('codex') else '2.1.323 (Claude Code)'}
+            versions = {provider: 'claude-agent-sdk@0.3.322' if provider == 'claude-sdk' else 'codex-cli 0.167.1' if provider.startswith('codex') else '2.1.323 (Claude Code)'}
             if row['scenario'].startswith('mixed-development-'):
-                versions['codex-app-server'] = 'codex_cli_rs/0.167.0 (Linux 6.11.0; x86_64)'
+                versions['codex-app-server'] = 'codex_cli_rs/0.167.1 (Linux 6.11.0; x86_64)'
             record = dict(row, engine={'commit': self.commit, 'source_fingerprint': self.fingerprint, 'version': self.policy['version'], 'dirty': 'false'},
                           assertions={a: True for a in scenario['assertions']}, provider_versions=versions,
                           invocations=[{'id': 'invocation-'+p, 'provider': p, 'version': v} for p,v in versions.items()],

@@ -12,18 +12,22 @@ import (
 )
 
 func TestPinnedCodexProtocolFixtures(t *testing.T) {
-	root := filepath.Join("testdata", "codex", "0.167.0")
+	root := filepath.Join("testdata", "codex", CodexProtocolVersion)
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var manifest struct {
-		Files   map[string]string `json:"files"`
-		Managed bool              `json:"managed_policy_certified"`
-		Live    bool              `json:"live_provider_verified"`
+		Provider string            `json:"provider"`
+		Files    map[string]string `json:"files"`
+		Managed  bool              `json:"managed_policy_certified"`
+		Live     bool              `json:"live_provider_verified"`
 	}
 	if err = json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
+	}
+	if manifest.Provider != "codex-cli "+CodexProtocolVersion {
+		t.Fatalf("protocol fixtures identify %q, expected pinned upstream %s", manifest.Provider, CodexProtocolVersion)
 	}
 	if manifest.Managed || manifest.Live {
 		t.Fatal("schema generation is not provider or managed-policy certification")

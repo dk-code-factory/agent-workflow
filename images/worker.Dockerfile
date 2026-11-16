@@ -39,8 +39,8 @@ RUN xargs apk add --no-cache --upgrade < /tmp/runtime-packages.txt && \
 COPY --from=dependencies /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 LABEL agent-workflow.guardian-protocol="1" \
       agent-workflow.bridge-protocol="2" \
-      agent-workflow.claude-sdk="0.3.319" \
-      agent-workflow.codex-cli="0.167.0" \
+      agent-workflow.claude-sdk="0.3.322" \
+      agent-workflow.codex-cli="0.167.1" \
       agent-workflow.npm-cli="12.2.2"
 COPY --from=guardian /guardian /usr/local/bin/agent-workflow-guardian
 COPY --from=go-runtime /usr/local/go /usr/local/go

@@ -86,7 +86,7 @@ const evidence = { runtime: name, checks: [], browserRequests: 0 };
 try {
   for (const [output, source] of [[runtime, './cmd/agent-workflow-runtime'], [workflow, './cmd/agent-workflow'], [fixture, './conformance/network-runtime/fixture'], [join(dir, 'guardian'), './cmd/agent-workflow-guardian']]) run('go', ['build', '-o', output, source], { env: { ...process.env, CGO_ENABLED: '0' } });
   // Host CA bundle is fixture content, not an agent home or credential store.
-  writeFileSync(join(dir, 'Containerfile'), 'FROM scratch\nCOPY fixture /fixture\nCOPY guardian /usr/local/bin/agent-workflow-guardian\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nLABEL agent-workflow.guardian-protocol="1" agent-workflow.codex-cli="0.167.0"\nENTRYPOINT ["/fixture"]\n');
+  writeFileSync(join(dir, 'Containerfile'), 'FROM scratch\nCOPY fixture /fixture\nCOPY guardian /usr/local/bin/agent-workflow-guardian\nCOPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\nLABEL agent-workflow.guardian-protocol="1" agent-workflow.codex-cli="0.167.1"\nENTRYPOINT ["/fixture"]\n');
   writeFileSync(join(dir, 'ca-certificates.crt'), readFileSync('/etc/ssl/certs/ca-certificates.crt'));
   image = run('sudo', ['-n', 'podman', 'build', '--network=none', '--pull=never', '-q', '-t', 'localhost/' + name, dir]);
   assert.match(image, /^[a-f0-9]{64}$/); image = 'sha256:' + image;
@@ -209,7 +209,7 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   writeFileSync(join(dir, 'agents.yml'), `execution:\n  network-runtime: ${name}\nagents:\n  fixture:\n    provider: codex-cli\n    command: ${fixture}\n    sandbox: read-only\n`);
   const codexWrapper = join(dir, 'fake-codex');
   const shellFixture = "'" + fixture.replaceAll("'", "'\\''") + "'";
-  writeFileSync(codexWrapper, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.167.0'; exit 0; fi\nexec ${shellFixture} app-server\n`, { mode: 0o700 });
+  writeFileSync(codexWrapper, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.167.1'; exit 0; fi\nexec ${shellFixture} app-server\n`, { mode: 0o700 });
   appendFileSync(join(dir, 'agents.yml'), `  codex:\n    provider: codex-app-server\n    command: ${codexWrapper}\n    authentication: {mode: api-key, credential-env: AW21_FIXTURE_KEY}\n`);
   writeFileSync(join(dir, 'workflows/fixture.toml'), "name='fixture'\ndescription='Disposable network fixture'\ndeveloper_instructions='Execute the disposable fixture.'\n");
   writeFileSync(join(dir, 'workflows/local.yml'), `on: {workflow_call: {}}\njobs:\n  test:\n    steps:\n      - id: command\n        argv: [${JSON.stringify(fixture)}, network, ${name}-command]\n      - id: agent\n        uses: agent/run\n        with:\n          agent: fixture.toml\n          prompt: ${name}-agent\n`);
