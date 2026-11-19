@@ -33,15 +33,16 @@ const (
 // ActionContext identifies a physical attempt and a stable logical operation.
 // OperationKey is unchanged by resume, reconciliation, or a new attempt.
 type ActionContext struct {
-	CredentialRefs string `json:"credential_refs,omitempty"`
-	RunID          string `json:"run_id"`
-	JobID          string `json:"job_id"`
-	StepID         string `json:"step_id"`
-	Iteration      int    `json:"iteration"`
-	AttemptID      string `json:"attempt_id"`
-	Attempt        int    `json:"attempt"`
-	Generation     int64  `json:"generation"`
-	OperationKey   string `json:"operation_key"`
+	ExecutionFingerprint string `json:"execution_fingerprint,omitempty"`
+	CredentialRefs       string `json:"credential_refs,omitempty"`
+	RunID                string `json:"run_id"`
+	JobID                string `json:"job_id"`
+	StepID               string `json:"step_id"`
+	Iteration            int    `json:"iteration"`
+	AttemptID            string `json:"attempt_id"`
+	Attempt              int    `json:"attempt"`
+	Generation           int64  `json:"generation"`
+	OperationKey         string `json:"operation_key"`
 }
 
 type ActionResult[O any] struct {

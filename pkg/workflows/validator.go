@@ -42,11 +42,11 @@ func Validate(w *Workflow) error {
 		if job.RunsOn != "" && job.RunsOn != "local" {
 			return fmt.Errorf("job %s: unsupported runner %q; only runs-on: local is supported", id, job.RunsOn)
 		}
-		if job.Repeat != nil && (job.Repeat.MaxAttempts < 1 || job.Repeat.MaxAttempts > 100 || strings.TrimSpace(job.Repeat.Until) == "") {
+		if job.Repeat != nil && ((job.Repeat.MaxAttemptsExpression == "" && (job.Repeat.MaxAttempts < 1 || job.Repeat.MaxAttempts > 100)) || (job.Repeat.MaxAttemptsExpression != "" && !wholeExpression(job.Repeat.MaxAttemptsExpression)) || strings.TrimSpace(job.Repeat.Until) == "") {
 			return fmt.Errorf("job %s: repeat requires max-attempts between 1 and 100 and until", id)
 		}
 		if job.ForEach != nil {
-			if job.ForEach.Concurrency != nil && *job.ForEach.Concurrency < 1 {
+			if job.ForEach.ConcurrencyExpression != "" && !wholeExpression(job.ForEach.ConcurrencyExpression) || job.ForEach.Concurrency != nil && *job.ForEach.Concurrency < 1 {
 				return fmt.Errorf("job %s: for-each.concurrency must be a positive integer", id)
 			}
 			if job.Uses == "" || job.Repeat != nil || strings.TrimSpace(job.ForEach.Key) == "" {
@@ -299,7 +299,7 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 				}
 			}
 		}
-		if _, err := agentTaskTurns(step.With["turns"]); err != nil {
+		if _, err := agentTaskTurns(step.With["turns"]); err != nil && !isWholeExpressionValue(step.With["turns"]) {
 			return fmt.Errorf("step %s: %w", sid, err)
 		}
 		if step.With["prompt"] == nil && step.With["message"] == nil {

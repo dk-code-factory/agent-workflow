@@ -8,6 +8,7 @@ export function diagnosticLabel(value: string | number): string {
   return text.length > 80 ? text.slice(0, 77) + '…' : text;
 }
 
+const wholeExpressionValue = (value: unknown): value is string => typeof value === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(value);
 export const identifier = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 export const controllerParameters: Record<string, string[]> = {
   'workspace/create': ['commit', 'independent'], 'workspace/snapshot': ['commit'],
@@ -108,7 +109,7 @@ function runnerInteger(value: unknown, source?: string): number | undefined {
   return Math.trunc(value) || 0;
 }
 
-type Shape = 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | 'container' | { [key: string]: Shape } | [Shape];
+type Shape = 'integer-expression' | 'strict-integer-expression' | 'strict-string' | 'strict-integer' | 'string' | 'boolean' | 'integer' | 'any' | 'list' | 'container' | { [key: string]: Shape } | [Shape];
 const context: Shape = { session: 'string', delivery: 'string' };
 const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
@@ -135,8 +136,8 @@ const schema: Shape = {
   jobs: { '*': {
     container: 'container', name: 'string', 'runs-on': 'string', needs: 'list', uses: 'string', if: 'string', 'continue-on-error': 'boolean',
     with: { '*': 'any' }, secrets: 'any', outputs: { '*': 'string' }, context,
-    repeat: { 'max-attempts': 'integer', until: 'string' },
-    'for-each': { items: 'any', key: 'string', concurrency: 'strict-integer' },
+    repeat: { 'max-attempts': 'integer-expression', until: 'string' },
+    'for-each': { items: 'any', key: 'string', concurrency: 'strict-integer-expression' },
     steps: [stepShape],
   } },
 };
@@ -266,10 +267,12 @@ export function parseWorkflow(source: string): Parsed {
               if (node.tag) node.tag = 'tag:yaml.org,2002:bool';
             }
           }
+        } else if (shape.endsWith('-expression') && wholeExpressionValue(value)) {
+          valid = true;
         } else {
           const node = doc!.getIn(path, true);
-          const exact = shape === 'strict-integer' ? runnerStrictInteger(isNode(node) ? node : undefined) : undefined;
-          const decoded = shape === 'strict-integer' ? exact === undefined ? undefined : Number(exact)
+          const exact = shape.startsWith('strict-integer') ? runnerStrictInteger(isNode(node) ? node : undefined) : undefined;
+          const decoded = shape.startsWith('strict-integer') ? exact === undefined ? undefined : Number(exact)
             : runnerInteger(value, isScalar(node) ? node.source : undefined);
           valid = decoded !== undefined;
           if (valid) {
@@ -370,17 +373,17 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
     if (!identifier.test(id)) add('identifier', 'Invalid job ID', p);
     if (job['runs-on'] && job['runs-on'] !== 'local') add('standalone', 'Only runs-on: local is supported', [...p, 'runs-on']);
     if (mapping(job.context) && Object.values(job.context).some(Boolean)) add('standalone', 'Session/delivery context requires PicoClaw', [...p, 'context']);
-    if (job.repeat && (!Number.isInteger(job.repeat['max-attempts']) || job.repeat['max-attempts'] < 1 || job.repeat['max-attempts'] > 100 || !job.repeat.until?.trim())) add('repeat', 'Repeat requires max-attempts 1–100 and until', [...p, 'repeat']);
+    if (job.repeat && ((!wholeExpressionValue(job.repeat['max-attempts']) && (typeof job.repeat['max-attempts'] !== 'number' || !Number.isInteger(job.repeat['max-attempts']) || job.repeat['max-attempts'] < 1 || job.repeat['max-attempts'] > 100)) || !job.repeat.until?.trim())) add('repeat', 'Repeat requires max-attempts 1–100 and until', [...p, 'repeat']);
     const each = job['for-each'];
     if (each) {
-      if (each.concurrency !== undefined && (!Number.isInteger(each.concurrency) || each.concurrency < 1)) add('for-each', 'for-each.concurrency must be a positive integer', [...p, 'for-each', 'concurrency']);
+      if (each.concurrency !== undefined && !wholeExpressionValue(each.concurrency) && (typeof each.concurrency !== 'number' || !Number.isInteger(each.concurrency) || each.concurrency < 1)) add('for-each', 'for-each.concurrency must be a positive integer', [...p, 'for-each', 'concurrency']);
       if (!job.uses || job.repeat || !each.key?.trim()) add('for-each', 'for-each requires a reusable workflow and key, and cannot combine with repeat', [...p, 'for-each']);
       if (!Array.isArray(each.items) && !(typeof each.items === 'string' && /^\s*\$\{\{[^}]+\}\}\s*$/.test(each.items))) add('for-each', 'for-each.items requires an array or a whole expression', [...p, 'for-each', 'items']);
       add('host-iteration', 'Ordered item identities, evidence and checkpoints require host runtime validation', [...p, 'for-each'], undefined, 'host', 'info');
     }
     if (job.container != null) {
       const image = typeof job.container === 'string' ? job.container : job.container?.image;
-      if (typeof image !== 'string' || !image.trim() || image.includes('${{')) add('container', 'Container image must be a static string', [...p, 'container']);
+      if (image !== undefined && (typeof image !== 'string' || !image.trim() || image.includes('${{'))) add('container', 'Container image must be a static string', [...p, 'container']);
       if (mapping(job.container)) for (const key of Object.keys(job.container)) if (!['image', 'files'].includes(key)) add('container', `Unsupported container field ${key}`, [...p, 'container', key]);
       if (mapping(job.container) && job.container.files != null) validateFiles(job.container.files, [...p, 'container', 'files']);
       if (job.uses) add('container', 'Reusable calls cannot declare a container', [...p, 'container']);
@@ -391,7 +394,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
     if (new Set(needs).size !== needs.length) add('duplicate-dependency', 'Duplicate dependency', [...p, 'needs'], undefined, 'browser', 'warning');
     if (job.uses) {
       const ref = job.uses.trim().replace(/^\.\//, '');
-      if (!/^workflows\/.+\.ya?ml$/i.test(ref) || ref.split('/').some(s => !s || s === '.' || s === '..')) add('workflow-ref', 'Expected a safe local workflows/*.yml or *.yaml reference', [...p, 'uses']);
+      if (!/^(?:[^/]+\/)*workflows\/.+\.ya?ml$/i.test(ref) || ref.split('/').some(s => !s || s === '.' || s === '..')) add('workflow-ref', 'Expected a safe local workflows/*.yml or *.yaml reference', [...p, 'uses']);
       if (job.steps?.length) add('job-kind', 'Reusable jobs cannot contain steps', p);
     } else {
       if (!job.steps?.length) add('steps', 'Job requires steps', [...p, 'steps']);
@@ -494,7 +497,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
           if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path or agent reference', [...sp, 'with', 'agent']);
           for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
-          if (params.turns != null) {
+          if (params.turns != null && !wholeExpressionValue(params.turns)) {
             const node = doc?.getIn([...sp, 'with', 'turns'], true);
             const allowance = runnerTaskAllowance(node);
             if (allowance === undefined || !Number.isInteger(allowance) || allowance < 1 || allowance > 2147483647) add('action', 'Agent turns must be a positive integer no greater than 2147483647', [...sp, 'with', 'turns']);

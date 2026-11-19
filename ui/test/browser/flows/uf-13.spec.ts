@@ -27,3 +27,19 @@ test('remove configured repeat through its control', async ({ page }) => {
   await ui.getByRole('button', { name: 'Remove repeat', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.repeat)).toBeUndefined();
 });
+
+test('author expression repeat limits and short-circuit conditions through controls', async ({ page }) => {
+  const { open, snapshot, field, job, downloadText } = await import('./harness');
+  const ui = await open(page, 'on: {workflow_call: {inputs: {bound: {type: number}}}}\njobs: {build: {steps: [{argv: [true]}]}}\n');
+  await job(page);
+  await ui.getByText('Repeat', { exact: true }).click();
+  await field(page, 'Maximum attempts', '${{ inputs.bound }}');
+  await field(page, 'Until', '${{ iteration.outputs.done or iteration.number == 3 and true }}');
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.build.repeat['max-attempts']).toBe('${{ inputs.bound }}');
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toBe(edited.source);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+});

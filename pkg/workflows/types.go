@@ -100,16 +100,18 @@ type Output struct {
 }
 
 type Repeat struct {
-	MaxAttempts int    `json:"max-attempts" yaml:"max-attempts"`
-	Until       string `json:"until" yaml:"until"`
+	MaxAttemptsExpression string `json:"max_attempts_expression,omitempty" yaml:"-"`
+	MaxAttempts           int    `json:"max-attempts" yaml:"max-attempts"`
+	Until                 string `json:"until" yaml:"until"`
 }
 
 // ForEach executes a reusable workflow over a pinned array, sequentially by default.
 // Key is evaluated against each item; payloads remain data.
 type ForEach struct {
-	Items       any    `json:"items" yaml:"items"`
-	Key         string `json:"key" yaml:"key"`
-	Concurrency *int   `json:"concurrency,omitempty" yaml:"concurrency,omitempty"`
+	Items                 any    `json:"items" yaml:"items"`
+	Key                   string `json:"key" yaml:"key"`
+	ConcurrencyExpression string `json:"concurrency_expression,omitempty" yaml:"-"`
+	Concurrency           *int   `json:"concurrency,omitempty" yaml:"concurrency,omitempty"`
 }
 
 type Job struct {

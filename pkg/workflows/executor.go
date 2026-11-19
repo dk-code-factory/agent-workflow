@@ -51,6 +51,7 @@ type RunStore interface {
 type Executor struct {
 	ContainerGuardianDirectory string
 	bundleOrigin               string
+	executionFingerprint       string
 	runSecrets                 map[string]string
 	Workers                    *WorkerManager
 
@@ -254,6 +255,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		if err := e.checkEffectAdmission(ctx, origin); err != nil {
 			return nil, err
 		}
+	}
+	if depth == 0 {
+		e.executionFingerprint = admittedFingerprint(all, e.Roles, req.Execution)
 	}
 	ctx = context.WithValue(ctx, definitionKey{}, ref)
 	if req.credentialAliases == nil {
@@ -520,14 +524,14 @@ func (e *Executor) executeJob(ctx context.Context, id string, job Job, inputs ma
 		return e.executeIteration(ctx, id, job, inputs, req, needs, all, slots, depth)
 	}
 	limit := 1
-	if job.Repeat != nil {
+	if job.Repeat != nil && job.Repeat.MaxAttemptsExpression == "" {
 		limit = job.Repeat.MaxAttempts
 	}
 	var history []JobIteration
 	previous := map[string]any{}
 	for iteration := 1; iteration <= limit; iteration++ {
 		req.iteration = iteration
-		result := e.executeJobOnce(ctx, id, job, inputs, req, needs, all, slots, depth, previous)
+		result := e.executeJobOnce(ctx, id, job, inputs, req, needs, all, slots, depth, previous, &limit)
 		history = append(history, JobIteration{Number: iteration, Status: result.Status, Outputs: result.Outputs, Steps: result.Steps, Error: result.Error})
 		result.Iterations = history
 		if job.Repeat == nil || result.Status != RunStatusSucceeded {
@@ -562,7 +566,7 @@ func stepsAsMap(steps map[string]StepExecution) map[string]any {
 	return m
 }
 
-func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, previous map[string]any) (out JobExecution) {
+func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow, slots chan struct{}, depth int, previous map[string]any, repeatLimit *int) (out JobExecution) {
 	out = JobExecution{ID: id, Status: RunStatusSucceeded, Steps: map[string]StepExecution{}, Outputs: map[string]any{}}
 	fail := func(err error) JobExecution {
 		if onlyError(err, ErrExternalInputCanceled) {
@@ -604,6 +608,30 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 	if !allowed {
 		out.Status = RunStatusSkipped
 		return out
+	}
+	if req.iteration == 1 && job.Repeat != nil && job.Repeat.MaxAttemptsExpression != "" {
+		// Resolve only admitted jobs, before their first body dispatch. Skipped
+		// or canceled jobs may have no dependency output or a disabled bound.
+		limit, err := resolveInteger(job.Repeat.MaxAttemptsExpression, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}, 1, 100)
+		if err == nil {
+			journal := iterationJournal(e.Store)
+			if journal == nil {
+				err = fmt.Errorf("expression repeat limits require a durable IterationJournal")
+			} else {
+				checkpoint, lookupErr := journal.IterationRun(ctx, req.runID, nativeString(req.Metadata, "iteration_logical_run_id"), "$repeat/"+id)
+				err = lookupErr
+				if err == nil {
+					err = journal.PinIteration(ctx, repeatBoundPlan(checkpoint, "$repeat/"+id, job.Repeat, limit))
+				}
+			}
+		}
+		if err != nil {
+			out.Status = RunStatusNeedsAttention
+			out.Error = err.Error()
+			out.FailureClass = classifyFailure(err)
+			return out
+		}
+		*repeatLimit = limit
 	}
 	if job.Uses != "" {
 		args, err := renderMap(job.With, ec)
@@ -813,6 +841,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 		owner = ec.RunID
 	}
 	turns, err := agentTaskTurns(args["turns"])
+	if expression, ok := step.With["turns"].(string); ok && wholeExpression(expression) {
+		turns, err = resolveInteger(expression, ec, 1, 1<<31-1)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -973,6 +1004,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		}
 	}
 	e.CommandExecution = snap.Execution
+	e.executionFingerprint = admittedFingerprint(snap.Definitions, snap.Roles, snap.Execution)
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {
 		return nil, fmt.Errorf("resume originating run %s", origin)
 	}

@@ -148,7 +148,7 @@ func checkNode(n *yaml.Node, t reflect.Type, depth int) error {
 				if n.Content[i].Value == "concurrency" {
 					value := n.Content[i+1]
 					var count int
-					if value.Tag != "!!int" || value.Decode(&count) != nil || count < 1 {
+					if !(value.Tag == "!!str" && wholeExpression(value.Value)) && (value.Tag != "!!int" || value.Decode(&count) != nil || count < 1) {
 						return fmt.Errorf("for-each.concurrency must be a positive integer")
 					}
 				}

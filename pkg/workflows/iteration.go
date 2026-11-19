@@ -105,7 +105,21 @@ func (e *Executor) iterationPlan(id string, job Job, inputs map[string]any, req 
 	if err = decodeJSONWithNumbers(b, &items); err != nil {
 		return IterationPlan{}, fmt.Errorf("for-each.items must return an array: %w", err)
 	}
+	concurrency := 1
+	if job.ForEach.Concurrency != nil {
+		concurrency = *job.ForEach.Concurrency
+	}
+	if job.ForEach.ConcurrencyExpression != "" {
+		var err error
+		concurrency, err = resolveInteger(job.ForEach.ConcurrencyExpression, ec, 1, int(^uint(0)>>1))
+		if err != nil {
+			return IterationPlan{}, fmt.Errorf("for-each.concurrency: %w", err)
+		}
+	}
 	p := IterationPlan{RunID: req.runID, JobID: id, Items: []IterationPlanItem{}}
+	if job.ForEach.ConcurrencyExpression != "" {
+		p.ResolvedBound = concurrency
+	}
 	seen := map[string]bool{}
 	for i, item := range items {
 		ec.Item = item
@@ -150,6 +164,9 @@ func (e *Executor) iterationPlan(id string, job Job, inputs map[string]any, req 
 	metadata, _ := cloneJSONValue(req.Metadata).(map[string]any)
 	delete(metadata, "iteration_ancestors")
 	p.Fingerprint = actionHash([]any{p.Items, job, all, contracts, e.Roles, event, metadata, req.Execution})
+	if p.ResolvedBound != 0 {
+		p.Fingerprint = actionHash([]any{p.Fingerprint, p.ResolvedBound})
+	}
 	// Identity data must be persisted exactly, never with substituted secrets.
 	b, err = actionJSON(p)
 	if err == nil {
@@ -269,6 +286,9 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 	concurrency := 1
 	if job.ForEach.Concurrency != nil {
 		concurrency = *job.ForEach.Concurrency
+	}
+	if p.ResolvedBound != 0 {
+		concurrency = p.ResolvedBound
 	}
 	if concurrency < 1 {
 		return fail(fmt.Errorf("for-each.concurrency must be a positive integer"))
@@ -727,7 +747,7 @@ func jobsValue(jobs map[string]JobExecution) map[string]any {
 // shortcut. Traverse physical children so nested plans and result fingerprints
 // receive the same checks as a top-level iteration.
 func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap Snapshot, secrets map[string]string) error {
-	if !hasOrderedIteration(snap.Definitions) {
+	if !hasOrderedIteration(snap.Definitions) && !hasExpressionRepeat(snap.Definitions) {
 		return nil
 	}
 	j := iterationJournal(e.Store)
@@ -763,6 +783,26 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 				}
 			}
 			ec := expressionContext{Inputs: inputs, Secrets: credentials, Event: s.Event, Needs: needs}
+			if job.Repeat != nil && job.Repeat.MaxAttemptsExpression != "" {
+				checkpoint, err := j.IterationRun(ctx, r.ID, nativeString(s.Metadata, "iteration_logical_run_id"), "$repeat/"+id)
+				if err != nil {
+					return err
+				}
+				pinned, err := j.IterationPlan(ctx, checkpoint, "$repeat/"+id)
+				if err == nil {
+					bound, resolveErr := resolveInteger(job.Repeat.MaxAttemptsExpression, ec, 1, 100)
+					if resolveErr != nil {
+						return resolveErr
+					}
+					if actionHash(pinned) != actionHash(repeatBoundPlan(checkpoint, "$repeat/"+id, job.Repeat, bound)) {
+						return fmt.Errorf("%w: retained repeat bound changed for %s", ErrActionIntegrity, id)
+					}
+				} else if !errors.Is(err, sql.ErrNoRows) {
+					return err
+				} else if result := r.Jobs[id]; result.Status == RunStatusSucceeded || len(result.Steps) > 0 || result.ChildRunID != "" {
+					return fmt.Errorf("%w: retained repeat bound missing for %s", ErrActionIntegrity, id)
+				}
+			}
 			if job.ForEach != nil {
 				checkpoint, err := j.IterationRun(ctx, r.ID, nativeString(s.Metadata, "iteration_logical_run_id"), id)
 				if err != nil {
@@ -824,11 +864,17 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 					hash := sha256.Sum256([]byte(r.ID + "/" + id + fmt.Sprint(iteration.Number)))
 					childID := hex.EncodeToString(hash[:16])
 					child, childSnap, err := j.Load(ctx, childID)
-					if errors.Is(err, sql.ErrNoRows) && iteration.Status == RunStatusSkipped {
+					result := r.Jobs[id]
+					// A terminal failure can occur while rendering the call, before
+					// child admission. Returned children always retain ChildRunID.
+					failedBeforeAdmission := iteration.Status == RunStatusFailed && result.Status == RunStatusFailed &&
+						len(result.ChildJobs) == 0 && len(result.Outputs) == 0 && len(result.Steps) == 0 && len(iteration.Outputs) == 0
+					notAdmitted := (iteration.Status == RunStatusCanceled || iteration.Status == RunStatusInterrupted || failedBeforeAdmission) && iteration.Number == len(result.Iterations) && result.ChildRunID == "" && len(iteration.Steps) == 0
+					if errors.Is(err, sql.ErrNoRows) && (iteration.Status == RunStatusSkipped || notAdmitted) {
 						continue
 					}
 					if err != nil {
-						return err
+						return fmt.Errorf("recover reusable %s/%s iteration %d (%s): %w", r.ID, id, iteration.Number, iteration.Status, err)
 					}
 					ec.Iteration = map[string]any{"number": iteration.Number}
 					childSecrets, err := callSecrets(job.Secrets, credentials, ec)

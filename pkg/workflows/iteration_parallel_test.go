@@ -346,7 +346,7 @@ func TestParallelIterationRestartKeepsCompletedAndGuardsInterrupted(t *testing.T
 }
 
 func TestParallelIterationConcurrencyValidationAndPinning(t *testing.T) {
-	for _, value := range []string{"0", "-1", "1.5", "1.0", "true", "null", "'2'", "'${{ inputs.bound }}'", "9223372036854775808"} {
+	for _, value := range []string{"0", "-1", "1.5", "1.0", "true", "null", "'2'", "9223372036854775808"} {
 		t.Run(value, func(t *testing.T) {
 			source := "jobs: {review: {uses: workflows/child.yml, for-each: {items: [], key: item.id, concurrency: " + value + "}}}"
 			w, err := Parse([]byte(source))

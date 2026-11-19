@@ -133,7 +133,19 @@ func evalIf(expr string, ctx expressionContext) (bool, error) {
 
 func evalExpression(expr string, ctx expressionContext) (any, error) {
 	expr = strings.TrimSpace(expr)
-	if terms, ok := splitExpressionLogicalAND(expr); ok {
+	if terms, ok := splitExpressionLogical(expr, " or "); ok {
+		for _, term := range terms {
+			value, err := evalExpression(term, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if truthy(value) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	if terms, ok := splitExpressionLogical(expr, " and "); ok {
 		for _, term := range terms {
 			value, err := evalExpression(term, ctx)
 			if err != nil {
@@ -185,12 +197,9 @@ func evalExpression(expr string, ctx expressionContext) (any, error) {
 	return lookupPath(expr, ctx)
 }
 
-// splitExpressionLogicalAND recognizes the deliberately small additive AND
-// grammar without treating literal text inside quoted operands as syntax.
-// Parentheses and OR remain unsupported, keeping evaluation bounded and
-// preserving the existing comparison/not grammar.
-func splitExpressionLogicalAND(expression string) ([]string, bool) {
-	const operator = " and "
+// splitExpressionLogical ignores operators inside quoted operands. Splitting OR
+// before AND gives AND precedence, and evaluation short-circuits both operators.
+func splitExpressionLogical(expression, operator string) ([]string, bool) {
 	var (
 		parts   []string
 		start   int

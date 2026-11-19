@@ -84,6 +84,16 @@ func validateResultReferences(w *Workflow) error {
 				return err
 			}
 		}
+		if job.Repeat != nil {
+			if err := check(job.Repeat.MaxAttemptsExpression, prefix+".repeat.max-attempts", id, nil, false); err != nil {
+				return err
+			}
+		}
+		if job.ForEach != nil {
+			if err := check(job.ForEach.ConcurrencyExpression, prefix+".for-each.concurrency", id, nil, false); err != nil {
+				return err
+			}
+		}
 		var handlers func([]Step, map[string]bool, string) error
 		handlers = func(steps []Step, inherited map[string]bool, path string) error {
 			local := copyStepScope(inherited)
@@ -300,7 +310,7 @@ func walkResultExpression(expression string, check func([]string) error) error {
 				quote = 2
 			}
 			boundaries = append(boundaries, boundary{offset, quote, backslashes%2 == 1})
-		case character == ' ' && strings.HasPrefix(expression[offset:], " and "):
+		case character == ' ' && (strings.HasPrefix(expression[offset:], " and ") || strings.HasPrefix(expression[offset:], " or ")):
 			boundaries = append(boundaries, boundary{offset: offset})
 		}
 		if character == '\\' {
@@ -347,6 +357,9 @@ func walkResultExpression(expression string, check func([]string) error) error {
 			boundaryIndex := sort.Search(len(boundaries), func(index int) bool { return boundaries[index].offset >= item.start })
 			found := nextAnd[0][boundaryIndex]
 			width := 5
+			if found >= 0 && strings.HasPrefix(expression[found:], " or ") {
+				width = 4
+			}
 			if found < item.start || found+width > item.end {
 				found = -1
 				for index, offsets := range positions {

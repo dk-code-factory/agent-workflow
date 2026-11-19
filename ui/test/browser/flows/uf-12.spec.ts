@@ -98,3 +98,16 @@ for (const bound of ['9007199254740993', '9223372036854775807', '!!int 0b10', '!
     expect((await snapshot(page)).source).toBe(result.source);
   });
 }
+
+test('retain expression concurrency on nested workflow calls', async ({ page }) => {
+  const source = 'on: {workflow_call: {inputs: {bound: {type: number}}}}\njobs:\n  review:\n    uses: examples/pr-fix/workflows/task.yml\n    for-each: {items: [], key: item.id, concurrency: "${{ inputs.bound }}"}\n';
+  const ui = await open(page, source);
+  await job(page, 'review');
+  await field(page, 'Name', 'Parallel reviews');
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.review['for-each'].concurrency).toBe('${{ inputs.bound }}');
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toBe(edited.source);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+});

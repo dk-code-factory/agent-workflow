@@ -234,3 +234,21 @@ for (const editor of ['parameters', 'parallel', 'sequence']) {
     expect((await snapshot(page)).source).toBe(edited.source);
   });
 }
+
+test('inherit configured image without dropping helper files and retain expression turns', async ({ page }) => {
+  const source = 'on: {workflow_call: {inputs: {turns: {type: number}}}}\njobs:\n  build:\n    container: {image: tools:latest, files: [helpers/]}\n    steps: [{argv: [true]}]\n  review:\n    steps: [{id: native, uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: 8}}]\n';
+  const ui = await open(page, source);
+  await job(page);
+  await field(page, 'Job container image', '');
+  expect((await snapshot(page)).workflow.jobs.build.container).toEqual({ files: ['helpers/'] });
+  await job(page, 'review');
+  await ui.getByRole('button', { name: '1. native', exact: true }).click();
+  await field(page, 'Agent turn allowance', '${{ inputs.turns }}');
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.review.steps[0].with.turns).toBe('${{ inputs.turns }}');
+  expect(edited.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect(await downloadText(page)).toBe(edited.source);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+});

@@ -19,8 +19,9 @@ import (
 const GitHubContainersV1 = "github-containers-v1"
 
 type JobContainer struct {
+	ImageExplicit  bool                     `json:"image_explicit,omitempty" yaml:"-"`
 	Files          []string                 `json:"files,omitempty" yaml:"files,omitempty"`
-	Image          string                   `json:"image" yaml:"image"`
+	Image          string                   `json:"image" yaml:"image,omitempty"`
 	Implementation *ContainerImplementation `json:"implementation,omitempty" yaml:"-"`
 }
 type ContainerImplementation struct {
@@ -37,8 +38,14 @@ func (c *JobContainer) UnmarshalYAML(n *yaml.Node) error {
 		if n.Tag != "!!str" {
 			return fmt.Errorf("container requires an image string or mapping")
 		}
+		c.ImageExplicit = true
 		c.Image = n.Value
 		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "image" {
+			c.ImageExplicit = true
+		}
 	}
 	type plain JobContainer
 	return n.Decode((*plain)(c))
@@ -148,7 +155,7 @@ func validateJobContainer(w *Workflow, id string, j Job) error {
 		}
 	}
 	if j.Container != nil {
-		if !staticContainerValue(j.Container.Image) {
+		if (j.Container.Image != "" || j.Container.ImageExplicit) && !staticContainerValue(j.Container.Image) {
 			return fmt.Errorf("job %s: container.image must be a static image", id)
 		}
 		if j.Uses != "" {
@@ -214,6 +221,12 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 			return retained, nil
 		}
 		policy := e.CommandExecution
+		if image == "" {
+			if policy.Mode != "container" || !staticContainerValue(policy.Image) {
+				return nil, fmt.Errorf("omitted container.image requires a configured container execution image")
+			}
+			image = policy.Image
+		}
 		policy.Mode = "container"
 		policy.Image = image
 		if policy.Runtime == "" {

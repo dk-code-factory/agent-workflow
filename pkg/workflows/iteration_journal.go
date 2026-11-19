@@ -11,10 +11,11 @@ import (
 // IterationPlan is immutable. Fingerprint binds order, payloads, resolved call
 // inputs, the concurrency bound, admitted definition closure, roles, and action contracts.
 type IterationPlan struct {
-	RunID       string              `json:"run_id"`
-	JobID       string              `json:"job_id"`
-	Fingerprint string              `json:"fingerprint"`
-	Items       []IterationPlanItem `json:"items"`
+	ResolvedBound int                 `json:"resolved_bound,omitempty"`
+	RunID         string              `json:"run_id"`
+	JobID         string              `json:"job_id"`
+	Fingerprint   string              `json:"fingerprint"`
+	Items         []IterationPlanItem `json:"items"`
 }
 type IterationPlanItem struct {
 	Key    string         `json:"key"`
