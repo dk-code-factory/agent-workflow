@@ -1,4 +1,4 @@
-# Checked-in orchestration; helpers validate data and retain evidence.
+# Bounded CI observation chunk with a retained absolute deadline.
 name: Bounded CI observation chunk
 'on':
   workflow_call:
@@ -6,9 +6,6 @@ name: Bounded CI observation chunk
       plan:
         type: string
         required: true
-      turns:
-        type: number
-        default: 8
     secrets:
       github_token:
         required: true
@@ -19,12 +16,36 @@ name: Bounded CI observation chunk
         value: ${{ jobs.observe.outputs.failed }}
 jobs:
   observe:
-    uses: examples/pr-fix/workflows/ci.yml
-    with:
-      plan: ${{ inputs.plan }}
-      turns: ${{ inputs.turns }}
-    secrets:
-      github_token: ${{ secrets.github_token }}
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - ci
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: ci
+    - id: delay
+      if: ${{ steps.ci.outputs.pending }}
+      argv:
+      - sleep
+      - '10'
+    outputs:
+      settled: ${{ steps.ci.outputs.pending != true }}
+      failed: ${{ steps.ci.outputs.failed }}
     repeat:
       max-attempts: 100
       until: ${{ iteration.outputs.settled or iteration.number == 100 }}

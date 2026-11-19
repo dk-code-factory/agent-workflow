@@ -6,7 +6,7 @@ from pathlib import Path
 
 from prfix import app
 from prfix.core import (MAX_JSON, FORMAT, Ledger, artifact, bounded_json,
-                        canonical, digest, read_artifact)
+                        canonical, digest, read_artifact, text)
 from prfix.capture import GitHub
 
 
@@ -92,6 +92,13 @@ def handle(operation, request, root=None, provider=None):
     root = Path(root or Path.cwd()).resolve(strict=True)
     if request.get("protocol") != "action-v1" or request.get("phase") not in {"bindings", "execute", "validate_checkpoint", "reconcile"}:
         raise ValueError("unsupported helper protocol/phase")
+    if operation == "invoke":
+        envelope = request.get("input")
+        if (not isinstance(envelope, dict) or set(envelope) != {"operation", "payload"}
+                or not isinstance(envelope["payload"], dict)):
+            raise ValueError("helper envelope requires an operation and one object payload")
+        operation = text(envelope["operation"], "helper operation")
+        request = {**request, "input": envelope["payload"]}
     phase = request["phase"]
     if operation in {"snapshot_request", "prepare"}:
         from prfix.preparation import handle as preparation

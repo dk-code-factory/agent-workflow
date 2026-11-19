@@ -9,7 +9,7 @@ import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix import core
-from prfix.prepare import prepare
+from prfix.prepare import prepare, TASK_ALIASES
 from prepared_fixture import DEFAULT_ADAPTERS
 from test_capture import Fixture, PR, git
 
@@ -88,6 +88,55 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual([g["concurrency"] for g in result["stages"][0]["groups"]], [2, 1])
         self.assertEqual([t["definition"] for t in plan["tasks"]], ["reviewer"] * 3 + ["verifier", "fixer"])
         self.assertFalse(any("uses" in stage or "jobs" in stage for stage in result["stages"]))
+
+    def test_named_tasks_and_explicit_stages_preserve_legacy_selections(self):
+        adapters = {TASK_ALIASES[key]: value for key, value in DEFAULT_ADAPTERS.items()}
+        adapters["review"] = {"kind": "review", "definition": "reviewer", "assignment": "Inspect sources"}
+        controls = {"tasks": ["read-feedback", {"stage": "publication"},
+                              {"stage": "reviews", "reviewers": [["review", "review"]]}],
+                    "finalizers": [{"stage": "ci"}], "adapters": adapters}
+        result, plan = self.prepare(controls=controls)
+        legacy, old_plan = self.prepare(controls={**controls,
+            "tasks": [{"skill": "dk-workflows:dk-pr-feedback-read"}, "dk-workflows:dk-pr-publish",
+                      {"skill": "dk-workflows:dk-pr-reviewers-run", "options": {"reviewers": [["local:review", "local:review"]]}}],
+            "finalizers": ["dk-workflows:dk-ci"]})
+        self.assertEqual(result["stages"], legacy["stages"])
+        self.assertEqual([{k: v for k, v in task.items() if k != "skill"} for task in plan["tasks"]],
+                         [{k: v for k, v in task.items() if k != "skill"} for task in old_plan["tasks"]])
+
+    def test_explicit_legacy_adapter_overrides_alias_fallback(self):
+        old = "dk-workflows:dk-pr-feedback-read"
+        _, plan = self.prepare(controls={"tasks": [old], "adapters": {
+            "read-feedback": {"assignment": "Default assignment"},
+            old: {"assignment": "Retain exact custom legacy assignment"}}})
+        self.assertEqual(plan["tasks"][0]["assignment"].strip(), "Retain exact custom legacy assignment")
+
+    def test_named_defaults_accept_legacy_adapter_maps(self):
+        for legacy, adapter in DEFAULT_ADAPTERS.items():
+            with self.subTest(legacy=legacy):
+                _, plan = self.prepare(controls={"tasks": [TASK_ALIASES[legacy]], "adapters": DEFAULT_ADAPTERS})
+                self.assertEqual(plan["tasks"][0]["assignment"].strip(), adapter["assignment"])
+        _, plan = self.prepare(controls={"tasks": [{"stage": "reviews"}], "reviewers": ["review"],
+            "adapters": {"local:review": {"kind": "review", "assignment": "Retain custom reviewer"}}})
+        self.assertEqual(plan["tasks"][0]["assignment"].strip(), "Retain custom reviewer")
+
+    def test_exact_named_adapter_overrides_legacy_fallback(self):
+        _, plan = self.prepare(controls={"tasks": ["read-feedback"], "adapters": {
+            "read-feedback": {"assignment": "Exact named assignment"},
+            "dk-workflows:dk-pr-feedback-read": {"assignment": "Legacy fallback"}}})
+        self.assertEqual(plan["tasks"][0]["assignment"].strip(), "Exact named assignment")
+
+    def test_explicit_stage_controls_and_parallel_barriers_are_validated(self):
+        for call in ({"stage": "unknown"}, {"stage": []}, {"task": "read-feedback", "stage": "ci"},
+                     {"stage": "ci", "instructions": "ignored"}, {"stage": "publication", "required": False},
+                     {"stage": "ci", "reviewers": []}, {"stage": "reviews", "options": {}},
+                     {"task": "read-feedback", "skill": "read-feedback"}):
+            with self.subTest(call=call), self.assertRaises(ValueError):
+                self.prepare(controls={"tasks": [call]})
+        with self.assertRaisesRegex(ValueError, "parallel group"):
+            self.prepare(controls={"tasks": [[{"stage": "ci"}, "dk-workflows:dk-pr-feedback-read"]]})
+        with self.assertRaisesRegex(ValueError, "read-only review adapters"):
+            self.prepare(controls={"tasks": [{"stage": "reviews", "reviewers": [{"stage": "ci"}]}]})
 
     def test_managed_stages_preserve_outer_settings_and_resources(self):
         controls = {"tasks": ["dk-workflows:dk-pr-publish", "dk-workflows:dk-ci"],

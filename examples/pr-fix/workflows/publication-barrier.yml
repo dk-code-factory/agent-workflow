@@ -1,4 +1,4 @@
-# Checked-in orchestration; helpers validate data and retain evidence.
+# Checked-in orchestration; helper calls retain separate operation boundaries.
 name: Sequential publication barrier
 'on':
   workflow_call:
@@ -14,35 +14,18 @@ name: Sequential publication barrier
         required: true
 jobs:
   list:
-    container:
-      files:
-      - helpers/
-      - agents/
-    steps:
-    - argv:
-      - python3
-      - -B
-      - /actions/helpers/action.py
-      - publication_list
-      protocol: action-v1
-      effect: external_mutation
-      input-schema:
-        type: object
-      output-schema:
-        type: object
-      input:
+    uses: examples/pr-fix/workflows/helper.yml
+    with:
+      operation: publication_list
+      payload:
         plan: ${{ inputs.plan }}
-      env:
-        GH_TOKEN: ${{ secrets.github_token }}
-        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
-      id: intents
-    outputs:
-      items: ${{ steps.intents.outputs.items }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
   publish:
     needs: list
     uses: examples/pr-fix/workflows/publication.yml
     for-each:
-      items: ${{ needs.list.outputs.items }}
+      items: ${{ needs.list.outputs.result.items }}
       key: ${{ item.id }}
       concurrency: 1
     with:

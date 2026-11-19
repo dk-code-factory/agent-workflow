@@ -1,0 +1,44 @@
+# Shared transport only; each call retains its own operation and recovery boundary.
+name: One retained helper operation
+'on':
+  workflow_call:
+    inputs:
+      operation:
+        type: string
+        required: true
+      payload:
+        type: object
+        required: true
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      result:
+        value: ${{ jobs.action.outputs.result }}
+jobs:
+  action:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - id: action
+      argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - invoke
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        operation: ${{ inputs.operation }}
+        payload: ${{ inputs.payload }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+    outputs:
+      result: ${{ steps.action.outputs }}

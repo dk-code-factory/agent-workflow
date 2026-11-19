@@ -175,7 +175,7 @@ func portableFixturePrepare(t *testing.T, root, instructions string, settings ..
 
 func portablePreparedIdentity(t *testing.T, root string, run *Run) (string, string, map[string][2]int) {
 	t.Helper()
-	reference, _ := run.Jobs["prepare"].Outputs["plan"].(string)
+	reference, _ := run.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
 	if reference == "" {
 		t.Fatal("preparation returned no plan", run.Jobs["prepare"])
 	}
@@ -579,7 +579,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 }
 
 func TestPortablePRFixAuthoredSelectionsAndPublicationGates(t *testing.T) {
-	for _, scenario := range []string{"empty", "defaults", "ordered-parallel-finalizers", "ci-repair", "ci-polling-chunk", "merge-without-authorization", "merge-authorized"} {
+	for _, scenario := range []string{"empty", "defaults", "legacy-adapter-defaults", "ordered-parallel-finalizers", "ci-repair", "ci-polling-chunk", "merge-without-authorization", "merge-authorized"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -702,6 +702,14 @@ jobs:
 				inputs["settings"] = map[string]any{"scope": "fixture-settings"}
 				inputs["tasks"] = []any{}
 				inputs["finalizers"] = []any{}
+			case "legacy-adapter-defaults":
+				// Keep main.yml's reviewer default while replacing its adapters
+				// with the legacy key accepted before task names were shortened.
+				inputs["tasks"] = []any{"dk-workflows:dk-pr-reviewers-run"}
+				inputs["finalizers"] = []any{}
+				inputs["adapters"] = map[string]any{"local:review": map[string]any{
+					"kind": "review", "assignment": "Retain the custom legacy reviewer assignment.",
+				}}
 			case "ordered-parallel-finalizers":
 				// Other scenarios keep capacity one. This group must admit both
 				// reviewers before either returns, proving authored concurrency.
@@ -740,6 +748,9 @@ jobs:
 				kind := task["kind"].(string)
 				skill, _ := task["skill"].(string)
 				observed = append(observed, skill)
+				if scenario == "legacy-adapter-defaults" && kind == "review" && strings.TrimSpace(task["assignment"].(string)) != "Retain the custom legacy reviewer assignment." {
+					return nil, fmt.Errorf("inherited reviewer default lost its custom legacy adapter")
+				}
 				if scenario == "ordered-parallel-finalizers" && skill == "local:review" {
 					reviewIDs[task["id"].(string)] = true
 					mu.Unlock()
@@ -810,7 +821,7 @@ jobs:
 				run = main
 			}
 			if scenario == "empty" {
-				planRef, _ := run.Jobs["prepare"].Outputs["plan"].(string)
+				planRef, _ := run.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
 				data, _ := os.ReadFile(filepath.Join(root, planRef))
 				var plan map[string]any
 				_ = json.Unmarshal(data, &plan)
@@ -822,7 +833,7 @@ jobs:
 				if err != nil {
 					t.Fatal(err)
 				}
-				planRef, _ = second.Jobs["prepare"].Outputs["plan"].(string)
+				planRef, _ = second.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
 				data, _ = os.ReadFile(filepath.Join(root, planRef))
 				_ = json.Unmarshal(data, &plan)
 				if plan["settings"].(map[string]any)["scope"] != "changed-settings" {
@@ -832,10 +843,13 @@ jobs:
 			if scenario == "empty" && len(observed) != 0 {
 				t.Fatal("empty selections dispatched", observed)
 			}
+			if scenario == "legacy-adapter-defaults" && strings.Join(observed, ",") != "review,finding_verification,finding_fix" {
+				t.Fatal("legacy adapter did not run through the inherited reviewer default", observed)
+			}
 			if scenario == "defaults" {
 				// The first feedback fix predates independent verification. Its
 				// changed governing evidence requires one refresh in the next cycle.
-				expected := []string{"dk-workflows:dk-pr-feedback-read", "dk-workflows:dk-pr-decisions", "dk-workflows:dk-pr-feedback-address", "dk-workflows:dk-pr-split", "dk-workflows:dk-pr-description", "local:review", "finding_verification", "finding_fix", "dk-workflows:dk-commit-split", "dk-workflows:dk-preferences", "dk-workflows:dk-pr-feedback-address"}
+				expected := []string{"read-feedback", "reconcile-decisions", "address-feedback", "assess-scope", "describe-pr", "review", "finding_verification", "finding_fix", "inspect-commits", "sync-guidance", "address-feedback"}
 				if strings.Join(observed, ",") != strings.Join(expected, ",") {
 					t.Fatal("default task/finalizer order changed", observed)
 				}
@@ -973,6 +987,11 @@ func TestPortablePRFixRetainedPublicationHasOneReceiptOwner(t *testing.T) {
 				var request map[string]any
 				if err := json.Unmarshal(input, &request); err != nil {
 					return nil, []byte(err.Error()), 1, true
+				}
+				if operation == "invoke" {
+					envelope := request["input"].(map[string]any)
+					operation = envelope["operation"].(string)
+					request["input"] = envelope["payload"]
 				}
 				phase := request["phase"].(string)
 				calls[operation+"/"+phase]++
