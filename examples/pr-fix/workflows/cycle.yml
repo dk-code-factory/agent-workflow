@@ -1,4 +1,4 @@
-# Checked-in orchestration; helpers validate data and retain evidence.
+# Checked-in orchestration; helper calls retain separate operation boundaries.
 name: Selected tasks then finalizers in their declared order
 'on':
   workflow_call:
@@ -23,7 +23,7 @@ name: Selected tasks then finalizers in their declared order
         required: true
     outputs:
       complete:
-        value: ${{ jobs.coverage.outputs.complete }}
+        value: ${{ jobs.coverage.outputs.result.complete }}
 jobs:
   stages:
     uses: examples/pr-fix/workflows/stage.yml
@@ -40,29 +40,12 @@ jobs:
       key: ${{ item.id }}
       concurrency: 1
   coverage:
-    container:
-      files:
-      - helpers/
-      - agents/
-    steps:
-    - argv:
-      - python3
-      - -B
-      - /actions/helpers/action.py
-      - coverage
-      protocol: action-v1
-      effect: external_mutation
-      input-schema:
-        type: object
-      output-schema:
-        type: object
-      input:
+    uses: examples/pr-fix/workflows/helper.yml
+    with:
+      operation: coverage
+      payload:
         plan: ${{ inputs.plan }}
-      env:
-        GH_TOKEN: ${{ secrets.github_token }}
-        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
-      id: coverage
+    secrets:
+      github_token: ${{ secrets.github_token }}
     needs:
     - stages
-    outputs:
-      complete: ${{ steps.coverage.outputs.complete }}

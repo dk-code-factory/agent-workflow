@@ -1,4 +1,4 @@
-# Checked-in orchestration; helpers validate data and retain evidence.
+# Observe CI, then perform at most one evidenced repair and publication.
 name: Observe exact-head CI and perform at most one evidenced repair
 'on':
   workflow_call:
@@ -32,7 +32,6 @@ jobs:
     uses: examples/pr-fix/workflows/ci-poll.yml
     with:
       plan: ${{ inputs.plan }}
-      turns: ${{ inputs.turns }}
     secrets:
       github_token: ${{ secrets.github_token }}
     repeat:

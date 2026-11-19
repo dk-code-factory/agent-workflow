@@ -118,7 +118,7 @@ and `turns`. Override them with ordinary CLI inputs or a reusable wrapper:
 ```sh
 agent-workflow run --config examples/pr-fix/agents.yml \
   --input request=examples/pr-fix/request.json \
-  --input 'tasks=["dk-workflows:dk-pr-feedback-read","dk-workflows:dk-pr-description"]' \
+  --input 'tasks=["read-feedback","describe-pr"]' \
   --input 'finalizers=[]' --secret-env github_token=GH_TOKEN \
   examples/pr-fix/workflows/main.yml
 ```
@@ -128,6 +128,29 @@ Nested arrays form parallel read barriers; writers run sequentially. Managed
 review stages run reviewer groups, then independent verification and fixes.
 Empty selections still reach coverage and completion. `native.yml` selects five
 literal TOML roles. Retry/checklist expressions carry original session references.
+
+Task names select assignments from `adapters`; they do not load installed skills.
+The defaults use `read-feedback`, `reconcile-decisions`, `address-feedback`,
+`assess-scope`, `describe-pr`, `inspect-commits`, `sync-guidance` and `review`.
+Use an object to supply task-specific controls, for example
+`{"task":"read-feedback","instructions":"Include deferred requests."}`.
+Orchestration stages are explicit objects: `{"stage":"publication"}`,
+`{"stage":"reviews"}` and `{"stage":"ci"}`. A reviews stage can override
+the top-level reviewers with `{"stage":"reviews","reviewers":[["review","review"]]}`.
+Stages cannot run inside parallel task groups. Reviewers must select read-only
+review adapters. The earlier `skill` objects and fully qualified selector names
+remain supported. An exact adapter key takes precedence over its alias. Alias
+lookup accepts either spelling, including legacy adapter maps used with the new
+default selections.
+
+Shallower helper jobs share `helper.yml`, which returns one `result` object.
+It calls a static command with the operation and payload as structured input;
+each call keeps its own checkpoint, identity and reconciliation boundary.
+The deepest native, retry and continuation workflows keep inline helper calls
+to preserve the engine's eight-level reusable-workflow limit, including a caller
+wrapper. An original attempt and its optional same-session retry feed one
+checklist continuation loop. CI polling keeps two bounded loops and the retained
+absolute deadline, with each observation and delay inside `ci-poll.yml`.
 
 An existing controller retains its admitted runtime configuration. After its
 owned work stops, restart it when changing `agents.yml`; passing another config
@@ -306,10 +329,11 @@ Migration from generated workflows:
   assignment, checklist, resource paths and sensitivity flags. Parallel groups
   may contain independent readers; writers sharing the Git index run in order.
   Arbitrary provider/session controls and shell orchestration are not adapters.
-- Managed publication and CI selections accept only the skill name and empty
-  default controls. A managed reviewer selection additionally accepts
-  `options.reviewers`. Put task instructions and optionality on explicit adapters;
-  unsupported managed stage controls fail preparation.
+- Managed publication and CI stages accept only `stage`; a reviews stage also
+  accepts `reviewers`. Legacy managed selectors accept empty default controls,
+  with `options.reviewers` additionally supported for the reviewer selector.
+  Put task instructions and optionality on task selections; unsupported managed
+  stage controls fail preparation.
 - Existing Go/plugin run ledgers and provider sessions are not migrated into a
   new portable logical run. Old evidence remains inspectable through its original
   implementation. Start portable work explicitly rather than claiming recovered

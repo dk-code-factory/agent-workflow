@@ -17,6 +17,52 @@ CHECKLIST = [
     {"id": "scope", "text": "Account for requirements, blockers and all proposed changes or publication operations without expanding user authority."},
 ]
 
+# Legacy names remain selectors, not installed plugin invocations.
+TASK_ALIASES = {
+    "dk-workflows:dk-pr-feedback-read": "read-feedback",
+    "dk-workflows:dk-pr-decisions": "reconcile-decisions",
+    "dk-workflows:dk-pr-feedback-address": "address-feedback",
+    "dk-workflows:dk-pr-split": "assess-scope",
+    "dk-workflows:dk-pr-description": "describe-pr",
+    "dk-workflows:dk-commit-split": "inspect-commits",
+    "dk-workflows:dk-preferences": "sync-guidance",
+    "local:review": "review",
+}
+ADAPTER_ALIASES = {**TASK_ALIASES, **{name: legacy for legacy, name in TASK_ALIASES.items()}}
+STAGE_ALIASES = {"dk-workflows:dk-pr-publish": "publication", "dk-workflows:dk-ci": "ci",
+                 "dk-workflows:dk-pr-reviewers-run": "reviews"}
+
+
+def _selection(raw):
+    call = {"task": raw} if isinstance(raw, str) else raw
+    if not isinstance(call, dict) or len(set(call) & {"task", "skill", "stage"}) != 1:
+        raise ValueError("select exactly one task or stage")
+    if "skill" in call:
+        name = call["skill"]
+        if isinstance(name, str) and name in STAGE_ALIASES:
+            allowed = {"reviewers"} if STAGE_ALIASES[name] == "reviews" else set()
+            options = call.get("options", {})
+            if (set(call) - {"skill", "options", "required", "instructions"}
+                    or not isinstance(options, dict) or set(options) - allowed
+                    or call.get("required", True) is not True or call.get("instructions", "") != ""):
+                raise ValueError("unsupported managed stage controls")
+            call = {"stage": STAGE_ALIASES[name], **options}
+        else:
+            call = {"task": name, **{key: value for key, value in call.items() if key != "skill"}}
+    elif "task" in call and isinstance(call["task"], str) and call["task"] in STAGE_ALIASES:
+        # Bare legacy strings were historically accepted alongside skill objects.
+        return _selection({"skill": call["task"], **{key: value for key, value in call.items() if key != "task"}})
+    if "stage" in call:
+        stage = call["stage"]
+        if not isinstance(stage, str) or stage not in {"publication", "reviews", "ci"}:
+            raise ValueError("unsupported managed stage")
+        if set(call) - ({"stage", "reviewers"} if stage == "reviews" else {"stage"}):
+            raise ValueError("unsupported managed stage controls")
+    elif set(call) - {"task", "options", "required", "instructions"}:
+        raise ValueError("portable tasks support task/options/required/instructions only")
+    return call
+
+
 def _groups(raw):
     if not isinstance(raw, list):
         raise ValueError("selected plan must be an array")
@@ -25,7 +71,7 @@ def _groups(raw):
         group = entry if isinstance(entry, list) else [entry]
         if not group or any(isinstance(item, list) for item in group):
             raise ValueError("invalid parallel group")
-        result.append([{"skill": item} if isinstance(item, str) else item for item in group])
+        result.append([_selection(item) for item in group])
     return result
 
 
@@ -131,11 +177,12 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
 
     def task_call(call, fallback=None):
         nonlocal serial
-        if not isinstance(call, dict) or set(call) - {"skill", "options", "required", "instructions"}:
-            raise ValueError("portable calls support skill/options/required/instructions only")
-        name = text(call.get("skill"), "selected skill")
-        if name in adapters:
-            adapter = adapters[name]
+        if "stage" in call:
+            raise ValueError("reviewer selection must use read-only review adapters")
+        name = text(call.get("task"), "selected task")
+        adapter_name = name if name in adapters else ADAPTER_ALIASES.get(name, name)
+        if adapter_name in adapters:
+            adapter = adapters[adapter_name]
             if not isinstance(adapter, dict) or set(adapter) - {"kind", "writes", "assignment", "definition", "checklist", "resources", "history", "head_sensitive", "cacheable"}:
                 raise ValueError("unsupported adapter fields")
         else:
@@ -167,25 +214,14 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
                   ("finalizers", options.get("finalizers", []))]
     for phase, selected in selections:
         for group in _groups(selected):
-            for call in group:
-                if not isinstance(call, dict) or set(call) - {"skill", "options", "required", "instructions"}:
-                    raise ValueError("portable calls support skill/options/required/instructions only")
-                if call.get("skill") in {"dk-workflows:dk-pr-publish", "dk-workflows:dk-ci", "dk-workflows:dk-pr-reviewers-run"}:
-                    allowed = {"reviewers"} if call["skill"] == "dk-workflows:dk-pr-reviewers-run" else set()
-                    stage_controls = call.get("options", {})
-                    if (not isinstance(stage_controls, dict) or set(stage_controls) - allowed
-                            or call.get("required", True) is not True or call.get("instructions", "") != ""):
-                        raise ValueError("unsupported managed stage controls; place task instructions and optionality on its explicit adapters")
-            if len(group) > 1 and any(call.get("skill") in {"dk-workflows:dk-pr-publish", "dk-workflows:dk-ci", "dk-workflows:dk-pr-reviewers-run"} for call in group):
+            if len(group) > 1 and any("stage" in call for call in group):
                 raise ValueError("managed publication/review/CI stages cannot be in a parallel group")
-            if len(group) == 1 and group[0].get("skill") == "dk-workflows:dk-pr-publish":
-                stages.append({"kind": "publication", "phase": phase})
+            stage = group[0].get("stage")
+            if stage in {"publication", "ci"}:
+                stages.append({"kind": stage, "phase": phase})
                 continue
-            if len(group) == 1 and group[0].get("skill") == "dk-workflows:dk-ci":
-                stages.append({"kind": "ci", "phase": phase})
-                continue
-            if len(group) == 1 and group[0].get("skill") == "dk-workflows:dk-pr-reviewers-run":
-                reviewers = group[0].get("options", {}).get("reviewers", options.get("reviewers", []))
+            if stage == "reviews":
+                reviewers = group[0].get("reviewers", options.get("reviewers", []))
                 if not reviewers:
                     raise ValueError("selected reviewer stage requires explicit reviewers")
                 groups = []

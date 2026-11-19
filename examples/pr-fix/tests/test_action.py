@@ -73,6 +73,27 @@ class ActionTests(unittest.TestCase):
             self.assertEqual(replay["result"], executed["result"])
             self.assertEqual(dispatched.call_count, 1)
 
+    def test_shared_helper_envelope_preserves_operation_recovery_and_conflicts(self):
+        def wrapped(phase, inputs=None, checkpoint=None):
+            request = self.request(phase, inputs, checkpoint=checkpoint)
+            request["input"] = {"operation": "coverage", "payload": request["input"]}
+            return action.handle("invoke", request, self.root, self.provider)
+        self.assertEqual(wrapped("bindings"), self.handle("coverage", "bindings"))
+        with patch.object(action, "dispatch", wraps=action.dispatch) as dispatched:
+            executed = wrapped("execute")
+            self.assertTrue(wrapped("validate_checkpoint", checkpoint=executed["result"])["valid"])
+            self.assertEqual(wrapped("reconcile")["result"], executed["result"])
+            self.assertEqual(wrapped("execute")["result"], executed["result"])
+            self.assertEqual(dispatched.call_count, 1)
+        with self.assertRaisesRegex(ValueError, "identity conflict"):
+            wrapped("execute", {"extra": "changed"})
+        for inputs in ({"operation": "coverage", "payload": []},
+                       {"operation": "coverage", "payload": {}, "plan": "ambiguous"}):
+            request = self.request("bindings")
+            request["input"] = inputs
+            with self.subTest(inputs=inputs), self.assertRaisesRegex(ValueError, "one object payload"):
+                action.handle("invoke", request, self.root, self.provider)
+
     def test_uncommitted_local_action_effect_stays_unknown_and_cannot_reexecute(self):
         real_artifact = action.artifact
         def lost_result(root, value):
