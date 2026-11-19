@@ -6,10 +6,12 @@ binary. PR-specific capture, report validation, retained allowances, Git policy,
 CI classification and publication receipts belong to the example. The controller
 owns native agent sessions, scheduling, admitted assets and recovery.
 
-Preparation compiles a complete, inspectable workflow closure before admission.
-The generated YAML shows task barriers, review/fix repetition, same-session
-checklist follow-ups, finalizers, publication audience checks and the final
-completion gate. Python helpers perform one boundary operation per invocation;
+The checked-in `examples/pr-fix/workflows/main.yml` owns preparation, bounded
+maintenance cycles, completion/readiness outputs and optional authorized merge.
+Reusable YAML shows task barriers, independent verification/fixes, same-session
+checklist follow-ups, finalizers, CI observation/repair and publication gates.
+Preparation snapshots immutable evidence. Execution writes no workflow YAML or
+agent configuration files. Python helpers perform one boundary operation per invocation;
 they do not launch providers or run an orchestration loop.
 
 ## Setup and preparation
@@ -18,7 +20,8 @@ Use an independent Git clone with a real `.git` directory, checked out at the PR
 head with the target commit available locally. Container workspace mounts reject
 linked worktrees whose `.git` is a file. Commit the copied example definitions
 before preparation, and start with a clean worktree. Preserve the exact original
-request and explicitly stage effective settings in the request JSON.
+request in private JSON. Put orchestration settings in YAML inputs, deployment
+settings in `agents.yml`, and native agent definitions in TOML.
 
 Writing plans need a repository-local commit identity. Set the intended author
 and committer in this clone before preparation:
@@ -37,8 +40,8 @@ The helper image must already be available locally under a digest-pinned
 reference or immutable local content ID and contain Python 3.11 or newer, Git,
 `gh` and `sleep`. Python helpers
 use only the standard library. Any compatible image can be used; no PR-specific
-Dockerfile or custom Go binary is required. Use the same image digest for
-preparation and `request.image`.
+Dockerfile or custom Go binary is required. Set the image under `execution.image` in `examples/pr-fix/agents.yml`.
+Helper jobs omit `image` and inherit the configured image before admission.
 
 For a generic local tool image, the operator can build these standard tools
 without adding a PR-specific Dockerfile to the example:
@@ -56,10 +59,10 @@ docker run --rm --pull=never "$TOOL_IMAGE" git --version
 docker run --rm --pull=never "$TOOL_IMAGE" gh --version
 ```
 
-Set `request.image` to that exact `sha256:...` value. The base tag chooses build
+Set `agents.yml` `execution.image` to that exact `sha256:...` value. The base tag chooses build
 inputs; the resulting content ID pins the actual admitted image. A compatible
 registry `IMAGE@sha256:...` reference is also supported. The zero digest in the
-sample request is a template placeholder, not an available tool image.
+sample configuration is a template placeholder, not an available tool image.
 
 Run preparation and the controller as the same non-root workspace owner. The
 preparation container's UID/GID must match the container execution identity so
@@ -70,69 +73,67 @@ selects the canonical PR host and maps `GH_TOKEN` to `GH_ENTERPRISE_TOKEN` for
 enterprise requests when necessary. Preparation never refreshes login.
 
 Copy [request.example.json](../examples/pr-fix/request.example.json) to a private
-request file, replacing the sample PR, exact instruction and image digest. The
-sample reviewer adapter and all five native definitions are explicit. Remote
-permissions start disabled and `authorizations` is empty. Keep this private file
-out of version control; for the documented path, add a local Git exclusion:
+file. Set the PR URL and exact original instruction. Optional `logical_run`
+defaults to a stable PR identity; authorizations retain their request ID, exact
+instruction and original source.
 
 ```sh
-printf '\n/.pr-fix-state/\n/workflows/.pr-fix-portable/\n/examples/pr-fix/request.json\n' >> .git/info/exclude
+printf '\n/.pr-fix-state/\n/examples/pr-fix/request.json\n' >> .git/info/exclude
 cp examples/pr-fix/request.example.json examples/pr-fix/request.json
 ```
 
-After editing it, prepare with the selected image. `TOOL_IMAGE` and the request's
-`image` field must name the same real digest. `GH_TOKEN` references the credential
-already provided by the operator.
-
-```sh
-docker run --rm --pull=never --network bridge \
-  --user "$(id -u):$(id -g)" -e GH_TOKEN \
-  -v "$PWD:/workspace" \
-  -v "$PWD/examples/pr-fix/workflows/helpers:/actions/helpers:ro" \
-  -w /workspace "$TOOL_IMAGE" \
-  python3 -B /actions/helpers/action.py prepare examples/pr-fix/request.json
-```
-
-Preparation makes GitHub reads and writes application-owned local artifacts and
-definitions. It does not start an agent or publish. It returns `logical_run`,
-`plan`, `workflow`, `config`, `request_id` and `inputs`. Review the returned plan,
-manifest, native definitions and YAML before running it. Definitions, helper
-bytes, image digest, original instructions, runtime settings and task selections
-participate in the prepared identities. A changed source creates a new closure;
-preparation rejects changed bytes in an existing closure. Generated files contain
-private assignments and belong outside version control.
-
 ## Stock CLI execution and recovery
 
-Use the exact returned values in place of `CONFIG`, `PLAN`, `REQUEST_ID` and
-`WORKFLOW`. Flags precede the workflow reference. The credential flag is
-`--secret-env`; its value names an environment variable rather than a token.
+Commit authored definitions and configuration first. Supply the existing
+credential through `GH_TOKEN`; flags precede the workflow reference:
 
 ```sh
-agent-workflow validate --workspace . --config CONFIG WORKFLOW
-agent-workflow run --workspace . --config CONFIG \
-  --secret-env github_token=GH_TOKEN --input plan=PLAN \
-  --request-id REQUEST_ID --detach WORKFLOW
-agent-workflow status --workspace . RUN_ID
-agent-workflow attempts --workspace . RUN_ID
-agent-workflow logs --workspace . --follow RUN_ID
+agent-workflow validate --config examples/pr-fix/agents.yml examples/pr-fix/workflows/main.yml
+agent-workflow run \
+  --config examples/pr-fix/agents.yml \
+  --input request=examples/pr-fix/request.json \
+  --secret-env github_token=GH_TOKEN \
+  examples/pr-fix/workflows/main.yml
+agent-workflow status RUN_ID
+agent-workflow attempts RUN_ID
+agent-workflow logs --follow RUN_ID
 ```
 
-An existing workspace controller retains its admitted runtime configuration.
-After its owned work has stopped, restart it when switching to a different
-generated configuration; passing a new `--config` to a running controller does
-not replace its role settings. Resume unfinished original work before replacing
-its runtime.
+There is no separate preparation command. `snapshot_request` retains the original
+request as immutable JSON. Structured `prepare` validates YAML selections, reads
+GitHub and retains its plan and result through interruption or response loss.
+Preparation cannot dispatch agents or publish. Bindings, checkpoint validation
+and reconciliation phases are read-only.
 
-The generated runtime uses local `codex-app-server` agent execution and
-container-backed Python helpers. The sample sets `runtime.sandbox` to
-`workspace-write` so native writing tasks can edit their assigned source files.
-An omitted sandbox defaults to read-only and cannot run the writing tasks;
-helper-container write access does not change native agent permissions.
-Helper containers use explicit bridge networking;
-the engine still pins their immutable image and retained helper bundle. Native
-agent waits use the controller's durable mailbox mechanism and release execution
-capacity. Containers finish their operation before YAML dispatches an agent.
+Evidence binds the authored workflow closure, retained helpers, five TOML
+roles and the opaque admitted execution/configuration fingerprint exposed by the
+engine. Subsequent helpers reject plans from another admitted configuration.
+Recovery uses engine snapshots and retained bundles without reloading changed
+workspace copies.
+
+`main.yml` declares defaults for `tasks`, `finalizers`, `reviewers`, `adapters`,
+`limits`, `permissions`, `ci`, `merge_method`, `accounts`, `settings`, `resources`
+and `turns`. Override them with ordinary CLI inputs or a reusable wrapper:
+
+```sh
+agent-workflow run --config examples/pr-fix/agents.yml \
+  --input request=examples/pr-fix/request.json \
+  --input 'tasks=["dk-workflows:dk-pr-feedback-read","dk-workflows:dk-pr-description"]' \
+  --input 'finalizers=[]' --secret-env github_token=GH_TOKEN \
+  examples/pr-fix/workflows/main.yml
+```
+
+Selections retain order and repeated occurrences with distinct stable IDs.
+Nested arrays form parallel read barriers; writers run sequentially. Managed
+review stages run reviewer groups, then independent verification and fixes.
+Empty selections still reach coverage and completion. `native.yml` selects five
+literal TOML roles. Retry/checklist expressions carry original session references.
+
+An existing controller retains its admitted runtime configuration. After its
+owned work stops, restart it when changing `agents.yml`; passing another config
+does not replace the running controller's roles. The sample uses local
+`codex-app-server` agents with `workspace-write` and helper containers with bridge
+networking. Native waits release capacity; containers finish before agent dispatch.
 
 A client disconnect or wait timeout leaves admitted controller work retained.
 Inspect the run before requesting a resume. Resume the original run after its
@@ -151,9 +152,8 @@ changed. Resume its originating run or inspect and reconcile the retained effect
 unknown publication effects never grant automatic replay. `--retry-uncertain`
 does not override structured mutation reconciliation.
 
-For changed instructions, settings or role definitions, prepare a new closure and
-start a replacement only after the original execution has stopped and uncertain
-effects have been settled. Keep the returned `logical_run` for the same PR. Its
+For changed instructions, settings or role definitions, start a replacement only after the original execution has stopped and uncertain
+effects have been settled. Keep the same `logical_run` for the PR. Its
 application ledger preserves consumed allowances and absolute deadlines across
 replacement engine runs. Changing configuration does not replenish them. Explicit
 user-authorized continuation records a stable request, exact instruction and
@@ -270,35 +270,35 @@ this live completion gate and cannot establish merge readiness without the
 required review evidence. A separately authorized merge is proposed only after
 readiness, receives its own audience assessment and repeats the live gates just
 before dispatch. The supported merge receipts bind merge/squash to the exact
-original head, target and method-specific commit parents. `options.merge_method`
+original head, target and method-specific commit parents. The `merge_method` YAML input
 defaults to `merge`; preparation rejects values other than `merge` or `squash`
-before capturing the PR or creating application state.
+after retaining the request snapshot, before capturing the PR or dispatching
+agents or publication.
 
 ## State, backup and compatibility
 
 Application state is `.pr-fix-state`, with an ownership marker, per-logical-run
-SQLite ledgers and immutable hash-addressed artifacts. Prepared closures live
-under `workflows/.pr-fix-portable/LOGICAL_RUN/FINGERPRINT`, also under an owned
-namespace. They contain static YAML, copied native definitions, read-only helper
-sources, runtime configuration and a byte manifest. Application state is outside
-`/actions` and separate from the engine's hidden `.agent-workflow` directory.
-Never put unrelated files in these application namespaces. Preparation rejects
-unmarked namespaces and refuses to hide Git-tracked source there.
+SQLite ledgers and immutable artifacts. Back up `.pr-fix-state` alongside the
+engine recovery bundle and retained helper assets. Preparation records include
+the original request, plan and response receipts. Neither cleanup nor backup may
+discard another run's or unrelated files.
 
-Back up application state and prepared closures together with the engine's owned
-backup/recovery bundle and referenced helper assets. A database-only copy omits
-executable helper bytes. Stop active owners before copying writable state. Keep
-uncertain intents, original reports, receipts and sessions until reconciliation
-and retention requirements are satisfied. Cleanup must be explicitly scoped to
-these verified application-owned paths; it must not remove unrelated workspace
-files or another run's assets.
+Migration from generated workflows:
 
-This portable contract deliberately changes the former Go application's setup:
+- Move JSON `options` fields to the corresponding declared `main.yml` inputs.
+  Move `settings`, `resources` and `adapters` there too. Use `--input NAME=JSON`
+  or a checked-in reusable wrapper to retain custom policy.
+- Move `image` and `runtime` settings to `agents.yml`; edit the five TOML files
+  instead of selecting role paths in the request. `turns` is a workflow input;
+  the admitted runtime's worker/turn ceilings still apply.
+- Keep only PR identity, exact instructions, logical-run identity and explicit
+  authorizations in the request JSON. Remove the separate `action.py prepare`
+  command and generated `--input plan=...` execution path.
+- Existing admitted runs retain their original engine snapshots, helper bundles
+  and generated closures. Do not rewrite them, remove their historical state or
+  treat a new execution as recovered coverage. Resume the originating run.
 
-- Use stock `run`/`resume`; the PR-specific CLI commands, Go registrations and
-  runner wrapper are removed from production. Historical Go code and fixtures
-  remain deterministic comparison evidence, not the portable entrypoint.
-- Supply explicit JSON `options`, `settings`, native role paths and adapters.
+- Supply explicit YAML selections, settings, resources and adapters.
   Implicit host XDG/plugin settings, arbitrary installed skills, automatic
   upstream discovery and legacy process hooks are not imported. Stage reviewed
   effective values explicitly. Unsupported selections fail preparation.
@@ -322,14 +322,14 @@ contract live under `examples/pr-fix/tests` and in the stock-engine example test
 Live providers, Docker conformance and GitHub publication conformance remain
 separate opt-ins.
 
-A configured native `runtime.limits.max-turns` ceiling must allow at least five
-turns for the original attempt, one eligible retry and three checklist
-continuations. Generated native tasks use up to eight turns within that ceiling.
-Preparation counts native task, verification/fix and possible CI-repair workers
-across every configured cycle, including repeated stages, plus the final audience
-worker when merge is authorized. Plans exceeding the
-stock retained-worker limit of 64 or a lower `runtime.limits.max-workers` ceiling
-fail preparation; closing a session does not restore that allowance. Publication
-audience sessions also consume retained workers when their intents are dispatched.
-CI observations remain in visible nested YAML repeats; the retained absolute
-deadline governs the supported wait of up to 86,400 seconds.
+The `turns` input must permit at least five turns for an original attempt, one
+eligible retry and three checklist continuations. It defaults to eight; a lower
+runtime ceiling requires a matching input. Retained workers, retries and repairs
+remain bounded by the engine and application ledger. Closing sessions does not
+restore consumed allowances, and publication audiences consume retained workers.
+Preparation bounds the selected plan size; it does not reserve workers for every
+conditional repair or publication audience. The separate engine worker ceiling
+can stop execution before all review or repair allowances are used.
+CI observation uses bounded nested YAML repeats with a retained absolute deadline
+of up to 86,400 seconds. Every repair is followed by fresh exact-head observation;
+completion and merge recheck the final published head.

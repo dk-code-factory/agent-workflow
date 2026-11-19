@@ -1,0 +1,251 @@
+# Native role and session dispatch with a shared report contract.
+name: Select one of the five admitted native roles
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      definition:
+        type: string
+        required: true
+      prompt:
+        type: string
+        required: true
+      task_input:
+        type: object
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      agent:
+        value: ${{ jobs.result.outputs.agent }}
+      report:
+        value: ${{ jobs.result.outputs.report }}
+      status:
+        value: ${{ jobs.result.outputs.status }}
+      error:
+        value: ${{ jobs.result.outputs.error }}
+      failure_class:
+        value: ${{ jobs.result.outputs.failure_class }}
+      unsafe_failure_class:
+        value: ${{ jobs.result.outputs.unsafe_failure_class }}
+schemas:
+  task-report:
+    type: object
+    required:
+    - complete
+    - checklist
+    - findings
+    - evidence
+    - blockers
+    properties:
+      complete:
+        type: boolean
+      checklist:
+        type: array
+        items:
+          type: object
+      findings:
+        type: array
+        items:
+          type: object
+      evidence:
+        type: array
+        items:
+          type: object
+      blockers:
+        type: array
+        items:
+          type: string
+      dispositions:
+        type: array
+        items:
+          type: object
+      changes:
+        type: array
+        items:
+          type: object
+      commit_message:
+        type: string
+      operations:
+        type: array
+        items:
+          type: object
+      audience:
+        type: object
+      deliverables:
+        type: object
+    additionalProperties: false
+jobs:
+  leaf:
+    if: ${{ inputs.definition == 'leaf' }}
+    steps:
+    - id: task
+      uses: agent/run
+      with:
+        agent: agents/leaf.toml
+        turns: ${{ inputs.turns }}
+        prompt: ${{ inputs.prompt }}
+        input: ${{ inputs.task_input }}
+        output:
+          format: json
+          repair-attempts: 0
+          schema: task-report
+      continue-on-error: true
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      report: ${{ steps.task.outputs.structured }}
+      status: ${{ steps.task.status }}
+      error: ${{ steps.task.error }}
+      failure_class: ${{ steps.task.failure_class }}
+      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
+  reviewer:
+    if: ${{ inputs.definition == 'reviewer' }}
+    steps:
+    - id: task
+      uses: agent/run
+      with:
+        agent: agents/reviewer.toml
+        turns: ${{ inputs.turns }}
+        prompt: ${{ inputs.prompt }}
+        input: ${{ inputs.task_input }}
+        output:
+          format: json
+          repair-attempts: 0
+          schema: task-report
+      continue-on-error: true
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      report: ${{ steps.task.outputs.structured }}
+      status: ${{ steps.task.status }}
+      error: ${{ steps.task.error }}
+      failure_class: ${{ steps.task.failure_class }}
+      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
+  verifier:
+    if: ${{ inputs.definition == 'verifier' }}
+    steps:
+    - id: task
+      uses: agent/run
+      with:
+        agent: agents/verifier.toml
+        turns: ${{ inputs.turns }}
+        prompt: ${{ inputs.prompt }}
+        input: ${{ inputs.task_input }}
+        output:
+          format: json
+          repair-attempts: 0
+          schema: task-report
+      continue-on-error: true
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      report: ${{ steps.task.outputs.structured }}
+      status: ${{ steps.task.status }}
+      error: ${{ steps.task.error }}
+      failure_class: ${{ steps.task.failure_class }}
+      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
+  fixer:
+    if: ${{ inputs.definition == 'fixer' }}
+    steps:
+    - id: task
+      uses: agent/run
+      with:
+        agent: agents/fixer.toml
+        turns: ${{ inputs.turns }}
+        prompt: ${{ inputs.prompt }}
+        input: ${{ inputs.task_input }}
+        output:
+          format: json
+          repair-attempts: 0
+          schema: task-report
+      continue-on-error: true
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      report: ${{ steps.task.outputs.structured }}
+      status: ${{ steps.task.status }}
+      error: ${{ steps.task.error }}
+      failure_class: ${{ steps.task.failure_class }}
+      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
+  audience:
+    if: ${{ inputs.definition == 'audience' }}
+    steps:
+    - id: task
+      uses: agent/run
+      with:
+        agent: agents/audience.toml
+        turns: ${{ inputs.turns }}
+        prompt: ${{ inputs.prompt }}
+        input: ${{ inputs.task_input }}
+        output:
+          format: json
+          repair-attempts: 0
+          schema: task-report
+      continue-on-error: true
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      report: ${{ steps.task.outputs.structured }}
+      status: ${{ steps.task.status }}
+      error: ${{ steps.task.error }}
+      failure_class: ${{ steps.task.failure_class }}
+      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
+  result:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - native_result
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        definition: ${{ inputs.definition }}
+        results:
+          leaf:
+            status: ${{ needs.leaf.status }}
+            output: ${{ needs.leaf.outputs }}
+          reviewer:
+            status: ${{ needs.reviewer.status }}
+            output: ${{ needs.reviewer.outputs }}
+          verifier:
+            status: ${{ needs.verifier.status }}
+            output: ${{ needs.verifier.outputs }}
+          fixer:
+            status: ${{ needs.fixer.status }}
+            output: ${{ needs.fixer.outputs }}
+          audience:
+            status: ${{ needs.audience.status }}
+            output: ${{ needs.audience.outputs }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: selected
+    needs:
+    - leaf
+    - reviewer
+    - verifier
+    - fixer
+    - audience
+    outputs:
+      agent: ${{ steps.selected.outputs.agent }}
+      report: ${{ steps.selected.outputs.report }}
+      status: ${{ steps.selected.outputs.status }}
+      error: ${{ steps.selected.outputs.error }}
+      failure_class: ${{ steps.selected.outputs.failure_class }}
+      unsafe_failure_class: ${{ steps.selected.outputs.unsafe_failure_class }}
+    if: ${{ needs.leaf.status != 'needs_attention' and needs.leaf.status != 'failed' and needs.reviewer.status !=
+      'needs_attention' and needs.reviewer.status != 'failed' and needs.verifier.status != 'needs_attention' and
+      needs.verifier.status != 'failed' and needs.fixer.status != 'needs_attention' and needs.fixer.status != 'failed'
+      and needs.audience.status != 'needs_attention' and needs.audience.status != 'failed' }}

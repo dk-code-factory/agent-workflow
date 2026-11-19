@@ -10,7 +10,7 @@ test-core: portable-prfix-test
 	@packages=$$(go list ./...) || exit $$?; \
 	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d') || exit $$?; \
 	test -n "$$packages" || { echo 'No non-PR-fix Go packages discovered' >&2; exit 1; }; \
-	go test -race -timeout 60m $$packages
+	go test -race -timeout 90m $$packages
 check: release-tooling-test portable-prfix-test
 	go vet ./...
 	go run ./cmd/agent-workflow validate workflows/parallel-review.yml

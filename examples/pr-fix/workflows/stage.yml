@@ -1,0 +1,79 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Select a declared stage kind
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      stage:
+        type: object
+        required: true
+      cycle:
+        type: number
+        required: true
+      repairs:
+        type: number
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+jobs:
+  tasks:
+    uses: examples/pr-fix/workflows/group.yml
+    with:
+      plan: ${{ inputs.plan }}
+      group: ${{ inputs.stage }}
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    if: ${{ inputs.stage.kind == 'tasks' }}
+  reviews:
+    uses: examples/pr-fix/workflows/reviews.yml
+    with:
+      plan: ${{ inputs.plan }}
+      groups: ${{ inputs.stage.groups }}
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    if: ${{ inputs.stage.kind == 'reviews' }}
+  publication:
+    uses: examples/pr-fix/workflows/publication-barrier.yml
+    with:
+      plan: ${{ inputs.plan }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    if: ${{ inputs.stage.kind == 'publication' }}
+  ci:
+    uses: examples/pr-fix/workflows/ci-pass.yml
+    with:
+      plan: ${{ inputs.plan }}
+      cycle: ${{ inputs.cycle }}
+      repair: true
+      bound: ${{ inputs.repairs }}
+      number: ${{ iteration.number }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    if: ${{ inputs.stage.kind == 'ci' and inputs.repairs > 0 }}
+    repeat:
+      max-attempts: ${{ inputs.repairs }}
+      until: ${{ iteration.outputs.settled }}
+  ci_final:
+    uses: examples/pr-fix/workflows/ci-pass.yml
+    with:
+      plan: ${{ inputs.plan }}
+      cycle: ${{ inputs.cycle }}
+      repair: false
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: ci
+    if: ${{ inputs.stage.kind == 'ci' and needs.ci.status != 'failed' and needs.ci.status != 'needs_attention'
+      and needs.ci.status != 'canceled' }}

@@ -13,7 +13,8 @@ import git_fixture
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix import app, publishing
 from prfix.core import Ledger, artifact, canonical, digest, identity, read_artifact
-from prfix.prepare import CHECKLIST, prepare
+from prfix.prepare import CHECKLIST
+from prepared_fixture import prepare
 from test_publication import AUTH, FakeGitHub
 
 REVIEWER = "agent_" + "1" * 32

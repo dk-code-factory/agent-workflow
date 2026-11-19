@@ -1,0 +1,214 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: One declared task occurrence and its retained session
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      cycle:
+        type: number
+        required: true
+      publication:
+        type: string
+        default: ''
+      task:
+        type: string
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      complete:
+        value: ${{ jobs.status.outputs.complete }}
+      agent:
+        value: ${{ jobs.status.outputs.agent }}
+      report:
+        value: ${{ jobs.status.outputs.report }}
+jobs:
+  prepare:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - claim
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        task: ${{ inputs.task }}
+        cycle: ${{ inputs.cycle }}
+        publication: ${{ inputs.publication }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: claim
+    outputs:
+      claim: ${{ steps.claim.outputs.claim }}
+      invoke: ${{ steps.claim.outputs.invoke }}
+      prompt: ${{ steps.claim.outputs.prompt }}
+      task_input: ${{ steps.claim.outputs.task_input }}
+      definition: ${{ steps.claim.outputs.definition }}
+  native:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.invoke }}
+    uses: examples/pr-fix/workflows/native.yml
+    with:
+      plan: ${{ inputs.plan }}
+      definition: ${{ needs.prepare.outputs.definition }}
+      prompt: ${{ needs.prepare.outputs.prompt }}
+      task_input: ${{ needs.prepare.outputs.task_input }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+  accept:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - turn_result
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        claim: ${{ needs.prepare.outputs.claim }}
+        agent: ${{ needs.native.outputs.agent }}
+        report: ${{ needs.native.outputs.report }}
+        status: ${{ needs.native.outputs.status }}
+        failure_class: ${{ needs.native.outputs.failure_class }}
+        unsafe_failure_class: ${{ needs.native.outputs.unsafe_failure_class }}
+        error: ${{ needs.native.outputs.error }}
+        publication: ${{ inputs.publication }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: accepted
+    needs:
+    - prepare
+    - native
+    outputs:
+      complete: ${{ steps.accepted.outputs.complete }}
+      retry: ${{ steps.accepted.outputs.retry }}
+      checklist: ${{ steps.accepted.outputs.checklist }}
+      prompt: ${{ steps.accepted.outputs.prompt }}
+      task_input: ${{ steps.accepted.outputs.task_input }}
+    if: ${{ needs.prepare.outputs.invoke }}
+  checklist:
+    needs:
+    - prepare
+    - native
+    - accept
+    - retry
+    if: ${{ needs.accept.outputs.checklist }}
+    uses: examples/pr-fix/workflows/continue.yml
+    repeat:
+      max-attempts: 3
+      until: ${{ iteration.outputs.settled }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    with:
+      plan: ${{ inputs.plan }}
+      claim: ${{ needs.prepare.outputs.claim }}
+      agent: ${{ needs.native.outputs.agent }}
+      round: ${{ iteration.number }}
+      publication: ${{ inputs.publication }}
+      turns: ${{ inputs.turns }}
+  status:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - task_status
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        claim: ${{ needs.prepare.outputs.claim }}
+        publication: ${{ inputs.publication }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: status
+    needs:
+    - prepare
+    - native
+    - accept
+    - checklist
+    - retry
+    - retry_checklist
+    outputs:
+      complete: ${{ steps.status.outputs.complete }}
+      agent: ${{ steps.status.outputs.agent }}
+      report: ${{ steps.status.outputs.structured }}
+    if: ${{ needs.prepare.status == 'succeeded' and needs.native.status != 'failed' and needs.native.status != 'needs_attention'
+      and needs.accept.status != 'failed' and needs.accept.status != 'needs_attention' and needs.checklist.status
+      != 'failed' and needs.checklist.status != 'needs_attention' and needs.retry.status != 'failed' and needs.retry.status
+      != 'needs_attention' and needs.retry_checklist.status != 'failed' and needs.retry_checklist.status != 'needs_attention'
+      }}
+  retry:
+    needs:
+    - prepare
+    - native
+    - accept
+    if: ${{ needs.accept.outputs.retry }}
+    uses: examples/pr-fix/workflows/retry.yml
+    with:
+      plan: ${{ inputs.plan }}
+      claim: ${{ needs.prepare.outputs.claim }}
+      agent: ${{ needs.native.outputs.agent }}
+      prompt: ${{ needs.accept.outputs.prompt }}
+      task_input: ${{ needs.accept.outputs.task_input }}
+      publication: ${{ inputs.publication }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+  retry_checklist:
+    needs:
+    - prepare
+    - native
+    - accept
+    - retry
+    if: ${{ needs.retry.outputs.checklist }}
+    uses: examples/pr-fix/workflows/continue.yml
+    repeat:
+      max-attempts: 3
+      until: ${{ iteration.outputs.settled }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    with:
+      plan: ${{ inputs.plan }}
+      claim: ${{ needs.prepare.outputs.claim }}
+      agent: ${{ needs.native.outputs.agent }}
+      round: ${{ iteration.number }}
+      publication: ${{ inputs.publication }}
+      turns: ${{ inputs.turns }}

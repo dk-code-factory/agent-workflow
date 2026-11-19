@@ -1,0 +1,54 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Reviewer groups in declared order
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      groups:
+        type: array
+        required: true
+      cycle:
+        type: number
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+jobs:
+  groups:
+    uses: examples/pr-fix/workflows/group.yml
+    with:
+      plan: ${{ inputs.plan }}
+      group: ${{ item }}
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    for-each:
+      items: ${{ inputs.groups }}
+      key: ${{ item.id }}
+      concurrency: 1
+  verify:
+    needs: groups
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: finding_verification
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+  fix:
+    needs: verify
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: finding_fix
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}

@@ -1,0 +1,61 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Observe exact-head CI and perform at most one evidenced repair
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      cycle:
+        type: number
+        required: true
+      repair:
+        type: boolean
+        required: true
+      bound:
+        type: number
+        default: 1
+      number:
+        type: number
+        default: 1
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      settled:
+        value: ${{ jobs.poll.outputs.failed != true or inputs.number == inputs.bound }}
+jobs:
+  poll:
+    uses: examples/pr-fix/workflows/ci-poll.yml
+    with:
+      plan: ${{ inputs.plan }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    repeat:
+      max-attempts: 100
+      until: ${{ iteration.outputs.settled }}
+  repair:
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: ci_repair
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: poll
+    if: ${{ needs.poll.outputs.failed and inputs.repair }}
+  publish:
+    uses: examples/pr-fix/workflows/publication-barrier.yml
+    with:
+      plan: ${{ inputs.plan }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: repair
+    if: ${{ needs.repair.status != 'failed' and needs.repair.status != 'needs_attention' and needs.repair.status
+      != 'canceled' }}

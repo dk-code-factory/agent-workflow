@@ -1,0 +1,56 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Parallel read barrier followed by independent verification and fixes
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      group:
+        type: object
+        required: true
+      cycle:
+        type: number
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+jobs:
+  tasks:
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: ${{ item.id }}
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    for-each:
+      items: ${{ inputs.group.tasks }}
+      key: ${{ item.id }}
+      concurrency: ${{ inputs.group.concurrency }}
+  verify:
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: finding_verification
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: tasks
+    if: ${{ inputs.group.review and needs.tasks.status == 'succeeded' }}
+  fix:
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      task: finding_fix
+      cycle: ${{ inputs.cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: verify
+    if: ${{ inputs.group.review and needs.verify.status == 'succeeded' }}
