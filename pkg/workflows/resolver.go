@@ -35,6 +35,10 @@ func (r Resolver) ResolveLocal(ref string) (ResolvedRef, error) {
 	}
 	root := filepath.Join(workspaceDir, definitionsDir)
 	rel := strings.TrimPrefix(canonical, DefaultDefinitionsDir+"/")
+	if index := strings.Index(canonical, "/"+DefaultDefinitionsDir+"/"); index >= 0 && !strings.HasPrefix(canonical, DefaultDefinitionsDir+"/") {
+		root = filepath.Join(workspaceDir, filepath.FromSlash(canonical[:index]), DefaultDefinitionsDir)
+		rel = canonical[index+len("/"+DefaultDefinitionsDir+"/"):]
+	}
 	target := filepath.Join(root, filepath.FromSlash(rel))
 	if err := ensureInsideWorkflowRoot(workspaceDir, root, target); err != nil {
 		return ResolvedRef{}, err
@@ -80,8 +84,8 @@ func CanonicalLocalRef(ref string) (string, error) {
 		}
 	}
 	clean := path.Clean(ref)
-	if !strings.HasPrefix(clean, DefaultDefinitionsDir+"/") {
-		return "", fmt.Errorf("workflow ref %q must start with workflows/", ref)
+	if !strings.HasPrefix(clean, DefaultDefinitionsDir+"/") && !strings.Contains(clean, "/"+DefaultDefinitionsDir+"/") {
+		return "", fmt.Errorf("workflow ref %q must name a workflows/ definition directory", ref)
 	}
 	ext := strings.ToLower(path.Ext(clean))
 	if ext != ".yml" && ext != ".yaml" {

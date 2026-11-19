@@ -186,7 +186,7 @@ def prepare_claim(root, provider, ledger, plan, inputs):
     current = _current(ledger, snapshot, task) if task.get("cacheable", True) else None
     if current:
         return {"claim": current["id"], "invoke": False, "complete": True,
-                "prompt": "", "task_input": {}, "report": current["report"]}
+                "definition": task["definition"], "prompt": "", "task_input": {}, "report": current["report"]}
     invocation = ledger.db.execute("SELECT count(*) FROM claims WHERE task=?", (task["id"],)).fetchone()[0]
     fingerprint = digest([fingerprint, invocation])
     key = "claim_" + digest([plan["logical_run"], task["id"], fingerprint, invocation])
@@ -243,7 +243,7 @@ def prepare_claim(root, provider, ledger, plan, inputs):
         ledger.db.execute("INSERT INTO claims(id,task,fingerprint,state,assignment) VALUES(?,?,?,?,?)",
                           (key, task["id"], fingerprint, "claimed", reference))
     return {"claim": key, "invoke": True, "complete": False,
-            "prompt": prompt, "task_input": assignment, "report": ""}
+            "definition": task["definition"], "prompt": prompt, "task_input": assignment, "report": ""}
 
 
 def _claim(ledger, key):

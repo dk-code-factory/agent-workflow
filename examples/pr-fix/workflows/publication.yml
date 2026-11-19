@@ -1,0 +1,143 @@
+# Retained publication effects reconcile before another audience or dispatch.
+name: One exact publication intent, audience verdict and receipt
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      proposal:
+        type: object
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      receipt:
+        value: ${{ jobs.receipt.outputs.receipt }}
+jobs:
+  prepare:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - publication_prepare
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        proposal: ${{ inputs.proposal }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: intent
+    outputs:
+      intent: ${{ steps.intent.outputs.intent }}
+      id: ${{ steps.intent.outputs.id }}
+      fingerprint: ${{ steps.intent.outputs.fingerprint }}
+      invoke: ${{ steps.intent.outputs.invoke }}
+  audience:
+    needs: prepare
+    uses: examples/pr-fix/workflows/task.yml
+    with:
+      plan: ${{ inputs.plan }}
+      cycle: 0
+      publication: ${{ needs.prepare.outputs.id }}
+      task: publication_audience
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    if: ${{ needs.prepare.outputs.invoke }}
+  publish:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - publication_execute
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        id: ${{ needs.prepare.outputs.id }}
+        agent: ${{ needs.audience.outputs.agent }}
+        report: ${{ needs.audience.outputs.report }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: published
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - publication_record
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        id: ${{ needs.prepare.outputs.id }}
+        receipt: ${{ steps.published.outputs.receipt }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: recorded
+    needs:
+    - prepare
+    - audience
+    outputs:
+      receipt: ${{ steps.recorded.outputs.receipt }}
+    if: ${{ needs.prepare.outputs.invoke and needs.audience.status == 'succeeded' }}
+  receipt:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - publication_recover
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+        id: ${{ needs.prepare.outputs.id }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: final
+    needs:
+    - prepare
+    - publish
+    outputs:
+      receipt: ${{ steps.final.outputs.receipt }}
+    if: ${{ needs.prepare.status == 'succeeded' and needs.publish.status != 'failed' and needs.publish.status != 'needs_attention' }}

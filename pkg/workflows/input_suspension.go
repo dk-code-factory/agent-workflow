@@ -14,6 +14,36 @@ func reusableChildID(parent, job string, iteration int) string {
 	return hex.EncodeToString(hash[:16])
 }
 
+// inputRepeatLimit reads the admitted bound without reevaluating expressions.
+// An unstarted job has no pin and cannot establish suspended descendant evidence.
+func (e *Executor) inputRepeatLimit(ctx context.Context, run, logical, job string, repeat *Repeat) (int, error) {
+	if repeat == nil {
+		return 1, nil
+	}
+	if repeat.MaxAttemptsExpression == "" {
+		return repeat.MaxAttempts, nil
+	}
+	journal := iterationJournal(e.Store)
+	if journal == nil {
+		return 0, fmt.Errorf("%w: suspended repeat journal missing", ErrActionIntegrity)
+	}
+	checkpoint, err := journal.IterationRun(ctx, run, logical, "$repeat/"+job)
+	if err != nil {
+		return 0, err
+	}
+	pinned, err := journal.IterationPlan(ctx, checkpoint, "$repeat/"+job)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if pinned.ResolvedBound < 1 || pinned.ResolvedBound > 100 || actionHash(pinned) != actionHash(repeatBoundPlan(checkpoint, "$repeat/"+job, repeat, pinned.ResolvedBound)) {
+		return 0, fmt.Errorf("%w: suspended repeat bound changed for %s", ErrActionIntegrity, job)
+	}
+	return pinned.ResolvedBound, nil
+}
+
 // inputSuspension proves a cancellation-only suspension from the persisted
 // physical child closure. Reusable calls do not carry iteration_ancestors, so
 // follow their admitted job/iteration identity as well as ordered item children.
@@ -100,9 +130,12 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 		for _, gate := range byRun[run.ID] {
 			definition, ok := workflow.Jobs[gate.JobID]
 			step, input := steps[gate.JobID][gate.StepID]
-			limit := 1
-			if definition.Repeat != nil {
-				limit = definition.Repeat.MaxAttempts
+			limit, err := e.inputRepeatLimit(ctx, run.ID, nativeString(snapshot.Metadata, "iteration_logical_run_id"), gate.JobID, definition.Repeat)
+			if err != nil {
+				return false, err
+			}
+			if limit == 0 {
+				return false, fmt.Errorf("%w: suspended repeat bound missing for %s", ErrActionIntegrity, gate.JobID)
 			}
 			validState := gate.State == "pending" || gate.State == "accepted" || gate.State == "consumed" || (gate.State == "canceled" && control.Canceled)
 			if !ok || !input || step.Uses != "input/wait" || gate.Iteration < 1 || gate.Iteration > limit || gate.ID != actionHash([]any{run.ID, gate.JobID, gate.StepID, gate.Iteration}) || !validState {
@@ -175,9 +208,20 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 				}
 				continue
 			}
-			limit := 1
-			if definition.Repeat != nil {
-				limit = definition.Repeat.MaxAttempts
+			limit, err := e.inputRepeatLimit(ctx, run.ID, nativeString(snapshot.Metadata, "iteration_logical_run_id"), jobID, definition.Repeat)
+			if err != nil {
+				return false, err
+			}
+			if limit == 0 {
+				// No pin is valid only when the job admitted no physical child.
+				_, _, err := journal.Load(ctx, reusableChildID(run.ID, jobID, 1))
+				if err == nil {
+					return false, fmt.Errorf("%w: suspended repeat bound missing for %s", ErrActionIntegrity, jobID)
+				}
+				if !errors.Is(err, sql.ErrNoRows) {
+					return false, err
+				}
+				continue
 			}
 			for number := 1; number <= limit; number++ {
 				id := reusableChildID(run.ID, jobID, number)

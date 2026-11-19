@@ -185,7 +185,7 @@ func completeAction(r *ActionAttempt) (StepExecution, error) {
 }
 
 func (e *Executor) executeApplicationAction(ctx context.Context, step Step, ec expressionContext) (result StepExecution, err error) {
-	ac := ActionContext{CredentialRefs: credentialRefsFrom(ctx), RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Iteration: ec.IterationNumber, Generation: 1}
+	ac := ActionContext{ExecutionFingerprint: e.executionFingerprint, CredentialRefs: credentialRefsFrom(ctx), RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Iteration: ec.IterationNumber, Generation: 1}
 	if f, ok := ctx.Value(fenceKey{}).(executionFence); ok {
 		ac.Generation = f.generation
 	}

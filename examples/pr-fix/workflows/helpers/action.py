@@ -5,24 +5,19 @@ import sys
 from pathlib import Path
 
 from prfix import app
-from prfix.core import (MAX_JSON, FORMAT, GENERATED, Ledger, artifact, bounded_json,
+from prfix.core import (MAX_JSON, FORMAT, Ledger, artifact, bounded_json,
                         canonical, digest, read_artifact)
 from prfix.capture import GitHub
 
 
-def verify_closure(root, plan):
-    import hashlib
-    directory = root / GENERATED / plan["logical_run"] / plan["fingerprint"]
-    for role, expected in plan["definitions"].items():
-        path = directory / "agents" / (role + ".toml")
-        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise ValueError("prepared native definition differs before dispatch")
-    # The engine pins the mounted helper bundle itself. Rechecking its admitted
-    # source declaration prevents a mixed native/helper closure at admission.
-    for name, expected in plan["helper_manifest"].items():
-        path = directory / "helpers" / name
-        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise ValueError("prepared helper closure differs before dispatch")
+def verify_closure(root, plan, execution_fingerprint):
+    # Recovery runs retained helpers and agent definitions from engine snapshots.
+    # Workspace copies may have evolved since admission; do not reload them.
+    if plan.get("execution_fingerprint") != execution_fingerprint:
+        raise ValueError("prepared evidence belongs to a different admitted execution/configuration")
+    from prfix.prepare import _helper_manifest
+    if _helper_manifest(Path(__file__).resolve().parent) != plan["helper_manifest"]:
+        raise ValueError("prepared helper closure differs before dispatch")
 
 
 def dispatch(operation, root, provider, ledger, plan, inputs):
@@ -30,6 +25,14 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
     if audience and operation in {"claim", "accept", "turn_result", "check_prepare", "task_status"}:
         from prfix.publishing import audience_scope
         plan, inputs = audience_scope(root, provider, ledger, plan, operation, inputs)
+    if operation == "native_result":
+        role = inputs.get("definition")
+        results = inputs.get("results", {})
+        if role not in {"leaf", "reviewer", "verifier", "fixer", "audience"} or set(results) != {"leaf", "reviewer", "verifier", "fixer", "audience"}:
+            raise ValueError("invalid declared native role")
+        if any(value.get("status") != ("succeeded" if key == role else "skipped") for key, value in results.items()):
+            raise ValueError("native role branches did not select exactly one result")
+        return results[role]["output"]
     if operation == "claim":
         return app.prepare_claim(root, provider, ledger, plan, inputs)
     if operation == "accept":
@@ -90,11 +93,14 @@ def handle(operation, request, root=None, provider=None):
     if request.get("protocol") != "action-v1" or request.get("phase") not in {"bindings", "execute", "validate_checkpoint", "reconcile"}:
         raise ValueError("unsupported helper protocol/phase")
     phase = request["phase"]
+    if operation in {"snapshot_request", "prepare"}:
+        from prfix.preparation import handle as preparation
+        return preparation(operation, request, root, provider)
     inputs = request.get("input")
     if not isinstance(inputs, dict) or not isinstance(inputs.get("plan"), str):
         raise ValueError("helper input requires immutable plan reference")
     plan = app.load_plan(root, inputs["plan"])
-    verify_closure(root, plan)
+    verify_closure(root, plan, request.get("context", {}).get("execution_fingerprint"))
     provider = provider or GitHub(root)
     provider.read_only = phase != "execute"
     key = request.get("context", {}).get("operation_key")
@@ -107,7 +113,7 @@ def handle(operation, request, root=None, provider=None):
         return {**response, "capabilities": ["bindings", "execute", "validate_checkpoint", "reconcile"],
                 "read_only_phases": ["bindings", "validate_checkpoint", "reconcile"],
                 "bindings": {"format": FORMAT, "plan": plan["fingerprint"], "logical_run": plan["logical_run"],
-                             "image": plan["image"], "definitions": plan["definitions"]}}
+                             "execution_fingerprint": plan["execution_fingerprint"], "definitions": plan["definitions"]}}
     with Ledger(root, plan["logical_run"], plan["pr"]["url"], read_only=phase != "execute") as ledger:
         saved = ledger.db.execute("SELECT * FROM operations WHERE id=?", (ident,)).fetchone()
         if saved and (saved["kind"] != operation or saved["input"] != fingerprint):
@@ -121,7 +127,7 @@ def handle(operation, request, root=None, provider=None):
                 # Recheck service proof at execution time. Reconciliation hooks
                 # remain read-only, and unknown effects never authorize replay.
                 observed = None
-                if operation in {"publication_execute", "publication_record"}:
+                if operation in {"publication_execute", "publication_record", "publication_recover"}:
                     from prfix.publishing import reconcile_operation
                     observed = reconcile_operation(root, provider, ledger, plan, inputs)
                 if not observed or observed.get("outcome") != "no_effect":
@@ -145,7 +151,7 @@ def handle(operation, request, root=None, provider=None):
                 result = value["result"]
                 result["evidence"]["artifact"] = saved["result"]
                 return {**response, "outcome": "completed", "proof": {"artifact": saved["result"], "input": fingerprint}, "result": result}
-            if operation in {"publication_execute", "publication_record"} and saved:
+            if operation in {"publication_execute", "publication_record", "publication_recover"} and saved:
                 from prfix.publishing import reconcile_operation
                 observed = reconcile_operation(root, provider, ledger, plan, inputs)
                 if observed.get("outcome") == "completed":
@@ -164,12 +170,12 @@ def handle(operation, request, root=None, provider=None):
             expected = value["result"]
             expected["evidence"]["artifact"] = evidence["artifact"]
             valid = expected == checkpoint and value["operation"] == ident and value["input"] == fingerprint
-        elif valid and evidence.get("publication_proof") and operation in {"publication_execute", "publication_record"}:
+        elif valid and evidence.get("publication_proof") and operation in {"publication_execute", "publication_record", "publication_recover"}:
             from prfix.publishing import validate_operation
             valid = validate_operation(root, provider, ledger, plan, inputs, checkpoint.get("output", {}))
         else:
             valid = False
-        if valid and operation in {"publication_execute", "publication_record"}:
+        if valid and operation in {"publication_execute", "publication_record", "publication_recover"}:
             from prfix.publishing import validate_operation
             valid = validate_operation(root, provider, ledger, plan, inputs, checkpoint["output"])
         if valid and operation == "claim" and checkpoint["output"].get("invoke"):
@@ -216,21 +222,17 @@ def handle(operation, request, root=None, provider=None):
 
 def main():
     if len(sys.argv) not in {2, 3}:
-        raise ValueError("usage: action.py OPERATION [PREPARATION_REQUEST.json]")
+        raise ValueError("usage: action.py OPERATION [CONTINUATION.json]")
     operation = sys.argv[1]
-    if operation in {"prepare", "continue"}:
-        from prfix.prepare import prepare
+    if operation == "continue":
         source = Path(sys.argv[2]).read_bytes() if len(sys.argv) == 3 else sys.stdin.buffer.read(MAX_JSON + 1)
         request = bounded_json(source)
-        if operation == "prepare":
-            result = prepare(Path.cwd(), request)
-        else:
-            if not isinstance(request, dict) or set(request) != {"plan", "name", "amount", "authorization"}:
-                raise ValueError("continuation requires plan, name, amount and exact authorization")
-            root = Path.cwd()
-            plan = app.load_plan(root, request["plan"])
-            with Ledger(root, plan["logical_run"], plan["pr"]["url"]) as ledger:
-                result = ledger.extend(request["authorization"]["request_id"], request["name"], request["amount"], request["authorization"])
+        if not isinstance(request, dict) or set(request) != {"plan", "name", "amount", "authorization"}:
+            raise ValueError("continuation requires plan, name, amount and exact authorization")
+        root = Path.cwd()
+        plan = app.load_plan(root, request["plan"])
+        with Ledger(root, plan["logical_run"], plan["pr"]["url"]) as ledger:
+            result = ledger.extend(request["authorization"]["request_id"], request["name"], request["amount"], request["authorization"])
     else:
         result = handle(operation, bounded_json(sys.stdin.buffer.read(MAX_JSON + 1)))
     encoded = canonical(result)

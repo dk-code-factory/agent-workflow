@@ -1,0 +1,68 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Selected tasks then finalizers in their declared order
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      stages:
+        type: array
+        required: true
+      cycle:
+        type: number
+        required: true
+      repairs:
+        type: number
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      complete:
+        value: ${{ jobs.coverage.outputs.complete }}
+jobs:
+  stages:
+    uses: examples/pr-fix/workflows/stage.yml
+    with:
+      plan: ${{ inputs.plan }}
+      stage: ${{ item }}
+      cycle: ${{ inputs.cycle }}
+      repairs: ${{ inputs.repairs }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    for-each:
+      items: ${{ inputs.stages }}
+      key: ${{ item.id }}
+      concurrency: 1
+  coverage:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - coverage
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ inputs.plan }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: coverage
+    needs:
+    - stages
+    outputs:
+      complete: ${{ steps.coverage.outputs.complete }}

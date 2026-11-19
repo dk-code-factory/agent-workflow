@@ -161,6 +161,21 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 					break
 				}
 			}
+			if !found && nativeString(ec.Metadata, "iteration_logical_run_id") != "" {
+				// A new physical item can recover the original logical dispatch.
+				// Bind the exact attempt, originating run and logical coordinates;
+				// another worker's failure cannot authorize replay or disposition.
+				var raw []byte
+				lookup := e.Workers.Store.db.QueryRowContext(ctx, `SELECT a.record FROM attempts a JOIN runs r ON r.id=a.run_id WHERE a.id=? AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.origin_run_id')=? AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=?`, outcome.TaskAttemptID, owner, nativeString(ec.Metadata, "iteration_logical_run_id")).Scan(&raw)
+				if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
+					return nil, lookup
+				}
+				var prior Attempt
+				if lookup == nil && decodeJSONWithNumbers(raw, &prior) == nil && prior.JobID == ec.JobID && prior.StepID == step.ID && prior.Iteration == ec.IterationNumber && prior.InputFingerprint == ec.Attempt.InputFingerprint && prior.AgentTask != nil && actionHash(prior.AgentTask) == actionHash(dispatch) {
+					found = true
+					uncheckpointedFailure = true
+				}
+			}
 			if !found {
 				return nil, fmt.Errorf("%w: original failed task attempt unavailable", ErrActionIntegrity)
 			}

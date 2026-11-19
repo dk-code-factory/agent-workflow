@@ -174,7 +174,7 @@ def publication_prepare(root, provider, ledger, plan, inputs):
         final = merge_proposal(root, provider, ledger, plan, {})
         if final["invoke"] and proposal == final["proposal"]:
             prepared = _publication(root, provider, ledger, plan).prepare(proposal)
-            return {key: prepared[key] for key in ("id", "fingerprint", "intent")}
+            return {**{key: prepared[key] for key in ("id", "fingerprint", "intent")}, "invoke": prepared["state"] == "prepared"}
     if not any(value == proposal for value in listed):
         # A completed or uncertain original may outlive source freshness after
         # its own publication. Its immutable ID/payload can be inspected and
@@ -189,9 +189,19 @@ def publication_prepare(root, provider, ledger, plan, inputs):
             raise PublicationError("proposal differs from the retained original operation")
         if saved["state"] not in {"completed", "uncertain"}:
             raise PublicationError("publication source changed before dispatch")
-        return {key: saved[key] for key in ("id", "fingerprint", "intent")}
+        return {**{key: saved[key] for key in ("id", "fingerprint", "intent")}, "invoke": False}
     prepared = _publication(root, provider, ledger, plan).prepare(proposal)
-    return {key: prepared[key] for key in ("id", "fingerprint", "intent")}
+    return {**{key: prepared[key] for key in ("id", "fingerprint", "intent")}, "invoke": prepared["state"] == "prepared"}
+
+
+def publication_recover(root, provider, ledger, plan, inputs):
+    publisher = _publication(root, provider, ledger, plan)
+    saved = publisher._load(text(inputs.get("id"), "original publication operation"))
+    _retained_audience(root, ledger, saved)
+    observed = publisher.reconcile(saved["id"])
+    if observed.get("outcome") != "completed":
+        raise PublicationError("original publication remains unresolved; inspect retained evidence before retry")
+    return publication_record(root, provider, ledger, plan, {"id": saved["id"], "receipt": observed["result"]})
 
 
 def publication_execute(root, provider, ledger, plan, inputs):
@@ -403,6 +413,7 @@ def completed_merge(root, provider, ledger, plan, completion):
 def dispatch(operation, root, provider, ledger, plan, inputs):
     handlers = {"publication_list": publication_list, "publication_prepare": publication_prepare,
                 "publication_execute": publication_execute, "publication_record": publication_record,
+                "publication_recover": publication_recover,
                 "readiness": readiness, "merge_proposal": merge_proposal}
     if operation not in handlers:
         raise PublicationError("unknown publication helper operation")

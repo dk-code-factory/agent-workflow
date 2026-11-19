@@ -1,0 +1,292 @@
+# Runnable entry point. Policy defaults and orchestration are authored here.
+name: Portable PR maintenance
+'on':
+  workflow_call:
+    inputs:
+      request:
+        type: string
+        required: true
+      tasks:
+        type: array
+        default:
+        - dk-workflows:dk-pr-feedback-read
+        - dk-workflows:dk-pr-decisions
+        - dk-workflows:dk-pr-feedback-address
+        - dk-workflows:dk-pr-publish
+        - dk-workflows:dk-pr-split
+        - dk-workflows:dk-pr-description
+        - dk-workflows:dk-pr-reviewers-run
+        - dk-workflows:dk-pr-publish
+      finalizers:
+        type: array
+        default:
+        - dk-workflows:dk-commit-split
+        - dk-workflows:dk-preferences
+        - dk-workflows:dk-ci
+      reviewers:
+        type: array
+        default:
+        - skill: local:review
+      adapters:
+        type: object
+        default:
+          dk-workflows:dk-pr-feedback-read:
+            kind: inspection
+            writes: false
+            assignment: Capture all actionable inline threads, review bodies and general comments; preserve source
+              identities and obligations.
+            definition: leaf
+          dk-workflows:dk-pr-decisions:
+            kind: decisions
+            writes: false
+            assignment: Reconcile settled decisions from original sources, exact request and repository guidance;
+              do not invent user authority.
+            definition: leaf
+          dk-workflows:dk-pr-feedback-address:
+            kind: fix
+            writes: true
+            assignment: Verify actionable feedback and implement focused changes. Account for original findings
+              and every changed file; preserve unrelated work.
+            definition: leaf
+          dk-workflows:dk-pr-split:
+            kind: scope
+            writes: false
+            assignment: Assess the complete diff against the selected size/scope policies; report concrete boundaries
+              and ownership evidence. Splitting publication requires separately supplied explicit authority.
+            definition: leaf
+          dk-workflows:dk-pr-description:
+            kind: description
+            writes: false
+            assignment: Prepare a repository-native PR title and description from the actual final diff and accepted
+              issue; propose exact authorized publication operations only.
+            definition: leaf
+          dk-workflows:dk-commit-split:
+            kind: cleanup
+            writes: false
+            assignment: Inspect the entire commit series against selected commit policy and final tree. Report blockers
+              and exact justified history proposals; do not rewrite Git directly.
+            definition: leaf
+          dk-workflows:dk-preferences:
+            kind: synchronization
+            writes: true
+            assignment: Synchronize governing repository content only where the exact original request and selected
+              policy require changes; account for every changed path.
+            definition: leaf
+          local:review:
+            kind: review
+            definition: reviewer
+            writes: false
+            assignment: Review the actual changes against the originating issue, documented repository standards
+              and accepted user scope. Return supported actionable findings or an evidenced no-findings report.
+            checklist:
+            - id: assignment
+              text: Inspect the actual diff and originating requirements.
+            - id: evidence
+              text: Verify source evidence and every concrete finding.
+            - id: scope
+              text: Account for repository rules, changed tests and unresolved checks.
+            resources: []
+            history: false
+            head_sensitive: false
+            cacheable: true
+      limits:
+        type: object
+        default:
+          review_cycles: 5
+          retries_per_task: 1
+          ci_repairs_per_cycle: 5
+          ci_reruns_per_head: 3
+      permissions:
+        type: object
+        default:
+          push_commits: false
+          rewrite_commits: false
+          edit_pr: false
+          reply_to_feedback: false
+          resolve_threads: false
+          create_draft_prs: false
+          request_review: false
+      ci:
+        type: object
+        default:
+          timeout_seconds: 1800
+      merge_method:
+        type: string
+        default: merge
+      accounts:
+        type: array
+        default: []
+      settings:
+        type: object
+        default: {}
+      resources:
+        type: array
+        default: []
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      complete:
+        value: ${{ jobs.completion.outputs.complete }}
+      ready:
+        value: ${{ jobs.completion.outputs.ready }}
+jobs:
+  request:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - snapshot_request
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        request: ${{ inputs.request }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: snapshot
+    outputs:
+      snapshot: ${{ steps.snapshot.outputs.snapshot }}
+  prepare:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - prepare
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        snapshot: ${{ needs.request.outputs.snapshot }}
+        controls:
+          tasks: ${{ inputs.tasks }}
+          finalizers: ${{ inputs.finalizers }}
+          reviewers: ${{ inputs.reviewers }}
+          adapters: ${{ inputs.adapters }}
+          limits: ${{ inputs.limits }}
+          permissions: ${{ inputs.permissions }}
+          ci: ${{ inputs.ci }}
+          merge_method: ${{ inputs.merge_method }}
+          accounts: ${{ inputs.accounts }}
+          settings: ${{ inputs.settings }}
+          resources: ${{ inputs.resources }}
+          turns: ${{ inputs.turns }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: plan
+    needs:
+    - request
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      stages: ${{ steps.plan.outputs.stages }}
+      limits: ${{ steps.plan.outputs.limits }}
+      merge_authorized: ${{ steps.plan.outputs.merge_authorized }}
+      turns: ${{ steps.plan.outputs.turns }}
+  cycles:
+    uses: examples/pr-fix/workflows/cycle.yml
+    with:
+      plan: ${{ needs.prepare.outputs.plan }}
+      stages: ${{ needs.prepare.outputs.stages }}
+      cycle: ${{ iteration.number }}
+      repairs: ${{ needs.prepare.outputs.limits.ci_repairs_per_cycle }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs: prepare
+    if: ${{ needs.prepare.status != 'failed' and needs.prepare.status != 'needs_attention' and needs.prepare.status
+      != 'canceled' }}
+    repeat:
+      max-attempts: ${{ needs.prepare.outputs.limits.review_cycles }}
+      until: ${{ iteration.outputs.complete }}
+  completion:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - completion
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ needs.prepare.outputs.plan }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: completion
+    needs:
+    - prepare
+    - cycles
+    outputs:
+      complete: ${{ steps.completion.outputs.complete }}
+      ready: ${{ steps.completion.outputs.ready }}
+  merge_proposal:
+    container:
+      files:
+      - helpers/
+      - agents/
+    steps:
+    - argv:
+      - python3
+      - -B
+      - /actions/helpers/action.py
+      - merge_proposal
+      protocol: action-v1
+      effect: external_mutation
+      input-schema:
+        type: object
+      output-schema:
+        type: object
+      input:
+        plan: ${{ needs.prepare.outputs.plan }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      id: proposal
+    needs:
+    - prepare
+    - completion
+    outputs:
+      invoke: ${{ steps.proposal.outputs.invoke }}
+      proposal: ${{ steps.proposal.outputs.proposal }}
+    if: ${{ needs.prepare.outputs.merge_authorized and needs.completion.outputs.ready }}
+  merge:
+    uses: examples/pr-fix/workflows/publication.yml
+    with:
+      plan: ${{ needs.prepare.outputs.plan }}
+      proposal: ${{ needs.merge_proposal.outputs.proposal }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    needs:
+    - prepare
+    - merge_proposal
+    if: ${{ needs.prepare.outputs.merge_authorized and needs.merge_proposal.outputs.invoke }}

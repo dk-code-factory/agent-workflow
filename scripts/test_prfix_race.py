@@ -122,33 +122,33 @@ exit 1
     def test_success_runs_portable_then_non_prfix_packages_then_all_shards(self):
         status, calls, python, sequence = self.run_target('example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n')
         self.assertEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root example/root/pkg/other'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other'])
         self.assertEqual(python, [self.portable_command, self.shard_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
-            'go test -race -timeout 60m example/root example/root/pkg/other',
+            'go test -race -timeout 90m example/root example/root/pkg/other',
             'python3 ' + self.shard_command,
         ])
 
     def test_non_prfix_failure_stops_before_shards(self):
         status, calls, python, sequence = self.run_target('example/root\n', test_exit=1)
         self.assertNotEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root'])
         self.assertEqual(python, [self.portable_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
-            'go test -race -timeout 60m example/root',
+            'go test -race -timeout 90m example/root',
         ])
 
     def test_core_runs_portable_and_non_prfix_packages_without_shards(self):
         status, calls, python, sequence = self.run_target(
             'example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n', target='test-core')
         self.assertEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root example/root/pkg/other'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other'])
         self.assertEqual(python, [self.portable_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
-            'go test -race -timeout 60m example/root example/root/pkg/other',
+            'go test -race -timeout 90m example/root example/root/pkg/other',
         ])
 
     def test_portable_failure_stops_before_package_discovery_and_go_suites(self):
@@ -161,11 +161,11 @@ exit 1
     def test_shard_failure_is_preserved_after_successful_prerequisites(self):
         status, calls, python, sequence = self.run_target('example/root\n', shard_exit=1)
         self.assertNotEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 60m example/root'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root'])
         self.assertEqual(python, [self.portable_command, self.shard_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
-            'go test -race -timeout 60m example/root', 'python3 ' + self.shard_command,
+            'go test -race -timeout 90m example/root', 'python3 ' + self.shard_command,
         ])
 
 

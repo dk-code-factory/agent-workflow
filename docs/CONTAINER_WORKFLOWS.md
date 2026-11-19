@@ -73,6 +73,13 @@ is separate and opt-in.
 
 ## Shared job containers and Docker steps
 
+A mapping container can omit `image`, for example `container: {files: [helpers/]}`.
+It inherits `execution.image` from a configured container execution policy. The
+engine resolves and pins that image before admission; recovery retains it even
+if current configuration changes. Omission fails when no container execution
+image is configured. Explicit image strings retain their syntax.
+An empty explicit image or a missing configured container image is an error.
+
 ```yaml
 jobs:
   build:
@@ -180,7 +187,12 @@ Every request has `protocol: "action-v1"`, `phase`, the original action `context
 the current `runtime_owner` (run ID and generation), and schema-validated `input`.
 Checkpoint phases also receive `checkpoint: {bindings, result}`. The context
 contains stable operation key, original run/job/step/iteration, attempt identity
-and generation. Current runtime ownership stays separate on recovery.
+and generation. `context.execution_fingerprint` is an opaque identity binding
+the admitted workflow closure, helper implementations, native definitions and
+execution/provider configuration. Helpers can bind evidence to it without
+receiving configuration values. It is stable across recovery and unchanged
+replacement executions; changed configuration produces a different identity.
+Current runtime ownership stays separate on recovery.
 
 Responses always repeat `protocol` and `phase`. The phase contracts are:
 

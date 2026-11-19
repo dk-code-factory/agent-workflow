@@ -17,11 +17,11 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
     const comparisons = [' == ', ' != ', ' >= ', ' <= ', ' > ', ' < '];
     const positions = new Map(comparisons.map(operator => [operator, [] as number[]]));
     const boundaries: { offset: number; token: string; escaped: boolean }[] = [];
-    for (const match of body.matchAll(/(?=(["']| and | == | != | >= | <= | > | < ))/g)) {
+    for (const match of body.matchAll(/(?=(["']| and | or | == | != | >= | <= | > | < ))/g)) {
       const token = match[1], offset = match.index;
       if (positions.has(token)) { positions.get(token)!.push(offset); continue; }
       let backslashes = 0;
-      if (token !== ' and ') for (let cursor = offset - 1; cursor >= 0 && body[cursor] === '\\'; cursor--) backslashes++;
+      if (token !== ' and ' && token !== ' or ') for (let cursor = offset - 1; cursor >= 0 && body[cursor] === '\\'; cursor--) backslashes++;
       boundaries.push({ offset, token, escaped: backslashes % 2 === 1 });
     }
     const lowerBound = (length: number, offsetAt: (index: number) => number, offset: number) => {
@@ -35,7 +35,7 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
     for (let index = boundaries.length - 1; index >= 0; index--) {
       const boundary = boundaries[index];
       for (let state = 0; state < 3; state++) {
-        if (state === 0 && boundary.token === ' and ') { nextAnd[state][index] = boundary.offset; continue; }
+        if (state === 0 && (boundary.token === ' and ' || boundary.token === ' or ')) { nextAnd[state][index] = boundary.offset; continue; }
         const quote = boundary.token === '"' ? 1 : boundary.token === "'" ? 2 : 0;
         const nextState = quote && !state ? quote : quote === state && !boundary.escaped ? 0 : state;
         nextAnd[state][index] = nextAnd[nextState][index + 1];
@@ -56,8 +56,9 @@ export function mapReferences(text: string, callback: (ref: Reference) => string
       const end = offset + expression.length;
       const boundary = lowerBound(boundaries.length, index => boundaries[index].offset, offset);
       const and = item.scanAnd ? nextAnd[0][boundary] : -1;
-      let index = and >= offset && and + 5 <= end ? and - offset : -1;
-      let operator = index >= 0 ? ' and ' : '';
+      let operator = and >= offset && body.startsWith(' or ', and) ? ' or ' : ' and ';
+      let index = and >= offset && and + operator.length <= end ? and - offset : -1;
+      if (index < 0) operator = '';
       if (index < 0 && item.scanComparison) for (const candidate of comparisons) {
         const offsets = positions.get(candidate)!;
         const found = offsets[lowerBound(offsets.length, index => offsets[index], offset)];
@@ -160,7 +161,7 @@ export function hasExpressionReferences(path: Path): boolean {
   if (path.length === 5 && path[0] === 'on' && path[1] === 'workflow_call' && path[2] === 'outputs' && path[4] === 'value') return true;
   if (path[0] !== 'jobs') return false;
   // Array item payloads are literal data. Only the whole items expression renders.
-  if (path.length === 4 && path[2] === 'for-each' && path[3] === 'items') return true;
+  if (path.length === 4 && (path[2] === 'for-each' && ['items', 'concurrency'].includes(String(path[3])) || path[2] === 'repeat' && path[3] === 'max-attempts')) return true;
   if ((path[2] === 'with' || path[2] === 'secrets') && path.length >= 4) return true;
   if (path[2] === 'outputs' && path.length === 4) return true;
   const step = stepPathLength(path);

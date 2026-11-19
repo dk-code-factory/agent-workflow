@@ -1,6 +1,7 @@
 """Container protocol recovery and read-only action-hook boundaries."""
 import copy
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "help
 import action
 from prfix import app, publishing
 from prfix.core import MAX_JSON, Ledger, artifact, canonical, digest, read_artifact
-from prfix.prepare import prepare
+from prepared_fixture import prepare
 from test_app import AppFixture, REVIEWER, VERIFIER
 from test_publication import AUTH
 
@@ -29,7 +30,7 @@ class ActionTests(unittest.TestCase):
     def request(self, phase, inputs=None, operation="fixture-operation", checkpoint=None):
         result = {"protocol": "action-v1", "phase": phase,
                   "input": {"plan": self.prepared["plan"], **(inputs or {})},
-                  "context": {"operation_key": operation}}
+                  "context": {"operation_key": operation, "execution_fingerprint": self.plan["execution_fingerprint"]}}
         if checkpoint is not None:
             result["checkpoint"] = {"result": checkpoint}
         return result
@@ -222,11 +223,15 @@ class ActionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "artifact identity"):
             self.handle("coverage", "reconcile")
         path.write_bytes(original)
-        directory = (self.root / self.prepared["workflow"]).parent
-        source = directory / "helpers" / "prfix" / "app.py"
-        source.write_bytes(source.read_bytes() + b"\n# unadmitted mutation\n")
-        with self.assertRaisesRegex(ValueError, "helper closure differs"):
+        retained = self.root / "retained-helpers"
+        shutil.copytree(Path(action.__file__).resolve().parent, retained,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        with patch.object(action, "__file__", str(retained / "action.py")):
             self.handle("coverage", "bindings")
+            helper = retained / "prfix" / "core.py"
+            helper.write_bytes(helper.read_bytes() + b"\n# corrupted retained helper\n")
+            with self.assertRaisesRegex(ValueError, "helper closure differs"):
+                self.handle("coverage", "bindings")
 
     def test_original_writer_checkpoint_accepts_edits_but_retains_governing_and_owner_bindings(self):
         request = copy.deepcopy(self.fixture.request)

@@ -465,6 +465,10 @@ consume their declared workflow outputs or ordered item outputs instead.
 Aliases derive from the existing retained results, so resume uses admitted
 definitions and checkpointed values, with the same redaction and replay rules.
 
+Reusable references are workspace-relative paths inside a `workflows/` directory,
+including nested examples such as `examples/pr-fix/workflows/main.yml`. They use
+`.yml` or `.yaml`; traversal and symlink escapes remain invalid.
+
 ### Commands and bounded iterations
 
 ```yaml
@@ -491,7 +495,13 @@ Arguments must render to strings; use interpolation such as
 and then contains the previous status, outputs, and steps. Repeat conditions can
 also inspect `iteration.outputs` and `iteration.status`. Reusable workflow jobs
 can repeat. The engine retains all attempt history and fails on exhaustion.
-`max-attempts` must be 1–100; the development example uses three fix cycles.
+`max-attempts` accepts a literal integer or a whole expression resolving to an
+integer from 1–100, such as `${{ inputs.cycles }}`. The resolved limit is pinned
+before dispatch and reused during recovery. Conditions support short-circuit
+`or` and `and`, with `and` taking precedence. For example,
+`${{ iteration.outputs.settled or iteration.number == 100 }}` ends a polling chunk.
+Direct numeric atoms in integer controls use decimal notation, including signs
+and exponents. The development example uses three fix cycles.
 
 Reusable jobs also support dynamic iteration with ordered results:
 
@@ -515,7 +525,8 @@ and call inputs are validated and pinned before starting any child. Literal item
 payloads remain data, including strings containing expression delimiters.
 `for-each` requires `uses` and cannot combine with `repeat`. YAML and Go are
 supported; the browser preserves and validates YAML without guided iteration
-controls. Optional `concurrency` is a positive integer, pinned with the plan;
+controls. Optional `concurrency` accepts a positive integer or a whole expression
+resolving to one, such as `${{ inputs.parallelism }}`, pinned with the plan;
 omitting it preserves sequential execution. At most that many item controllers
 run concurrently. Their agent invocations, commands and container execution use
 the existing shared host/provider capacity. Registered Go action dispatch does
@@ -576,6 +587,9 @@ Legacy JSON stores cannot execute iteration workflows.
 
 Use `agent/run` with a native Codex TOML definition. Paths resolve relative to
 this workflow; the configured `codex` runtime must use `codex-app-server`.
+Agent `with.turns` also accepts a whole expression resolving to a positive integer
+within the existing signed 32-bit limit. Resolved allowances are validated before
+dispatch and retained with the admitted task; recovery cannot replenish them.
 
 ```yaml
 jobs:

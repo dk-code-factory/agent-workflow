@@ -11,9 +11,9 @@ export interface Step extends Mapping {
 }
 export interface Job extends Mapping {
   name?: string; needs?: string | string[]; uses?: string; steps?: Step[]; outputs?: Record<string, string>;
-  container?: string | { image: string; files?: string[] | null };
-  'for-each'?: { items: unknown[] | string; key: string; concurrency?: number } | null;
-  repeat?: { 'max-attempts': number; until: string } | null; if?: string;
+  container?: string | { image?: string; files?: string[] | null };
+  'for-each'?: { items: unknown[] | string; key: string; concurrency?: number | string } | null;
+  repeat?: { 'max-attempts': number | string; until: string } | null; if?: string;
 }
 export interface Workflow extends Mapping { name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
 export interface Diagnostic {

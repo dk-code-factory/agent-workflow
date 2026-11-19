@@ -51,11 +51,18 @@ func TestExternalInputGateCrashProcess(t *testing.T) {
 }
 
 func TestExternalInputGateCrashSameChild(t *testing.T) {
-	for _, guard := range []string{"none", "missing", "step", "evidence", "payload", "uncertain"} {
-		for _, composition := range []string{"ordered", "ordered/reusable", "ordered/ordered", "ordered/repeat"} {
+	for _, guard := range []string{"none", "missing", "step", "evidence", "payload", "uncertain", "missing-repeat-bound", "changed-repeat-bound"} {
+		for _, composition := range []string{"ordered", "ordered/reusable", "ordered/ordered", "ordered/repeat", "ordered/expression-repeat", "ordered/expression-input-repeat", "ordered/expression-late-input"} {
 			for _, checkpoint := range []bool{false, true} {
 				for _, retry := range []bool{false, true} {
-					if guard != "none" && (composition != "ordered" || checkpoint || retry) {
+					if strings.Contains(composition, "expression-late-input") && checkpoint {
+						continue
+					}
+					if guard == "missing-repeat-bound" || guard == "changed-repeat-bound" {
+						if !strings.Contains(composition, "expression") || checkpoint || retry {
+							continue
+						}
+					} else if guard != "none" && (composition != "ordered" || checkpoint || retry) {
 						continue
 					}
 					t.Run(fmt.Sprint(guard, "/", composition, "/checkpoint=", checkpoint, "/retry=", retry), func(t *testing.T) {
@@ -72,16 +79,29 @@ func TestExternalInputGateCrashSameChild(t *testing.T) {
 							if node == "ordered" {
 								options = ", for-each: {items: [{id: a}], key: item.id}"
 							}
+							if node == "expression-repeat" {
+								options = ", repeat: {max-attempts: '${{ 2 }}', until: 'iteration.number == 2'}"
+							}
 							if node == "repeat" {
 								options = ", repeat: {max-attempts: 2, until: 'iteration.number == 2'}"
 							}
 							writeWorkflow(t, root, name, prefix+fmt.Sprintf("jobs: {review: {uses: workflows/layer%d.yml%s}}\n", index+1, options))
 						}
-						source := "on: {workflow_call: {}}\njobs:\n  question:\n    steps:\n"
+						source := "on: {workflow_call: {}}\njobs:\n  question:\n"
+						if strings.Contains(composition, "expression-input-repeat") || strings.Contains(composition, "expression-late-input") {
+							source += "    repeat: {max-attempts: '${{ 2 }}', until: 'iteration.number == 2'}\n"
+						}
+						source += "    steps:\n"
 						if checkpoint {
 							source += "      - {id: before, uses: action/capture, with: {value: before}}\n"
 						}
-						source += "      - {uses: input/wait, with: {prompt: question, evidence-id: pinned}}\n"
+						if strings.Contains(composition, "expression-late-input") {
+							// The first gate is on iteration two, so a guessed bound of
+							// one cannot establish the retained suspension proof.
+							source += "      - {uses: input/wait, if: 'iteration.number == 2', with: {prompt: question, evidence-id: pinned}}\n"
+						} else {
+							source += "      - {uses: input/wait, with: {prompt: question, evidence-id: pinned}}\n"
+						}
 						writeWorkflow(t, root, fmt.Sprint("layer", len(nodes), ".yml"), source)
 						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 						defer cancel()
@@ -115,6 +135,14 @@ func TestExternalInputGateCrashSameChild(t *testing.T) {
 							t.Fatal(gate)
 						}
 						switch guard {
+						case "missing-repeat-bound":
+							if _, err := s.db.Exec("DELETE FROM iteration_plans WHERE job_id LIKE '$repeat/%'"); err != nil {
+								t.Fatal(err)
+							}
+						case "changed-repeat-bound":
+							if _, err := s.db.Exec("UPDATE iteration_plans SET record=json_set(CAST(record AS TEXT),'$.resolved_bound',3) WHERE job_id LIKE '$repeat/%'"); err != nil {
+								t.Fatal(err)
+							}
 						case "missing":
 							if _, err := s.db.Exec("DELETE FROM input_gates WHERE id=?", gate.ID); err != nil {
 								t.Fatal(err)
@@ -154,6 +182,9 @@ func TestExternalInputGateCrashSameChild(t *testing.T) {
 						if guard != "none" {
 							if err == nil {
 								t.Fatalf("unsafe gate snapshot resumed: %+v", run)
+							}
+							if strings.Contains(guard, "repeat-bound") && !errors.Is(err, ErrActionIntegrity) {
+								t.Fatalf("missing or changed admitted repeat bound lost integrity error: %v", err)
 							}
 							gates, loadErr := s.Inputs(context.Background(), origin)
 							if loadErr != nil {

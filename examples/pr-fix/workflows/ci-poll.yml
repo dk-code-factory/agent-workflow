@@ -1,0 +1,30 @@
+# Checked-in orchestration; helpers validate data and retain evidence.
+name: Bounded CI observation chunk
+'on':
+  workflow_call:
+    inputs:
+      plan:
+        type: string
+        required: true
+      turns:
+        type: number
+        default: 8
+    secrets:
+      github_token:
+        required: true
+    outputs:
+      settled:
+        value: ${{ jobs.observe.outputs.settled }}
+      failed:
+        value: ${{ jobs.observe.outputs.failed }}
+jobs:
+  observe:
+    uses: examples/pr-fix/workflows/ci.yml
+    with:
+      plan: ${{ inputs.plan }}
+      turns: ${{ inputs.turns }}
+    secrets:
+      github_token: ${{ secrets.github_token }}
+    repeat:
+      max-attempts: 100
+      until: ${{ iteration.outputs.settled or iteration.number == 100 }}
