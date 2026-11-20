@@ -315,7 +315,7 @@ def publication_record(root, provider, ledger, plan, inputs):
 def readiness(root, provider, ledger, plan, inputs=None):
     """Fresh application coverage plus live repository/CI evidence, read-only."""
     from . import app
-    from .ci import classify, verify_exceptions
+    from .ci import classify_current
     result = {"complete": False, "ready": False, "clean_review": False, "verified": False,
               "head": "", "target": "", "ci": {"head": "", "success": False}, "evidence": [], "blockers": []}
     try:
@@ -345,14 +345,7 @@ def readiness(root, provider, ledger, plan, inputs=None):
         observed = provider.observe_ci(plan["pr"], snapshot["head"])
         if observed.get("head") != snapshot["head"]:
             raise PublicationError("CI observation belongs to another head")
-        options = plan.get("options", {})
-        selected = options.get("ci", {})
-        candidates = selected.get("classifications", options.get("ci_classifications", []))
-        rules = selected.get("exceptions", options.get("ci_exceptions", []))
-        if isinstance(rules, dict):
-            rules = rules.get("entries", [])
-        proofs = verify_exceptions(provider, plan["pr"], observed, candidates, rules) if candidates else []
-        classified = classify(observed, proofs)
+        classified = classify_current(provider, plan, observed)
         result["ci"] = {**classified, "success": classified["status"] == "success"}
         result["evidence"].append("sha256:" + digest(observed))
         if not result["ci"]["success"]:

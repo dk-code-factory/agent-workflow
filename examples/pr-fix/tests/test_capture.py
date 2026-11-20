@@ -282,6 +282,31 @@ class GitHubTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             self.provider.capture(PR)
 
+    def test_capture_ignores_repo_statistics_but_pins_pr_refs(self):
+        metadata_reads = 0
+        change_head = False
+        def request(method, route, payload=None):
+            nonlocal metadata_reads
+            if route == "user":
+                return {"id": 1, "login": "owner"}
+            if route == "graphql":
+                return {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "totalCount": 0, "nodes": [],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+            metadata_reads += 1
+            return {"html_url": PR["url"], "number": 17, "state": "open", "updated_at": "now",
+                    "head": {"sha": "c" * 40 if change_head and metadata_reads % 2 == 0 else "a" * 40,
+                             "ref": "feature", "repo": {"id": 1, "full_name": "owner/repo",
+                                                        "pushed_at": str(metadata_reads)}},
+                    "base": {"sha": "b" * 40, "ref": "main", "repo": {
+                        "id": 1, "full_name": "owner/repo", "open_issues_count": metadata_reads}}}
+        self.provider.request = request
+        self.provider.pages = lambda route, **kwargs: []
+        self.assertEqual(self.provider.capture(PR)["metadata"]["head"]["sha"], "a" * 40)
+        change_head = True
+        with self.assertRaisesRegex(ValueError, "PR changed during capture"):
+            self.provider.capture(PR)
+
     def test_ci_checks_and_statuses_bind_exact_current_head(self):
         head = "a" * 40
         check = {"id": 9, "name": "Test", "head_sha": head, "status": "completed",

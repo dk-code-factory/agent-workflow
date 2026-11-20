@@ -107,6 +107,10 @@ func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {
 		{"schema: Review", "schema: Missing", "with.output: schema"},
 		{"schema: Review", "schema: '${{ inputs.contract }}'", "unknown workflow-local schema"},
 		{"type: boolean", "type: unknown", "schemas.Review.properties.approved.type"},
+		{"type: boolean", "type: [string, number]", "schemas.Review.properties.approved.type"},
+		{"type: boolean", "type: ['null']", "schemas.Review.properties.approved.type"},
+		{"type: boolean", "type: ['null', 'null']", "schemas.Review.properties.approved.type"},
+		{"type: boolean", "type: ['null', unknown]", "schemas.Review.properties.approved.type"},
 		{"approved: {type: boolean}", "approved: {$ref: 'https://example.invalid/schema'}", "schemas.Review.properties.approved.$ref"},
 		{"approved: {type: boolean}", "approved: {type: string, pattern: '['}", "schemas.Review"},
 		{"required: [approved]", "required: wrong", "schemas.Review.required"},
@@ -140,6 +144,35 @@ func TestNamedSchemasRejectInvalidBeforeEffects(t *testing.T) {
 	}
 	if err = Validate(w); err == nil || !strings.Contains(err.Error(), "schemas.Unused.type") {
 		t.Fatal(err)
+	}
+}
+
+func TestNamedNullableSchemasPreserveConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		schema         map[string]any
+		valid, invalid []any
+	}{
+		{"string", map[string]any{"type": []any{"string", "null"}, "minLength": 2}, []any{nil, "ok"}, []any{"x", true}},
+		{"object", map[string]any{"type": []any{"null", "object"}, "required": []any{"value"}, "properties": map[string]any{"value": map[string]any{"type": "string"}}, "additionalProperties": false}, []any{nil, map[string]any{"value": "ok"}}, []any{map[string]any{}, map[string]any{"value": 1}, map[string]any{"value": "ok", "extra": true}}},
+		{"number", map[string]any{"type": []any{"integer", "null"}, "minimum": 1}, []any{nil, 2}, []any{0, "2"}},
+		{"enum", map[string]any{"type": []any{"string", "null"}, "enum": []any{"yes"}}, []any{"yes"}, []any{nil, "no"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateNamedSchema(tc.schema, "$", 0); err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range tc.valid {
+				if err := validateJSONSchemaValue(value, tc.schema, "$"); err != nil {
+					t.Fatalf("%v: %v", value, err)
+				}
+			}
+			for _, value := range tc.invalid {
+				if err := validateJSONSchemaValue(value, tc.schema, "$"); err == nil {
+					t.Fatalf("accepted invalid value %v", value)
+				}
+			}
+		})
 	}
 }
 

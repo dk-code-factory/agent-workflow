@@ -240,6 +240,108 @@ class AppTests(unittest.TestCase):
         report["checklist"][-1]["status"] = "incomplete"
         self.assertFalse(app.verify_report(self.root, task, report))
 
+    def test_retained_capture_is_context_and_cannot_replace_source_evidence(self):
+        reference = artifact(self.root, {"discussion": [], "source": "GitHub"})
+        report = self.fixture.report()
+        report["evidence"][0].update(path=reference,
+                                     sha256=hashlib.sha256((self.root / reference).read_bytes()).hexdigest())
+        with self.assertRaisesRegex(ValueError, "source path outside"):
+            app.verify_report(self.root, self.review, report)
+        report = self.fixture.report(deliverables={"discussion_reference": reference})
+        self.assertTrue(app.verify_report(self.root, self.review, report))
+
+    def test_rejected_checklist_preserves_findings_without_granting_coverage(self):
+        claim = self.claim()
+        report = self.fixture.report(findings=[{"id": "R1", "text": "Original defect", "sources": ["source"]}])
+        report["checklist"].append({"id": "required-tests", "status": "completed", "evidence": ["source"]})
+        rejected = self.accept(claim, report)
+        self.assertFalse(rejected["complete"])
+        self.assertFalse(rejected["settled"])
+        self.assertIn("contract_error", read_artifact(self.root, rejected["report"]))
+        self.assertEqual(app.candidates(self.root, self.ledger, self.plan), [])
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM accepted_reports").fetchone()[0], 0)
+        corrected = copy.deepcopy(report)
+        corrected["checklist"].pop()
+        with self.assertRaisesRegex(ValueError, "original native session"):
+            self.accept(claim, corrected, agent=VERIFIER, round=1)
+        with self.assertRaisesRegex(ValueError, "later same-session"):
+            self.accept(claim, corrected)
+        with self.assertRaisesRegex(ValueError, "lost or rewrote"):
+            self.accept(claim, self.fixture.report(), round=1)
+        self.assertTrue(self.accept(claim, corrected, round=1)["complete"])
+        self.assertEqual(app.candidates(self.root, self.ledger, self.plan)[0]["original_id"], "R1")
+
+    def test_wire_errors_do_not_retain_invalid_findings(self):
+        claim = self.claim()
+        original = {"id": "R1", "text": "Original defect", "sources": ["source"]}
+        invalid = [
+            [original, {**original, "text": "Different defect with the same ID"}],
+            [{**original, "sources": ["unknown"]}],
+        ]
+        for findings in invalid:
+            for fields in ({"deliverables": "[]"}, {"operations": ["null"]}):
+                with self.subTest(findings=findings, fields=fields):
+                    report = self.fixture.report(findings=findings, **fields)
+                    with self.assertRaisesRegex(ValueError, "finding sources"):
+                        self.accept(claim, report)
+                    self.assertEqual(self.ledger.db.execute(
+                        "SELECT count(*) FROM report_rejections").fetchone()[0], 0)
+                    self.assertEqual(self.ledger.db.execute(
+                        "SELECT count(*) FROM accepted_reports").fetchone()[0], 0)
+                    self.assertEqual(app._claim(self.ledger, claim["claim"])["state"], "claimed")
+        corrected = self.fixture.report(findings=[original], deliverables="{}")
+        self.assertTrue(self.accept(claim, corrected)["complete"])
+        self.assertEqual(app.candidates(self.root, self.ledger, self.plan)[0]["original_id"], "R1")
+
+    def test_rejected_writer_report_keeps_patch_until_same_session_correction(self):
+        claim = self.claim("finding_fix")
+        before = app.source_file(self.root, "code.py")
+        (self.root / "code.py").write_text("value = 3\n")
+        report = self.fixture.report(changes=[{"path": "code.py", "before": before,
+                                              "after": app.source_file(self.root, "code.py")}],
+                                     commit_message="Fix the selected value")
+        report["checklist"].append({"id": "required-tests", "status": "completed", "evidence": ["source"]})
+        rejected = self.accept(claim, report, agent=FIXER)
+        self.assertFalse(rejected["complete"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.fixture.head)
+        self.assertEqual((self.root / "code.py").read_text(), "value = 3\n")
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM local_commits").fetchone()[0], 0)
+        report["checklist"].pop()
+        self.assertTrue(self.accept(claim, report, agent=FIXER, round=1)["complete"])
+        self.assertNotEqual(git(self.root, "rev-parse", "HEAD"), self.fixture.head)
+        self.assertEqual(self.ledger.db.execute("SELECT state FROM local_commits").fetchone()[0], "completed")
+
+    def test_checklist_corrections_are_bounded_and_cannot_replace_complete_reports(self):
+        claim = self.claim()
+        report = self.fixture.report()
+        report["checklist"].append({"id": "extra", "status": "completed", "evidence": ["source"]})
+        for number in range(3):
+            self.assertFalse(self.accept(claim, report, round=number)["complete"])
+        with self.assertRaisesRegex(ValueError, "bounded same-session"):
+            self.accept(claim, report, round=3)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM report_rejections").fetchone()[0], 4)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM accepted_reports").fetchone()[0], 0)
+        with self.assertRaisesRegex(ValueError, "allowance exceeded"):
+            self.accept(claim, report, round=4)
+        fresh = self.claim("finding_verification")
+        self.accept(fresh, self.fixture.report(), agent=VERIFIER)
+        with self.assertRaisesRegex(ValueError, "completed task coverage"):
+            self.accept(fresh, report, agent=VERIFIER)
+
+    def test_source_and_governing_evidence_failures_do_not_become_report_corrections(self):
+        claim = self.claim()
+        report = self.fixture.report()
+        report["checklist"].append({"id": "extra", "status": "completed", "evidence": ["source"]})
+        forged = copy.deepcopy(report)
+        forged["evidence"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "changed source evidence"):
+            self.accept(claim, forged)
+        (self.root / "AGENTS.md").write_text("Changed governing instruction\n")
+        report["evidence"][0]["sha256"] = app.source_file(self.root, "AGENTS.md")
+        with self.assertRaisesRegex(ValueError, "governing inputs changed"):
+            self.accept(claim, report)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM report_rejections").fetchone()[0], 0)
+
     def test_optional_final_checklist_round_settles_without_task_coverage(self):
         self.review["required"] = False
         claim = self.claim()
@@ -326,6 +428,23 @@ class AppTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "retained allowance exhausted"):
                 self.claim(task["id"])
 
+    def test_fresh_review_assignments_do_not_receive_prior_reviewer_hypotheses(self):
+        original = self.original_finding()
+        second = copy.deepcopy(self.review)
+        second["id"] += "_independent"
+        self.plan["tasks"].append(second)
+        review = self.claim(second["id"])
+        self.assertEqual(review["task_input"]["findings"], [])
+        self.assertEqual(app.candidates(self.root, self.ledger, self.plan)[0]["id"], original["id"])
+        self.accept(review, self.fixture.report(), agent=FIXER)
+        verification = self.claim("finding_verification")
+        self.assertEqual([v["id"] for v in verification["task_input"]["findings"]], [original["id"]])
+        disposition = {"finding_id": original["id"], "status": "confirmed", "sources": ["source"],
+                       "reason": "Verified independently against source"}
+        self.accept(verification, self.fixture.report(dispositions=[disposition]), agent=VERIFIER)
+        fix = self.claim("finding_fix")
+        self.assertEqual([v["id"] for v in fix["task_input"]["findings"]], [original["id"]])
+
     def test_later_review_findings_invalidate_verification_and_fix_coverage(self):
         self.accept(self.claim())
         self.accept(self.claim("finding_verification"), agent=VERIFIER)
@@ -351,9 +470,9 @@ class AppTests(unittest.TestCase):
         report = self.fixture.report(dispositions=[disposition])
         with self.assertRaisesRegex(ValueError, "independent native"):
             self.accept(claim, report, agent=REVIEWER)
-        with self.assertRaisesRegex(ValueError, "omitted original"):
-            self.accept(claim, self.fixture.report(dispositions=[]), agent=VERIFIER)
-        accepted = self.accept(claim, report, agent=VERIFIER)
+        rejected = self.accept(claim, self.fixture.report(dispositions=[]), agent=VERIFIER)
+        self.assertFalse(rejected["complete"])
+        accepted = self.accept(claim, report, agent=VERIFIER, round=1)
         self.assertTrue(accepted["complete"])
 
     def test_later_confirmation_overrides_an_original_rejection_for_completion(self):
@@ -384,8 +503,91 @@ class AppTests(unittest.TestCase):
         claim = self.claim("finding_verification")
         report = self.fixture.report(dispositions=[{"finding_id": finding["id"], "status": "rejected",
             "sources": ["forged"], "reason": "Unsupported purported counterexample"}])
-        with self.assertRaises(ValueError):
-            self.accept(claim, report, agent=VERIFIER)
+        rejected = self.accept(claim, report, agent=VERIFIER)
+        self.assertFalse(rejected["complete"])
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM accepted_reports WHERE task=?", ("finding_verification",)).fetchone()[0], 0)
+        report["dispositions"][0]["sources"] = ["source"]
+        self.assertTrue(self.accept(claim, report, agent=VERIFIER, round=1)["complete"])
+
+    def test_mixed_original_and_current_disposition_sources_need_same_session_correction(self):
+        finding = self.original_finding()
+        verification = self.claim("finding_verification")
+        disposition = {"finding_id": finding["id"], "status": "confirmed", "sources": ["source"],
+                       "reason": "Verified against current source"}
+        self.accept(verification, self.fixture.report(dispositions=[disposition]), agent=VERIFIER)
+        claim = self.claim("finding_fix")
+        before = app.source_file(self.root, "code.py")
+        (self.root / "code.py").write_text("value = 3\n")
+        disposition.update(status="fixed", sources=["E2", "E3", "source"])
+        report = self.fixture.report(dispositions=[disposition],
+            changes=[{"path": "code.py", "before": before, "after": app.source_file(self.root, "code.py")}],
+            commit_message="Fix the selected value")
+        self.assertFalse(self.accept(claim, report, agent=FIXER)["complete"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.fixture.head)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM local_commits").fetchone()[0], 0)
+        report["dispositions"][0]["sources"] = ["source"]
+        report["deliverables"] = {"original_sources": ["E2", "E3"]}
+        self.assertTrue(self.accept(claim, report, agent=FIXER, round=1)["complete"])
+        self.assertEqual(self.ledger.db.execute("SELECT state FROM local_commits").fetchone()[0], "completed")
+
+    def accepted_source_fix(self):
+        finding = self.original_finding()
+        disposition = {"finding_id": finding["id"], "status": "confirmed", "sources": ["source"],
+                       "reason": "Independently reproduced the original defect"}
+        self.accept(self.claim("finding_verification"), self.fixture.report(dispositions=[disposition]), agent=VERIFIER)
+        claim = self.claim("finding_fix")
+        before = app.source_file(self.root, "code.py")
+        (self.root / "code.py").write_text("value = 3\n")
+        disposition = {**disposition, "status": "fixed"}
+        report = self.fixture.report(dispositions=[disposition], changes=[
+            {"path": "code.py", "before": before, "after": app.source_file(self.root, "code.py")}],
+            commit_message="Fix original value")
+        self.assertTrue(self.accept(claim, report, agent=FIXER)["complete"])
+        return finding, disposition, git(self.root, "rev-parse", "HEAD")
+
+    def reconfirm_original_fix(self, finding):
+        self.accept(self.claim())
+        report = self.fixture.report(dispositions=[{"finding_id": finding["id"], "status": "confirmed",
+            "sources": ["source"], "reason": "Original finding was valid; current code is fixed"}])
+        self.assertTrue(self.accept(self.claim("finding_verification"), report, agent=VERIFIER)["complete"])
+
+    def test_reconfirmed_fixed_finding_needs_no_redundant_edit_or_commit(self):
+        finding, disposition, head = self.accepted_source_fix()
+        self.reconfirm_original_fix(finding)
+        claim = self.claim("finding_fix")
+        retained = claim["task_input"]["verified_existing_fixes"][finding["id"]]
+        self.assertEqual(retained["head"], head)
+        self.assertTrue(self.accept(claim, self.fixture.report(dispositions=[disposition], changes=[]), agent=FIXER)["complete"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.ledger.db.execute("SELECT count(*) FROM local_commits").fetchone()[0], 1)
+        self.assertTrue(app.coverage(self.root, self.provider, self.ledger, self.plan, {})["complete"])
+
+    def test_noop_fixed_report_requires_an_accepted_controlled_commit(self):
+        finding, disposition, head = self.accepted_source_fix()
+        self.reconfirm_original_fix(finding)
+        claim = self.claim("finding_fix")
+        self.ledger.db.execute("DELETE FROM local_commits")
+        self.assertIsNone(app._retained_fix(self.root, self.ledger, finding["id"]))
+        with self.assertRaisesRegex(app.ReportContractError, "verified code changes"):
+            app._dispositions(self.root, self.ledger, self.plan, claim["task_input"]["task"],
+                self.fixture.report(dispositions=[disposition], changes=[]), FIXER, claim["task_input"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+
+    def test_noop_fixed_report_rejects_changed_bytes_of_a_previous_fix(self):
+        finding, disposition, _ = self.accepted_source_fix()
+        self.reconfirm_original_fix(finding)
+        claim = self.claim("finding_fix")
+        self.assertIn(finding["id"], claim["task_input"]["verified_existing_fixes"])
+        (self.root / "code.py").write_text("value = 4\n")
+        self.assertFalse(self.accept(claim, self.fixture.report(dispositions=[disposition], changes=[]), agent=FIXER)["complete"])
+
+    def test_noop_fix_proof_requires_the_original_commit_in_current_history(self):
+        finding, _, _ = self.accepted_source_fix()
+        git(self.root, "reset", "--hard", self.fixture.head)
+        (self.root / "code.py").write_text("value = 3\n")
+        git(self.root, "add", "code.py")
+        git(self.root, "commit", "-m", "Unretained alternative with identical bytes")
+        self.assertIsNone(app._retained_fix(self.root, self.ledger, finding["id"]))
 
     def test_accepted_and_deferred_findings_require_exact_bound_user_authority(self):
         finding = self.original_finding()

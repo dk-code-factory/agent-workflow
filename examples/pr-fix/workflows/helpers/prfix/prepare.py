@@ -242,7 +242,7 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
     if any(task["kind"] == "review" for task in tasks):
         for key, kind, role, assignment in [
             ("finding_verification", "verification", "verifier", "Independently verify every retained original finding. Preserve exact finding_id and report source; return dispositions confirmed/rejected with concrete source evidence and reason. Do not edit or publish."),
-            ("finding_fix", "fix", "fixer", "Address independently confirmed findings. Return every finding_id disposition fixed/accepted/deferred/rejected, original sources, evidence and exact changed-file hashes/commit_message. Accepted/deferred dispositions require retained exact user authority. Do not publish or commit.")]:
+            ("finding_fix", "fix", "fixer", "Address independently confirmed findings. Return every finding_id disposition fixed/accepted/deferred/rejected, current evidence IDs and exact changed-file hashes/commit_message. Preserve original report/source references in deliverables. Accepted/deferred dispositions require retained exact user authority. Do not publish or commit.")]:
             tasks.append({"id": key, "skill": key, "kind": kind, "definition": role,
                 "definition_digest": hashlib.sha256(definitions[role]).hexdigest(), "assignment": assignment,
                 "required": True, "writes": kind == "fix", "checklist": CHECKLIST,

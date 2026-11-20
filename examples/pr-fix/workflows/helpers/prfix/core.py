@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY, task TEXT NOT NULL, finge
  report TEXT NOT NULL DEFAULT '', coverage TEXT NOT NULL DEFAULT '', UNIQUE(task,fingerprint));
 CREATE TABLE IF NOT EXISTS submissions(claim_id TEXT NOT NULL, round INTEGER NOT NULL,
  agent TEXT NOT NULL, report TEXT NOT NULL, PRIMARY KEY(claim_id,round));
+CREATE TABLE IF NOT EXISTS report_rejections(claim_id TEXT NOT NULL, round INTEGER NOT NULL,
+ agent TEXT NOT NULL, report TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(claim_id,round));
 CREATE TABLE IF NOT EXISTS accepted_reports(reference TEXT PRIMARY KEY, task TEXT NOT NULL,
  kind TEXT NOT NULL, fingerprint TEXT NOT NULL, agent TEXT NOT NULL, report TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, kind TEXT NOT NULL, input TEXT NOT NULL,

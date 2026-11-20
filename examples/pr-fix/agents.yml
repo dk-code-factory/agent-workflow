@@ -1,4 +1,6 @@
 # Replace this placeholder with an existing local content ID or registry digest.
+controller:
+  run-timeout: 2h
 execution:
   mode: container
   image: registry.example.com/team/python-git-gh@sha256:0000000000000000000000000000000000000000000000000000000000000000

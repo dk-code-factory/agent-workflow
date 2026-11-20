@@ -668,6 +668,7 @@ the admitted contract even after source files change.
 
 Named declarations accept the output validator's supported subset: a single
 `type` (`object`, `array`, `string`, `integer`, `number`, `boolean`, or `null`),
+or a two-type nullable union such as `[string, 'null']`,
 `properties`, `required`, `additionalProperties` (boolean or schema), `items`,
 `enum`, RE2 `pattern`, `minLength`, `maxLength`, `maxItems`, and `minimum`, plus
 `title`, `description`, and `$comment`. Object, array, and length constraints

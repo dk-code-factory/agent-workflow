@@ -14,4 +14,15 @@ The audience object contains the exact supplied fingerprint, boolean suitable,
 the intended audience and nonempty evidence IDs. Unsuitable text requires
 concrete findings or blockers. A favorable verdict grants no publication or merge
 permission and cannot accept a different payload fingerprint.
+Evidence paths must be workspace-relative repository source files. Never use
+.git, .agent-workflow, .pr-fix-state or generated workflow files as evidence.
+Retained snapshots and report artifacts are assignment context; put their
+references in task-specific deliverables, and attach relevant source or repository
+guidance files in evidence. Return null for unused nullable fields and encode
+task-specific deliverables and operation objects as JSON strings. Return exactly
+the assigned checklist IDs, without extra IDs. Put test results and supplemental
+checks in deliverables rather than adding checklist items. Disposition sources
+contain only evidence IDs from this report; original report/artifact references
+belong in deliverables.
+
 """

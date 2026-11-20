@@ -23,6 +23,9 @@ before preparation, and start with a clean worktree. Preserve the exact original
 request in private JSON. Put orchestration settings in YAML inputs, deployment
 settings in `agents.yml`, and native agent definitions in TOML.
 
+Use a self-contained clone: Git object alternates outside the workspace are not
+mounted into helper containers. If cloning with `--reference`, add `--dissociate`.
+
 Writing plans need a repository-local commit identity. Set the intended author
 and committer in this clone before preparation:
 
@@ -42,6 +45,28 @@ reference or immutable local content ID and contain Python 3.11 or newer, Git,
 use only the standard library. Any compatible image can be used; no PR-specific
 Dockerfile or custom Go binary is required. Set the image under `execution.image` in `examples/pr-fix/agents.yml`.
 Helper jobs omit `image` and inherit the configured image before admission.
+
+Allow enough controller time for the complete selected plan, including review
+after source changes. The default `controller.run-timeout` is 30 minutes; set a
+larger value such as `2h` in the deployment configuration for long live runs.
+The CLI `--timeout` controls client waiting or foreground execution and does not
+change the detached controller's run deadline. Restart an existing controller
+after changing its configuration, then resume the original run with its retained
+claims and budgets.
+
+For recovery, preserve the original deployment file so its hash and retained task
+coverage remain unchanged. After stopping its old controller, start the controller
+in a separate terminal with an operational deadline override:
+
+```sh
+agent-workflow controller --workspace /path/to/checkout \
+  --config examples/pr-fix/agents.yml --controller-run-timeout 2h
+```
+
+Then resume or submit a replacement execution against the original logical-run
+ledger. The override is valid only for `controller`; it does not alter the pinned
+agent configuration or replenish review, retry or CI allowances. An unresolved
+effect still requires its original reconciliation evidence.
 
 For a generic local tool image, the operator can build these standard tools
 without adding a PR-specific Dockerfile to the example:
@@ -126,8 +151,11 @@ agent-workflow run --config examples/pr-fix/agents.yml \
 Selections retain order and repeated occurrences with distinct stable IDs.
 Nested arrays form parallel read barriers; writers run sequentially. Managed
 review stages run reviewer groups, then independent verification and fixes.
-Empty selections still reach coverage and completion. `native.yml` selects five
-literal TOML roles. Retry/checklist expressions carry original session references.
+Empty selections still reach coverage and completion. `native.yml` owns one
+report schema and report-acceptance boundary for initial, retry and checklist
+turns. Initial turns select five literal TOML roles; retry/checklist expressions
+carry original session references. Eligible retries retain their original failure
+classification, while failed checklist turns stop without entering another retry.
 
 Task names select assignments from `adapters`; they do not load installed skills.
 The defaults use `read-feedback`, `reconcile-decisions`, `address-feedback`,
@@ -138,16 +166,24 @@ Orchestration stages are explicit objects: `{"stage":"publication"}`,
 `{"stage":"reviews"}` and `{"stage":"ci"}`. A reviews stage can override
 the top-level reviewers with `{"stage":"reviews","reviewers":[["review","review"]]}`.
 Stages cannot run inside parallel task groups. Reviewers must select read-only
-review adapters. The earlier `skill` objects and fully qualified selector names
-remain supported. An exact adapter key takes precedence over its alias. Alias
+review adapters.
+
+For the same Toolkit, Standards and Spec reviewers used by `code-review-ad`,
+prepare the [native pass profile](../examples/pr-fix/profiles/README.md) before
+admission. It snapshots the installed package briefs, criteria, checks and drivers,
+then selects three fresh parallel engine sessions and independent verification.
+The profile records its execution differences from the standalone skill and pins
+supplemental frozen specifications as resources.
+
+The earlier `skill` objects and fully qualified selector names remain supported. An exact adapter key takes precedence over its alias. Alias
 lookup accepts either spelling, including legacy adapter maps used with the new
 default selections.
 
 Shallower helper jobs share `helper.yml`, which returns one `result` object.
 It calls a static command with the operation and payload as structured input;
 each call keeps its own checkpoint, identity and reconciliation boundary.
-The deepest native, retry and continuation workflows keep inline helper calls
-to preserve the engine's eight-level reusable-workflow limit, including a caller
+The deepest native-turn workflow keeps inline helper calls to preserve the
+engine's eight-level reusable-workflow limit, including a caller
 wrapper. An original attempt and its optional same-session retry feed one
 checklist continuation loop. CI polling keeps two bounded loops and the retained
 absolute deadline, with each observation and delay inside `ci-poll.yml`.
@@ -169,8 +205,8 @@ agent-workflow resume --workspace . --config CONFIG \
 
 Normal engine recovery reuses the original native session, admitted definition,
 turn allowance and helper bundle. Same-session checklist continuation is explicit
-in `continue.yml`, with at most three follow-ups. An unfinished application claim
-cannot be dispatched by a replacement execution merely because its process has
+in the checklist mode of `native.yml`, with at most three follow-ups. An unfinished
+application claim cannot be dispatched by a replacement execution merely because its process has
 changed. Resume its originating run or inspect and reconcile the retained effect;
 unknown publication effects never grant automatic replay. `--retry-uncertain`
 does not override structured mutation reconciliation.
@@ -218,9 +254,35 @@ A leaf receives one typed assignment, its original instructions, relevant settin
 source snapshot, exact checklist and original findings. Its structured JSON report
 contains `complete`, `checklist`, `findings`, `evidence` and `blockers`. Evidence is
 an array of `{id,path,sha256}` entries naming current regular workspace files.
-Checklist evidence and finding sources name these evidence IDs. Each assigned
+Checklist evidence, finding sources and disposition sources name these evidence IDs.
+Keep references from earlier reports in `deliverables`; their evidence IDs do not
+identify evidence in the current report. Each assigned
 checklist item must appear exactly once, with `completed` or `incomplete` status;
 completed items require evidence. A true `complete` flag alone grants no coverage.
+
+Report contract errors, including extra or missing checklist IDs and invalid
+disposition references, retain the rejected
+report separately and continue the original native session within the existing
+three-round checklist allowance. They grant no coverage and cannot commit or
+publish. Source/governing-input failures remain blocking. Corrections preserve
+every rejected finding identity and any fenced source edits; only a valid final
+report can create the controlled commit. Put supplemental checks and actual test
+results in `deliverables` instead of inventing checklist IDs.
+
+The native wire schema closes every object and requires all of its properties,
+as Codex structured output requires. Optional values are nullable. Publication
+operations are JSON-encoded object strings, and task-specific `deliverables` is
+a JSON-encoded object string or null. The helper decodes these open-ended fields
+during report acceptance and retains ordinary object reports. Malformed encoded
+values enter same-session contract correction after source evidence validation.
+Initial turns,
+same-session retries and checklist continuations use the same wire schema.
+
+Report `evidence` paths name current repository source or guidance files relative
+to the workspace. Captured GitHub discussions and retained report artifacts are
+assignment context: reference them in `deliverables`, and attach the relevant
+source files separately. Private state and generated workflow files cannot serve
+as source evidence, even when their content hashes are correct.
 
 Review fingerprints include the current tree and diff, target/base trees,
 discussion, instructions, settings, relevant resources, task controls and native

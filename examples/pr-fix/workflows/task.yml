@@ -46,46 +46,28 @@ jobs:
     uses: examples/pr-fix/workflows/native.yml
     with:
       plan: ${{ inputs.plan }}
+      claim: ${{ needs.prepare.outputs.result.claim }}
+      publication: ${{ inputs.publication }}
       definition: ${{ needs.prepare.outputs.result.definition }}
       prompt: ${{ needs.prepare.outputs.result.prompt }}
       task_input: ${{ needs.prepare.outputs.result.task_input }}
       turns: ${{ inputs.turns }}
     secrets:
       github_token: ${{ secrets.github_token }}
-  accept:
-    uses: examples/pr-fix/workflows/helper.yml
-    with:
-      operation: turn_result
-      payload:
-        plan: ${{ inputs.plan }}
-        claim: ${{ needs.prepare.outputs.result.claim }}
-        agent: ${{ needs.native.outputs.agent }}
-        report: ${{ needs.native.outputs.report }}
-        status: ${{ needs.native.outputs.status }}
-        failure_class: ${{ needs.native.outputs.failure_class }}
-        unsafe_failure_class: ${{ needs.native.outputs.unsafe_failure_class }}
-        error: ${{ needs.native.outputs.error }}
-        publication: ${{ inputs.publication }}
-    secrets:
-      github_token: ${{ secrets.github_token }}
-    needs:
-    - prepare
-    - native
-    if: ${{ needs.prepare.outputs.result.invoke }}
   checklist:
     needs:
     - prepare
     - native
-    - accept
     - retry
-    if: ${{ needs.accept.outputs.result.checklist or needs.retry.outputs.checklist }}
-    uses: examples/pr-fix/workflows/continue.yml
+    if: ${{ needs.native.outputs.checklist or needs.retry.outputs.checklist }}
+    uses: examples/pr-fix/workflows/native.yml
     repeat:
       max-attempts: 3
       until: ${{ iteration.outputs.settled }}
     secrets:
       github_token: ${{ secrets.github_token }}
     with:
+      mode: checklist
       plan: ${{ inputs.plan }}
       claim: ${{ needs.prepare.outputs.result.claim }}
       agent: ${{ needs.native.outputs.agent }}
@@ -105,26 +87,25 @@ jobs:
     needs:
     - prepare
     - native
-    - accept
     - checklist
     - retry
-    if: ${{ needs.prepare.status == 'succeeded' and needs.native.status != 'failed' and needs.native.status != 'needs_attention'
-      and needs.accept.status != 'failed' and needs.accept.status != 'needs_attention' and needs.checklist.status
-      != 'failed' and needs.checklist.status != 'needs_attention' and needs.retry.status != 'failed' and needs.retry.status
-      != 'needs_attention' }}
+    if: ${{ needs.prepare.status == 'succeeded' and needs.native.status != 'failed' and
+      needs.native.status != 'needs_attention' and needs.checklist.status != 'failed' and
+      needs.checklist.status != 'needs_attention' and needs.retry.status != 'failed' and
+      needs.retry.status != 'needs_attention' }}
   retry:
     needs:
     - prepare
     - native
-    - accept
-    if: ${{ needs.accept.outputs.result.retry }}
-    uses: examples/pr-fix/workflows/retry.yml
+    if: ${{ needs.native.outputs.retry }}
+    uses: examples/pr-fix/workflows/native.yml
     with:
+      mode: retry
       plan: ${{ inputs.plan }}
       claim: ${{ needs.prepare.outputs.result.claim }}
       agent: ${{ needs.native.outputs.agent }}
-      prompt: ${{ needs.accept.outputs.result.prompt }}
-      task_input: ${{ needs.accept.outputs.result.task_input }}
+      prompt: ${{ needs.native.outputs.prompt }}
+      task_input: ${{ needs.native.outputs.task_input }}
       publication: ${{ inputs.publication }}
       turns: ${{ inputs.turns }}
     secrets:
