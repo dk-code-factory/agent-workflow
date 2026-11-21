@@ -127,7 +127,12 @@ func readJSON(path string, v any) error {
 		return e
 	}
 	defer f.Close()
-	d := json.NewDecoder(io.LimitReader(f, maxOutput+1))
+	return decodeJSON(f, v)
+}
+
+func decodeJSON(reader io.Reader, v any) error {
+	d := json.NewDecoder(io.LimitReader(reader, maxOutput+1))
+	var e error
 	d.DisallowUnknownFields()
 	if e = d.Decode(v); e != nil {
 		return e
