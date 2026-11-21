@@ -130,7 +130,7 @@ jobs:
           npm run build --prefix ui
           npm run test:consumers --prefix ui
       - name: Run browser tests
-        run: npm run test:browser --prefix ui -- --project=chromium
+        run: npm run test:browser --prefix ui -- --project=chromium --workers=4
       - name: Upload UI browser failure reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
