@@ -34,7 +34,7 @@ record = root / "object.json"
 if args[0] == "info":
     print(json.dumps({"host":{"hostname":"fixture"},"store":{"graphRoot":str(root)}}))
 elif args[:2] == ["image", "inspect"]:
-    print(json.dumps([{"Id":"sha256:"+"a"*64,"Os":"linux","Architecture":"amd64","Config":{"Entrypoint":["tool"],"Cmd":["default"]}}]))
+    print(json.dumps([{"Id":"a"*64,"Os":"linux","Architecture":"amd64","Config":{"Entrypoint":["tool"],"Cmd":["default"]}}]))
 elif args[0] == "create":
     labels = dict(args[i+1].split("=",1) for i,a in enumerate(args) if a == "--label")
     record.write_text(json.dumps({"Id":"b"*64,"Name":args[args.index("--name")+1],"Config":{"Labels":labels},"State":{"Running":False}}))
@@ -78,6 +78,10 @@ else:
 	id, err := runtime.Create(ctx, CreateRequest{Name: owner.Name, Image: image.ID, User: "1000:1000", PrivatePaths: []string{"/workspace/.agent-workflow"}, Labels: owner.Labels, Mounts: []Mount{{Source: root, Target: "/actions", ReadOnly: true}}, Entrypoint: []string{"tool"}, Command: []string{"", "a b"}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	createCalls, readErr := os.ReadFile(filepath.Join(root, "calls.jsonl"))
+	if readErr != nil || !strings.Contains(string(createCalls), "/workspace/.agent-workflow:ro,nosuid,nodev,noexec,size=4096,mode=000,notmpcopyup") {
+		t.Fatalf("private state mask must suppress Podman copy-up: %s %v", createCalls, readErr)
 	}
 	owner.ID = id
 	a, err := runtime.Attach(ctx, id)

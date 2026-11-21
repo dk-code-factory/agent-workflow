@@ -69,6 +69,23 @@ class Provider:
 
 
 class CITests(unittest.TestCase):
+    def test_shared_classification_resolves_legacy_controls_and_rechecks_proofs(self):
+        for options in ({"ci": {"classifications": [candidate()]}},
+                        {"ci_classifications": [candidate()]}):
+            with self.subTest(options=options):
+                provider = Provider()
+                plan = {"pr": PR, "options": options}
+                self.assertEqual(ci.classify_current(provider, plan, observation())["status"], "success")
+                provider.issue["state"] = "closed"
+                with self.assertRaisesRegex(ValueError, "issue does not affirm"):
+                    ci.classify_current(provider, plan, observation())
+                self.assertEqual(provider.observations, 0)
+
+    def test_explicit_empty_classifications_override_legacy_candidates(self):
+        plan = {"pr": PR, "options": {"ci": {"classifications": []},
+                                      "ci_classifications": [candidate()]}}
+        self.assertEqual(ci.classify_current(Provider(), plan, observation())["status"], "failed")
+
     def test_configuration_validates_declared_rule_fields_without_live_evidence(self):
         flake = candidate()
         rule = {"id": "saved", "kind": "pipeline", "workflow": flake["workflow"],

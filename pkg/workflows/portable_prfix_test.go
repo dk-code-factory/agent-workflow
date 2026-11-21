@@ -124,6 +124,48 @@ print(json.dumps(result))
 	t.Setenv("AW_PORTABLE_CALLS", filepath.Join(directory, "calls.jsonl"))
 }
 
+// portableWireReport models the provider-facing strict report, including the
+// JSON encoding used only for fields with task-specific object keys.
+func portableWireReport(t *testing.T, report map[string]any) map[string]any {
+	t.Helper()
+	for _, key := range []string{"dispositions", "changes", "operations"} {
+		if _, exists := report[key]; !exists {
+			report[key] = []any{}
+		}
+	}
+	for _, key := range []string{"commit_message", "audience", "deliverables"} {
+		if _, exists := report[key]; !exists {
+			report[key] = nil
+		}
+	}
+	for _, raw := range report["dispositions"].([]any) {
+		disposition := raw.(map[string]any)
+		if _, exists := disposition["authorization"]; !exists {
+			disposition["authorization"] = nil
+		}
+	}
+	if audience, ok := report["audience"].(map[string]any); ok {
+		audience["audience"] = "PR participants"
+	}
+	operations := []any{}
+	for _, operation := range report["operations"].([]any) {
+		body, err := json.Marshal(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operations = append(operations, string(body))
+	}
+	report["operations"] = operations
+	if value, ok := report["deliverables"].(map[string]any); ok {
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report["deliverables"] = string(body)
+	}
+	return report
+}
+
 type portablePrepared struct {
 	Workflow string `json:"workflow"`
 	Config   string `json:"config"`
@@ -382,6 +424,16 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 			"evidence": []any{map[string]any{"id": "source", "path": "file.txt", "sha256": hex.EncodeToString(sourceHash[:])}},
 			"findings": []any{}, "dispositions": []any{},
 		}
+		if kind == "review" && incomplete {
+			// A real provider completed the work but added an unassigned test
+			// checklist ID. Preserve its findings and correct the report through
+			// the original session instead of accepting or abandoning it.
+			report["complete"] = true
+			for _, raw := range checks {
+				raw.(map[string]any)["status"] = "completed"
+			}
+			report["checklist"] = append(checks, map[string]any{"id": "required-tests", "status": "completed", "evidence": []string{"source"}})
+		}
 		if kind == "review" {
 			reviewed = append(reviewed, request.ParentWorkerID)
 			report["findings"] = []any{map[string]any{"id": "candidate", "text": "Check the changed source against the fixture specification.", "sources": []string{"source"}}}
@@ -398,10 +450,14 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 			verificationAgents = append(verificationAgents, request.ParentWorkerID)
 			for _, raw := range assignment["findings"].([]any) {
 				finding := raw.(map[string]any)
-				report["dispositions"] = append(report["dispositions"].([]any), map[string]any{"finding_id": finding["id"], "status": "rejected", "reason": "The inspected source matches this deterministic fixture's specification.", "sources": []string{"source"}})
+				sources := []string{"source"}
+				if turns[request.ParentWorkerID] == 1 {
+					sources = append(sources, "original-report-source")
+				}
+				report["dispositions"] = append(report["dispositions"].([]any), map[string]any{"finding_id": finding["id"], "status": "rejected", "reason": "The inspected source matches this deterministic fixture's specification.", "sources": sources})
 			}
 		}
-		body, err := json.Marshal(report)
+		body, err := json.Marshal(portableWireReport(t, report))
 		return map[string]any{"text": string(body)}, err
 	}}
 	runner := &portableInterruptedSession{nativeTaskFixture: fake, entered: make(chan SessionRequest, 1)}
@@ -467,17 +523,27 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	var lostKey string
 	var lossMu sync.Mutex
 	docker.helper = func(ctx context.Context, argv []string, input []byte, environment []string) ([]byte, []byte, int, bool) {
-		if len(argv) == 0 || argv[len(argv)-1] != "turn_result" {
+		if len(argv) == 0 {
 			return nil, nil, 0, false
 		}
 		var hook struct {
-			Phase   string `json:"phase"`
+			Phase string `json:"phase"`
+			Input struct {
+				Operation string `json:"operation"`
+			} `json:"input"`
 			Context struct {
 				Operation string `json:"operation_key"`
 			} `json:"context"`
 		}
 		if json.Unmarshal(input, &hook) != nil {
 			return nil, []byte("invalid portable hook input"), 1, true
+		}
+		operation := argv[len(argv)-1]
+		if operation == "invoke" {
+			operation = hook.Input.Operation
+		}
+		if operation != "turn_result" {
+			return nil, nil, 0, false
 		}
 		if hook.Phase == "reconcile" {
 			lossMu.Lock()
@@ -489,7 +555,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		}
 		commandContext, cancelCommand := context.WithTimeout(ctx, 20*time.Second)
 		defer cancelCommand()
-		command := exec.CommandContext(commandContext, "python3", "-B", filepath.Join(closure, "helpers", "action.py"), "turn_result")
+		command := exec.CommandContext(commandContext, "python3", "-B", filepath.Join(closure, "helpers", "action.py"), argv[len(argv)-1])
 		command.Dir, command.Env, command.Stdin = root, append(os.Environ(), environment...), bytes.NewReader(input)
 		process.Configure(command)
 		command.WaitDelay = time.Second
@@ -517,7 +583,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	if run.Outputs["complete"] != true || run.Outputs["ready"] != false {
 		t.Fatalf("selected completion did not remain separate from pending live CI: %#v", run.Outputs)
 	}
-	if len(reviewed) != 2 || reviewed[0] != reviewed[1] || len(verificationAgents) != 1 || verificationAgents[0] == reviewed[0] {
+	if len(reviewed) != 2 || reviewed[0] != reviewed[1] || len(verificationAgents) != 2 || verificationAgents[0] != verificationAgents[1] || verificationAgents[0] == reviewed[0] {
 		t.Fatalf("lost original-session checklist or independent verification: reviews=%v verifiers=%v", reviewed, verificationAgents)
 	}
 	if reviewed[0] != failedAgent || turns[failedAgent] != 3 {
@@ -819,7 +885,7 @@ jobs:
 			audiences++
 			report["audience"] = map[string]any{"fingerprint": assignment["payload"].(map[string]any)["fingerprint"], "suitable": true, "evidence": []string{"source"}}
 		}
-		data, err := json.Marshal(report)
+		data, err := json.Marshal(portableWireReport(t, report))
 		return map[string]any{"text": string(data)}, err
 	}}
 	e.Agents = fake
@@ -943,31 +1009,61 @@ jobs:
 }
 
 func TestPortablePRFixRetainedReportSchemasStayCompatible(t *testing.T) {
-	var original map[string]any
-	for _, name := range []string{"native.yml", "retry.yml", "continue.yml"} {
-		source, err := os.ReadFile(filepath.Join("..", "..", "examples", "pr-fix", "workflows", name))
-		if err != nil {
-			t.Fatal(err)
+	source, err := os.ReadFile(filepath.Join("..", "..", "examples", "pr-fix", "workflows", "native.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := Parse(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := workflow.Schemas["task-report"]
+	if len(original) == 0 {
+		t.Fatal("native.yml has no retained task-report schema")
+	}
+	for _, role := range []string{"leaf", "reviewer", "verifier", "fixer", "audience", "retry", "checklist"} {
+		job, exists := workflow.Jobs[role]
+		if !exists || len(job.Steps) != 1 || job.Steps[0].Uses != "agent/run" {
+			t.Fatal("missing native turn branch", role)
 		}
-		workflow, err := Parse(source)
-		if err != nil {
-			t.Fatal(name, err)
+		step := job.Steps[0]
+		output, ok := step.With["output"].(map[string]any)
+		if !ok || output["schema"] != "task-report" {
+			t.Fatal("native turn does not use the shared retained report contract", role)
 		}
-		schema := workflow.Schemas["task-report"]
-		if len(schema) == 0 {
-			t.Fatal(name, "has no retained task-report schema")
-		}
-		if original == nil {
-			original = schema
-		}
-		if actionHash(schema) != actionHash(original) {
-			t.Fatal(name, "task-report differs from native.yml; retained reports must survive retry and checklist continuation")
+		if step.ContinueOnError != (role != "checklist") {
+			t.Fatal("checklist failures must stop; initial and retry failures need classification", role)
 		}
 	}
-	report := map[string]any{"complete": true, "checklist": []any{}, "findings": []any{}, "evidence": []any{}, "blockers": []any{}, "deliverables": map[string]any{}}
+	report := portableWireReport(t, map[string]any{"complete": true, "checklist": []any{}, "findings": []any{}, "evidence": []any{}, "blockers": []any{}, "deliverables": map[string]any{}})
 	if err := validateJSONSchemaValue(report, original, "$"); err != nil {
 		t.Fatal("original report contract rejected its allowed field", err)
 	}
+	var strictObjects func(any)
+	strictObjects = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			if properties, ok := value["properties"].(map[string]any); ok {
+				required, _ := value["required"].([]any)
+				if value["additionalProperties"] != false || len(required) != len(properties) {
+					t.Fatal("Codex strict object must be closed and require every property", value)
+				}
+				for _, name := range required {
+					if _, exists := properties[name.(string)]; !exists {
+						t.Fatal("required property missing", name)
+					}
+				}
+			}
+			for _, child := range value {
+				strictObjects(child)
+			}
+		case []any:
+			for _, child := range value {
+				strictObjects(child)
+			}
+		}
+	}
+	strictObjects(original)
 	data, err := json.Marshal(original)
 	if err != nil {
 		t.Fatal(err)

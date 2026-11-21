@@ -50,8 +50,10 @@ Names such as `read-feedback` select local adapter assignments. Explicit stage
 objects select orchestration: `{"stage":"publication"}`, `{"stage":"reviews"}`
 and `{"stage":"ci"}`. These selectors do not invoke installed plugin skills.
 Legacy qualified names and `skill` objects remain accepted. Shared helper calls
-use [helper.yml](workflows/helper.yml); retry and checklist continuation preserve
-the original native session. [ci-poll.yml](workflows/ci-poll.yml) owns each CI
+use [helper.yml](workflows/helper.yml). [native.yml](workflows/native.yml) shares
+one report contract across initial turns, eligible retries and checklist
+continuations; retry and checklist modes preserve the original native session.
+[ci-poll.yml](workflows/ci-poll.yml) owns each CI
 observation and delay within its bounded polling chunk.
 
 A selected stage grants no publication authority. Every remote write needs its

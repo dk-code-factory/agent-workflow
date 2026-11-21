@@ -526,7 +526,7 @@ func validateJSONSchemaValueWithPatterns(
 		return nil
 	}
 	if expected := schemaType(schema); expected != "" {
-		if !schemaTypeMatches(value, expected) {
+		if !schemaTypeMatches(value, expected) && !(value == nil && schemaAllowsNull(schema)) {
 			return fmt.Errorf("%s must be %s", path, expected)
 		}
 	}
@@ -534,6 +534,9 @@ func validateJSONSchemaValueWithPatterns(
 		if !schemaEnumContains(enumValues, value) {
 			return fmt.Errorf("%s must be one of %v", path, enumValues)
 		}
+	}
+	if value == nil && schemaAllowsNull(schema) {
+		return nil
 	}
 	if _, isString := value.(string); isString {
 		if err := validateJSONSchemaPattern(value, schema, path, patterns); err != nil {
@@ -723,6 +726,20 @@ func schemaType(schema map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func schemaAllowsNull(schema map[string]any) bool {
+	if schema["type"] == "null" {
+		return true
+	}
+	if types, ok := schema["type"].([]any); ok {
+		for _, value := range types {
+			if value == "null" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func schemaTypeMatches(value any, expected string) bool {

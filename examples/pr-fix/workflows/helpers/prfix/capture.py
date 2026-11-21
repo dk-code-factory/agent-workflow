@@ -7,7 +7,6 @@ The caller owns storage of ``GitHub.last_capture`` as immutable evidence.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -18,7 +17,7 @@ import subprocess
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from .core import FORMAT, GENERATED, STATE, bounded_json
+from .core import FORMAT, GENERATED, STATE, bounded_json, canonical, digest
 
 
 MAX_OUTPUT = 16 << 20
@@ -29,15 +28,6 @@ MAX_FILE_BYTES = 64 << 20
 SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
-
-
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False, allow_nan=False).encode("utf-8")
-
-
-def digest(value):
-    return hashlib.sha256(canonical(value)).hexdigest()
 
 
 def _text(value, label):
@@ -303,8 +293,17 @@ class GitHub:
         else:
             raise ValueError("review threads exceed bounded pagination")
         after = self.request("GET", route)
-        before_pin = [metadata.get(k) for k in ("head", "base", "updated_at", "state")]
-        after_pin = [after.get(k) for k in ("head", "base", "updated_at", "state")]
+        def pin(value):
+            refs = []
+            for name in ("head", "base"):
+                ref = value.get(name, {})
+                repository = ref.get("repo") or {}
+                refs.append([ref.get("sha"), ref.get("ref"), repository.get("id"), repository.get("full_name")])
+            # Repository statistics also change when another branch or PR is
+            # updated. They are not changes to this PR's captured discussion.
+            return [refs, *[value.get(k) for k in ("updated_at", "state", "merged", "draft")]]
+        before_pin = pin(metadata)
+        after_pin = pin(after)
         if before_pin != after_pin:
             raise ValueError("PR changed during capture; retry this read")
         self.last_capture = result

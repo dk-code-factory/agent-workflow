@@ -81,13 +81,20 @@ func validateNamedSchema(schema map[string]any, path string, depth int) error {
 		case "minLength", "maxLength":
 			expected = "string"
 		}
-		if expected != "" && schema["type"] != expected {
+		if expected != "" && schemaType(schema) != expected {
 			return fmt.Errorf("%s: requires type: %s", field, expected)
 		}
 		switch key {
 		case "type":
-			text, ok := value.(string)
-			if !ok || (text != "object" && text != "array" && text != "string" && text != "integer" && text != "number" && text != "boolean" && text != "null") {
+			validType := func(value any) bool {
+				text, ok := value.(string)
+				return ok && (text == "object" || text == "array" || text == "string" || text == "integer" || text == "number" || text == "boolean" || text == "null")
+			}
+			if types, ok := value.([]any); ok {
+				if len(types) != 2 || !validType(types[0]) || !validType(types[1]) || types[0] == types[1] || !schemaAllowsNull(schema) {
+					return invalid()
+				}
+			} else if !validType(value) {
 				return invalid()
 			}
 		case "title", "description", "$comment", "pattern":
@@ -141,7 +148,7 @@ func validateNamedSchema(schema map[string]any, path string, depth int) error {
 				return invalid()
 			}
 		case "minimum":
-			if schema["type"] != "number" && schema["type"] != "integer" {
+			if schemaType(schema) != "number" && schemaType(schema) != "integer" {
 				return fmt.Errorf("%s: requires type: number or integer", field)
 			}
 			if number, ok := asFloat(value); !ok || math.IsNaN(number) || math.IsInf(number, 0) {

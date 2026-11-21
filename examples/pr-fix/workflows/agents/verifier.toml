@@ -14,4 +14,16 @@ status confirmed or rejected, a concrete reason and source evidence. No findings
 still requires the assigned checklist and source evidence. A different native
 session produced the original report; never present its unsupported conclusion
 as independent verification.
+Evidence paths must be workspace-relative repository source files. Never use
+.git, .agent-workflow, .pr-fix-state or generated workflow files as evidence.
+Retained snapshots and report artifacts are assignment context; put their
+references in task-specific deliverables, and attach relevant source or repository
+guidance files in evidence. Return null for unused nullable fields and encode
+task-specific deliverables and operation objects as JSON strings. Return exactly
+the assigned checklist IDs, without extra IDs. Put test results and supplemental
+checks in deliverables rather than adding checklist items. Disposition sources
+contain only evidence IDs from this report; original report/artifact references
+belong in deliverables.
+
 """
+model_reasoning_effort = "high"

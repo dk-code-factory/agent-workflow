@@ -48,6 +48,41 @@ def source_file(root, name):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def decode_native_report(report):
+    """Decode open-ended fields from the strict native wire schema.
+
+    Codex requires closed objects whose properties are all required. Task-specific
+    deliverables and publication payloads have open-ended keys, so only those
+    fields use JSON strings on the wire. Existing retained object reports keep
+    their original representation and are accepted unchanged.
+    """
+    def object_field(value, name):
+        try:
+            value = bounded_json(value) if isinstance(value, str) else value
+            # Parsing can produce nonfinite floats or unpaired surrogates.
+            # Check serialization while the original wire report is retained.
+            canonical(value)
+        except (ValueError, RecursionError) as error:
+            raise ReportContractError("native " + name + " must encode a bounded JSON object: " + str(error)) from error
+        if not isinstance(value, dict):
+            raise ReportContractError("native " + name + " must encode an object")
+        return value
+
+    decoded = dict(report)
+    for key in ("commit_message", "audience", "deliverables"):
+        if decoded.get(key) is None:
+            decoded.pop(key, None)
+    operations = decoded.get("operations", [])
+    if "operations" in decoded and isinstance(operations, list):
+        decoded["operations"] = []
+        for value in operations:
+            decoded["operations"].append(object_field(value, "publication operation"))
+    deliverables = decoded.get("deliverables")
+    if isinstance(deliverables, str):
+        decoded["deliverables"] = object_field(deliverables, "deliverables")
+    return decoded
+
+
 def verify_evidence(root, report):
     evidence = report.get("evidence")
     if not isinstance(evidence, list) or not evidence or len(evidence) > 128:
@@ -63,31 +98,15 @@ def verify_evidence(root, report):
     return identities
 
 
-def verify_report(root, task, report):
-    if not isinstance(report, dict) or type(report.get("complete")) is not bool:
-        raise ValueError("report must declare boolean complete")
-    if len(canonical(report)) > 512 << 10:
-        raise ValueError("report exceeds application byte limit")
-    identities = verify_evidence(root, report)
-    checks = report.get("checklist")
-    if not isinstance(checks, list):
-        raise ValueError("report checklist missing")
-    expected = {item["id"] for item in task["checklist"]}
-    observed = set()
-    all_complete = True
-    for check in checks:
-        if not isinstance(check, dict) or check.get("id") not in expected or check["id"] in observed:
-            raise ValueError("unknown or duplicate checklist item")
-        observed.add(check["id"])
-        if check.get("status") not in {"completed", "incomplete"}:
-            raise ValueError("invalid checklist disposition")
-        references = check.get("evidence", [])
-        if (not isinstance(references, list) or any(ref not in identities for ref in references)
-                or check["status"] == "completed" and not references):
-            raise ValueError("checklist evidence does not name verified source evidence")
-        all_complete = all_complete and check["status"] == "completed"
-    if observed != expected:
-        raise ValueError("report does not account for its exact assigned checklist")
+class ReportContractError(ValueError):
+    """An invalid report grants no coverage and needs a bounded correction."""
+
+
+class ChecklistContractError(ReportContractError):
+    """A bounded same-session correction can repair the checklist envelope."""
+
+
+def verify_findings(report, identities):
     findings = report.get("findings", [])
     if not isinstance(findings, list) or len(findings) > 128:
         raise ValueError("invalid findings")
@@ -98,9 +117,37 @@ def verify_report(root, task, report):
         if key in seen or not finding.get("sources") or any(ref not in identities for ref in finding["sources"]):
             raise ValueError("finding sources do not name verified evidence")
         seen.add(key)
+
+
+def verify_report(root, task, report):
+    if not isinstance(report, dict) or type(report.get("complete")) is not bool:
+        raise ValueError("report must declare boolean complete")
+    if len(canonical(report)) > 512 << 10:
+        raise ValueError("report exceeds application byte limit")
+    identities = verify_evidence(root, report)
+    verify_findings(report, identities)
     blockers = report.get("blockers", [])
     if not isinstance(blockers, list) or any(not isinstance(item, str) for item in blockers):
         raise ValueError("invalid blocker list")
+    checks = report.get("checklist")
+    if not isinstance(checks, list):
+        raise ChecklistContractError("report checklist missing")
+    expected = {item["id"] for item in task["checklist"]}
+    observed = set()
+    all_complete = True
+    for check in checks:
+        if not isinstance(check, dict) or check.get("id") not in expected or check["id"] in observed:
+            raise ChecklistContractError("unknown or duplicate checklist item; return only assigned IDs")
+        observed.add(check["id"])
+        if check.get("status") not in {"completed", "incomplete"}:
+            raise ChecklistContractError("invalid checklist disposition")
+        references = check.get("evidence", [])
+        if (not isinstance(references, list) or any(ref not in identities for ref in references)
+                or check["status"] == "completed" and not references):
+            raise ChecklistContractError("checklist evidence does not name verified source evidence")
+        all_complete = all_complete and check["status"] == "completed"
+    if observed != expected:
+        raise ChecklistContractError("report does not account for its exact assigned checklist")
     return report["complete"] and all_complete and not blockers
 
 
@@ -191,22 +238,39 @@ def prepare_claim(root, provider, ledger, plan, inputs):
     fingerprint = digest([fingerprint, invocation])
     key = "claim_" + digest([plan["logical_run"], task["id"], fingerprint, invocation])
     writer_lease(root, plan["logical_run"], key)
-    findings = candidates(root, ledger, plan)
+    # Fresh reviewers receive frozen source/specification/discussion, never
+    # hypotheses from earlier or sibling reviewers. Verification and fixing
+    # retain the original findings and their identities below.
+    findings = [] if task["kind"] == "review" else candidates(root, ledger, plan)
     if task["id"] == "finding_fix":
         verdicts = {}
         for row in ledger.db.execute("SELECT report FROM accepted_reports WHERE kind='verification' ORDER BY rowid"):
             for disposition in bounded_json(row["report"]).get("dispositions", []):
                 verdicts[disposition["finding_id"]] = disposition["status"]
         findings = [finding for finding in findings if verdicts.get(finding["id"]) == "confirmed"]
+    existing_fixes = {finding["id"]: retained for finding in findings
+                      if task["kind"] == "fix"
+                      and (retained := _retained_fix(root, ledger, finding["id"]))}
     assignment = {"format": FORMAT, "claim": key, "task": task,
                   "snapshot": snapshot, "instructions": plan["instructions"],
                   "settings": plan.get("settings", {}), "findings": findings,
+                  "verified_existing_fixes": existing_fixes,
                   "payload": payload,
                   "invocation": invocation,
                   "authorization": plan.get("authorizations", {}),
-                  "report_contract": "Source evidence is {id,path,sha256}; checklist evidence names these IDs. "
+                  "report_contract": "Source evidence is {id,path,sha256}; path must name a current regular repository "
+                  "source file, relative to the workspace (for example AGENTS.md or the reviewed code). "
+                  "Never put .pr-fix-state, .agent-workflow, .git, generated workflow files or "
+                  "absolute paths in evidence. Retained snapshot/artifact references are context, "
+                  "not source evidence; cite them in deliverables instead. Checklist evidence names "
+                  "only verified source evidence IDs. Return exactly the assigned checklist IDs, "
+                  "without extra items; put required test results and supplemental checks in deliverables. "
                   "Do not publish, commit, coordinate stages or start provider processes. "
-                  "Keep all original finding IDs and sources in disposition reports."}
+                  "Keep original finding IDs in dispositions. Disposition sources must name only evidence "
+                  "IDs from this report; preserve original report/artifact references in deliverables. "
+                  "A fixed disposition without new changes requires verified_existing_fixes for that "
+                  "original finding: the earlier controlled fix commit must remain an ancestor and "
+                  "all its changed source bytes must remain intact. Do not make redundant edits."}
     reference = artifact(root, assignment)
     # Reviewers share each input-sensitive round. A fresh invocation of a
     # noncacheable reviewer consumes another round even when inputs are unchanged.
@@ -267,16 +331,49 @@ def continuation_current(root, provider, ledger, plan, claim, assignment):
     return _fingerprint(current, task, ledger) == _fingerprint(assignment["snapshot"], task, ledger)
 
 
+def _retained_fix(root, ledger, finding_id):
+    """Prove a prior accepted controlled fix is still present, without new edits."""
+    head = git(root, "rev-parse", "HEAD").decode().strip()
+    for row in ledger.db.execute("SELECT reference,report FROM accepted_reports WHERE kind='fix' ORDER BY rowid DESC"):
+        report = bounded_json(row["report"])
+        if not any(item.get("finding_id") == finding_id and item.get("status") == "fixed"
+                   for item in report.get("dispositions", [])) or not report.get("changes"):
+            continue
+        wrapper = read_artifact(root, row["reference"])
+        if wrapper.get("report") != report:
+            raise ValueError("retained fix lost its accepted native report")
+        commit = ledger.db.execute("SELECT head FROM local_commits WHERE id=? AND state='completed'",
+                                   (wrapper["claim"],)).fetchone()
+        if not commit or git(root, "merge-base", commit["head"], head, check=False).decode().strip() != commit["head"]:
+            continue
+        intact = True
+        for change in report["changes"]:
+            path = Path(root) / change["path"]
+            if change["after"] is None:
+                intact = intact and not (path.exists() or path.is_symlink())
+            else:
+                intact = intact and path.is_file() and source_file(root, change["path"]) == change["after"]
+        if intact:
+            return {"claim": wrapper["claim"], "report": row["reference"],
+                    "head": commit["head"], "changes": report["changes"]}
+    return None
+
+
 def _dispositions(root, ledger, plan, task, report, agent, assignment):
     original = assignment["findings"]
+    if task["kind"] == "verification" and any(candidate["agent"] == agent for candidate in original):
+        raise ValueError("finding verification must use an independent native agent")
     evidence_ids = {item["id"] for item in report["evidence"]}
-    for disposition in report.get("dispositions", []):
+    dispositions = report.get("dispositions", [])
+    if not isinstance(dispositions, list) or any(not isinstance(item, dict) for item in dispositions):
+        raise ReportContractError("dispositions must be an array of objects")
+    for disposition in dispositions:
         sources = disposition.get("sources")
-        if not isinstance(sources, list) or not sources or any(source not in evidence_ids for source in sources):
-            raise ValueError("disposition sources must name verified source evidence")
+        if (not isinstance(sources, list) or not sources or
+                any(not isinstance(source, str) or source not in evidence_ids for source in sources)):
+            raise ReportContractError("disposition sources must name only evidence IDs in this report; "
+                                      "retain original report/source references in deliverables")
     if task["kind"] == "verification":
-        if any(candidate["agent"] == agent for candidate in original):
-            raise ValueError("finding verification must use an independent native agent")
         wanted = {finding["id"] for finding in original}
         observed = {}
         for disposition in report.get("dispositions", []):
@@ -284,17 +381,17 @@ def _dispositions(root, ledger, plan, task, report, agent, assignment):
             if (key not in wanted or key in observed
                     or disposition.get("status") not in {"confirmed", "rejected"}
                     or not disposition.get("sources") or not disposition.get("reason")):
-                raise ValueError("independent verification does not account for original finding")
+                raise ReportContractError("independent verification does not account for original finding")
             observed[key] = disposition
         if set(observed) != wanted:
-            raise ValueError("independent verification omitted original findings")
+            raise ReportContractError("independent verification omitted original findings")
     elif task["kind"] == "fix":
         wanted = {finding["id"] for finding in original}
         seen = set()
         for disposition in report.get("dispositions", []):
             key = disposition.get("finding_id")
             if key not in wanted or key in seen or not disposition.get("reason") or not disposition.get("sources"):
-                raise ValueError("fix disposition does not name original finding and evidence")
+                raise ReportContractError("fix disposition does not name original finding and evidence")
             seen.add(key)
             status = disposition.get("status")
             if status in {"accepted", "deferred"}:
@@ -302,12 +399,50 @@ def _dispositions(root, ledger, plan, task, report, agent, assignment):
                 if authority != plan["authorizations"].get("finding:" + key):
                     raise ValueError("accepted/deferred finding needs exact retained user authority")
             elif status == "fixed":
-                if not report.get("changes"):
-                    raise ValueError("a fixed disposition needs verified code changes")
+                if not report.get("changes") and not _retained_fix(root, ledger, key):
+                    raise ReportContractError("a fixed disposition needs verified code changes")
             elif status != "rejected":
-                raise ValueError("unsupported finding disposition")
+                raise ReportContractError("unsupported finding disposition")
         if seen != wanted:
-            raise ValueError("fix report omitted independently confirmed original findings")
+            raise ReportContractError("fix report omitted independently confirmed original findings")
+
+
+def _preserve_rejected_findings(ledger, claim, report):
+    current = {item["id"]: item for item in report.get("findings", [])}
+    for row in ledger.db.execute("SELECT report FROM report_rejections WHERE claim_id=?", (claim["id"],)):
+        for original in bounded_json(row["report"]).get("findings", []):
+            if current.get(original["id"]) != original:
+                raise ValueError("report correction lost or rewrote an original finding")
+
+
+def _reject_report(root, provider, ledger, plan, claim, assignment, report, agent, round_number, error):
+    if claim["state"] not in {"claimed", "incomplete"}:
+        raise ValueError("a rejected report cannot replace completed task coverage")
+    if not continuation_current(root, provider, ledger, plan, claim, assignment):
+        raise ValueError("governing inputs changed before report correction")
+    _preserve_rejected_findings(ledger, claim, report)
+    reason = str(error)
+    reference = artifact(root, {"claim": claim["id"], "agent": agent, "round": round_number,
+                                "report": report, "contract_error": reason})
+    encoded = canonical(report).decode()
+    with ledger.transaction():
+        if ledger.db.execute("SELECT 1 FROM submissions WHERE claim_id=? AND round=?",
+                             (claim["id"], round_number)).fetchone():
+            raise ValueError("a rejected report conflicts with an accepted original round")
+        old = ledger.db.execute("SELECT agent,report,reason FROM report_rejections WHERE claim_id=? AND round=?",
+                                (claim["id"], round_number)).fetchone()
+        if old and tuple(old) != (agent, encoded, reason):
+            raise ValueError("rejected native submission identity conflicts with original report")
+        ledger.db.execute("INSERT OR IGNORE INTO report_rejections VALUES(?,?,?,?,?)",
+                          (claim["id"], round_number, agent, encoded, reason))
+        ledger.db.execute("UPDATE claims SET state='incomplete',agent=?,report=?,coverage='' WHERE id=?",
+                          (agent, reference, claim["id"]))
+    if round_number == 3:
+        raise ValueError("report contract remains invalid after bounded same-session corrections")
+    return {"claim": claim["id"], "complete": False, "agent": agent, "settled": False,
+            "feedback": {"checklist": assignment["task"]["checklist"], "prior_report": reference,
+                         "original_findings": assignment["findings"], "contract_error": reason},
+            "report": reference}
 
 
 def accept(root, provider, ledger, plan, inputs):
@@ -321,10 +456,25 @@ def accept(root, provider, ledger, plan, inputs):
     if type(round_number) is not int or not 0 <= round_number <= 3:
         raise ValueError("checklist allowance exceeded")
     assignment = read_artifact(root, claim["assignment"])
-    complete = verify_report(root, task, report)
     if claim["agent"] and claim["agent"] != agent:
         raise ValueError("checklist continuation changed the original native session")
-    _dispositions(root, ledger, plan, task, report, agent, assignment)
+    try:
+        # Invalid evidence or findings cannot become immutable correction input.
+        # Apply the report byte limit after removing wire-string escaping.
+        if not isinstance(report, dict):
+            raise ValueError("report must declare boolean complete")
+        identities = verify_evidence(root, report)
+        verify_findings(report, identities)
+        report = decode_native_report(report)
+        complete = verify_report(root, task, report)
+        _dispositions(root, ledger, plan, task, report, agent, assignment)
+    except ReportContractError as error:
+        return _reject_report(root, provider, ledger, plan, claim, assignment,
+                              report, agent, round_number, error)
+    if ledger.db.execute("SELECT 1 FROM report_rejections WHERE claim_id=? AND round=?",
+                         (claim["id"], round_number)).fetchone():
+        raise ValueError("a rejected original round requires a later same-session correction")
+    _preserve_rejected_findings(ledger, claim, report)
     reference = artifact(root, {"claim": claim["id"], "agent": agent, "round": round_number, "report": report})
     snapshot = _snapshot(root, provider, plan)
     governing = dict(snapshot)

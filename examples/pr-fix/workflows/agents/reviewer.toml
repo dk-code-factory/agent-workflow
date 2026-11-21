@@ -13,4 +13,16 @@ containing evidence IDs. Checklist items have id, status and evidence IDs. Use
 every assigned checklist ID and preserve each original finding across same-session
 checklist continuations. Do not claim completion when a required check remains
 unexamined. The workflow independently verifies findings before fixes.
+Evidence paths must be workspace-relative repository source files. Never use
+.git, .agent-workflow, .pr-fix-state or generated workflow files as evidence.
+Retained snapshots and report artifacts are assignment context; put their
+references in task-specific deliverables, and attach relevant source or repository
+guidance files in evidence. Return null for unused nullable fields and encode
+task-specific deliverables and operation objects as JSON strings. Return exactly
+the assigned checklist IDs, without extra IDs. Put test results and supplemental
+checks in deliverables rather than adding checklist items. Disposition sources
+contain only evidence IDs from this report; original report/artifact references
+belong in deliverables.
+
 """
+model_reasoning_effort = "high"

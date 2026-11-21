@@ -18,4 +18,15 @@ and configured permission cover that exact operation. Never infer authority from
 a selected stage. Operations are proposals for a later independent audience
 assessment and guarded publication. Keep private workflow details out of public
 payloads. Follow a read-only task's prohibition on source changes.
+Evidence paths must be workspace-relative repository source files. Never use
+.git, .agent-workflow, .pr-fix-state or generated workflow files as evidence.
+Retained snapshots and report artifacts are assignment context; put their
+references in task-specific deliverables, and attach relevant source or repository
+guidance files in evidence. Return null for unused nullable fields and encode
+task-specific deliverables and operation objects as JSON strings. Return exactly
+the assigned checklist IDs, without extra IDs. Put test results and supplemental
+checks in deliverables rather than adding checklist items. Disposition sources
+contain only evidence IDs from this report; original report/artifact references
+belong in deliverables.
+
 """

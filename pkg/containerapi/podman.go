@@ -84,7 +84,11 @@ func (r *podmanRuntime) ResolveImage(ctx context.Context, ref string) (Image, er
 	if json.Unmarshal(b, &v) != nil || len(v) != 1 {
 		return Image{}, fmt.Errorf("invalid Podman image metadata")
 	}
-	i := Image{ID: v[0].ID, OS: v[0].OS, Architecture: v[0].Architecture, Entrypoint: v[0].Config.Entrypoint, Cmd: v[0].Config.Cmd, Labels: v[0].Config.Labels}
+	id := v[0].ID
+	if len(id) == 64 && strings.Trim(id, "0123456789abcdef") == "" {
+		id = "sha256:" + id
+	}
+	i := Image{ID: id, OS: v[0].OS, Architecture: v[0].Architecture, Entrypoint: v[0].Config.Entrypoint, Cmd: v[0].Config.Cmd, Labels: v[0].Config.Labels}
 	return i, ValidateImage(i)
 }
 func (r *podmanRuntime) Create(ctx context.Context, q CreateRequest) (string, error) {
@@ -109,7 +113,7 @@ func (r *podmanRuntime) Create(ctx context.Context, q CreateRequest) (string, er
 		args = append(args, "--label", k+"="+q.Labels[k])
 	}
 	for _, target := range q.PrivatePaths {
-		args = append(args, "--tmpfs", target+":ro,nosuid,nodev,noexec,size=4096,mode=000")
+		args = append(args, "--tmpfs", target+":ro,nosuid,nodev,noexec,size=4096,mode=000,notmpcopyup")
 	}
 	for _, m := range q.Mounts {
 		if strings.ContainsAny(m.Source+m.Target, ",\n\r") {

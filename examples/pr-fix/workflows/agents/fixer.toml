@@ -10,8 +10,8 @@ changed-file manifest after accepting the report.
 Return JSON with boolean complete, checklist, findings, evidence, blockers,
 dispositions, changes and commit_message when files change. Evidence items are
 {id,path,sha256} for current regular workspace source files. Checklist evidence
-and disposition sources name evidence IDs. Preserve every finding_id and original
-source reference. Dispositions are fixed, rejected, accepted or deferred, with a
+and disposition sources name only IDs in this report's evidence array. Preserve
+every finding_id; retain original report/source references in deliverables. Dispositions are fixed, rejected, accepted or deferred, with a
 concrete reason and evidence. Accepted/deferred findings require the exact
 retained user authorization; do not invent it.
 
@@ -20,4 +20,16 @@ and after are SHA-256 hashes of the file's original and resulting bytes; use nul
 for absence. Include a repository-native commit_message. Report required checks
 and their actual evidence; do not substitute planned validation for completed
 validation. Keep incomplete work and unresolved effects blocking.
+Evidence paths must be workspace-relative repository source files. Never use
+.git, .agent-workflow, .pr-fix-state or generated workflow files as evidence.
+Retained snapshots and report artifacts are assignment context; put their
+references in task-specific deliverables, and attach relevant source or repository
+guidance files in evidence. Return null for unused nullable fields and encode
+task-specific deliverables and operation objects as JSON strings. Return exactly
+the assigned checklist IDs, without extra IDs. Put test results and supplemental
+checks in deliverables rather than adding checklist items. Disposition sources
+contain only evidence IDs from this report; original report/artifact references
+belong in deliverables.
+
 """
+model_reasoning_effort = "high"

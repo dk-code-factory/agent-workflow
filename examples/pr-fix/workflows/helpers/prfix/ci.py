@@ -114,6 +114,12 @@ def configuration(options):
                 if rule["id"] in seen:
                     raise ValueError("duplicate CI exception ID")
                 seen.add(rule["id"])
+    return _selection(options)
+
+
+def _selection(options):
+    """Resolve admitted controls, including retained legacy option spellings."""
+    selected = options.get("ci", {})
     rules = selected.get("exceptions", options.get("ci_exceptions", []))
     return {"timeout_seconds": selected.get("timeout_seconds", options.get("ci_timeout_seconds", 1800)),
             "classifications": selected.get("classifications", options.get("ci_classifications", [])),
@@ -349,6 +355,19 @@ def _timestamp(value):
     return value
 
 
+def classify_current(provider, plan, observation):
+    """Classify one supplied observation with freshly verified exception proofs.
+
+    The caller owns capture freshness and any retained observation deadline.
+    Preparation validates options; readiness can also read older admitted plans.
+    """
+    selected = _selection(plan.get("options", {}))
+    candidates = selected["classifications"]
+    proofs = verify_exceptions(provider, plan["pr"], observation, candidates,
+                              selected["exceptions"]) if candidates else []
+    return classify(observation, proofs)
+
+
 def observe(provider, plan, ledger, operation):
     """Observe once. A new process or head never silently renews the clock."""
     selected = configuration(plan.get("options", {}))
@@ -362,10 +381,7 @@ def observe(provider, plan, ledger, operation):
     observation = provider.observe_ci(plan["pr"], head)
     if observation.get("head") != head:
         raise ValueError("CI observer returned another head")
-    candidates = selected["classifications"]
-    rules = selected["exceptions"]
-    proofs = verify_exceptions(provider, plan["pr"], observation, candidates, rules) if candidates else []
-    result = classify(observation, proofs)
+    result = classify_current(provider, plan, observation)
     if time.time() >= deadline:
         raise TimeoutError("retained CI deadline exhausted during observation")
     result.update(deadline=deadline, operation=operation,

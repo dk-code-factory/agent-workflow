@@ -1,5 +1,6 @@
 """Container protocol recovery and read-only action-hook boundaries."""
 import copy
+import json
 from pathlib import Path
 import shutil
 import sys
@@ -13,8 +14,52 @@ import action
 from prfix import app, publishing
 from prfix.core import MAX_JSON, Ledger, artifact, canonical, digest, read_artifact
 from prepared_fixture import prepare
-from test_app import AppFixture, REVIEWER, VERIFIER
+from test_app import AppFixture, FIXER, REVIEWER, VERIFIER
 from test_publication import AUTH
+
+
+class NativeResultTests(unittest.TestCase):
+    def results(self, selected):
+        return {name: {"status": "succeeded" if name == selected else "skipped",
+                       "output": {"agent": REVIEWER, "report": {"complete": True},
+                                  "status": "succeeded"} if name == selected else {}}
+                for name in ("leaf", "reviewer", "verifier", "fixer", "audience", "retry", "checklist")}
+
+    def test_each_turn_mode_selects_one_original_result_and_acceptance_boundary(self):
+        selections = [("initial", role) for role in ("leaf", "reviewer", "verifier", "fixer", "audience")]
+        selections += [("retry", "retry"), ("checklist", "checklist")]
+        for mode, selected in selections:
+            with self.subTest(mode=mode, selected=selected):
+                results = self.results(selected)
+                before = copy.deepcopy(results)
+                result = action.native_result({"mode": mode, "definition": selected, "results": results})
+                self.assertEqual(result, {**results[selected]["output"],
+                    "accept_operation": "accept" if mode == "checklist" else "turn_result"})
+                self.assertEqual(results, before)
+
+    def test_ambiguous_missing_and_failed_branches_never_supply_an_accepted_result(self):
+        valid = {"mode": "initial", "definition": "reviewer", "results": self.results("reviewer")}
+        invalid = [{**valid, "mode": "unknown"}, {**valid, "definition": "retry"}]
+        for branch, status in (("reviewer", "skipped"), ("leaf", "succeeded"),
+                               ("reviewer", "failed"), ("reviewer", "needs_attention"),
+                               ("reviewer", "canceled")):
+            value = copy.deepcopy(valid)
+            value["results"][branch]["status"] = status
+            invalid.append(value)
+        missing = copy.deepcopy(valid)
+        del missing["results"]["checklist"]
+        invalid.append(missing)
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                action.native_result(value)
+
+    def test_retry_preserves_engine_failure_metadata_for_original_session_classification(self):
+        results = self.results("retry")
+        results["retry"]["output"] = {"agent": REVIEWER, "status": "failed",
+            "failure_class": "provider_failure", "unsafe_failure_class": "permission_failure",
+            "error": "Original engine diagnostic", "report": None}
+        result = action.native_result({"mode": "retry", "results": results})
+        self.assertEqual(result, {**results["retry"]["output"], "accept_operation": "turn_result"})
 
 
 class ActionTests(unittest.TestCase):
@@ -45,7 +90,7 @@ class ActionTests(unittest.TestCase):
     def state(self):
         with self.ledger(read_only=True) as ledger:
             records = {name: [tuple(row) for row in ledger.db.execute("SELECT * FROM " + name + " ORDER BY rowid")]
-                       for name in ("operations", "claims", "submissions", "accepted_reports", "publication_intents", "reservations")}
+                       for name in ("operations", "claims", "submissions", "report_rejections", "accepted_reports", "publication_intents", "reservations")}
         artifacts = sorted(path.name for path in (self.root / ".pr-fix-state" / "artifacts").glob("*.json"))
         return records, artifacts
 
@@ -149,6 +194,114 @@ class ActionTests(unittest.TestCase):
         self.prepared = prepare(self.root, request, self.provider)
         self.plan = read_artifact(self.root, self.prepared["plan"])
         return self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]})["result"]["output"]["claim"]
+
+    def test_rejected_report_enters_original_session_checklist_continuation(self):
+        claim = self.review_claim()
+        report = self.fixture.report()
+        report["checklist"].append({"id": "test-command", "status": "completed", "evidence": ["source"]})
+        rejected = self.handle("turn_result", "execute", {"claim": claim, "agent": REVIEWER,
+            "status": "succeeded", "report": report}, key="rejected-native-report")
+        self.assertTrue(rejected["result"]["output"]["checklist"])
+        self.assertFalse(rejected["result"]["output"]["complete"])
+        inputs = {"claim": claim, "agent": REVIEWER, "round": 1}
+        prepared = self.handle("check_prepare", "execute", inputs, key="correct-report")
+        self.assertEqual(prepared["result"]["output"]["task_input"]["claim"], claim)
+        self.assertEqual(prepared["result"]["output"]["task_input"]["prior_report_reference"],
+                         rejected["result"]["output"]["report"])
+        self.assertIn("contract_error", prepared["result"]["output"]["task_input"])
+        before = self.state()
+        self.assertTrue(self.handle("check_prepare", "validate_checkpoint", inputs,
+            key="correct-report", checkpoint=prepared["result"])["valid"])
+        self.assertEqual(before, self.state())
+        self.assertEqual(self.handle("check_prepare", "reconcile", inputs, key="correct-report")["outcome"], "completed")
+
+    def test_invalid_encoded_fields_reconcile_and_correct_in_original_session(self):
+        cases = [("deliverables", "[]"), ("deliverables", "{broken"),
+                 ("operations", ["null"]), ("operations", ["{broken"]),
+                 ("deliverables", '{"same":1,"same":2}'),
+                 ("deliverables", '{"value":1e400}'),
+                 ("operations", ['{"value":1e400}']),
+                 ("deliverables", json.dumps({"value": chr(0xD800)})),
+                 ("operations", [json.dumps({"value": chr(0xD800)})]),
+                 ("deliverables", "[" * 1500 + "]" * 1500)]
+        for field, value in cases:
+            with self.subTest(field=field, value=str(value)[:50]):
+                request = copy.deepcopy(self.fixture.request)
+                request["logical_run"] = "wire-" + digest([field, value])
+                request["options"]["tasks"] = ["local:review"]
+                self.prepared = prepare(self.root, request, self.provider)
+                self.plan = read_artifact(self.root, self.prepared["plan"])
+                claim = self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]})["result"]["output"]["claim"]
+                report = self.fixture.report(findings=[{"id": "original", "text": "Keep the original finding",
+                    "sources": ["source"]}], **{field: value})
+                inputs = {"claim": claim, "agent": REVIEWER, "status": "succeeded", "report": report}
+                rejected = self.handle("turn_result", "execute", inputs, key="wire-result")
+                self.assertTrue(rejected["result"]["output"]["checklist"])
+                self.assertFalse(rejected["result"]["output"]["complete"])
+                self.assertEqual(self.handle("turn_result", "reconcile", inputs, key="wire-result")["outcome"], "completed")
+                self.assertEqual(self.handle("turn_result", "execute", inputs, key="wire-result"), rejected)
+                with self.ledger(read_only=True) as ledger:
+                    retained = app._claim(ledger, claim)
+                    self.assertEqual((retained["agent"], retained["state"], retained["coverage"]), (REVIEWER, "incomplete", ""))
+                    original = ledger.db.execute("SELECT report FROM report_rejections").fetchone()[0]
+                    self.assertEqual(json.loads(original), report)
+                    for table in ("accepted_reports", "local_commits", "publication_intents"):
+                        self.assertEqual(ledger.db.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
+                continuation = {"claim": claim, "agent": REVIEWER, "round": 1}
+                self.handle("check_prepare", "execute", continuation, key="wire-correction")
+                corrected = {**report, "operations": [], "deliverables": "{}"}
+                accepted = self.handle("accept", "execute", {**continuation, "report": corrected}, key="wire-accepted")
+                self.assertTrue(accepted["result"]["output"]["complete"])
+                with self.ledger(read_only=True) as ledger:
+                    retained = read_artifact(self.root, app._claim(ledger, claim)["report"])["report"]
+                    self.assertEqual(retained["findings"], report["findings"])
+                    self.assertEqual(retained["deliverables"], {})
+                    self.assertEqual(ledger.db.execute("SELECT count(*) FROM operations WHERE state!='complete'").fetchone()[0], 0)
+
+    def test_wire_error_does_not_hide_invalid_source_evidence(self):
+        claim = self.review_claim()
+        report = self.fixture.report(deliverables="[]")
+        report["evidence"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "changed source evidence"):
+            self.handle("turn_result", "execute", {"claim": claim, "agent": REVIEWER,
+                "status": "succeeded", "report": report})
+        with self.ledger(read_only=True) as ledger:
+            self.assertEqual(ledger.db.execute("SELECT count(*) FROM report_rejections").fetchone()[0], 0)
+
+    def test_report_limit_counts_decoded_values_instead_of_wire_escaping(self):
+        claim = self.review_claim()
+        deliverables = {"quoted": '"' * (160 << 10)}
+        report = self.fixture.report(deliverables=json.dumps(deliverables))
+        inputs = {"claim": claim, "agent": REVIEWER, "status": "succeeded", "report": report}
+        self.assertGreater(len(canonical(report)), 512 << 10)
+        self.assertLess(len(canonical(self.request("execute", inputs))), MAX_JSON)
+        self.assertTrue(self.handle("turn_result", "execute", inputs)["result"]["output"]["complete"])
+        with self.ledger(read_only=True) as ledger:
+            accepted = read_artifact(self.root, app._claim(ledger, claim)["report"])["report"]
+            self.assertEqual(accepted["deliverables"], deliverables)
+
+    def test_wire_correction_preserves_fenced_writer_edits_until_valid_commit(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["options"]["tasks"] = ["local:review"]
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        claim = self.handle("claim", "execute", {"task": "finding_fix"})["result"]["output"]["claim"]
+        before = app.source_file(self.root, "code.py")
+        (self.root / "code.py").write_text("value = 3\n")
+        report = self.fixture.report(deliverables="[]", changes=[{"path": "code.py", "before": before,
+            "after": app.source_file(self.root, "code.py")}], commit_message="Fix the selected value")
+        rejected = self.handle("turn_result", "execute", {"claim": claim, "agent": FIXER,
+            "status": "succeeded", "report": report}, key="writer-wire-result")
+        self.assertTrue(rejected["result"]["output"]["checklist"])
+        with self.ledger(read_only=True) as ledger:
+            self.assertEqual(ledger.db.execute("SELECT count(*) FROM local_commits").fetchone()[0], 0)
+        self.assertEqual((self.root / "code.py").read_text(), "value = 3\n")
+        continuation = {"claim": claim, "agent": FIXER, "round": 1}
+        self.handle("check_prepare", "execute", continuation, key="writer-wire-correction")
+        self.assertTrue(self.handle("accept", "execute", {**continuation,
+            "report": {**report, "deliverables": "{}"}}, key="writer-wire-accepted")["result"]["output"]["complete"])
+        with self.ledger(read_only=True) as ledger:
+            self.assertEqual(ledger.db.execute("SELECT state FROM local_commits").fetchone()[0], "completed")
 
     def test_retry_checkpoint_rechecks_governing_evidence_until_the_claim_finishes(self):
         claim = self.review_claim()

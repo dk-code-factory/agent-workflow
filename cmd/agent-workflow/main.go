@@ -73,6 +73,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	configPath := fs.String("config", "agents.yml", "role configuration relative to workspace")
 	parallel := fs.Int("parallel", 4, "maximum active executions across jobs and runs")
 	timeout := fs.Duration("timeout", 30*time.Minute, "client wait/foreground timeout; 0 disables")
+	controllerRunTimeout := fs.Duration("controller-run-timeout", 0, "controller command only: override run deadline without changing admitted role configuration; 0 uses configuration")
 	detach := fs.Bool("detach", false, "return the durable run handle immediately")
 	foreground := fs.Bool("foreground", false, "execute in this process with exclusive workspace ownership")
 	retry := fs.Bool("retry-uncertain", false, "acknowledge that failed/interrupted effects may be repeated on resume")
@@ -112,6 +113,12 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	if *timeout < 0 {
 		return fmt.Errorf("timeout must not be negative")
+	}
+	if *controllerRunTimeout < 0 {
+		return fmt.Errorf("controller-run-timeout must not be negative")
+	}
+	if *controllerRunTimeout != 0 && verb != "controller" {
+		return fmt.Errorf("--controller-run-timeout is only valid for controller")
 	}
 	if *taskGroup != "" {
 		if verb != "run" {
@@ -388,7 +395,11 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		previous := slog.Default()
 		slog.SetDefault(logger)
 		defer slog.SetDefault(previous)
-		return (&controller.Server{Executor: executor, Store: store, Dir: dir, Workers: workers, Operational: cfg.Controller, Logger: logger, MaxQueued: cfg.Controller.MaxQueued, MaxRuns: cfg.Controller.MaxRuns, RunTimeout: cfg.Controller.Timeout()}).Serve(ctx)
+		runTimeout := cfg.Controller.Timeout()
+		if *controllerRunTimeout > 0 {
+			runTimeout = *controllerRunTimeout
+		}
+		return (&controller.Server{Executor: executor, Store: store, Dir: dir, Workers: workers, Operational: cfg.Controller, Logger: logger, MaxQueued: cfg.Controller.MaxQueued, MaxRuns: cfg.Controller.MaxRuns, RunTimeout: runTimeout}).Serve(ctx)
 	}
 	if verb == "mcp" {
 		if err = ensureController(ctx, controller.NewClient(dir), root, path, *parallel, stderr); err != nil {
