@@ -578,26 +578,57 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	}
 }
 
-func TestPortablePRFixAuthoredSelectionsAndPublicationGates(t *testing.T) {
-	for _, scenario := range []string{"empty", "defaults", "legacy-adapter-defaults", "ordered-parallel-finalizers", "ci-repair", "ci-polling-chunk", "merge-without-authorization", "merge-authorized"} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
-			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-			t.Setenv("GIT_CONFIG_COUNT", "0")
-			t.Setenv("GIT_CONFIG_PARAMETERS", "")
-			t.Setenv("GIT_TEMPLATE_DIR", t.TempDir())
-			e, store, docker := containerExecutor(t)
-			docker.commandTimeout = 15 * time.Second
-			root := e.WorkspaceDir
-			if err := os.CopyFS(filepath.Join(root, "examples", "pr-fix"), os.DirFS(filepath.Join("..", "..", "examples", "pr-fix"))); err != nil {
-				t.Fatal(err)
-			}
-			entry := "examples/pr-fix/workflows/main.yml"
-			if scenario == "ci-repair" {
-				// Exercise the documented wrapper through the deepest CI audience.
-				entry = "examples/pr-fix/workflows/fixture-wrapper.yml"
-				wrapper := `on:
+func TestPortablePRFixAuthoredEmpty(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "empty")
+}
+
+func TestPortablePRFixAuthoredDefaults(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "defaults")
+}
+
+func TestPortablePRFixAuthoredLegacyAdapterDefaults(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "legacy-adapter-defaults")
+}
+
+func TestPortablePRFixAuthoredOrderedParallelFinalizers(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "ordered-parallel-finalizers")
+}
+
+func TestPortablePRFixAuthoredCIRepair(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "ci-repair")
+}
+
+func TestPortablePRFixAuthoredCIPollingChunk(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "ci-polling-chunk")
+}
+
+func TestPortablePRFixAuthoredMergeWithoutAuthorization(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "merge-without-authorization")
+}
+
+func TestPortablePRFixAuthoredMergeAuthorized(t *testing.T) {
+	testPortablePRFixAuthoredSelection(t, "merge-authorized")
+}
+
+func testPortablePRFixAuthoredSelection(t *testing.T, scenario string) {
+	t.Helper()
+	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	t.Setenv("GIT_TEMPLATE_DIR", t.TempDir())
+	e, store, docker := containerExecutor(t)
+	docker.commandTimeout = 15 * time.Second
+	root := e.WorkspaceDir
+	if err := os.CopyFS(filepath.Join(root, "examples", "pr-fix"), os.DirFS(filepath.Join("..", "..", "examples", "pr-fix"))); err != nil {
+		t.Fatal(err)
+	}
+	entry := "examples/pr-fix/workflows/main.yml"
+	if scenario == "ci-repair" {
+		// Exercise the documented wrapper through the deepest CI audience.
+		entry = "examples/pr-fix/workflows/fixture-wrapper.yml"
+		wrapper := `on:
   workflow_call:
     inputs:
       request: {type: string, required: true}
@@ -617,299 +648,297 @@ jobs:
       permissions: ${{ inputs.permissions }}
     secrets: {github_token: '${{ secrets.github_token }}'}
 `
-				if err := os.WriteFile(filepath.Join(root, entry), []byte(wrapper), 0600); err != nil {
-					t.Fatal(err)
+		if err := os.WriteFile(filepath.Join(root, entry), []byte(wrapper), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if scenario == "ci-polling-chunk" {
+		// Scale only the chunk boundary to exercise rollover quickly. The
+		// authored condition and outer polling controller stay intact.
+		path := filepath.Join(root, "examples/pr-fix/workflows/ci-poll.yml")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.ReplaceAll(data, []byte("100"), []byte("2"))
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	portableFixtureGit(t, root, "init", "-b", "main")
+	portableFixtureGit(t, root, "config", "user.name", "Fixture")
+	portableFixtureGit(t, root, "config", "user.email", "fixture@example.invalid")
+	portableFixtureGit(t, root, "add", ".")
+	portableFixtureGit(t, root, "commit", "-m", "Fixture base")
+	base := portableFixtureGit(t, root, "rev-parse", "HEAD")
+	portableFixtureGit(t, root, "switch", "-c", "fix")
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("changed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	portableFixtureGit(t, root, "commit", "-am", "Fixture change")
+	head := portableFixtureGit(t, root, "rev-parse", "HEAD")
+	portableFixtureGit(t, root, "remote", "add", "origin", "https://github.com/fixture/repository.git")
+	portableFixtureGitHub(t, root, head, base)
+	updateMetadata := func(changes map[string]any) {
+		b, err := os.ReadFile(os.Getenv("AW_PORTABLE_METADATA"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value map[string]any
+		if err = json.Unmarshal(b, &value); err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range changes {
+			value[k] = v
+		}
+		b, _ = json.Marshal(value)
+		if err = os.WriteFile(os.Getenv("AW_PORTABLE_METADATA"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updateMetadata(map[string]any{"fixture_ci_status": "completed"})
+	if scenario == "ci-repair" {
+		updateMetadata(map[string]any{"fixture_ci_conclusion": "failure"})
+	}
+	var pollDelays atomic.Int32
+	if scenario == "ci-polling-chunk" {
+		updateMetadata(map[string]any{"fixture_ci_status": "in_progress"})
+		docker.helper = func(_ context.Context, argv []string, _ []byte, _ []string) ([]byte, []byte, int, bool) {
+			if len(argv) == 2 && argv[0] == "sleep" && argv[1] == "10" {
+				if pollDelays.Add(1) == 2 {
+					updateMetadata(map[string]any{"fixture_ci_status": "completed"})
 				}
+				return nil, nil, 0, true
 			}
-			if scenario == "ci-polling-chunk" {
-				// Scale only the chunk boundary to exercise rollover quickly. The
-				// authored condition and outer polling controller stay intact.
-				path := filepath.Join(root, "examples/pr-fix/workflows/ci-poll.yml")
-				data, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				data = bytes.ReplaceAll(data, []byte("100"), []byte("2"))
-				if err := os.WriteFile(path, data, 0600); err != nil {
-					t.Fatal(err)
-				}
+			return nil, nil, 0, false
+		}
+	}
+	original := map[string]any{"pr": "https://github.com/fixture/repository/pull/1", "instructions": "Maintain the exact fixture."}
+	if scenario == "ci-repair" {
+		original["authorizations"] = map[string]any{"reply": map[string]any{"request_id": "fixture-wrapper-reply", "instruction": "Publish the exact deterministic fixture reply.", "source": "user:fixture"}}
+	}
+	if scenario == "merge-authorized" {
+		original["authorizations"] = map[string]any{"merge": map[string]any{"request_id": "fixture-merge", "instruction": "Merge this exact fixture PR.", "source": "user:fixture"}}
+	}
+	b, _ := json.Marshal(original)
+	if err := os.WriteFile(filepath.Join(root, ".git", "request.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inputs := map[string]any{"request": ".git/request.json"}
+	switch scenario {
+	case "empty":
+		inputs["settings"] = map[string]any{"scope": "fixture-settings"}
+		inputs["tasks"] = []any{}
+		inputs["finalizers"] = []any{}
+	case "legacy-adapter-defaults":
+		// Keep main.yml's reviewer default while replacing its adapters
+		// with the legacy key accepted before task names were shortened.
+		inputs["tasks"] = []any{"dk-workflows:dk-pr-reviewers-run"}
+		inputs["finalizers"] = []any{}
+		inputs["adapters"] = map[string]any{"local:review": map[string]any{
+			"kind": "review", "assignment": "Retain the custom legacy reviewer assignment.",
+		}}
+	case "ordered-parallel-finalizers":
+		// Other scenarios keep capacity one. This group must admit both
+		// reviewers before either returns, proving authored concurrency.
+		e.MaxParallel = 2
+		e.Slots = make(chan struct{}, 2)
+		inputs["tasks"] = []any{[]any{"local:review", "local:review"}, "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-description"}
+		inputs["finalizers"] = []any{"dk-workflows:dk-pr-feedback-read", "dk-workflows:dk-ci"}
+	case "ci-repair":
+		inputs["tasks"] = []any{"dk-workflows:dk-pr-description", "dk-workflows:dk-ci"}
+		inputs["finalizers"] = []any{}
+		inputs["permissions"] = map[string]any{"reply_to_feedback": true}
+	case "ci-polling-chunk":
+		inputs["tasks"] = []any{"dk-workflows:dk-ci"}
+		inputs["finalizers"] = []any{}
+		inputs["limits"] = map[string]any{"review_cycles": 5, "retries_per_task": 1, "ci_repairs_per_cycle": 0, "ci_reruns_per_head": 3}
+	case "merge-without-authorization", "merge-authorized":
+		inputs["tasks"] = []any{"dk-workflows:dk-pr-reviewers-run"}
+		inputs["finalizers"] = []any{"dk-workflows:dk-ci"}
+	}
+	e.CommandExecution = runtimeexec.Policy{Mode: "container", Image: "fixture/python-tools@sha256:" + strings.Repeat("a", 64), Runtime: "docker", NetworkMode: "bridge", Writable: true}
+	var mu sync.Mutex
+	var observed []string
+	var reviewArrivals atomic.Int32
+	reviewOverlap := make(chan struct{})
+	reviewIDs := map[string]bool{}
+	repairs, audiences := 0, 0
+	sourceHash := sha256.Sum256([]byte("changed\n"))
+	fake := &nativeTaskFixture{respond: func(request SessionRequest) (map[string]any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		assignment := portableFixtureAssignment(request.Input)
+		if assignment == nil {
+			return nil, fmt.Errorf("lost assignment")
+		}
+		task := assignment["task"].(map[string]any)
+		kind := task["kind"].(string)
+		skill, _ := task["skill"].(string)
+		observed = append(observed, skill)
+		if scenario == "legacy-adapter-defaults" && kind == "review" && strings.TrimSpace(task["assignment"].(string)) != "Retain the custom legacy reviewer assignment." {
+			return nil, fmt.Errorf("inherited reviewer default lost its custom legacy adapter")
+		}
+		if scenario == "ordered-parallel-finalizers" && skill == "local:review" {
+			reviewIDs[task["id"].(string)] = true
+			mu.Unlock()
+			if reviewArrivals.Add(1) == 2 {
+				close(reviewOverlap)
 			}
-			if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("base\n"), 0600); err != nil {
-				t.Fatal(err)
+			timer := time.NewTimer(30 * time.Second)
+			var overlapErr error
+			select {
+			case <-reviewOverlap:
+			case <-timer.C:
+				overlapErr = fmt.Errorf("authored parallel reviewers did not overlap")
+			case <-t.Context().Done():
+				overlapErr = t.Context().Err()
 			}
-			portableFixtureGit(t, root, "init", "-b", "main")
-			portableFixtureGit(t, root, "config", "user.name", "Fixture")
-			portableFixtureGit(t, root, "config", "user.email", "fixture@example.invalid")
-			portableFixtureGit(t, root, "add", ".")
-			portableFixtureGit(t, root, "commit", "-m", "Fixture base")
-			base := portableFixtureGit(t, root, "rev-parse", "HEAD")
-			portableFixtureGit(t, root, "switch", "-c", "fix")
-			if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("changed\n"), 0600); err != nil {
-				t.Fatal(err)
+			timer.Stop()
+			mu.Lock()
+			if overlapErr != nil {
+				return nil, overlapErr
 			}
-			portableFixtureGit(t, root, "commit", "-am", "Fixture change")
-			head := portableFixtureGit(t, root, "rev-parse", "HEAD")
-			portableFixtureGit(t, root, "remote", "add", "origin", "https://github.com/fixture/repository.git")
-			portableFixtureGitHub(t, root, head, base)
-			updateMetadata := func(changes map[string]any) {
-				b, err := os.ReadFile(os.Getenv("AW_PORTABLE_METADATA"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				var value map[string]any
-				if err = json.Unmarshal(b, &value); err != nil {
-					t.Fatal(err)
-				}
-				for k, v := range changes {
-					value[k] = v
-				}
-				b, _ = json.Marshal(value)
-				if err = os.WriteFile(os.Getenv("AW_PORTABLE_METADATA"), b, 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			updateMetadata(map[string]any{"fixture_ci_status": "completed"})
-			if scenario == "ci-repair" {
-				updateMetadata(map[string]any{"fixture_ci_conclusion": "failure"})
-			}
-			var pollDelays atomic.Int32
-			if scenario == "ci-polling-chunk" {
-				updateMetadata(map[string]any{"fixture_ci_status": "in_progress"})
-				docker.helper = func(_ context.Context, argv []string, _ []byte, _ []string) ([]byte, []byte, int, bool) {
-					if len(argv) == 2 && argv[0] == "sleep" && argv[1] == "10" {
-						if pollDelays.Add(1) == 2 {
-							updateMetadata(map[string]any{"fixture_ci_status": "completed"})
-						}
-						return nil, nil, 0, true
-					}
-					return nil, nil, 0, false
-				}
-			}
-			original := map[string]any{"pr": "https://github.com/fixture/repository/pull/1", "instructions": "Maintain the exact fixture."}
-			if scenario == "ci-repair" {
-				original["authorizations"] = map[string]any{"reply": map[string]any{"request_id": "fixture-wrapper-reply", "instruction": "Publish the exact deterministic fixture reply.", "source": "user:fixture"}}
-			}
-			if scenario == "merge-authorized" {
-				original["authorizations"] = map[string]any{"merge": map[string]any{"request_id": "fixture-merge", "instruction": "Merge this exact fixture PR.", "source": "user:fixture"}}
-			}
-			b, _ := json.Marshal(original)
-			if err := os.WriteFile(filepath.Join(root, ".git", "request.json"), b, 0600); err != nil {
-				t.Fatal(err)
-			}
-			inputs := map[string]any{"request": ".git/request.json"}
-			switch scenario {
-			case "empty":
-				inputs["settings"] = map[string]any{"scope": "fixture-settings"}
-				inputs["tasks"] = []any{}
-				inputs["finalizers"] = []any{}
-			case "legacy-adapter-defaults":
-				// Keep main.yml's reviewer default while replacing its adapters
-				// with the legacy key accepted before task names were shortened.
-				inputs["tasks"] = []any{"dk-workflows:dk-pr-reviewers-run"}
-				inputs["finalizers"] = []any{}
-				inputs["adapters"] = map[string]any{"local:review": map[string]any{
-					"kind": "review", "assignment": "Retain the custom legacy reviewer assignment.",
-				}}
-			case "ordered-parallel-finalizers":
-				// Other scenarios keep capacity one. This group must admit both
-				// reviewers before either returns, proving authored concurrency.
-				e.MaxParallel = 2
-				e.Slots = make(chan struct{}, 2)
-				inputs["tasks"] = []any{[]any{"local:review", "local:review"}, "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-description"}
-				inputs["finalizers"] = []any{"dk-workflows:dk-pr-feedback-read", "dk-workflows:dk-ci"}
-			case "ci-repair":
-				inputs["tasks"] = []any{"dk-workflows:dk-pr-description", "dk-workflows:dk-ci"}
-				inputs["finalizers"] = []any{}
-				inputs["permissions"] = map[string]any{"reply_to_feedback": true}
-			case "ci-polling-chunk":
-				inputs["tasks"] = []any{"dk-workflows:dk-ci"}
-				inputs["finalizers"] = []any{}
-				inputs["limits"] = map[string]any{"review_cycles": 5, "retries_per_task": 1, "ci_repairs_per_cycle": 0, "ci_reruns_per_head": 3}
-			case "merge-without-authorization", "merge-authorized":
-				inputs["tasks"] = []any{"dk-workflows:dk-pr-reviewers-run"}
-				inputs["finalizers"] = []any{"dk-workflows:dk-ci"}
-			}
-			e.CommandExecution = runtimeexec.Policy{Mode: "container", Image: "fixture/python-tools@sha256:" + strings.Repeat("a", 64), Runtime: "docker", NetworkMode: "bridge", Writable: true}
-			var mu sync.Mutex
-			var observed []string
-			var reviewArrivals atomic.Int32
-			reviewOverlap := make(chan struct{})
-			reviewIDs := map[string]bool{}
-			repairs, audiences := 0, 0
-			sourceHash := sha256.Sum256([]byte("changed\n"))
-			fake := &nativeTaskFixture{respond: func(request SessionRequest) (map[string]any, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				assignment := portableFixtureAssignment(request.Input)
-				if assignment == nil {
-					return nil, fmt.Errorf("lost assignment")
-				}
-				task := assignment["task"].(map[string]any)
-				kind := task["kind"].(string)
-				skill, _ := task["skill"].(string)
-				observed = append(observed, skill)
-				if scenario == "legacy-adapter-defaults" && kind == "review" && strings.TrimSpace(task["assignment"].(string)) != "Retain the custom legacy reviewer assignment." {
-					return nil, fmt.Errorf("inherited reviewer default lost its custom legacy adapter")
-				}
-				if scenario == "ordered-parallel-finalizers" && skill == "local:review" {
-					reviewIDs[task["id"].(string)] = true
-					mu.Unlock()
-					if reviewArrivals.Add(1) == 2 {
-						close(reviewOverlap)
-					}
-					timer := time.NewTimer(30 * time.Second)
-					var overlapErr error
-					select {
-					case <-reviewOverlap:
-					case <-timer.C:
-						overlapErr = fmt.Errorf("authored parallel reviewers did not overlap")
-					case <-t.Context().Done():
-						overlapErr = t.Context().Err()
-					}
-					timer.Stop()
-					mu.Lock()
-					if overlapErr != nil {
-						return nil, overlapErr
-					}
-				}
-				checks := []any{}
-				for _, raw := range task["checklist"].([]any) {
-					checks = append(checks, map[string]any{"id": raw.(map[string]any)["id"], "status": "completed", "evidence": []string{"source"}})
-				}
-				report := map[string]any{"complete": true, "checklist": checks, "findings": []any{}, "blockers": []any{}, "evidence": []any{map[string]any{"id": "source", "path": "file.txt", "sha256": hex.EncodeToString(sourceHash[:])}}}
-				if task["id"] == "ci_repair" {
-					repairs++
-					updateMetadata(map[string]any{"fixture_ci_conclusion": "success"})
-				}
-				if scenario == "ci-repair" && skill == "dk-workflows:dk-pr-description" {
-					report["operations"] = []any{map[string]any{"kind": "reply", "head": head, "target": base, "payload": map[string]any{"body": "Deterministic wrapper CI publication."}}}
-				}
-				if kind == "publication_audience" {
-					audiences++
-					report["audience"] = map[string]any{"fingerprint": assignment["payload"].(map[string]any)["fingerprint"], "suitable": true, "evidence": []string{"source"}}
-				}
-				data, err := json.Marshal(report)
-				return map[string]any{"text": string(data)}, err
-			}}
-			e.Agents = fake
-			e.Capacity = &Capacity{Slots: e.Slots}
-			manager := &WorkerManager{Store: store, Slots: e.Slots, Capacity: e.Capacity, Factory: func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
-				return fake, nil, nil, nil
-			}}
-			if err := manager.Init(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			e.Workers = manager
-			e.BeforeFinalize = manager.StopRun
-			serveWorkers(t, manager)
-			budget := 20 * time.Minute
-			if scenario == "defaults" {
-				// The complete default plan needs more time than the custom selections.
-				budget = 40 * time.Minute
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), budget)
-			defer cancel()
-			run, err := e.Run(ctx, RunRequest{Ref: entry, Inputs: inputs, Secrets: map[string]string{"github_token": "fixture-token"}})
-			if err != nil || run == nil || run.Status != RunStatusSucceeded || run.Outputs["complete"] != true {
-				t.Fatalf("%s failed: run=%+v err=%v", scenario, run, err)
-			}
-			if scenario == "ci-repair" {
-				main, _, err := store.Load(ctx, run.Jobs["maintain"].ChildRunID)
-				if err != nil || main.Status != RunStatusSucceeded {
-					t.Fatal("wrapper lost main result", main, err)
-				}
-				run = main
-			}
-			if scenario == "empty" {
-				planRef, _ := run.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
-				data, _ := os.ReadFile(filepath.Join(root, planRef))
-				var plan map[string]any
-				_ = json.Unmarshal(data, &plan)
-				if plan["settings"].(map[string]any)["scope"] != "fixture-settings" {
-					t.Fatalf("settings lost: inputs=%v plan=%s", inputs, data)
-				}
-				inputs["settings"] = map[string]any{"scope": "changed-settings"}
-				second, err := e.Run(ctx, RunRequest{Ref: "examples/pr-fix/workflows/main.yml", Inputs: inputs, Secrets: map[string]string{"github_token": "fixture-token"}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				planRef, _ = second.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
-				data, _ = os.ReadFile(filepath.Join(root, planRef))
-				_ = json.Unmarshal(data, &plan)
-				if plan["settings"].(map[string]any)["scope"] != "changed-settings" {
-					t.Fatalf("changed settings lost: inputs=%v plan=%s", inputs, data)
-				}
-			}
-			if scenario == "empty" && len(observed) != 0 {
-				t.Fatal("empty selections dispatched", observed)
-			}
-			if scenario == "legacy-adapter-defaults" && strings.Join(observed, ",") != "review,finding_verification,finding_fix" {
-				t.Fatal("legacy adapter did not run through the inherited reviewer default", observed)
-			}
-			if scenario == "defaults" {
-				// The first feedback fix predates independent verification. Its
-				// changed governing evidence requires one refresh in the next cycle.
-				expected := []string{"read-feedback", "reconcile-decisions", "address-feedback", "assess-scope", "describe-pr", "review", "finding_verification", "finding_fix", "inspect-commits", "sync-guidance", "address-feedback"}
-				if strings.Join(observed, ",") != strings.Join(expected, ",") {
-					t.Fatal("default task/finalizer order changed", observed)
-				}
-			}
+		}
+		checks := []any{}
+		for _, raw := range task["checklist"].([]any) {
+			checks = append(checks, map[string]any{"id": raw.(map[string]any)["id"], "status": "completed", "evidence": []string{"source"}})
+		}
+		report := map[string]any{"complete": true, "checklist": checks, "findings": []any{}, "blockers": []any{}, "evidence": []any{map[string]any{"id": "source", "path": "file.txt", "sha256": hex.EncodeToString(sourceHash[:])}}}
+		if task["id"] == "ci_repair" {
+			repairs++
+			updateMetadata(map[string]any{"fixture_ci_conclusion": "success"})
+		}
+		if scenario == "ci-repair" && skill == "dk-workflows:dk-pr-description" {
+			report["operations"] = []any{map[string]any{"kind": "reply", "head": head, "target": base, "payload": map[string]any{"body": "Deterministic wrapper CI publication."}}}
+		}
+		if kind == "publication_audience" {
+			audiences++
+			report["audience"] = map[string]any{"fingerprint": assignment["payload"].(map[string]any)["fingerprint"], "suitable": true, "evidence": []string{"source"}}
+		}
+		data, err := json.Marshal(report)
+		return map[string]any{"text": string(data)}, err
+	}}
+	e.Agents = fake
+	e.Capacity = &Capacity{Slots: e.Slots}
+	manager := &WorkerManager{Store: store, Slots: e.Slots, Capacity: e.Capacity, Factory: func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
+		return fake, nil, nil, nil
+	}}
+	if err := manager.Init(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.Workers = manager
+	e.BeforeFinalize = manager.StopRun
+	serveWorkers(t, manager)
+	budget := 20 * time.Minute
+	if scenario == "defaults" {
+		// The complete default plan needs more time than the custom selections.
+		budget = 40 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+	run, err := e.Run(ctx, RunRequest{Ref: entry, Inputs: inputs, Secrets: map[string]string{"github_token": "fixture-token"}})
+	if err != nil || run == nil || run.Status != RunStatusSucceeded || run.Outputs["complete"] != true {
+		t.Fatalf("%s failed: run=%+v err=%v", scenario, run, err)
+	}
+	if scenario == "ci-repair" {
+		main, _, err := store.Load(ctx, run.Jobs["maintain"].ChildRunID)
+		if err != nil || main.Status != RunStatusSucceeded {
+			t.Fatal("wrapper lost main result", main, err)
+		}
+		run = main
+	}
+	if scenario == "empty" {
+		planRef, _ := run.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
+		data, _ := os.ReadFile(filepath.Join(root, planRef))
+		var plan map[string]any
+		_ = json.Unmarshal(data, &plan)
+		if plan["settings"].(map[string]any)["scope"] != "fixture-settings" {
+			t.Fatalf("settings lost: inputs=%v plan=%s", inputs, data)
+		}
+		inputs["settings"] = map[string]any{"scope": "changed-settings"}
+		second, err := e.Run(ctx, RunRequest{Ref: "examples/pr-fix/workflows/main.yml", Inputs: inputs, Secrets: map[string]string{"github_token": "fixture-token"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		planRef, _ = second.Jobs["prepare"].Outputs["result"].(map[string]any)["plan"].(string)
+		data, _ = os.ReadFile(filepath.Join(root, planRef))
+		_ = json.Unmarshal(data, &plan)
+		if plan["settings"].(map[string]any)["scope"] != "changed-settings" {
+			t.Fatalf("changed settings lost: inputs=%v plan=%s", inputs, data)
+		}
+	}
+	if scenario == "empty" && len(observed) != 0 {
+		t.Fatal("empty selections dispatched", observed)
+	}
+	if scenario == "legacy-adapter-defaults" && strings.Join(observed, ",") != "review,finding_verification,finding_fix" {
+		t.Fatal("legacy adapter did not run through the inherited reviewer default", observed)
+	}
+	if scenario == "defaults" {
+		// The first feedback fix predates independent verification. Its
+		// changed governing evidence requires one refresh in the next cycle.
+		expected := []string{"read-feedback", "reconcile-decisions", "address-feedback", "assess-scope", "describe-pr", "review", "finding_verification", "finding_fix", "inspect-commits", "sync-guidance", "address-feedback"}
+		if strings.Join(observed, ",") != strings.Join(expected, ",") {
+			t.Fatal("default task/finalizer order changed", observed)
+		}
+	}
 
-			if scenario == "ordered-parallel-finalizers" {
-				if reviewArrivals.Load() != 2 || len(reviewIDs) != 2 {
-					t.Fatal("parallel group lost distinct reviewer occurrences", reviewArrivals.Load(), reviewIDs)
-				}
-				expected := []string{"local:review", "local:review", "finding_verification", "finding_fix", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-feedback-read"}
-				if strings.Join(observed, ",") != strings.Join(expected, ",") {
-					t.Fatal("task occurrence order changed", observed)
-				}
+	if scenario == "ordered-parallel-finalizers" {
+		if reviewArrivals.Load() != 2 || len(reviewIDs) != 2 {
+			t.Fatal("parallel group lost distinct reviewer occurrences", reviewArrivals.Load(), reviewIDs)
+		}
+		expected := []string{"local:review", "local:review", "finding_verification", "finding_fix", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-description", "dk-workflows:dk-pr-feedback-read"}
+		if strings.Join(observed, ",") != strings.Join(expected, ",") {
+			t.Fatal("task occurrence order changed", observed)
+		}
+	}
+	if scenario == "ci-repair" {
+		if repairs != 1 || audiences != 1 {
+			t.Fatal("CI repair/audience counts", repairs, audiences)
+		}
+		calls, err := os.ReadFile(os.Getenv("AW_PORTABLE_CALLS"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writes := 0
+		for _, line := range bytes.Split(bytes.TrimSpace(calls), []byte("\n")) {
+			var call []string
+			if err := json.Unmarshal(line, &call); err != nil {
+				t.Fatal(err)
 			}
-			if scenario == "ci-repair" {
-				if repairs != 1 || audiences != 1 {
-					t.Fatal("CI repair/audience counts", repairs, audiences)
-				}
-				calls, err := os.ReadFile(os.Getenv("AW_PORTABLE_CALLS"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				writes := 0
-				for _, line := range bytes.Split(bytes.TrimSpace(calls), []byte("\n")) {
-					var call []string
-					if err := json.Unmarshal(line, &call); err != nil {
-						t.Fatal(err)
-					}
-					if len(call) == 2 && call[0] == "POST" && call[1] == "repos/fixture/repository/issues/1/comments" {
-						writes++
-					}
-				}
-				logical, _, _ := portablePreparedIdentity(t, root, run)
-				ledger, err := sql.Open("sqlite", "file:"+filepath.Join(root, ".pr-fix-state", logical+".sqlite")+"?mode=ro")
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer ledger.Close()
-				var receipts int
-				if err := ledger.QueryRow("SELECT count(*) FROM publication_intents WHERE state='completed' AND receipt IS NOT NULL AND json_extract(CAST(value AS TEXT),'$.kind')='reply'").Scan(&receipts); err != nil {
-					t.Fatal(err)
-				}
-				if writes != 1 || receipts != 1 {
-					t.Fatal("wrapper publication lost exact effect/receipt", writes, receipts)
-				}
+			if len(call) == 2 && call[0] == "POST" && call[1] == "repos/fixture/repository/issues/1/comments" {
+				writes++
 			}
-			if scenario == "ci-polling-chunk" && pollDelays.Load() != 2 {
-				t.Fatal("CI chunk did not roll over", pollDelays.Load())
-			}
-			if scenario == "merge-authorized" {
-				if run.Jobs["merge"].Status != RunStatusSucceeded {
-					t.Fatal("authorized merge not executed", run.Jobs["merge"])
-				}
-			} else if run.Jobs["merge"].Status != RunStatusSkipped {
-				t.Fatal("unauthorized merge branch executed", run.Jobs["merge"])
-			}
-			if changes := portableFixtureGit(t, root, "status", "--porcelain", "--", ".", ":(exclude).pr-fix-state"); changes != "" {
-				t.Fatal("execution changed definitions/configuration", changes)
-			}
-		})
+		}
+		logical, _, _ := portablePreparedIdentity(t, root, run)
+		ledger, err := sql.Open("sqlite", "file:"+filepath.Join(root, ".pr-fix-state", logical+".sqlite")+"?mode=ro")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ledger.Close()
+		var receipts int
+		if err := ledger.QueryRow("SELECT count(*) FROM publication_intents WHERE state='completed' AND receipt IS NOT NULL AND json_extract(CAST(value AS TEXT),'$.kind')='reply'").Scan(&receipts); err != nil {
+			t.Fatal(err)
+		}
+		if writes != 1 || receipts != 1 {
+			t.Fatal("wrapper publication lost exact effect/receipt", writes, receipts)
+		}
+	}
+	if scenario == "ci-polling-chunk" && pollDelays.Load() != 2 {
+		t.Fatal("CI chunk did not roll over", pollDelays.Load())
+	}
+	if scenario == "merge-authorized" {
+		if run.Jobs["merge"].Status != RunStatusSucceeded {
+			t.Fatal("authorized merge not executed", run.Jobs["merge"])
+		}
+	} else if run.Jobs["merge"].Status != RunStatusSkipped {
+		t.Fatal("unauthorized merge branch executed", run.Jobs["merge"])
+	}
+	if changes := portableFixtureGit(t, root, "status", "--porcelain", "--", ".", ":(exclude).pr-fix-state"); changes != "" {
+		t.Fatal("execution changed definitions/configuration", changes)
 	}
 }
 

@@ -29,7 +29,13 @@ A stable version-tag push follows this order:
    pin the verified report, publish the tested artifacts, and verify the release.
 
 `test.yml` and standalone `pre-release.yml` remain credential-free and do not
-invoke live conformance. Deterministic validation does not certify a provider.
+invoke live conformance. PR/main CI runs `make test-support check build`,
+with the complete workflow and PR-fix race packages each distributed across four
+independent jobs. The workflow's authored-selection scenarios are separate Go
+tests so those scenarios can run on different runners. All shards are mandatory
+inputs to `Required`. Local and pre-release `make test-core` still run the complete
+workflow package; `make test` also runs every PR-fix shard.
+Deterministic validation does not certify a provider.
 A manual `gh workflow run pre-release.yml --ref <candidate>` does not replace the
 release workflow's mandatory invocation on the exact signed candidate.
 

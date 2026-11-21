@@ -54,13 +54,34 @@ class PRFixRaceTests(unittest.TestCase):
             self.assertEqual(sum(bool(pattern.search(name)) for pattern in patterns), 1)
         self.assertTrue(all('-race' in command and '-count=1' in command for command in turns))
 
+    def test_workflow_package_selection_reaches_discovery_and_every_execution(self):
+        for selection in [['--shard', '1'], ['--all']]:
+            with self.subTest(selection=selection):
+                def run(command, **kwargs):
+                    if '-list' in command:
+                        return SimpleNamespace(stdout='TestA\nTestB\nTestC\nTestD\n')
+                    return SimpleNamespace(returncode=1)
+
+                with patch('sys.argv', ['prfix_race.py', '--package', './pkg/workflows',
+                                        '--shards', '2', *selection]), \
+                        patch('prfix_race.subprocess.run', side_effect=run) as process, \
+                        redirect_stdout(StringIO()):
+                    self.assertEqual(main(), 1)
+                commands = [call.args[0] for call in process.call_args_list]
+                self.assertTrue(all('./pkg/workflows' in command for command in commands))
+                executions = [command for command in commands if '-run' in command]
+                self.assertEqual(len(executions), 2 if selection == ['--all'] else 1)
+                self.assertTrue(all('-race' in command and '-count=1' in command
+                                    and '90m' in command for command in executions))
+
 
 class MakeTestTargetTests(unittest.TestCase):
     portable_command = '-B -m unittest discover -s examples/pr-fix/tests -p test_*.py -v'
+    workflow_command = 'test -race -timeout 90m ./pkg/workflows'
     shard_command = 'scripts/prfix_race.py --all --shards 4'
 
     def run_target(self, packages, discovery_exit=0, test_exit=0,
-                   portable_exit=0, shard_exit=0, target='test'):
+                   portable_exit=0, shard_exit=0, workflow_exit=0, target='test'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             go = root / 'go'
@@ -69,7 +90,9 @@ printf '%s\\n' "$*" >> "$GO_CALLS"
 printf 'go %s\\n' "$*" >> "$RUN_CALLS"
 case "$1" in
     list) printf '%s' "$DISCOVERED_PACKAGES"; exit "$DISCOVERY_EXIT" ;;
-    test) exit "$TEST_EXIT" ;;
+    test)
+        if [ "$*" = "test -race -timeout 90m ./pkg/workflows" ]; then exit "$WORKFLOW_TEST_EXIT"; fi
+        exit "$TEST_EXIT" ;;
 esac
 exit 1
 ''')
@@ -91,7 +114,7 @@ exit 1
             environment = dict(os.environ, PATH=f'{root}{os.pathsep}{os.environ["PATH"]}',
                                GO_CALLS=str(go_calls), PYTHON_CALLS=str(python_calls),
                                RUN_CALLS=str(run_calls), PORTABLE_EXIT=str(portable_exit),
-                               SHARD_EXIT=str(shard_exit),
+                               SHARD_EXIT=str(shard_exit), WORKFLOW_TEST_EXIT=str(workflow_exit),
                                DISCOVERED_PACKAGES=packages, DISCOVERY_EXIT=str(discovery_exit),
                                TEST_EXIT=str(test_exit))
             result = subprocess.run(['make', '--no-print-directory', '-s', '-f', str(ROOT / 'Makefile'), target],
@@ -111,7 +134,8 @@ exit 1
                 self.assertEqual(sequence, ['python3 ' + self.portable_command, 'go list ./...'])
 
     def test_empty_package_selection_stops_before_go_tests_and_shards(self):
-        for output in ['', 'example/root/pkg/prfix\n']:
+        for output in ['', 'example/root/pkg/prfix\n', 'example/root/pkg/workflows\n',
+                       'example/root/pkg/prfix\nexample/root/pkg/workflows\n']:
             with self.subTest(output=output):
                 status, calls, python, sequence = self.run_target(output)
                 self.assertNotEqual(status, 0)
@@ -120,13 +144,14 @@ exit 1
                 self.assertEqual(sequence, ['python3 ' + self.portable_command, 'go list ./...'])
 
     def test_success_runs_portable_then_non_prfix_packages_then_all_shards(self):
-        status, calls, python, sequence = self.run_target('example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n')
+        status, calls, python, sequence = self.run_target('example/root\nexample/root/pkg/prfix\nexample/root/pkg/workflows\nexample/root/pkg/other\n')
         self.assertEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other', self.workflow_command])
         self.assertEqual(python, [self.portable_command, self.shard_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
             'go test -race -timeout 90m example/root example/root/pkg/other',
+            'go ' + self.workflow_command,
             'python3 ' + self.shard_command,
         ])
 
@@ -140,16 +165,31 @@ exit 1
             'go test -race -timeout 90m example/root',
         ])
 
-    def test_core_runs_portable_and_non_prfix_packages_without_shards(self):
+    def test_core_runs_supporting_and_workflow_packages_without_prfix_shards(self):
         status, calls, python, sequence = self.run_target(
-            'example/root\nexample/root/pkg/prfix\nexample/root/pkg/other\n', target='test-core')
+            'example/root\nexample/root/pkg/prfix\nexample/root/pkg/workflows\nexample/root/pkg/other\n', target='test-core')
         self.assertEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root example/root/pkg/other', self.workflow_command])
         self.assertEqual(python, [self.portable_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
             'go test -race -timeout 90m example/root example/root/pkg/other',
+            'go ' + self.workflow_command,
         ])
+
+    def test_workflow_failure_stops_before_prfix_shards(self):
+        status, calls, python, sequence = self.run_target('example/root\n', workflow_exit=1)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root',
+                                 self.workflow_command])
+        self.assertEqual(python, [self.portable_command])
+
+    def test_ci_support_excludes_both_independently_sharded_packages(self):
+        status, calls, python, sequence = self.run_target(
+            'example/root\nexample/root/pkg/prfix\nexample/root/pkg/workflows\n', target='test-support')
+        self.assertEqual(status, 0)
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root'])
+        self.assertEqual(python, [self.portable_command])
 
     def test_portable_failure_stops_before_package_discovery_and_go_suites(self):
         status, calls, python, sequence = self.run_target('example/root\n', portable_exit=1)
@@ -161,11 +201,12 @@ exit 1
     def test_shard_failure_is_preserved_after_successful_prerequisites(self):
         status, calls, python, sequence = self.run_target('example/root\n', shard_exit=1)
         self.assertNotEqual(status, 0)
-        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root'])
+        self.assertEqual(calls, ['list ./...', 'test -race -timeout 90m example/root', self.workflow_command])
         self.assertEqual(python, [self.portable_command, self.shard_command])
         self.assertEqual(sequence, [
             'python3 ' + self.portable_command, 'go list ./...',
-            'go test -race -timeout 90m example/root', 'python3 ' + self.shard_command,
+            'go test -race -timeout 90m example/root', 'go ' + self.workflow_command,
+            'python3 ' + self.shard_command,
         ])
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Partition the complete PR-fix race suite across independent CI jobs."""
+"""Partition a complete Go package race suite across independent CI jobs."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -35,8 +35,9 @@ def run_pattern(names):
     return '^(' + '|'.join(re.escape(name) for name in names) + ')$'
 
 
-def run_selected(names):
-    return subprocess.run(['go', 'test', '-race', '-timeout', '60m', PACKAGE,
+def run_selected(names, package=PACKAGE):
+    timeout = '90m' if package == './pkg/workflows' else '60m'
+    return subprocess.run(['go', 'test', '-race', '-timeout', timeout, package,
                            '-run', run_pattern(names), '-count=1'], cwd=ROOT).returncode
 
 
@@ -45,11 +46,12 @@ def main():
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--shard', type=int)
     selection.add_argument('--all', action='store_true', help='Run all shards concurrently')
+    parser.add_argument('--package', default=PACKAGE, choices=[PACKAGE, './pkg/workflows'])
     parser.add_argument('--shards', type=int, required=True)
     parser.add_argument('--list', action='store_true', help='Print selection without running it')
     args = parser.parse_args()
     discovered = subprocess.run(
-        ['go', 'test', PACKAGE, '-list', '^(Test|Example|Fuzz)'],
+        ['go', 'test', args.package, '-list', '^(Test|Example|Fuzz)'],
         cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
     names = parse_tests(discovered.stdout)
     if args.all:
@@ -60,14 +62,14 @@ def main():
             print(json.dumps({'shards': groups, 'total': len(names)}), flush=True)
             return 0
         with ThreadPoolExecutor(max_workers=args.shards) as executor:
-            results = list(executor.map(run_selected, groups))
+            results = list(executor.map(lambda group: run_selected(group, args.package), groups))
         return next((result for result in results if result != 0), 0)
     selected = select_tests(names, args.shard, args.shards)
     print(json.dumps({'shard': args.shard, 'shards': args.shards,
                       'total': len(names), 'tests': selected}), flush=True)
     if args.list:
         return 0
-    return run_selected(selected)
+    return run_selected(selected, args.package)
 
 
 if __name__ == '__main__':
