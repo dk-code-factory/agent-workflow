@@ -1,4 +1,4 @@
-.PHONY: build test test-core check dist
+.PHONY: build test test-core test-support check dist
 build:
 	python3 scripts/build-guardians.py
 	go build -o bin/agent-workflow ./cmd/agent-workflow
@@ -6,10 +6,13 @@ build:
 test: test-core
 	python3 scripts/prfix_race.py --all --shards 4
 # CI runs the PR-fix race shards in separate jobs to avoid resource contention.
-test-core: portable-prfix-test
+test-core: test-support
+	go test -race -timeout 90m ./pkg/workflows
+# PR CI distributes the workflow package separately; release/local checks retain it.
+test-support: portable-prfix-test
 	@packages=$$(go list ./...) || exit $$?; \
-	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d') || exit $$?; \
-	test -n "$$packages" || { echo 'No non-PR-fix Go packages discovered' >&2; exit 1; }; \
+	packages=$$(printf '%s\n' "$$packages" | sed '\|/pkg/prfix$$|d; \|/pkg/workflows$$|d') || exit $$?; \
+	test -n "$$packages" || { echo 'No supporting Go packages discovered' >&2; exit 1; }; \
 	go test -race -timeout 90m $$packages
 check: release-tooling-test portable-prfix-test
 	go vet ./...
