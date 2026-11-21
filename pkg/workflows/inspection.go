@@ -21,7 +21,7 @@ func OpenSQLiteInspection(dir string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &SQLiteStore{db: db, Dir: dir}
+	s := &SQLiteStore{db: db, Dir: dir, taskGroupCache: &checkpointTaskGroupCache{}}
 	if err = s.RequireCurrentSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
