@@ -1,14 +1,19 @@
 package prfix
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
@@ -86,30 +91,102 @@ func (r *Runtime) observer(ctx context.Context) *Runtime {
 	observer.observationContext = ctx
 	return &observer
 }
-func (r *Runtime) plan(in ActionInput) (Plan, error) {
+
+// Read one bounded byte sequence for both identity checks and parsing.
+func (r *Runtime) readPlanArtifact(in ActionInput) (string, []byte, error) {
 	root := filepath.Join(r.Root, ".agent-workflow", "pr-fix", "artifacts")
-	abs, e := filepath.Abs(in.Plan)
-	if e != nil {
-		return Plan{}, e
+	abs, err := filepath.Abs(in.Plan)
+	if err != nil {
+		return "", nil, err
 	}
-	rel, e := filepath.Rel(root, abs)
-	if e != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return Plan{}, fmt.Errorf("plan outside application-owned artifacts")
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", nil, fmt.Errorf("plan outside application-owned artifacts")
 	}
-	p, e := ReadPlan(abs)
-	if e != nil {
-		return p, e
+	file, err := os.Open(abs)
+	if err != nil {
+		return "", nil, err
 	}
-	b, e := os.ReadFile(abs)
-	if e != nil {
-		return p, e
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxOutput+1))
+	if err != nil {
+		return "", nil, err
 	}
-	if filepath.Base(abs) != digest(json.RawMessage(b))+".json" {
-		return p, fmt.Errorf("plan artifact identity mismatch")
+	if len(data) > maxOutput {
+		return "", nil, fmt.Errorf("plan artifact exceeds 16 MiB")
 	}
-	return p, nil
+	return abs, data, nil
+}
+
+func verifyPlanIdentity(path string, data []byte) error {
+	// Preserve the original RawMessage whitespace/HTML-escape normalization.
+	canonical, err := json.Marshal(json.RawMessage(data))
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(canonical)
+	if filepath.Base(path) != hex.EncodeToString(sum[:])+".json" {
+		return fmt.Errorf("plan artifact identity mismatch")
+	}
+	return nil
+}
+
+func parsePlan(data []byte) (Plan, error) {
+	var plan Plan
+	if err := decodeJSON(bytes.NewReader(data), &plan); err != nil {
+		return plan, err
+	}
+	return validatePlan(plan)
+}
+
+func (r *Runtime) plan(in ActionInput) (Plan, error) {
+	path, data, err := r.readPlanArtifact(in)
+	if err != nil {
+		return Plan{}, err
+	}
+	if err := verifyPlanIdentity(path, data); err != nil {
+		return Plan{}, err
+	}
+	return parsePlan(data)
+}
+
+// Cache only the scalar bindings derived from one exact, verified byte sequence.
+// Re-read the file for each observation and compare all bytes with the verified
+// artifact; never reuse a mutable plan or rely on file timestamps. Register
+// shares this bounded cache across actions.
+type planBindingCache struct {
+	mu      sync.Mutex
+	root    string
+	path    string
+	data    []byte
+	binding json.RawMessage
+}
+
+func (cache *planBindingCache) bindings(r *Runtime, in ActionInput) (json.RawMessage, error) {
+	path, data, err := r.readPlanArtifact(in)
+	if err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.root != r.Root || cache.path != path || !bytes.Equal(cache.data, data) || cache.binding == nil {
+		if err := verifyPlanIdentity(path, data); err != nil {
+			return nil, err
+		}
+		plan, err := parsePlan(data)
+		if err != nil {
+			return nil, err
+		}
+		binding, err := json.Marshal(map[string]any{"plan": digest(plan), "logical_run": plan.LogicalRun, "repository": plan.Identity.Repository, "root": r.Root})
+		if err != nil {
+			return nil, err
+		}
+		cache.root, cache.path, cache.data, cache.binding = r.Root, path, data, binding
+	}
+	return bytes.Clone(cache.binding), nil
 }
 func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
+	bindings := &planBindingCache{}
 	names := []string{"task_prepare", "task_result", "review_admit", "cycle", "claim", "finish", "status", "commit", "intents", "publish", "ci", "reserve", "completion", "receipt", "candidates", "ci_classify", "close", "turn_state", "check_prepare", "review_request_inspect", "review_request_dispose", "reply_inspect", "reply_dispose"}
 	for _, name := range names {
 		name := name
@@ -122,11 +199,7 @@ func (r *Runtime) Register(registry *workflows.ActionRegistry) error {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			p, e := r.plan(in)
-			if e != nil {
-				return nil, e
-			}
-			return json.Marshal(map[string]any{"plan": digest(p), "logical_run": p.LogicalRun, "repository": p.Identity.Repository, "root": r.Root})
+			return bindings.bindings(r, in)
 		}
 		spec.Handler = func(ctx context.Context, ac workflows.ActionContext, in ActionInput) (workflows.ActionResult[ActionOutput], error) {
 			ctx = context.WithValue(ctx, liveObservationKey{}, &liveObservation{})

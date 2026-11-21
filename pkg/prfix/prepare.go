@@ -733,6 +733,9 @@ func ReadPlan(path string) (Plan, error) {
 	if e != nil {
 		return p, e
 	}
+	return validatePlan(p)
+}
+func validatePlan(p Plan) (Plan, error) {
 	if p.Version != Version || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(p.LogicalRun) {
 		return p, fmt.Errorf("unsupported PR-fix plan")
 	}
