@@ -33,7 +33,11 @@ invoke live conformance. PR/main CI runs `make test-support check build`,
 with the complete workflow and PR-fix race packages each distributed across four
 independent jobs. The workflow's authored-selection scenarios are separate Go
 tests so those scenarios can run on different runners. All shards are mandatory
-inputs to `Required`. Local and pre-release `make test-core` still run the complete
+inputs to `Required`. Shards use longest-first scheduling with measured race
+test durations in `scripts/race-test-durations.json`; the recorded commands and
+source trees describe those measurements. Discovery determines coverage, and
+new tests always run with a one-second fallback weight until timings are updated.
+Local and pre-release `make test-core` still run the complete
 workflow package; `make test` also runs every PR-fix shard.
 Deterministic validation does not certify a provider.
 A manual `gh workflow run pre-release.yml --ref <candidate>` does not replace the

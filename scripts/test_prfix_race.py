@@ -9,7 +9,7 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from prfix_race import main, parse_tests, run_pattern, select_tests
+from prfix_race import load_durations, main, parse_tests, run_pattern, select_tests
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,6 +25,32 @@ class PRFixRaceTests(unittest.TestCase):
                     pattern = re.compile(run_pattern(group))
                     self.assertEqual([name for name in names if pattern.search(name)], group)
                     self.assertIsNone(pattern.search('TestAExtra'))
+
+    def test_weighted_shards_balance_heavy_tests_and_include_new_tests_once(self):
+        names = ['TestA', 'TestB', 'TestC', 'TestD', 'TestNew']
+        durations = {'TestA': 100, 'TestB': 100, 'TestC': 1, 'TestD': 1}
+        groups = [select_tests(names, index, 2, durations) for index in range(2)]
+        self.assertEqual(sorted(name for group in groups for name in group), names)
+        self.assertEqual(len({name for group in groups for name in group}), len(names))
+        self.assertNotEqual(next(i for i, group in enumerate(groups) if 'TestA' in group),
+                            next(i for i, group in enumerate(groups) if 'TestB' in group))
+        loads = [sum(durations.get(name, 1) for name in group) for group in groups]
+        self.assertLessEqual(max(loads) - min(loads), 1)
+        self.assertEqual(groups, [select_tests(list(reversed(names)), index, 2, durations)
+                                  for index in range(2)])
+        for shards in [1, 4, 5]:
+            selected = [select_tests(names, index, shards, durations) for index in range(shards)]
+            self.assertTrue(all(selected))
+            self.assertEqual(sorted(name for group in selected for name in group), names)
+
+    def test_timing_inventory_rejects_invalid_costs(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'timings.json'
+            for value in [-1, 0, float('inf'), float('nan'), True, '1', None]:
+                path.write_text(json.dumps({'packages': {'./pkg/prfix': {'TestA': value}}}))
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    load_durations(path, './pkg/prfix')
 
     def test_discovery_fails_closed(self):
         for output in ['', 'ok  package 0.1s\n', 'TestA\nTestA\n', 'TestA\nFAIL\n']:
