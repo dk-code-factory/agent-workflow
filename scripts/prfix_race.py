@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -25,10 +26,34 @@ def parse_tests(output):
     return sorted(names)
 
 
-def select_tests(names, shard, shards):
+def select_tests(names, shard, shards, durations=None):
     if shards < 1 or shard < 0 or shard >= shards or shards > len(names):
         raise ValueError('Every shard must have a valid index and at least one test')
-    return names[shard::shards]
+    if not durations:
+        return names[shard::shards]
+    groups = [[] for _ in range(shards)]
+    totals = [0.0] * shards
+    # Longest-first scheduling limits the slowest job while preserving complete
+    # discovery. New tests are included with a small positive fallback weight.
+    for name in sorted(names, key=lambda name: (-durations.get(name, 1.0), name)):
+        selected = min(range(shards), key=lambda index: (totals[index], index))
+        groups[selected].append(name)
+        totals[selected] += durations.get(name, 1.0)
+    return sorted(groups[shard])
+
+
+def load_durations(path, package):
+    data = json.loads(path.read_text())
+    packages = data['packages']
+    if not isinstance(packages, dict) or package not in packages:
+        raise ValueError('Race timing inventory must contain the selected package')
+    durations = packages[package]
+    if not isinstance(durations, dict) or any(
+            not isinstance(name, str) or type(seconds) not in (int, float)
+            or not math.isfinite(seconds) or seconds <= 0
+            for name, seconds in durations.items()):
+        raise ValueError('Race timings must be finite positive seconds by test name')
+    return durations
 
 
 def run_pattern(names):
@@ -54,8 +79,9 @@ def main():
         ['go', 'test', args.package, '-list', '^(Test|Example|Fuzz)'],
         cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
     names = parse_tests(discovered.stdout)
+    durations = load_durations(ROOT / 'scripts' / 'race-test-durations.json', args.package)
     if args.all:
-        groups = [select_tests(names, shard, args.shards) for shard in range(args.shards)]
+        groups = [select_tests(names, shard, args.shards, durations) for shard in range(args.shards)]
         if not groups:
             parser.error('At least one shard is required')
         if args.list:
@@ -64,7 +90,7 @@ def main():
         with ThreadPoolExecutor(max_workers=args.shards) as executor:
             results = list(executor.map(lambda group: run_selected(group, args.package), groups))
         return next((result for result in results if result != 0), 0)
-    selected = select_tests(names, args.shard, args.shards)
+    selected = select_tests(names, args.shard, args.shards, durations)
     print(json.dumps({'shard': args.shard, 'shards': args.shards,
                       'total': len(names), 'tests': selected}), flush=True)
     if args.list:
