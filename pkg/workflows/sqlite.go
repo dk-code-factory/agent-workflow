@@ -82,8 +82,9 @@ type Journal interface {
 }
 
 type SQLiteStore struct {
-	db  *sql.DB
-	Dir string
+	taskGroupCache *checkpointTaskGroupCache
+	db             *sql.DB
+	Dir            string
 }
 
 func OpenSQLite(dir string) (*SQLiteStore, error) {
@@ -106,7 +107,7 @@ func OpenSQLite(dir string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &SQLiteStore{db: db, Dir: dir}
+	s := &SQLiteStore{db: db, Dir: dir, taskGroupCache: &checkpointTaskGroupCache{}}
 	var version int
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		_ = db.Close()
@@ -285,6 +286,12 @@ func (s *SQLiteStore) Load(ctx context.Context, id string) (*Run, Snapshot, erro
 	if err := s.db.QueryRowContext(ctx, "SELECT record,snapshot,generation,owner FROM runs WHERE id=?", id).Scan(&b, &p, &r.Generation, &r.Owner); err != nil {
 		return nil, snap, err
 	}
+	return decodeCheckpoint(b, p, r.Generation, r.Owner)
+}
+
+func decodeCheckpoint(b, p []byte, generation int64, owner string) (*Run, Snapshot, error) {
+	var snap Snapshot
+	r := Run{Generation: generation, Owner: owner}
 	if err := decodeJSONWithNumbers(b, &r); err != nil {
 		return nil, snap, err
 	}

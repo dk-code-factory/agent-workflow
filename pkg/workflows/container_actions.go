@@ -356,11 +356,11 @@ func (e *Executor) validateContainerRecoveryRequest(ctx context.Context, ac Acti
 	}
 	var reserved *taskStateDescriptor
 	if store := invocationStore(e.Store); store != nil {
-		_, snap, err := store.Load(ctx, f.id)
+		group, err := store.checkpointTaskGroup(ctx, f.id)
 		if err != nil {
 			return err
 		}
-		if group := nativeString(snap.Metadata, "task_group"); group != "" {
+		if group != "" {
 			// Only grouped runs receive a capability. Its group and socket stay
 			// fixed, while each future hook receives another 64-character token.
 			reserved = &taskStateDescriptor{Socket: taskStateMount + "/rpc.sock", Token: strings.Repeat("0", 64), Group: group}

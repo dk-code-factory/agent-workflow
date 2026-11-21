@@ -60,11 +60,10 @@ func (e *Executor) newTaskStateService(ctx context.Context) (*taskStateService, 
 	if store == nil {
 		return nil, nil
 	}
-	_, snap, err := store.Load(ctx, f.id)
+	group, err := store.checkpointTaskGroup(ctx, f.id)
 	if err != nil {
 		return nil, err
 	}
-	group := nativeString(snap.Metadata, "task_group")
 	if group == "" {
 		return nil, nil
 	}
