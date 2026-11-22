@@ -542,7 +542,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 		if operation == "invoke" {
 			operation = hook.Input.Operation
 		}
-		if operation != "turn_result" {
+		if operation != "native_accept" {
 			return nil, nil, 0, false
 		}
 		if hook.Phase == "reconcile" {
