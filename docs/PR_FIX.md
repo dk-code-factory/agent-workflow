@@ -151,9 +151,13 @@ agent-workflow run --config examples/pr-fix/agents.yml \
 Selections retain order and repeated occurrences with distinct stable IDs.
 Nested arrays form parallel read barriers; writers run sequentially. Managed
 review stages run reviewer groups, then independent verification and fixes.
-Empty selections still reach coverage and completion. `native.yml` owns one
-report schema and report-acceptance boundary for initial, retry and checklist
-turns. Initial turns select five literal TOML roles; retry/checklist expressions
+Empty selections still reach coverage and completion. `batch.yml` runs ordered
+groups through `group.yml`, then optionally performs independent verification
+and fixes. Ordinary task groups and explicit review stages share this sequence
+while retaining their original order, parallel read barriers and occurrences.
+`native.yml` owns one report schema and report-acceptance boundary for initial,
+retry and checklist turns. Initial turns select from five literal TOML roles
+admitted together in a fixed catalog; retry/checklist expressions
 carry original session references. Eligible retries retain their original failure
 classification, while failed checklist turns stop without entering another retry.
 
@@ -182,6 +186,12 @@ default selections.
 Shallower helper jobs share `helper.yml`, which returns one `result` object.
 It calls a static command with the operation and payload as structured input;
 each call keeps its own checkpoint, identity and reconciliation boundary.
+Native report acceptance selects exactly one initial, retry or checklist result
+inside the same helper operation that validates and retains the report. It
+preserves engine failure metadata and rechecks continuation and audience evidence
+when reusing a checkpoint, without a separate result-selection container.
+Retry context retains the original immutable assignment reference so combining
+acceptance and native report outputs cannot duplicate a large assignment body.
 The deepest native-turn workflow keeps inline helper calls to preserve the
 engine's eight-level reusable-workflow limit, including a caller
 wrapper. An original attempt and its optional same-session retry feed one

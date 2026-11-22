@@ -287,9 +287,8 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			}
 		}
 		if step.Uses == "agent/run" {
-			ref, ok := step.With["agent"].(string)
-			if !ok || strings.TrimSpace(ref) == "" {
-				return fmt.Errorf("step %s: agent/run requires with.agent definition or reference", sid)
+			if _, err := agentDefinitionChoices(step.With["agent"]); err != nil {
+				return fmt.Errorf("step %s: %w", sid, err)
 			}
 		}
 		for _, key := range []string{"prompt", "message", "model", "workspace"} {

@@ -47,7 +47,13 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	if err != nil {
 		return nil, err
 	}
-	if step.Definition == nil {
+	if selection, ok := args["agent"].(map[string]any); ok {
+		name, ok := selection["select"].(string)
+		if !ok || step.Definitions[name] == nil {
+			return nil, fmt.Errorf("unknown admitted agent definition selection: %v", selection["select"])
+		}
+		request.Definition = step.Definitions[name]
+	} else if step.Definition == nil {
 		reference, _ = args["agent"].(string)
 		if !strings.HasPrefix(reference, "agent_") {
 			return nil, fmt.Errorf("with.agent expression must return an admitted agent reference")

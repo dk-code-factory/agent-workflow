@@ -613,6 +613,23 @@ settings. An explicit definition creates an independent agent; use
 `${{ steps.review.outputs.agent }}` as another task's `with.agent` to continue
 its session. Identity survives retries and execution generations.
 
+To select a fresh agent from a fixed catalog, supply an object instead of a path:
+
+```yaml
+agent:
+  select: ${{ inputs.role }}
+  definitions:
+    review: ../.codex/agents/reviewer.toml
+    fix: ../.codex/agents/fixer.toml
+```
+
+The catalog contains 1–32 literal names and definition paths. Admission loads and
+pins every definition, including unselected entries; runtime selection accepts
+only a declared name. Unknown names and non-string selectors fail before agent
+dispatch. Recovery uses the admitted definitions even when their files change.
+A string expression retains its existing meaning as an opaque session reference.
+The UI preserves catalog objects and edits them through structured YAML controls.
+
 See [agent tasks and event hooks](docs/AGENT_TASKS.md) for the supported TOML
 subset, typed inputs, completion verification, six ordered hook lists, and
 recovery rules. Quote date-like prompts such as `"2026-11-06"`. Removed forms

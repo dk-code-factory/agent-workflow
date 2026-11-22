@@ -168,6 +168,8 @@ type Step struct {
 	ContinueOnError         bool                     `json:"continue_on_error,omitempty" yaml:"continue-on-error,omitempty"`
 	With                    map[string]any           `json:"with,omitempty"              yaml:"with,omitempty"`
 	Context                 RunContext               `json:"context,omitempty"           yaml:"context,omitempty"`
+
+	Definitions map[string]*AgentDefinition `json:"agent_definitions,omitempty" yaml:"-"`
 }
 
 type ConversationSpec struct {

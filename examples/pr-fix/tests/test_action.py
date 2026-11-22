@@ -23,11 +23,10 @@ class NativeResultTests(unittest.TestCase):
         return {name: {"status": "succeeded" if name == selected else "skipped",
                        "output": {"agent": REVIEWER, "report": {"complete": True},
                                   "status": "succeeded"} if name == selected else {}}
-                for name in ("leaf", "reviewer", "verifier", "fixer", "audience", "retry", "checklist")}
+                for name in ("initial", "retry", "checklist")}
 
     def test_each_turn_mode_selects_one_original_result_and_acceptance_boundary(self):
-        selections = [("initial", role) for role in ("leaf", "reviewer", "verifier", "fixer", "audience")]
-        selections += [("retry", "retry"), ("checklist", "checklist")]
+        selections = [(mode, mode) for mode in ("initial", "retry", "checklist")]
         for mode, selected in selections:
             with self.subTest(mode=mode, selected=selected):
                 results = self.results(selected)
@@ -38,11 +37,11 @@ class NativeResultTests(unittest.TestCase):
                 self.assertEqual(results, before)
 
     def test_ambiguous_missing_and_failed_branches_never_supply_an_accepted_result(self):
-        valid = {"mode": "initial", "definition": "reviewer", "results": self.results("reviewer")}
-        invalid = [{**valid, "mode": "unknown"}, {**valid, "definition": "retry"}]
-        for branch, status in (("reviewer", "skipped"), ("leaf", "succeeded"),
-                               ("reviewer", "failed"), ("reviewer", "needs_attention"),
-                               ("reviewer", "canceled")):
+        valid = {"mode": "initial", "results": self.results("initial")}
+        invalid = [{**valid, "mode": "unknown"}]
+        for branch, status in (("initial", "skipped"), ("retry", "succeeded"),
+                               ("initial", "failed"), ("initial", "needs_attention"),
+                               ("initial", "canceled")):
             value = copy.deepcopy(valid)
             value["results"][branch]["status"] = status
             invalid.append(value)
@@ -106,6 +105,76 @@ class ActionTests(unittest.TestCase):
         self.assertTrue(self.handle("coverage", "validate_checkpoint", checkpoint=executed["result"])["valid"])
         self.assertEqual(self.handle("coverage", "reconcile")["outcome"], "completed")
         self.assertEqual(before, self.state())
+
+    def native_inputs(self, mode, claim, report=None, **metadata):
+        results = NativeResultTests().results(mode)
+        results[mode]["output"] = {"agent": REVIEWER, "status": "succeeded",
+                                   "report": report or self.fixture.report(), **metadata}
+        return {"claim": claim, "mode": mode, "round": 1 if mode == "checklist" else 0,
+                "results": results}
+
+    def test_native_acceptance_reconciles_lost_result_without_accepting_twice(self):
+        claim = self.review_claim()
+        inputs = self.native_inputs("initial", claim)
+        with patch.object(app, "turn_result", wraps=app.turn_result) as accepted:
+            executed = self.handle("native_accept", "execute", inputs)
+            output = executed["result"]["output"]
+            self.assertTrue(output["complete"])
+            self.assertEqual(output["agent"], REVIEWER)
+            self.assertEqual(output["native_report"], inputs["results"]["initial"]["output"]["report"])
+            before = self.state()
+            self.assertTrue(self.handle("native_accept", "validate_checkpoint", inputs,
+                checkpoint=executed["result"])["valid"])
+            self.assertEqual(self.handle("native_accept", "reconcile", inputs)["result"], executed["result"])
+            self.assertEqual(self.state(), before)
+            self.assertEqual(self.handle("native_accept", "execute", inputs)["result"], executed["result"])
+            self.assertEqual(accepted.call_count, 1)
+
+    def test_native_acceptance_retry_and_checklist_checkpoints_recheck_governing_inputs(self):
+        for mode in ("initial", "retry", "checklist"):
+            with self.subTest(mode=mode):
+                # Separate plans keep original claim/round ownership independent.
+                request = copy.deepcopy(self.fixture.request)
+                request["logical_run"] = "native-accept-" + mode
+                request["options"]["tasks"] = ["local:review"]
+                self.prepared = prepare(self.root, request, self.provider)
+                self.plan = read_artifact(self.root, self.prepared["plan"])
+                claim = self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]}, key=mode)["result"]["output"]["claim"]
+                partial = self.fixture.report(complete=False)
+                partial["checklist"][-1]["status"] = "incomplete"
+                if mode == "checklist":
+                    with self.ledger() as ledger:
+                        app.accept(self.root, self.provider, ledger, self.plan,
+                            {"claim": claim, "agent": REVIEWER, "report": partial})
+                metadata = {"status": "failed", "failure_class": "usage_exhausted", "error": "Original limit"} if mode == "initial" else {}
+                inputs = self.native_inputs(mode, claim, partial, **metadata)
+                executed = self.handle("native_accept", "execute", inputs, key=mode + "-accept")
+                self.assertEqual(executed["result"]["output"].get("retry", False), mode == "initial")
+                self.provider.ev["comments"].append({"id": 101 + len(self.provider.ev["comments"]),
+                    "body": "Changed incoming request", "user": {"id": 21}})
+                self.assertFalse(self.handle("native_accept", "validate_checkpoint", inputs,
+                    key=mode + "-accept", checkpoint=executed["result"])["valid"])
+
+    def test_native_acceptance_keeps_large_retry_assignment_and_report_within_transport_limit(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["logical_run"] = "large-native-accept"
+        request["instructions"] = "i" * (800 << 10)
+        request["options"]["tasks"] = ["local:review"]
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        claim = self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]})["result"]["output"]["claim"]
+        report = self.fixture.report(findings=[{"id": "original", "text": "f" * (256 << 10), "sources": ["source"]}])
+        inputs = self.native_inputs("initial", claim, report, status="failed",
+            failure_class="usage_exhausted", unsafe_failure_class="", error="Original limit")
+        executed = self.handle("native_accept", "execute", inputs, key="large-native-accept")
+        self.assertLess(len(canonical(executed)), MAX_JSON)
+        self.assertEqual(self.handle("native_accept", "reconcile", inputs, key="large-native-accept")["result"], executed["result"])
+        output = executed["result"]["output"]
+        self.assertEqual(output["native_report"], report)
+        self.assertNotIn("feedback", output)
+        assignment = read_artifact(self.root, output["task_input"]["assignment_reference"])
+        self.assertEqual(assignment["instructions"], request["instructions"])
+        self.assertEqual(output["task_input"]["original_failure"]["diagnostic"], "Original limit")
 
     def test_lost_acknowledgement_returns_original_result_without_another_dispatch(self):
         original = action.dispatch

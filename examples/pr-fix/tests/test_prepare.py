@@ -72,7 +72,7 @@ class PrepareTests(unittest.TestCase):
         result, plan = self.prepare(controls=controls)
         self.assertEqual([stage["kind"] for stage in result["stages"]], ["tasks", "tasks", "publication", "tasks", "tasks"])
         self.assertEqual([stage["id"] for stage in result["stages"]], ["stage_" + str(n) for n in range(1, 6)])
-        self.assertEqual(result["stages"][1]["concurrency"], 2)
+        self.assertEqual(result["stages"][1]["groups"][0]["concurrency"], 2)
         self.assertEqual(result["stages"][-1]["phase"], "finalizers")
         self.assertEqual([task["id"] for task in plan["tasks"]], ["task_" + str(n) for n in range(1, 6)])
         self.assertEqual(plan["tasks"][0]["skill"], plan["tasks"][3]["skill"])
@@ -88,6 +88,23 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual([g["concurrency"] for g in result["stages"][0]["groups"]], [2, 1])
         self.assertEqual([t["definition"] for t in plan["tasks"]], ["reviewer"] * 3 + ["verifier", "fixer"])
         self.assertFalse(any("uses" in stage or "jobs" in stage for stage in result["stages"]))
+
+    def test_task_and_review_stages_share_group_shape_and_preserve_verification_barriers(self):
+        controls = {"tasks": ["read-feedback", ["local:review", "local:review"],
+                              {"stage": "reviews", "reviewers": ["local:review", ["local:review", "local:review"]]}],
+                    "finalizers": ["describe-pr"], "limits": {"review_cycles": 1},
+                    "adapters": {**DEFAULT_ADAPTERS, "local:review": {"kind": "review",
+                        "definition": "reviewer", "assignment": "Inspect sources"}}}
+        result, plan = self.prepare(controls=controls)
+        stages = result["stages"]
+        self.assertEqual([stage["review"] for stage in stages], [False, True, True, False])
+        self.assertEqual([[group["concurrency"] for group in stage["groups"]] for stage in stages],
+                         [[1], [2], [1, 2], [1]])
+        ordered = [task["id"] for stage in stages for group in stage["groups"] for task in group["tasks"]]
+        self.assertEqual(ordered, [task["id"] for task in plan["tasks"] if task["id"].startswith("task_")])
+        self.assertEqual(len(set(ordered)), 7)
+        self.assertEqual([task["id"] for task in plan["tasks"] if not task["id"].startswith("task_")],
+                         ["finding_verification", "finding_fix"])
 
     def test_named_tasks_and_explicit_stages_preserve_legacy_selections(self):
         adapters = {TASK_ALIASES[key]: value for key, value in DEFAULT_ADAPTERS.items()}
