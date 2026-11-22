@@ -25,8 +25,10 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
     if audience and operation in {"claim", "accept", "turn_result", "check_prepare", "task_status"}:
         from prfix.publishing import audience_scope
         plan, inputs = audience_scope(root, provider, ledger, plan, operation, inputs)
-    if operation == "native_result":
-        return native_result(inputs)
+    if operation == "native_accept":
+        selected, turn_inputs = native_acceptance(inputs)
+        result = dispatch(selected["accept_operation"], root, provider, ledger, plan, turn_inputs)
+        return {**result, "agent": selected["agent"], "native_report": selected.get("report")}
     if operation == "claim":
         return app.prepare_claim(root, provider, ledger, plan, inputs)
     if operation == "accept":
@@ -86,19 +88,24 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
 
 
 def native_result(inputs):
-    roles = {"leaf", "reviewer", "verifier", "fixer", "audience"}
     mode = inputs.get("mode", "initial")
-    selected = inputs.get("definition") if mode == "initial" else mode
+    modes = {"initial", "retry", "checklist"}
     results = inputs.get("results", {})
-    if (mode not in {"initial", "retry", "checklist"}
-            or mode == "initial" and selected not in roles
-            or set(results) != roles | {"retry", "checklist"}):
-        raise ValueError("invalid declared native mode or role")
-    if any(value.get("status") != ("succeeded" if key == selected else "skipped")
+    if mode not in modes or set(results) != modes:
+        raise ValueError("invalid declared native mode")
+    if any(value.get("status") != ("succeeded" if key == mode else "skipped")
            for key, value in results.items()):
-        raise ValueError("native role branches did not select exactly one result")
-    return {**results[selected]["output"],
+        raise ValueError("native turn branches did not select exactly one result")
+    return {**results[mode]["output"],
             "accept_operation": "accept" if mode == "checklist" else "turn_result"}
+
+
+def native_acceptance(inputs):
+    selected = native_result(inputs)
+    turn_inputs = {key: inputs[key] for key in ("plan", "claim", "round", "publication") if key in inputs}
+    turn_inputs.update({key: value for key, value in selected.items() if key != "accept_operation"})
+    turn_inputs["retried"] = inputs.get("mode", "initial") == "retry"
+    return selected, turn_inputs
 
 
 def _retained_result(root, reference):
@@ -165,6 +172,9 @@ def _validate_checkpoint(operation, root, provider, ledger, plan, inputs, ident,
         valid = validate_operation(root, provider, ledger, plan, inputs, checkpoint.get("output", {}))
     else:
         valid = False
+    if valid and operation == "native_accept":
+        selected, inputs = native_acceptance(inputs)
+        operation = selected["accept_operation"]
     if valid and operation in {"publication_execute", "publication_record", "publication_recover"}:
         from prfix.publishing import validate_operation
         valid = validate_operation(root, provider, ledger, plan, inputs, checkpoint["output"])

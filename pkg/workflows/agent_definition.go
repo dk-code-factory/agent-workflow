@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -99,32 +100,83 @@ type NativeTaskRunner interface {
 	AdmitNativeTask(*AgentDefinition) (*AgentDefinition, error)
 }
 
+// agentDefinitionChoices keeps definition paths literal while allowing the
+// selected name to come from workflow data. All choices are admitted together.
+func agentDefinitionChoices(value any) (map[string]string, error) {
+	if reference, ok := value.(string); ok && strings.TrimSpace(reference) != "" {
+		return nil, nil
+	}
+	selection, ok := value.(map[string]any)
+	if !ok || len(selection) != 2 {
+		return nil, fmt.Errorf("agent/run requires with.agent definition, reference or {select, definitions}")
+	}
+	selector, ok := selection["select"].(string)
+	if !ok || strings.TrimSpace(selector) == "" {
+		return nil, fmt.Errorf("agent selection requires a nonempty string select")
+	}
+	values, ok := selection["definitions"].(map[string]any)
+	if !ok || len(values) == 0 || len(values) > 32 {
+		return nil, fmt.Errorf("agent selection requires 1–32 literal definitions")
+	}
+	choices := make(map[string]string, len(values))
+	for name, value := range values {
+		path, ok := value.(string)
+		if strings.TrimSpace(name) == "" || len(name) > 128 || strings.Contains(name, "${{") || !ok || strings.TrimSpace(path) == "" || strings.Contains(path, "${{") {
+			return nil, fmt.Errorf("agent selection requires literal names and definition paths")
+		}
+		choices[name] = path
+	}
+	if !wholeExpression(selector) {
+		if _, ok := choices[selector]; !ok {
+			return nil, fmt.Errorf("unknown agent definition selection %q", selector)
+		}
+	}
+	return choices, nil
+}
+
 func (e *Executor) admitAgentDefinitions(w *Workflow, path string) error {
 	for id, job := range w.Jobs {
 		steps, err := mapSteps(job.Steps, "", func(step Step) (Step, error) {
 			if step.Uses != "agent/run" {
 				return step, nil
 			}
-			reference, _ := step.With["agent"].(string)
-			// Expressions can only carry an admitted opaque reference. Loading a new
-			// definition dynamically would bypass the immutable admission snapshot.
-			if wholeExpression(reference) {
-				return step, nil
+			load := func(reference string) (*AgentDefinition, error) {
+				if !filepath.IsAbs(reference) {
+					reference = filepath.Join(filepath.Dir(path), reference)
+				}
+				definition, err := LoadAgentDefinition(reference)
+				if err == nil {
+					if runner, ok := e.Agents.(NativeTaskRunner); ok {
+						definition, err = runner.AdmitNativeTask(definition)
+					}
+				}
+				return definition, err
 			}
-			if !filepath.IsAbs(reference) {
-				reference = filepath.Join(filepath.Dir(path), reference)
-			}
-			definition, err := LoadAgentDefinition(reference)
+			choices, err := agentDefinitionChoices(step.With["agent"])
 			if err != nil {
 				return step, err
 			}
-			if runner, ok := e.Agents.(NativeTaskRunner); ok {
-				definition, err = runner.AdmitNativeTask(definition)
-				if err != nil {
-					return step, err
+			if choices == nil {
+				reference := step.With["agent"].(string)
+				// String expressions retain their existing session-only meaning.
+				if !wholeExpression(reference) {
+					step.Definition, err = load(reference)
 				}
+				return step, err
 			}
-			step.Definition = definition
+			step.Definitions = make(map[string]*AgentDefinition, len(choices))
+			names := make([]string, 0, len(choices))
+			for name := range choices {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				definition, err := load(choices[name])
+				if err != nil {
+					return step, fmt.Errorf("agent definition %s: %w", name, err)
+				}
+				step.Definitions[name] = definition
+			}
 			return step, nil
 		})
 		if err != nil {

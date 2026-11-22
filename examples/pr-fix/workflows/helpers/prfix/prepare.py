@@ -230,14 +230,15 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
                     if any(next(t for t in tasks if t["id"] == key)["kind"] != "review" for key in keys):
                         raise ValueError("reviewer selection must use read-only review adapters")
                     groups.append({"id": "group_" + str(len(groups) + 1),
-                                   "tasks": [{"id": key} for key in keys], "concurrency": len(keys), "review": False})
-                stages.append({"kind": "reviews", "groups": groups, "phase": phase})
+                                   "tasks": [{"id": key} for key in keys], "concurrency": len(keys)})
+                stages.append({"kind": "reviews", "groups": groups, "review": True, "phase": phase})
                 continue
             keys = [task_call(call) for call in group]
             if len(keys) > 1 and any(next(t for t in tasks if t["id"] == key)["writes"] for key in keys):
                 raise ValueError("parallel writing tasks share a Git index and are unsupported")
-            stages.append({"kind": "tasks", "tasks": [{"id": key} for key in keys], "phase": phase,
-                           "concurrency": len(keys), "review": any(next(t for t in tasks if t["id"] == key)["kind"] == "review" for key in keys)})
+            stages.append({"kind": "tasks", "phase": phase,
+                           "groups": [{"id": "group_1", "tasks": [{"id": key} for key in keys], "concurrency": len(keys)}],
+                           "review": any(next(t for t in tasks if t["id"] == key)["kind"] == "review" for key in keys)})
 
     if any(task["kind"] == "review" for task in tasks):
         for key, kind, role, assignment in [
@@ -274,8 +275,8 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
         stage["id"] = "stage_" + str(number)
     # Bound selected plan size separately from the runtime worker budget.
     # Conditional CI repairs and publication audiences do not reserve workers here.
-    selection_weight_per_cycle = sum(len(stage["tasks"]) + (2 if stage["review"] else 0) if stage["kind"] == "tasks" else
-                           sum(len(group["tasks"]) for group in stage["groups"]) + 2 if stage["kind"] == "reviews" else
+    selection_weight_per_cycle = sum(sum(len(group["tasks"]) for group in stage["groups"]) + (2 if stage["review"] else 0)
+                           if stage["kind"] in {"tasks", "reviews"} else
                            1 if stage["kind"] == "ci" else 0 for stage in stages)
     selection_weight = selection_weight_per_cycle * limits["review_cycles"] + (1 if "merge" in authorizations else 0)
     if len(tasks) > 40 or selection_weight > 64:

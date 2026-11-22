@@ -1,6 +1,28 @@
 import { expect, test } from '@playwright/test';
 import { downloadText, field, open, snapshot } from './harness';
 
+test('edit pinned agent definition selections and repair invalid catalogs', async ({ page }) => {
+  const source = "on: {workflow_call: {inputs: {role: {type: string}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.toml, fix: fixer.toml}}, prompt: Review}}]}}";
+  const ui = await open(page, source);
+  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.getByRole('button', { name: '1. review', exact: true }).click();
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  const catalog = '{select: fix, definitions: {review: reviewer.toml, fix: fixer.toml}}';
+  await field(page, 'Agent definition selection (YAML)', catalog);
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.select).toBe('fix');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.select).toBe('${{ inputs.role }}');
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.definitions).toEqual({ review: 'reviewer.toml', fix: 'fixer.toml' });
+  expect(await downloadText(page)).toContain('fixer.toml');
+  for (const invalid of [catalog.replace('select: fix', 'select: unknown'), catalog.replace('fixer.toml', "'${{ inputs.role }}'")]) {
+    await field(page, 'Agent definition selection (YAML)', invalid);
+    await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-definition').length).toBe(1);
+    await field(page, 'Agent definition selection (YAML)', catalog);
+    await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  }
+});
+
 test('configure a bounded conversation and repair finisher membership', async ({ page }) => {
   const source = 'schemas: {Decision: {type: object, properties: {approved: {type: boolean}}}}\njobs: {solve: {steps: [{id: solution, conversation: [builder, reviewer], finishBy: reviewer, prompt: Work, with: {output: {format: json, schema: Decision}}}]}}';
   const ui = await open(page, source);

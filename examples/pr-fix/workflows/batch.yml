@@ -1,5 +1,5 @@
 # Checked-in orchestration; helpers validate data and retain evidence.
-name: Reviewer groups in declared order
+name: Ordered task groups followed by optional verification and fixes
 'on':
   workflow_call:
     inputs:
@@ -8,6 +8,9 @@ name: Reviewer groups in declared order
         required: true
       groups:
         type: array
+        required: true
+      review:
+        type: boolean
         required: true
       cycle:
         type: number
@@ -34,6 +37,7 @@ jobs:
       concurrency: 1
   verify:
     needs: groups
+    if: ${{ inputs.review and needs.groups.status == 'succeeded' }}
     uses: examples/pr-fix/workflows/task.yml
     with:
       plan: ${{ inputs.plan }}
@@ -44,6 +48,7 @@ jobs:
       github_token: ${{ secrets.github_token }}
   fix:
     needs: verify
+    if: ${{ inputs.review and needs.verify.status == 'succeeded' }}
     uses: examples/pr-fix/workflows/task.yml
     with:
       plan: ${{ inputs.plan }}

@@ -23,25 +23,16 @@ name: Select a declared stage kind
         required: true
 jobs:
   tasks:
-    uses: examples/pr-fix/workflows/group.yml
-    with:
-      plan: ${{ inputs.plan }}
-      group: ${{ inputs.stage }}
-      cycle: ${{ inputs.cycle }}
-      turns: ${{ inputs.turns }}
-    secrets:
-      github_token: ${{ secrets.github_token }}
-    if: ${{ inputs.stage.kind == 'tasks' }}
-  reviews:
-    uses: examples/pr-fix/workflows/reviews.yml
+    uses: examples/pr-fix/workflows/batch.yml
     with:
       plan: ${{ inputs.plan }}
       groups: ${{ inputs.stage.groups }}
+      review: ${{ inputs.stage.review }}
       cycle: ${{ inputs.cycle }}
       turns: ${{ inputs.turns }}
     secrets:
       github_token: ${{ secrets.github_token }}
-    if: ${{ inputs.stage.kind == 'reviews' }}
+    if: ${{ inputs.stage.kind == 'tasks' or inputs.stage.kind == 'reviews' }}
   publication:
     uses: examples/pr-fix/workflows/publication-barrier.yml
     with:

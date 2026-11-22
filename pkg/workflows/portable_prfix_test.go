@@ -1021,7 +1021,7 @@ func TestPortablePRFixRetainedReportSchemasStayCompatible(t *testing.T) {
 	if len(original) == 0 {
 		t.Fatal("native.yml has no retained task-report schema")
 	}
-	for _, role := range []string{"leaf", "reviewer", "verifier", "fixer", "audience", "retry", "checklist"} {
+	for _, role := range []string{"initial", "retry", "checklist"} {
 		job, exists := workflow.Jobs[role]
 		if !exists || len(job.Steps) != 1 || job.Steps[0].Uses != "agent/run" {
 			t.Fatal("missing native turn branch", role)

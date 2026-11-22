@@ -5,6 +5,27 @@ exactly one TOML file. Paths resolve from the workflow that owns the step.
 Admission captures the file bytes and effective settings; resume uses that
 snapshot even if the file changes.
 
+`with.agent` also accepts `{select, definitions}`. `definitions` is a catalog of
+1–32 literal names mapped to literal file or directory paths, resolved relative
+to this workflow. `select` is a declared name or a whole expression returning
+one. Admission captures every definition, including unselected entries, through
+the same native runtime checks as a single definition. Runtime never loads a
+path from expression data. An unknown name or a non-string selection fails
+before agent dispatch. For example:
+
+```yaml
+agent:
+  select: ${{ inputs.role }}
+  definitions:
+    review: agents/reviewer.toml
+    fix: agents/fixer.toml
+```
+
+The selected definition creates a fresh session. Continue it with the returned
+opaque agent reference, using the ordinary string-expression form. Catalog
+selection and string session references remain distinct. The editor accepts the
+catalog form and exposes **Agent definition selection (YAML)** for editing it.
+
 The optional positive integer literal `with.turns` narrows the initial agent's total turn
 allowance, up to the configured runtime limit. It cannot change an existing
 agent reference's original allowance or replenish turns on continuation or

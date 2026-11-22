@@ -38,9 +38,9 @@ name: One native turn with retained report acceptance
         required: true
     outputs:
       agent:
-        value: ${{ jobs.result.outputs.agent }}
+        value: ${{ jobs.accept.outputs.result.agent }}
       report:
-        value: ${{ jobs.result.outputs.report }}
+        value: ${{ jobs.accept.outputs.result.native_report }}
       complete:
         value: ${{ jobs.accept.outputs.result.complete }}
       retry:
@@ -271,101 +271,20 @@ jobs:
     outputs:
       input: ${{ steps.check.outputs.task_input }}
       prompt: ${{ steps.check.outputs.prompt }}
-  leaf:
-    if: ${{ inputs.mode == 'initial' and inputs.definition == 'leaf' }}
+  initial:
+    if: ${{ inputs.mode == 'initial' }}
     steps:
     - id: task
       uses: agent/run
       with:
-        agent: agents/leaf.toml
-        turns: ${{ inputs.turns }}
-        prompt: ${{ inputs.prompt }}
-        input: ${{ inputs.task_input }}
-        output:
-          format: json
-          repair-attempts: 0
-          schema: task-report
-      continue-on-error: true
-    outputs:
-      agent: ${{ steps.task.outputs.agent }}
-      report: ${{ steps.task.outputs.structured }}
-      status: ${{ steps.task.status }}
-      error: ${{ steps.task.error }}
-      failure_class: ${{ steps.task.failure_class }}
-      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
-  reviewer:
-    if: ${{ inputs.mode == 'initial' and inputs.definition == 'reviewer' }}
-    steps:
-    - id: task
-      uses: agent/run
-      with:
-        agent: agents/reviewer.toml
-        turns: ${{ inputs.turns }}
-        prompt: ${{ inputs.prompt }}
-        input: ${{ inputs.task_input }}
-        output:
-          format: json
-          repair-attempts: 0
-          schema: task-report
-      continue-on-error: true
-    outputs:
-      agent: ${{ steps.task.outputs.agent }}
-      report: ${{ steps.task.outputs.structured }}
-      status: ${{ steps.task.status }}
-      error: ${{ steps.task.error }}
-      failure_class: ${{ steps.task.failure_class }}
-      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
-  verifier:
-    if: ${{ inputs.mode == 'initial' and inputs.definition == 'verifier' }}
-    steps:
-    - id: task
-      uses: agent/run
-      with:
-        agent: agents/verifier.toml
-        turns: ${{ inputs.turns }}
-        prompt: ${{ inputs.prompt }}
-        input: ${{ inputs.task_input }}
-        output:
-          format: json
-          repair-attempts: 0
-          schema: task-report
-      continue-on-error: true
-    outputs:
-      agent: ${{ steps.task.outputs.agent }}
-      report: ${{ steps.task.outputs.structured }}
-      status: ${{ steps.task.status }}
-      error: ${{ steps.task.error }}
-      failure_class: ${{ steps.task.failure_class }}
-      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
-  fixer:
-    if: ${{ inputs.mode == 'initial' and inputs.definition == 'fixer' }}
-    steps:
-    - id: task
-      uses: agent/run
-      with:
-        agent: agents/fixer.toml
-        turns: ${{ inputs.turns }}
-        prompt: ${{ inputs.prompt }}
-        input: ${{ inputs.task_input }}
-        output:
-          format: json
-          repair-attempts: 0
-          schema: task-report
-      continue-on-error: true
-    outputs:
-      agent: ${{ steps.task.outputs.agent }}
-      report: ${{ steps.task.outputs.structured }}
-      status: ${{ steps.task.status }}
-      error: ${{ steps.task.error }}
-      failure_class: ${{ steps.task.failure_class }}
-      unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
-  audience:
-    if: ${{ inputs.mode == 'initial' and inputs.definition == 'audience' }}
-    steps:
-    - id: task
-      uses: agent/run
-      with:
-        agent: agents/audience.toml
+        agent:
+          select: ${{ inputs.definition }}
+          definitions:
+            leaf: agents/leaf.toml
+            reviewer: agents/reviewer.toml
+            verifier: agents/verifier.toml
+            fixer: agents/fixer.toml
+            audience: agents/audience.toml
         turns: ${{ inputs.turns }}
         prompt: ${{ inputs.prompt }}
         input: ${{ inputs.task_input }}
@@ -425,78 +344,11 @@ jobs:
       error: ${{ steps.task.error }}
       failure_class: ${{ steps.task.failure_class }}
       unsafe_failure_class: ${{ steps.task.unsafe_failure_class }}
-  result:
-    container:
-      files:
-      - helpers/
-      - agents/
-    steps:
-    - argv:
-      - python3
-      - -B
-      - /actions/helpers/action.py
-      - native_result
-      protocol: action-v1
-      effect: external_mutation
-      input-schema:
-        type: object
-      output-schema:
-        type: object
-      input:
-        plan: ${{ inputs.plan }}
-        definition: ${{ inputs.definition }}
-        mode: ${{ inputs.mode }}
-        results:
-          leaf:
-            status: ${{ needs.leaf.status }}
-            output: ${{ needs.leaf.outputs }}
-          reviewer:
-            status: ${{ needs.reviewer.status }}
-            output: ${{ needs.reviewer.outputs }}
-          verifier:
-            status: ${{ needs.verifier.status }}
-            output: ${{ needs.verifier.outputs }}
-          fixer:
-            status: ${{ needs.fixer.status }}
-            output: ${{ needs.fixer.outputs }}
-          audience:
-            status: ${{ needs.audience.status }}
-            output: ${{ needs.audience.outputs }}
-          retry:
-            status: ${{ needs.retry.status }}
-            output: ${{ needs.retry.outputs }}
-          checklist:
-            status: ${{ needs.checklist.status }}
-            output: ${{ needs.checklist.outputs }}
-      env:
-        GH_TOKEN: ${{ secrets.github_token }}
-        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
-      id: selected
-    needs:
-    - leaf
-    - reviewer
-    - verifier
-    - fixer
-    - audience
-    - retry
-    - checklist
-    outputs:
-      agent: ${{ steps.selected.outputs.agent }}
-      report: ${{ steps.selected.outputs.report }}
-      status: ${{ steps.selected.outputs.status }}
-      error: ${{ steps.selected.outputs.error }}
-      failure_class: ${{ steps.selected.outputs.failure_class }}
-      unsafe_failure_class: ${{ steps.selected.outputs.unsafe_failure_class }}
-      accept_operation: ${{ steps.selected.outputs.accept_operation }}
-    if: ${{ needs.leaf.status != 'needs_attention' and needs.leaf.status != 'failed' and
-      needs.reviewer.status != 'needs_attention' and needs.reviewer.status != 'failed' and
-      needs.verifier.status != 'needs_attention' and needs.verifier.status != 'failed' and
-      needs.fixer.status != 'needs_attention' and needs.fixer.status != 'failed' and
-      needs.audience.status != 'needs_attention' and needs.audience.status != 'failed' and
-      needs.retry.status != 'needs_attention' and needs.retry.status != 'failed' and
-      needs.checklist.status != 'needs_attention' and needs.checklist.status != 'failed' }}
   accept:
-    needs: result
+    needs: [initial, retry, checklist]
+    if: ${{ needs.initial.status != 'failed' and needs.initial.status != 'needs_attention' and
+      needs.retry.status != 'failed' and needs.retry.status != 'needs_attention' and
+      needs.checklist.status != 'failed' and needs.checklist.status != 'needs_attention' }}
     container:
       files:
       - helpers/
@@ -507,7 +359,7 @@ jobs:
       - python3
       - -B
       - /actions/helpers/action.py
-      - invoke
+      - native_accept
       protocol: action-v1
       effect: external_mutation
       input-schema:
@@ -515,19 +367,21 @@ jobs:
       output-schema:
         type: object
       input:
-        operation: ${{ needs.result.outputs.accept_operation }}
-        payload:
-          plan: ${{ inputs.plan }}
-          claim: ${{ inputs.claim }}
-          agent: ${{ needs.result.outputs.agent }}
-          report: ${{ needs.result.outputs.report }}
-          status: ${{ needs.result.outputs.status }}
-          failure_class: ${{ needs.result.outputs.failure_class }}
-          unsafe_failure_class: ${{ needs.result.outputs.unsafe_failure_class }}
-          error: ${{ needs.result.outputs.error }}
-          retried: ${{ inputs.mode == 'retry' }}
-          round: ${{ inputs.round }}
-          publication: ${{ inputs.publication }}
+        plan: ${{ inputs.plan }}
+        claim: ${{ inputs.claim }}
+        mode: ${{ inputs.mode }}
+        round: ${{ inputs.round }}
+        publication: ${{ inputs.publication }}
+        results:
+          initial:
+            status: ${{ needs.initial.status }}
+            output: ${{ needs.initial.outputs }}
+          retry:
+            status: ${{ needs.retry.status }}
+            output: ${{ needs.retry.outputs }}
+          checklist:
+            status: ${{ needs.checklist.status }}
+            output: ${{ needs.checklist.outputs }}
       env:
         GH_TOKEN: ${{ secrets.github_token }}
         GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}

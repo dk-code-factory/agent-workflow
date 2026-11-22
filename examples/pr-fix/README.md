@@ -52,7 +52,11 @@ and `{"stage":"ci"}`. These selectors do not invoke installed plugin skills.
 Legacy qualified names and `skill` objects remain accepted. Shared helper calls
 use [helper.yml](workflows/helper.yml). [native.yml](workflows/native.yml) shares
 one report contract across initial turns, eligible retries and checklist
-continuations; retry and checklist modes preserve the original native session.
+continuations and selects fresh roles from a fixed admitted TOML catalog;
+retry and checklist modes preserve the original native session. Result selection
+and report acceptance share one retained helper operation.
+[batch.yml](workflows/batch.yml) shares ordered task groups and their optional
+independent verification/fix sequence across task and review stages.
 [ci-poll.yml](workflows/ci-poll.yml) owns each CI
 observation and delay within its bounded polling chunk.
 

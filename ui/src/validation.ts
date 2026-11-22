@@ -494,7 +494,15 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
           add('host-action', 'Registered action availability and typed schemas require host runtime validation', [...sp, 'uses'], undefined, 'host', 'info');
         } else {
           if (uses !== 'agent/run') add('action', 'Expected agent/run or a controller action', [...sp, 'uses']);
-          if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path or agent reference', [...sp, 'with', 'agent']);
+          if (mapping(params.agent)) {
+            const { select, definitions } = params.agent;
+            const names = mapping(definitions) ? Object.keys(definitions) : [];
+            if (Object.keys(params.agent).length !== 2 || typeof select !== 'string' || !select.trim() || !mapping(definitions) || names.length < 1 || names.length > 32
+              || names.some(name => !name.trim() || new TextEncoder().encode(name).length > 128 || name.includes('${{') || typeof definitions[name] !== 'string' || !definitions[name].trim() || definitions[name].includes('${{'))
+              || !wholeExpressionValue(select) && !Object.hasOwn(definitions, select)) {
+              add('agent-definition', 'Agent selection requires select and 1–32 literal named definition paths', [...sp, 'with', 'agent']);
+            }
+          } else if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path, agent reference or definition selection', [...sp, 'with', 'agent']);
           for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
           for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
           if (params.turns != null && !wholeExpressionValue(params.turns)) {
