@@ -28,6 +28,14 @@ def dispatch(operation, root, provider, ledger, plan, inputs):
     if operation == "native_accept":
         selected, turn_inputs = native_acceptance(inputs)
         result = dispatch(selected["accept_operation"], root, provider, ledger, plan, turn_inputs)
+        # Workflow outputs need the native report, not a second copy of findings
+        # from acceptance feedback. Large retries keep their original assignment
+        # available by immutable reference in the same session.
+        result.pop("feedback", None)
+        if result.get("retry"):
+            claim = app._claim(ledger, inputs["claim"])
+            result["task_input"] = {"assignment_reference": claim["assignment"],
+                                    "original_failure": result["task_input"]["original_failure"]}
         return {**result, "agent": selected["agent"], "native_report": selected.get("report")}
     if operation == "claim":
         return app.prepare_claim(root, provider, ledger, plan, inputs)

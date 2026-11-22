@@ -190,6 +190,8 @@ Native report acceptance selects exactly one initial, retry or checklist result
 inside the same helper operation that validates and retains the report. It
 preserves engine failure metadata and rechecks continuation and audience evidence
 when reusing a checkpoint, without a separate result-selection container.
+Retry context retains the original immutable assignment reference so combining
+acceptance and native report outputs cannot duplicate a large assignment body.
 The deepest native-turn workflow keeps inline helper calls to preserve the
 engine's eight-level reusable-workflow limit, including a caller
 wrapper. An original attempt and its optional same-session retry feed one

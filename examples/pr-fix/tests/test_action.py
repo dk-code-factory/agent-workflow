@@ -155,6 +155,27 @@ class ActionTests(unittest.TestCase):
                 self.assertFalse(self.handle("native_accept", "validate_checkpoint", inputs,
                     key=mode + "-accept", checkpoint=executed["result"])["valid"])
 
+    def test_native_acceptance_keeps_large_retry_assignment_and_report_within_transport_limit(self):
+        request = copy.deepcopy(self.fixture.request)
+        request["logical_run"] = "large-native-accept"
+        request["instructions"] = "i" * (800 << 10)
+        request["options"]["tasks"] = ["local:review"]
+        self.prepared = prepare(self.root, request, self.provider)
+        self.plan = read_artifact(self.root, self.prepared["plan"])
+        claim = self.handle("claim", "execute", {"task": self.plan["tasks"][0]["id"]})["result"]["output"]["claim"]
+        report = self.fixture.report(findings=[{"id": "original", "text": "f" * (256 << 10), "sources": ["source"]}])
+        inputs = self.native_inputs("initial", claim, report, status="failed",
+            failure_class="usage_exhausted", unsafe_failure_class="", error="Original limit")
+        executed = self.handle("native_accept", "execute", inputs, key="large-native-accept")
+        self.assertLess(len(canonical(executed)), MAX_JSON)
+        self.assertEqual(self.handle("native_accept", "reconcile", inputs, key="large-native-accept")["result"], executed["result"])
+        output = executed["result"]["output"]
+        self.assertEqual(output["native_report"], report)
+        self.assertNotIn("feedback", output)
+        assignment = read_artifact(self.root, output["task_input"]["assignment_reference"])
+        self.assertEqual(assignment["instructions"], request["instructions"])
+        self.assertEqual(output["task_input"]["original_failure"]["diagnostic"], "Original limit")
+
     def test_lost_acknowledgement_returns_original_result_without_another_dispatch(self):
         original = action.dispatch
         with patch.object(action, "dispatch", wraps=original) as dispatched:
