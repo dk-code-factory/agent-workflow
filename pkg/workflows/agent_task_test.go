@@ -54,13 +54,19 @@ func TestNativeAgentTaskRejectsSecretsBeforeRetainingDispatch(t *testing.T) {
 }
 
 func TestNativeAgentObservedFailureRequiresExactProviderError(t *testing.T) {
-	e, _, _ := agentTaskFixture(t, `jobs:
+	for _, checklist := range []string{"", ", checklist: {max-retries: 0, stages: [verify]}"} {
+		t.Run(fmt.Sprint(checklist != ""), func(t *testing.T) { testNativeObservedFailure(t, checklist) })
+	}
+}
+
+func testNativeObservedFailure(t *testing.T, checklist string) {
+	e, _, _ := agentTaskFixture(t, fmt.Sprintf(`jobs:
   review:
     steps:
       - id: review
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: Review}
-`, func(SessionRequest) (map[string]any, error) {
+        with: {agent: reviewer.toml, prompt: Review%s}
+`, checklist), func(SessionRequest) (map[string]any, error) {
 		return map[string]any{"text": "retained partial work"}, fmt.Errorf("%w: ordinary provider rejection", ErrProviderFailure)
 	})
 	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
@@ -70,6 +76,9 @@ func TestNativeAgentObservedFailureRequiresExactProviderError(t *testing.T) {
 	result := run.Jobs["review"].Steps["review"]
 	ec := expressionContext{RunID: run.ID}
 	step := Step{Uses: "agent/run"}
+	if checklist != "" {
+		step.With = map[string]any{"checklist": true}
+	}
 	if !e.observedNativeTaskFailure(context.Background(), step, result, ec) {
 		t.Fatal("exact observed provider failure was not eligible for explicit continuation")
 	}

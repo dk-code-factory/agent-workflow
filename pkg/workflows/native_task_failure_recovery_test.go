@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,12 @@ import (
 )
 
 func TestNativeContinuedFailureLostCompletionRetainsObservation(t *testing.T) {
+	for _, c := range []struct{ checklist, fault string }{{"", "task"}, {", checklist: {max-retries: 0, stages: [verify]}", "task/checklist/task"}, {", checklist: {max-retries: 0, stages: [verify]}", "task"}} {
+		testNativeContinuedFailureLostCompletion(t, c.checklist, c.fault)
+	}
+}
+
+func testNativeContinuedFailureLostCompletion(t *testing.T, checklist, fault string) {
 	for _, failure := range []struct {
 		name string
 		err  error
@@ -17,8 +24,8 @@ func TestNativeContinuedFailureLostCompletionRetainsObservation(t *testing.T) {
 		{"usage_exhausted", ErrUsageExhausted},
 		{"provider_failure", ErrProviderFailure},
 	} {
-		t.Run(failure.name, func(t *testing.T) {
-			e, store, fixture := agentTaskFixture(t, `jobs:
+		t.Run(fmt.Sprint(failure.name, checklist != "", fault), func(t *testing.T) {
+			e, store, fixture := agentTaskFixture(t, fmt.Sprintf(`jobs:
   native:
     outputs:
       status: '${{ steps.task.status }}'
@@ -28,17 +35,17 @@ func TestNativeContinuedFailureLostCompletionRetainsObservation(t *testing.T) {
       - id: task
         uses: agent/run
         continue-on-error: true
-        with: {agent: reviewer.toml, prompt: work, turns: 8}
+        with: {agent: reviewer.toml, prompt: work, turns: 8%s}
   disposition:
     needs: native
     steps:
       - argv: [true]
-`, func(SessionRequest) (map[string]any, error) {
+`, checklist), func(SessionRequest) (map[string]any, error) {
 				return map[string]any{"text": "original partial analysis"}, failure.err
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
+			e.Store = &blockCompletionFault{SQLiteStore: store, failID: fault}
 			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run == nil || !strings.Contains(err.Error(), "lost checkpoint write") {
 				t.Fatalf("did not fault completion: run=%+v err=%v", run, err)
@@ -79,6 +86,9 @@ func TestNativeContinuedFailureLostCompletionRetainsObservation(t *testing.T) {
 			}
 			ec := expressionContext{RunID: run.ID, JobID: "native"}
 			step := Step{ID: "task", Uses: "agent/run"}
+			if checklist != "" {
+				step.With = map[string]any{"checklist": true}
+			}
 			if !e.observedNativeTaskFailure(ctx, step, result, ec) {
 				t.Fatal("recovered physical attempt lost exact dispatch/observation binding")
 			}
@@ -90,6 +100,14 @@ func TestNativeContinuedFailureLostCompletionRetainsObservation(t *testing.T) {
 			for _, candidate := range attempts {
 				if candidate.ID == result.AttemptID {
 					attempt = candidate
+				}
+			}
+			if attempt.ChecklistFailure != "" {
+				for _, child := range attempts {
+					if child.ID == attempt.ChecklistFailure {
+						attempt = child
+						break
+					}
 				}
 			}
 			if attempt.AgentTask == nil {

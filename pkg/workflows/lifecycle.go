@@ -210,7 +210,15 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 	var attempt Attempt
 	if durable {
 		var reused bool
-		if ec.Ordered {
+		if hasChecklist(step) {
+			// The owner only orchestrates durable child effects. Child attempts
+			// retain the normal uncertainty and ordered-input replay guards.
+			if blocks := blockJournal(e.Store); blocks != nil {
+				attempt, reused, err = blocks.BeginBlock(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber)
+			} else {
+				return result, fmt.Errorf("checklist requires a durable block journal")
+			}
+		} else if ec.Ordered {
 			attempt, reused, err = e.beginIterationStep(ctx, journal, step, ec, retry)
 		} else {
 			attempt, reused, err = journal.Begin(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, retry)
@@ -230,7 +238,11 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 	} else {
 		result.StartedAt = time.Now().UTC()
 		result.AttemptID = attempt.ID
-		result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
+		if hasChecklist(step) {
+			result.Outputs, err = e.executeChecklist(ctx, step, ec, slots, retry)
+		} else {
+			result.Outputs, err = e.executeStep(invocationContext(ctx, e.Store, ec.Attempt), step, ec, slots)
+		}
 		err = lifecycleContextError(ctx, err)
 		if err != nil {
 			result.Status = executionFailureStatus(ctx, err)
@@ -455,6 +467,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 				return err
 			}
 			result.Outputs = cloneJSONMap(replacement)
+			if hasChecklist(step) {
+				result.Outputs["checklist"] = cloneJSONValue(life.Candidate["checklist"])
+			}
 			if life.Agent != "" {
 				result.Outputs["agent"] = life.Agent
 			}
@@ -480,6 +495,10 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			replacement, fallbackErr := run("onError", step.OnError)
 			if step.Uses == "agent/run" {
 				replacement = replacementCandidate("onError", step.OnError)
+			}
+			if hasChecklist(step) && fallbackErr == nil && replacement != nil {
+				// An AI fallback cannot attest on behalf of unfinished checks.
+				fallbackErr = fmt.Errorf("checklist verification remains incomplete after onError")
 			}
 			if fallbackErr == nil && replacement != nil && life.Skipped["onError"] == "" {
 				fallbackErr = validateLifecycleReplacement(step, replacement, ec)
@@ -531,7 +550,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.UnsafeFailureClass = unsafeFailureClass(err)
 	}
 	if durable {
-		if hasLifecycle(step) || child {
+		if hasLifecycle(step) || child || hasChecklist(step) && (err == nil || errors.Is(err, errChecklistExhausted)) || ctx.Value(checklistCommandKey{}) != nil && checklistCommandFailed(result) {
 			attempt.Phase = "lifecycle_completed"
 		}
 		if persistErr := journal.Complete(context.WithoutCancel(ctx), attempt, result); persistErr != nil {

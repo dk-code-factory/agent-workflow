@@ -21,6 +21,34 @@ export const hasAgentResult = (step: Mapping): boolean => Object.hasOwn(step, 'c
 export const effectiveStepID = (step: Mapping, index: number) => String(step.id || `step_${index + 1}`);
 export const mapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+function checklistError(value: unknown, node?: unknown): string | undefined {
+  const retries = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 100;
+  const timestamp = (node: unknown, value: unknown) => isScalar(node) && typeof value === 'string' &&
+    (node.tag === 'tag:yaml.org,2002:timestamp' || !node.tag && node.type === 'PLAIN' && runnerTimestamp(value));
+  if (!mapping(value) || Object.keys(value).length !== 2 || !retries(value['max-retries']) || !Array.isArray(value.stages) || value.stages.length < 1 || value.stages.length > 100) return 'Checklist requires max-retries from 0 to 100 and 1–100 stages';
+  const nodes = isMap(node) ? node.get('stages', true) : undefined;
+  for (const [index, raw] of value.stages.entries()) {
+    const stageNode = isSeq(nodes) ? nodes.items[index] : undefined;
+    if (timestamp(stageNode, raw)) return 'Checklist prompts must be strings; quote date values';
+    const stage = typeof raw === 'string' ? { prompt: raw } : raw;
+    if (!mapping(stage)) return 'Checklist stage requires a prompt or command';
+    for (const [key, field] of Object.entries(stage)) {
+      if (!['prompt', 'argv', 'run', 'shell', 'timeout', 'working-directory', 'max-retries'].includes(key)) return `Unknown checklist stage field "${key}"`;
+      if (key === 'max-retries') { if (!retries(field)) return 'Stage max-retries must be an integer from 0 to 100'; }
+      else if (key === 'argv') {
+        if (!Array.isArray(field) || field.length === 0 || field.some(arg => typeof arg !== 'string') || !/\P{White_Space}/u.test(field[0])) return 'Checklist argv requires a nonempty string array and executable';
+        const args = isMap(stageNode) ? stageNode.get('argv', true) : undefined;
+        if (isSeq(args) && field.some((arg, i) => timestamp(args.items[i], arg))) return 'Checklist argv values must be strings; quote date values';
+      }
+      else if (typeof field !== 'string' || !/\P{White_Space}/u.test(field)) return `Checklist ${key} must be a nonempty string`;
+      else if (isMap(stageNode) && timestamp(stageNode.get(key, true), field)) return `Checklist ${key} must be a string; quote date values`;
+    }
+    if ([stage.prompt, stage.argv, stage.run].filter(v => v !== undefined).length !== 1 || !!stage.run !== !!stage.shell) return 'Checklist stage requires exactly one of prompt, argv, or run with shell';
+    if (stage.prompt && (stage.timeout !== undefined || stage['working-directory'] !== undefined)) return 'Checklist prompt stages cannot declare command settings';
+    if (stage.timeout !== undefined && (typeof stage.timeout !== 'string' || !validDuration(stage.timeout))) return 'Checklist timeout must be a positive duration';
+  }
+}
+
 export function normalizeStringScalar(node: Scalar): string {
   const value = node.value;
   const text = typeof value === 'string' ? value
@@ -503,7 +531,47 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
               add('agent-definition', 'Agent selection requires select and 1–32 literal named definition paths', [...sp, 'with', 'agent']);
             }
           } else if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path, agent reference or definition selection', [...sp, 'with', 'agent']);
-          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns', 'checklist'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          if (Object.hasOwn(params, 'checklist')) {
+            const normalizeBudget = (object: Mapping, path: Path) => {
+              if (!Object.hasOwn(object, 'max-retries')) return;
+              const node = doc?.getIn([...path, 'max-retries'], true);
+              const value = runnerTaskAllowance(node);
+              if (value !== undefined && Number.isInteger(value) && value >= 0 && value <= 100) {
+                object['max-retries'] = value;
+                if (isScalar(node)) node.value = value;
+              }
+            };
+            const normalizeText = (object: Mapping | unknown[], key: string | number, path: Path) => {
+              const node = doc?.getIn(path, true);
+              if (!isScalar(node) || node.tag !== 'tag:yaml.org,2002:binary') return;
+              // Node's binary decoder tolerates malformed base64 that yaml.v3 rejects.
+              const source = (node.source ?? '').replace(/[\r\n]/g, '');
+              if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(source)) {
+                add('checklist', 'Checklist binary strings require valid base64', path, node);
+                return;
+              }
+              try { Object.defineProperty(object, key, { value: normalizeStringScalar(node), writable: true, configurable: true, enumerable: true }); }
+              catch { add('checklist', 'Checklist strings require valid UTF-8', path, node); }
+            };
+            const checklistPath = [...sp, 'with', 'checklist'];
+            if (mapping(params.checklist)) {
+              normalizeBudget(params.checklist, checklistPath);
+              const stages = params.checklist.stages;
+              if (Array.isArray(stages)) stages.forEach((stage, index) => {
+                const path = [...checklistPath, 'stages', index];
+                normalizeText(stages, index, path);
+                if (mapping(stage)) {
+                  normalizeBudget(stage, path);
+                  for (const key of ['prompt', 'run', 'shell', 'working-directory', 'timeout']) normalizeText(stage, key, [...path, key]);
+                  const argv = stage.argv;
+                  if (Array.isArray(argv)) argv.forEach((_, i) => normalizeText(argv, i, [...path, 'argv', i]));
+                }
+              });
+            }
+            const error = checklistError(params.checklist, doc?.getIn(checklistPath, true));
+            if (error) add('checklist', error, [...sp, 'with', 'checklist']);
+          }
           for (const key of ['prompt', 'message', 'model', 'workspace']) if (params[key] != null && (typeof params[key] !== 'string' || (() => { const n = doc?.getIn([...sp, 'with', key], true); return isScalar(n) && n.type === 'PLAIN' && !n.tag && runnerTimestamp(String(params[key])); })())) add('action', `Agent ${key} must be a string`, [...sp, 'with', key]);
           if (params.turns != null && !wholeExpressionValue(params.turns)) {
             const node = doc?.getIn([...sp, 'with', 'turns'], true);

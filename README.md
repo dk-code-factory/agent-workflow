@@ -471,6 +471,10 @@ including nested examples such as `examples/pr-fix/workflows/main.yml`. They use
 
 ### Commands and bounded iterations
 
+For verification attached to one agent session, use an
+[agent checklist](docs/AGENT_CHECKLISTS.md). `with.checklist` combines ordered
+prompt or command stages with shared and per-stage retry limits.
+
 ```yaml
 jobs:
   check:

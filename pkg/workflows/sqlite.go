@@ -40,6 +40,7 @@ type Snapshot struct {
 }
 
 type Attempt struct {
+	ChecklistFailure string             `json:"checklist_failure,omitempty"`
 	AgentTask        *AgentTaskDispatch `json:"agent_task,omitempty"`
 	Conversation     *ConversationState `json:"conversation,omitempty"`
 	InputFingerprint string             `json:"input_fingerprint,omitempty"`

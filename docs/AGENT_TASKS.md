@@ -1,5 +1,9 @@
 # Pipeline agent tasks
 
+Native tasks can declare an ordered [verification checklist](AGENT_CHECKLISTS.md)
+under `with.checklist`, with shared and per-stage retry limits, prompt stages,
+and command checks whose failures return to the original agent for repair.
+
 Use `agent/run` with a native Codex agent TOML file or a directory containing
 exactly one TOML file. Paths resolve from the workflow that owns the step.
 Admission captures the file bytes and effective settings; resume uses that
