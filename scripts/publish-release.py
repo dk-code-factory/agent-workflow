@@ -139,7 +139,7 @@ def publish(out, tag):
         require(Path(name).name == name and sha256(out / name) == digest, 'local asset mismatch: ' + name)
     # Recheck all gates immediately before external effects. No offline override.
     validate_certified(out, tag)
-    for path in sorted(out.glob('*.tar.gz')):
+    for path in sorted([*out.glob('*.tar.gz'), *out.glob('*.zip')]):
         verify_attestation(path, commit, tag)
     verify_attestation(out / 'release-manifest.json', commit, tag)
     reg = local['registry']
@@ -176,7 +176,7 @@ def publish(out, tag):
             with path.open('wb') as stream:
                 run('gh', 'api', '-H', 'Accept: application/octet-stream', 'repos/' + REPO + '/releases/assets/' + str(asset['id']), stdout=stream)
             require(sha256(path) == expected[path.name], 'draft download checksum mismatch')
-        for path in downloaded.glob('*.tar.gz'):
+        for path in [*downloaded.glob('*.tar.gz'), *downloaded.glob('*.zip')]:
             verify_attestation(path, commit, tag)
         verify_attestation(downloaded / 'release-manifest.json', commit, tag)
     require(manifest(tag)[0] == reg['digest'], 'registry tag changed before publication')

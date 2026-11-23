@@ -170,6 +170,14 @@ registry effects and again before draft-release publication.
 ## Publication and verification
 
 Archives have normalized timestamps, gzip metadata, ordering, ownership and modes.
+The platform-independent `agent-workflow-plugin-<version>.zip` is reproduced
+alongside the four engine archives, included in archive provenance and the
+release manifest, and checked again after draft download and immutable
+publication. Every engine archive includes the matching plugin and marketplace;
+plugin/engine version drift or Codex compatibility drift from `images/pins.json`
+blocks packaging. Native plugin model acceptance remains a separate manual
+procedure in [conformance/plugin](../conformance/plugin/README.md); it is not a
+new recurring release prerequisite or a substitute for existing certification.
 The source fingerprint covers all tracked bytes and modes. Builds require the
 exact pinned Go toolchain. Scans use current vulnerability databases; high or
 critical image vulnerabilities block release.

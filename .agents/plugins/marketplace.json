@@ -2,6 +2,18 @@
   "name": "agent-workflow",
   "plugins": [
     {
+      "name": "agent-workflow",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agent-workflow"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
       "name": "network-runtime",
       "source": {
         "source": "local",
@@ -10,7 +22,8 @@
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
-      }
+      },
+      "category": "Developer tools"
     }
   ]
 }

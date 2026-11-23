@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "engine_version": "0.2.2",
+  "codex_versions": ["0.167.1"],
+  "python_minimum": "3.11",
+  "repository": "dk-code-factory/agent-workflow",
+  "release_workflow": "dk-code-factory/agent-workflow/.github/workflows/release.yml"
+}

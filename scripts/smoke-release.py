@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke an extracted native archive. Only disposable Git and fake providers."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -10,7 +11,7 @@ import tempfile
 
 archive = Path(sys.argv[1]).resolve()
 with tempfile.TemporaryDirectory(prefix="workflow-archive-smoke-") as temporary:
-    root = Path(temporary)
+    root = Path(temporary).resolve()
     with tarfile.open(archive) as bundle:
         bundle.extractall(root, filter="data")
     package = next(path for path in root.iterdir() if path.is_dir())
@@ -37,10 +38,21 @@ for line in sys.stdin:
         send({'method':'turn/completed','params':{'threadId':'archive-fixture','turn':{'id':'turn-1','status':'completed'}}})
 """)
     path.chmod(0o700)
-    env = dict(os.environ, PATH=str(fakebin) + os.pathsep + os.environ["PATH"], TMPDIR=str(root), AW_ARCHIVE_FIXTURE_KEY="disposable-local-key")
+    gh = fakebin / "gh"
+    gh.write_text("#!/bin/sh\n[ \"$*\" = 'attestation verify --help' ] || exit 1\nprintf '%s\\n' '--source-ref --source-digest --signer-digest --signer-workflow --bundle'\n")
+    gh.chmod(0o700)
+    env = dict(os.environ, PATH=str(fakebin) + os.pathsep + os.environ["PATH"], TMPDIR=str(root), XDG_CACHE_HOME=str(root / "cache"), AW_ARCHIVE_FIXTURE_KEY="disposable-local-key")
     def run(*args):
         return subprocess.check_output(list(args), cwd=workspace, env=env, text=True)
     version = json.loads(run(str(binary), "version"))
+    launcher = package / "plugins/agent-workflow/scripts/agent-workflow"
+    assert json.loads(run(sys.executable, str(launcher), "check"))["prerequisites"] == "ok"
+    candidate = ["--candidate-archive", str(archive), "--sha256", hashlib.sha256(archive.read_bytes()).hexdigest()]
+    installed = json.loads(run(sys.executable, str(launcher), "ensure", *candidate))
+    assert installed["certified_release"] is False
+    assert json.loads(run(sys.executable, str(launcher), "exec", *candidate, "--", "version")) == version
+    # Cached candidate reuse performs no release download or attestation operation.
+    assert json.loads(run(sys.executable, str(launcher), "exec", *candidate, "--", "version")) == version
     run(str(binary), "init", "--workspace", str(workspace))
     (workspace / "agents.yml").write_text("agents:\n  codex:\n    provider: codex-app-server\n    authentication: {mode: api-key, credential-env: AW_ARCHIVE_FIXTURE_KEY}\n")
     run("git", "init", "-b", "main")
@@ -55,4 +67,4 @@ for line in sys.stdin:
     assert result["status"] == "succeeded", result
     assert result["normalized_usage"]["input_tokens"] == 1, result
     assert result["jobs"]["x"]["steps"]["step_1"]["outputs"]["text"] == "ARCHIVE_SMOKE_OK", result
-    print(json.dumps({"archive": archive.name, "build": version, "assertions": ["extract", "version", "init", "validate", "doctor", "fake-provider-run", "accounting"], "model_calls": 0}))
+    print(json.dumps({"archive": archive.name, "build": version, "assertions": ["extract", "version", "packaged-plugin-install", "cached-candidate", "init", "validate", "doctor", "fake-provider-run", "accounting"], "model_calls": 0}))

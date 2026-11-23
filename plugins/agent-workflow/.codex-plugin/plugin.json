@@ -1,0 +1,9 @@
+{
+  "name": "agent-workflow",
+  "version": "0.2.2",
+  "description": "Design, validate and run durable agent workflows, and prepare reviewed engine bug reports.",
+  "skills": "./skills/",
+  "author": {"name": "Agent Workflow contributors"},
+  "homepage": "https://github.com/dk-code-factory/agent-workflow",
+  "license": "MIT"
+}

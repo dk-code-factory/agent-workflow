@@ -7,6 +7,7 @@ import gzip
 from release_lib import source_fingerprint as fingerprint_source
 from go_locks import check_go_locks
 from guardian_assets import build_guardians
+from plugin_package import build_plugin, validate_plugin
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,7 @@ pins = json.loads((ROOT / "images" / "pins.json").read_text())
 if metadata["go"] != pins["go_toolchain"]:
     raise SystemExit("release requires pinned Go toolchain " + pins["go_toolchain"])
 version = metadata["version"]
+validate_plugin(version)
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
 epoch = int(subprocess.check_output(["git", "show", "-s", "--format=%ct", "HEAD"], cwd=ROOT))
@@ -68,7 +70,7 @@ for target in targets:
             run(["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", str(stage / command), "./cmd/" + command], env=env)
         for item in ["README.md", "DESIGN.md", "LICENSE", "NOTICE", "agents.yml", "go.mod", "go.sum"]:
             shutil.copyfile(ROOT / item, stage / item)
-        for directory in ["workflows", "docs", "examples", "conformance", "plugins/network-runtime"]:
+        for directory in ["workflows", "docs", "examples", "conformance", "plugins/network-runtime", "plugins/agent-workflow"]:
             shutil.copytree(ROOT / directory, stage / directory, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
         marketplace = stage / ".agents" / "plugins"
         marketplace.mkdir(parents=True)
@@ -108,6 +110,8 @@ for target in targets:
                     bundle.add(stage, arcname=name, filter=normalize)
         archives.append(archive)
 
+plugin_archive = build_plugin(output, version)
+
 # Dependency inventories are generated from the actual locked inputs.
 lock = json.loads((ROOT / "bridge" / "claude" / "package-lock.json").read_text())
 public_modules = [{key: value for key, value in module.items() if key in ["Path", "Version", "Sum", "GoModSum", "GoVersion"]} for module in modules]
@@ -139,4 +143,4 @@ for artifact in sorted(output.iterdir()):
                 digest.update(chunk)
         checksums.append(digest.hexdigest() + "  " + artifact.name)
 (output / "SHA256SUMS").write_text("\n".join(checksums) + "\n")
-print(json.dumps({"version": version, "archives": [str(path) for path in archives], "published": False}))
+print(json.dumps({"version": version, "archives": [str(path) for path in archives], "plugin": str(plugin_archive), "published": False}))

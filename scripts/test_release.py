@@ -84,7 +84,7 @@ class NetworkPluginTests(unittest.TestCase):
         catalog = json.loads((self.root / '.agents/plugins/marketplace.json').read_text())
         self.assertEqual(manifest['name'], 'network-runtime')
         self.assertEqual(catalog['name'], 'agent-workflow')
-        entry, = catalog['plugins']
+        entry, = [item for item in catalog['plugins'] if item['name'] == 'network-runtime']
         self.assertEqual(entry['name'], manifest['name'])
         self.assertEqual(entry['source'], {'source': 'local', 'path': './plugins/network-runtime'})
         self.assertEqual(entry['policy']['installation'], 'AVAILABLE')
@@ -144,10 +144,14 @@ class PluginArchiveTests(unittest.TestCase):
               'plugins/network-runtime/README.md': 0o644}
 
     def verify_fixture(self, directory, change=None):
+        from plugin_package import plugin_files, build_plugin
         directory = Path(directory)
+        version = json.loads((self.root / 'plugins/agent-workflow/plugin.json').read_text())['version']
+        build_plugin(directory, version)
         for os_name in ['linux', 'darwin']:
             for arch in ['amd64', 'arm64']:
                 files = {name: ((self.root / name).read_bytes(), mode) for name, mode in self.assets.items()}
+                files.update({name: ((self.root / name).read_bytes(), mode) for name, mode in plugin_files().items()})
                 for name in ['agent-workflow', 'agent-workflow-runtime', 'agent-workflow-guardian', 'workflow-conformance']:
                     files[name] = (b'fixture executable', 0o755)
                 for name in ['agents.yml', 'LICENSE', 'NOTICE', 'licenses/index.json', 'bridge/claude/bridge.mjs', 'bridge/claude/package-lock.json']:
@@ -156,7 +160,7 @@ class PluginArchiveTests(unittest.TestCase):
                     fixture_guardians(Path(guardian_fixture))
                     for path in Path(guardian_fixture).iterdir():
                         files['guardians/' + path.name] = (path.read_bytes(), path.stat().st_mode & 0o777)
-                files['build.json'] = (json.dumps({'source_fingerprint': 'a' * 64, 'os': os_name, 'arch': arch}).encode(), 0o644)
+                files['build.json'] = (json.dumps({'version': version, 'source_fingerprint': 'a' * 64, 'os': os_name, 'arch': arch}).encode(), 0o644)
                 if change:
                     change(files)
                 archive = directory / f'agent-workflow-fixture-{os_name}-{arch}.tar.gz'
@@ -169,7 +173,7 @@ class PluginArchiveTests(unittest.TestCase):
                         entry.size, entry.mode = len(data), mode
                         bundle.addfile(entry, io.BytesIO(data))
         (directory / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n'
-                                                    for p in sorted(directory.glob('*.tar.gz'))))
+                                                    for p in sorted(directory.iterdir()) if p.suffix in ['.gz', '.zip']))
         return subprocess.run(['python3', str(self.root / 'scripts/verify-release.py'), str(directory)], capture_output=True, text=True)
 
     def test_all_platform_assets_and_helper_modes(self):
