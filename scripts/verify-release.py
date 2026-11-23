@@ -8,6 +8,7 @@ import sys
 import tarfile
 import tempfile
 from guardian_assets import verify_guardians
+from plugin_package import plugin_files, verify_plugin
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else "dist").resolve()
 source_root = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ plugin_assets = {
     "plugins/network-runtime/hooks/pre-tool-use.sh": 0o755,
     "plugins/network-runtime/README.md": 0o644,
 }
+plugin_assets.update(plugin_files())
 helpers = ["agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance"]
 def digest_file(path):
     value = hashlib.sha256()
@@ -68,7 +70,7 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
             if not entry.isfile() or entry.mode != mode or source.extractfile(entry).read() != (source_root / name).read_bytes():
                 raise SystemExit("archive plugin content/mode mismatch: " + name)
         bundled_plugin_files = {entry.name.removeprefix(prefix + "/") for entry in members if entry.isfile()
-                                and entry.name.startswith(prefix + "/plugins/network-runtime/")}
+                                and entry.name.startswith(prefix + "/plugins/")}
         if bundled_plugin_files != {name for name in plugin_assets if name.startswith("plugins/")}:
             raise SystemExit("archive plugin asset set mismatch")
         for name in helpers:
@@ -81,6 +83,11 @@ for archive in sorted(root.glob("agent-workflow-*.tar.gz")):
         checked.append({"archive": archive.name, "build": metadata})
 if not checked:
     raise SystemExit("no distribution archives verified")
+version = checked[0]["build"]["version"]
+plugin_zip = root / ("agent-workflow-plugin-" + version + ".zip")
+if plugin_zip.name not in checksums:
+    raise SystemExit("plugin ZIP missing from checksums")
+verify_plugin(plugin_zip, version)
 for image in (root / "worker-linux-amd64.json", root / "worker-linux-arm64.json"):
     if not image.exists():
         continue
@@ -128,6 +135,8 @@ if manifest_path.exists():
             raise SystemExit("release manifest asset mismatch: " + name)
     if checksums != set(manifest["assets"]) | {"release-manifest.json", "manifest-provenance.jsonl"}:
         raise SystemExit("release manifest/checksum asset set mismatch")
+    if plugin_zip.name not in manifest["assets"]:
+        raise SystemExit("release manifest missing plugin ZIP")
     platforms = set()
     for item in checked:
         build = item["build"]

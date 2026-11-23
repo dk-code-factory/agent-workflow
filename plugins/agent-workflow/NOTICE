@@ -1,0 +1,8 @@
+Extracted and adapted from PicoClaw (MIT).
+Source: https://github.com/sipeed/picoclaw
+Source commit: 54263352e6cf62b19530cd71fac3512c0fe082e7
+
+Derived files: pkg/workflows/types.go, expression.go, resolver.go,
+resolver_test.go, agent_output.go, agent_output_test.go.
+The standalone executor, CLI adapters, storage, and command are new.
+Original application integrations are not included.
