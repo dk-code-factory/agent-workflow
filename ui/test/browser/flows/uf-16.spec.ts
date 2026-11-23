@@ -1,6 +1,55 @@
 import { expect, test } from '@playwright/test';
 import { downloadText, field, open, snapshot } from './harness';
 
+test('edit checklist budgets and script stages, repair errors and preserve history', async ({ page }) => {
+  const ui = await open(page, 'jobs: {build: {steps: [{id: implement, uses: agent/run, with: {agent: developer.toml, prompt: Implement}}]}}');
+  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.getByRole('button', { name: '1. implement', exact: true }).click();
+  const checklist = '{max-retries: 4, stages: [{prompt: Verify requirements, max-retries: 1}, {argv: [go, test, ./...], timeout: 5m}, {shell: sh, run: git diff --check, max-retries: 2}]}';
+  await field(page, 'Checklist (YAML)', checklist);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  const expected = (await snapshot(page)).workflow.jobs.build.steps[0].with.checklist;
+  expect(expected['max-retries']).toBe(4);
+  expect(expected.stages[1].argv).toEqual(['go', 'test', './...']);
+  await field(page, 'Checklist (YAML)', checklist.replace('max-retries: 4', 'max-retries: -1'));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'checklist')).toBe(true);
+  await field(page, 'Checklist (YAML)', checklist);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.checklist['max-retries']).toBe(-1);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.checklist).toEqual(expected);
+  expect(await downloadText(page)).toContain('max-retries: 4');
+});
+
+test('repair imported unquoted checklist date arguments in YAML', async ({ page }) => {
+  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 0, stages: [{argv: [echo, 2026-01-01]}]}}}]}}';
+  const ui = await open(page, source);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'checklist')).toBe(true);
+  await ui.getByRole('button', { name: 'YAML', exact: true }).click();
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace('2026-01-01', "'2026-01-01'"));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.checklist.stages[0].argv).toEqual(['echo', '2026-01-01']);
+  expect(await downloadText(page)).toContain("'2026-01-01'");
+});
+
+test('import and export decoded checklist binary strings', async ({ page }) => {
+  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 0, stages: [!!binary VmVyaWZ5, !!binary 77u/, {argv: [echo, !!binary b2s=]}]}}}]}}';
+  const ui = await open(page, source);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
+  await field(page, 'Prompt', 'Work carefully');
+  const checklist = (await snapshot(page)).workflow.jobs.build.steps[0].with.checklist;
+  expect(checklist.stages).toEqual(['Verify', '\uFEFF', { argv: ['echo', 'ok'] }]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.checklist).toEqual(checklist);
+  const exported = await downloadText(page);
+  expect(exported).toContain('Verify');
+  expect(exported).toContain('ok');
+});
+
 test('edit pinned agent definition selections and repair invalid catalogs', async ({ page }) => {
   const source = "on: {workflow_call: {inputs: {role: {type: string}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.toml, fix: fixer.toml}}, prompt: Review}}]}}";
   const ui = await open(page, source);

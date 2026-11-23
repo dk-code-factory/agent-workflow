@@ -62,7 +62,7 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	if step.Protocol == ContainerActionV1 {
 		return e.executeContainerAction(ctx, step, ec, slots)
 	}
-	if hasLifecycle(step) {
+	if hasLifecycle(step) || hasChecklist(step) {
 		return e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)
 	}
 	if step.Uses == "input/wait" {

@@ -166,6 +166,14 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			}
 			continue
 		}
+		if hasChecklist(step) {
+			if step.Uses != "agent/run" {
+				return fmt.Errorf("step %s: checklist requires agent/run", sid)
+			}
+			if _, err := parseChecklist(step.With["checklist"]); err != nil {
+				return fmt.Errorf("step %s: %w", sid, err)
+			}
+		}
 		if step.Start != "" || step.FinishBy != "" || step.MaxTurns != 0 || step.MaxMessages != 0 {
 			return fmt.Errorf("step %s: conversation fields require conversation", sid)
 		}
@@ -281,7 +289,7 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 		}
 		for key := range step.With {
 			switch key {
-			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns":
+			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns", "checklist":
 			default:
 				return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
 			}

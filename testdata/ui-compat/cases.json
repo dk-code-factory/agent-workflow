@@ -484,5 +484,83 @@
     "file": "input-wait-extra.yml",
     "parse": true,
     "valid": false
+  },
+  {
+    "name": "checklist",
+    "file": "checklist.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "checklist-zero",
+    "file": "checklist-zero.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "checklist-fractional",
+    "file": "checklist-fractional.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-quoted",
+    "file": "checklist-quoted.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-conflict",
+    "file": "checklist-conflict.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-shell",
+    "file": "checklist-shell.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-empty",
+    "file": "checklist-empty.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-argv-date",
+    "file": "checklist-argv-date.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-argv-date-quoted",
+    "file": "checklist-argv-date-quoted.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "checklist-binary",
+    "file": "checklist-binary.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "checklist-binary-invalid-utf8",
+    "file": "checklist-binary-invalid-utf8.yml",
+    "parse": true,
+    "valid": false
+  },
+  {
+    "name": "checklist-bom",
+    "file": "checklist-bom.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "checklist-whitespace",
+    "file": "checklist-whitespace.yml",
+    "parse": true,
+    "valid": false
   }
 ]

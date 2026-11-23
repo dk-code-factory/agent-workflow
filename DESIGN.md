@@ -1,5 +1,19 @@
 # Workflow runtime design
 
+## Agent checklists
+
+`agent/run` admits literal `with.checklist` stage structure and shared/local
+retry limits. Its owner is effect-free orchestration; the initial task, each
+prompt check, each command check and each repair have stable child coordinates.
+Prompt and repair turns bind the original opaque agent reference. Durable child
+receipts reconstruct stage position and consumed retries after response loss.
+Committed nonzero command exits are reusable check outcomes; interrupted effects
+retain ordinary replay guards. Checklist exhaustion is terminal and runs before
+step lifecycle handlers. Command repairs cannot pass a check without a successful
+command rerun. Script diagnostics remain typed data and full streams stay in
+artifacts; checklist summaries retain child references rather than duplicating
+command streams.
+
 ## Ownership and persistence
 
 One controller holds an advisory workspace ownership lock and a private Unix

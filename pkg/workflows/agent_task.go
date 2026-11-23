@@ -457,6 +457,17 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 	for _, attempt := range attempts {
 		if attempt.ID == result.AttemptID && attempt.RunID == ec.RunID && (ec.JobID == "" || attempt.JobID == ec.JobID) && (step.ID == "" || attempt.StepID == step.ID) {
 			dispatch = attempt.AgentTask
+			if hasChecklist(step) {
+				// The orchestration receipt binds the exact failed native child;
+				// unrelated turns on the same session cannot supply its observation.
+				dispatch = nil
+				for _, child := range attempts {
+					if child.ID == attempt.ChecklistFailure && child.RunID == attempt.RunID && child.JobID == attempt.JobID && child.Iteration == attempt.Iteration && strings.HasPrefix(child.StepID, attempt.StepID+"/checklist/") {
+						dispatch = child.AgentTask
+						break
+					}
+				}
+			}
 			break
 		}
 	}

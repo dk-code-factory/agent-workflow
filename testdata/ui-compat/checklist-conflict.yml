@@ -1,0 +1,1 @@
+jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 1, stages: [{prompt: Verify, argv: [echo]}]}}}]}}
