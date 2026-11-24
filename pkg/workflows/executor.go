@@ -20,6 +20,10 @@ import (
 )
 
 const (
+	maxReusableWorkflowDepth = 200
+	// Admission must fit the entry workflow plus a full-depth call chain.
+	maxWorkflowDefinitions = maxReusableWorkflowDepth + 1
+
 	RunStatusRunning   = "running"
 	RunStatusSucceeded = "succeeded"
 	RunStatusFailed    = "failed"
@@ -103,8 +107,8 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 	active := map[string]bool{}
 	var load func(string, int) error
 	load = func(ref string, depth int) error {
-		if depth > 8 {
-			return fmt.Errorf("reusable workflow depth exceeds 8")
+		if depth > maxReusableWorkflowDepth {
+			return fmt.Errorf("reusable workflow depth exceeds %d", maxReusableWorkflowDepth)
 		}
 		resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
 		if err != nil {
@@ -144,8 +148,8 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 			w.Jobs[id] = job
 		}
 
-		if len(all) >= 128 {
-			return fmt.Errorf("workflow closure exceeds 128 definitions")
+		if len(all) >= maxWorkflowDefinitions {
+			return fmt.Errorf("workflow closure exceeds %d definitions", maxWorkflowDefinitions)
 		}
 		active[ref] = true
 		all[ref] = w
@@ -247,8 +251,8 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 }
 
 func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all map[string]*Workflow, slots chan struct{}, depth int, existing *Run) (*Run, error) {
-	if depth > 8 {
-		return nil, fmt.Errorf("reusable workflow depth exceeds 8")
+	if depth > maxReusableWorkflowDepth {
+		return nil, fmt.Errorf("reusable workflow depth exceeds %d", maxReusableWorkflowDepth)
 	}
 	if depth > 0 {
 		origin := nativeString(req.Metadata, "origin_run_id")
