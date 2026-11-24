@@ -475,6 +475,9 @@ definitions and checkpointed values, with the same redaction and replay rules.
 Reusable references are workspace-relative paths inside a `workflows/` directory,
 including nested examples such as `examples/pr-fix/workflows/main.yml`. They use
 `.yml` or `.yaml`; traversal and symlink escapes remain invalid.
+The entry workflow has depth zero and may call through 200 nested reusable
+workflows. The admitted closure is limited to 201 distinct workflow definitions,
+including the entry workflow; sibling calls share this definition limit.
 
 ### Commands and bounded iterations
 

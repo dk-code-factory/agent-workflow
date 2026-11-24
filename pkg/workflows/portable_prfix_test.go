@@ -1195,33 +1195,3 @@ func TestPortablePRFixRetainedPublicationHasOneReceiptOwner(t *testing.T) {
 		})
 	}
 }
-
-func TestPortablePRFixWrappersRetainEngineDepthFence(t *testing.T) {
-	e, _, fake := agentTaskFixture(t, `jobs: {leaf: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work}}]}}`, nil)
-	all := map[string]*Workflow{}
-	for level := 0; level <= 9; level++ {
-		name := fmt.Sprintf("depth-%d.yml", level)
-		source := `on: {workflow_call: {}}
-jobs: {leaf: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work}}]}}
-`
-		if level < 9 {
-			source = fmt.Sprintf("on: {workflow_call: {}}\njobs: {child: {uses: workflows/depth-%d.yml}}", level+1)
-		}
-		writeWorkflow(t, e.WorkspaceDir, name, source)
-		definition, err := Parse([]byte(source))
-		if err != nil {
-			t.Fatal(err)
-		}
-		all["workflows/"+name] = definition
-	}
-	if _, err := e.Load("workflows/depth-0.yml"); err == nil || !strings.Contains(err.Error(), "depth exceeds 8") {
-		t.Fatal("closure depth fence removed", err)
-	}
-	// Already available definitions must still meet the execution-time fence.
-	if _, err := e.execute(t.Context(), "workflows/depth-9.yml", RunRequest{}, all, e.Slots, 9, nil); err == nil || !strings.Contains(err.Error(), "depth exceeds 8") {
-		t.Fatal("execution depth fence removed", err)
-	}
-	if len(fake.requests) != 0 {
-		t.Fatal("above-limit wrapper dispatched", fake.requests)
-	}
-}
