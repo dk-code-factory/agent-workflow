@@ -14,6 +14,9 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 const AssetBundleVersion = 1
@@ -59,14 +62,34 @@ func assetBundleID(entries []AssetEntry) string {
 	}{AssetBundleVersion, entries})
 }
 
+// ValidateAssetEntries checks the complete materialized path and byte bounds
+// without storage, provider access or mutation. Builders share runtime limits.
+func ValidateAssetEntries(entries []AssetEntry) error {
+	_, err := assetDirectories(entries)
+	return err
+}
+
 func assetDirectories(entries []AssetEntry) (map[string]bool, error) {
 	if len(entries) > MaxAssetPaths {
 		return nil, fmt.Errorf("retained assets exceed materialized path limit of %d", MaxAssetPaths)
 	}
 	directories := map[string]bool{".": true}
 	byPath := make(map[string]AssetEntry, len(entries))
+	portablePaths := map[string]string{}
+	fold := cases.Fold()
+	checkPortable := func(name string) error {
+		key := norm.NFD.String(fold.String(norm.NFD.String(name)))
+		if original, exists := portablePaths[key]; exists && original != name {
+			return fmt.Errorf("portable asset path collision between %q and %q", original, name)
+		}
+		portablePaths[key] = name
+		return nil
+	}
 	fileCount := 0
 	addDirectory := func(name string) error {
+		if err := checkPortable(name); err != nil {
+			return err
+		}
 		if !directories[name] {
 			if len(directories)-1+fileCount >= MaxAssetPaths {
 				return fmt.Errorf("retained assets exceed materialized path limit of %d", MaxAssetPaths)
@@ -83,6 +106,9 @@ func assetDirectories(entries []AssetEntry) (map[string]bool, error) {
 			return nil, fmt.Errorf("invalid or unsorted retained asset path/mode %q", entry.Path)
 		}
 		previous = entry.Path
+		if err := checkPortable(name); err != nil {
+			return nil, err
+		}
 		switch entry.Kind {
 		case "directory":
 			if entry.Size != 0 || entry.SHA256 != "" {

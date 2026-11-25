@@ -345,3 +345,36 @@ func TestAssetBundleBoundsInferredDirectoriesBeforeStaging(t *testing.T) {
 		t.Fatalf("rejected bounded inferred parents: %d, %v", len(dirs), err)
 	}
 }
+
+func TestAssetBundlePortableUnicodePathCollisions(t *testing.T) {
+	for _, paths := range [][]string{
+		{"Readme", "README"},
+		{"caf\u00e9/data", "cafe\u0301/other"},
+		{"Stra\u00dfe/a", "STRASSE/b"},
+		{"\u03a3/a", "\u03c2/b"},
+		{"A", "a/child"},
+	} {
+		entries := make([]AssetEntry, 0, len(paths))
+		for _, name := range paths {
+			entries = append(entries, AssetEntry{Path: name, Kind: "file", Mode: 0644, SHA256: digestBytes(nil)})
+		}
+		slices.SortFunc(entries, func(a, b AssetEntry) int { return strings.Compare(a.Path, b.Path) })
+		if err := ValidateAssetEntries(entries); err == nil || !strings.Contains(err.Error(), "portable asset path collision") {
+			t.Fatalf("accepted casefold/canonical collision %v: %v", paths, err)
+		}
+	}
+	// Same-spelled inferred parents are shared, and textual prefix overlap alone
+	// does not collide. Keep Unicode spelling intact instead of rewriting paths.
+	entries := []AssetEntry{
+		{Path: "caf\u00e9/a", Kind: "file", Mode: 0644, SHA256: digestBytes(nil)},
+		{Path: "caf\u00e9/b", Kind: "file", Mode: 0644, SHA256: digestBytes(nil)},
+		{Path: "caf\u00e9-extra/a", Kind: "file", Mode: 0644, SHA256: digestBytes(nil)},
+	}
+	slices.SortFunc(entries, func(a, b AssetEntry) int { return strings.Compare(a.Path, b.Path) })
+	if err := ValidateAssetEntries(entries); err != nil {
+		t.Fatalf("rejected legitimate shared parents: %v", err)
+	}
+	if entries[1].Path != "caf\u00e9/a" {
+		t.Fatal("rewrote original Unicode spelling")
+	}
+}
