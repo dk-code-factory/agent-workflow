@@ -387,7 +387,15 @@ func rewriteWorkflow(data []byte, prefix string) ([]byte, error) {
 		}
 	}
 	quoteLeadingNewlines(&doc)
-	return yaml.Marshal(&doc)
+	encoded, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, err
+	}
+	// Serialization can expand valid source beyond the engine's admission limit.
+	if _, err := workflows.Parse(encoded); err != nil {
+		return nil, fmt.Errorf("serialized workflow: %w", err)
+	}
+	return encoded, nil
 }
 
 func quoteLeadingNewlines(node *yaml.Node) {

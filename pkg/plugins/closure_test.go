@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,54 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
+
+func TestPluginAddSkillRejectsExpandedWorkflow(t *testing.T) {
+	source := t.TempDir()
+	data := "on:\n  workflow_call:\n    inputs:\n      payload:\n        type: string\n        default: |-\n" + strings.Repeat("\n", (2<<20)+1024) + "          payload\njobs:\n  main:\n    steps: [{argv: [echo, hello]}]\n"
+	if _, err := workflows.Parse([]byte(data)); err != nil {
+		t.Fatalf("source is not engine-valid: %v", err)
+	}
+	put(t, source, "large.yaml", data)
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", ""); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() map[string]string {
+		t.Helper()
+		files := map[string]string{}
+		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			files[path] = info.Mode().String()
+			if !entry.IsDir() {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				files[path] += string(data)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	before := snapshot()
+	if err := AddSkill(root, "large", filepath.Join(source, "large.yaml")); err == nil || !strings.Contains(err.Error(), "workflow exceeds 4 MiB") {
+		t.Fatalf("accepted unadmittable serialized workflow: %v", err)
+	}
+	if after := snapshot(); !reflect.DeepEqual(before, after) {
+		t.Fatal("failed import changed existing project contents, paths or modes")
+	}
+	if got, err := os.ReadFile(filepath.Join(source, "large.yaml")); err != nil || string(got) != data {
+		t.Fatalf("source changed: %v", err)
+	}
+}
 
 func TestPluginImportEncodedJobUses(t *testing.T) {
 	source := t.TempDir()
