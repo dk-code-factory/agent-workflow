@@ -113,11 +113,14 @@ func distribution(captured *CapturedPackage, targets []string) (map[string]file,
 	// Owned source files are transformed deliberately. All other generated paths
 	// are exclusive, including collisions with explicitly declared resources.
 	delete(payload, DescriptorFile)
+	for _, skill := range d.Skills {
+		binding, _ := captured.Binding(skill.Name)
+		delete(payload, binding.Path)
+	}
 	for i, sourceSkill := range d.Skills {
 		binding, _ := captured.Binding(sourceSkill.Name)
 		instructions, _ := captured.ReadFile(binding.Path)
 		canonical := path.Join("skills", binding.Name, "SKILL.md")
-		delete(payload, binding.Path)
 		if canonical != binding.Path {
 			// Keep author instructions beside their declared resources, but outside
 			// host SKILL discovery. The entrypoint reads this file before invocation.

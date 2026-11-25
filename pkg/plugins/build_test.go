@@ -211,6 +211,33 @@ func writeBuildDescriptor(t *testing.T, root string, d Descriptor) {
 	put(t, root, DescriptorFile, string(data))
 }
 
+func TestBuildSkillRemappingDoesNotDependOnSourceOrder(t *testing.T) {
+	source, d, _ := capturedFixture(t)
+	d.Skills = []Skill{
+		{Name: "second", Path: "skills/demo/SKILL.md", Workflow: "workflows/main.yml"},
+		{Name: "demo", Path: "skills/second/SKILL.md", Workflow: "workflows/second.yml"},
+	}
+	put(t, source, "skills/demo/SKILL.md", string(skillText("second")))
+	put(t, source, "skills/second/SKILL.md", string(skillText("demo")))
+	put(t, source, "workflows/second.yml", "jobs: {main: {steps: [{run: echo second, shell: sh}]}}\n")
+	writeBuildDescriptor(t, source, d)
+	output := filepath.Join(t.TempDir(), "built")
+	result, err := Build(source, output, []string{"codex", "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Capture(filepath.Join(output, "demo/plugins/demo"))
+	if err != nil || installed.Digest() != result.PackageDigest {
+		t.Fatal("crossed source paths failed final admission", err)
+	}
+	for _, name := range []string{"demo", "second"} {
+		binding, _ := installed.Binding(name)
+		if binding.Path != "skills/"+name+"/SKILL.md" {
+			t.Fatal("incorrect host identity", binding)
+		}
+	}
+}
+
 func TestBuildRejectsIncompleteOrCollidingOutput(t *testing.T) {
 	for _, scenario := range []string{"missing", "native", "metadata", "manifest", "other host manifest", "bootstrap", "ancestor", "case", "discovery", "targets", "duplicate targets", "engine prerelease", "line break", "marketplace collision"} {
 		t.Run(scenario, func(t *testing.T) {
