@@ -276,10 +276,70 @@ cases:
     actions: {probe: read_only}
     operations:
       - {uses: action/probe, phase: bindings, result: {nullable: null}}
-      - {uses: action/probe, result: {nullable: null}, evidence: {proof: null}, receipt: {id: null}}
+      - {uses: action/probe, result: {nullable: null, '<<': null}, evidence: {proof: null}, receipt: {id: 18446744073709551615}}
     expect: {state: succeeded, invocation-count: 1}
 `)
 	fixtureReport(t, root)
+}
+func TestPluginFixtureRejectsInlineMerges(t *testing.T) {
+	for _, source := range []string{
+		`schema-version: 1
+<<:
+  cases:
+    - name: merged
+      skill: sample
+      inputs: {task: work}
+      operations: [{uses: agent/run, result: {text: done}}]
+      expect: {state: succeeded, invocation-count: 1, sessions: null, worker-remaining: [31, null]}
+`,
+		`schema-version: 1
+cases:
+  - name: merged
+    skill: sample
+    inputs: {task: work}
+    operations: [{uses: agent/run, result: {text: done}, <<: {call: null}}]
+    expect: {state: succeeded, invocation-count: 1}
+`,
+	} {
+		r := Test(t.Context(), fixtureProject(t, "", source))
+		if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+			t.Fatalf("merged schema reached execution: %+v", r)
+		}
+	}
+}
+func TestPluginFixtureRejectsLossyUTF8BeforeExecution(t *testing.T) {
+	// The initial interpreter path serializes admitted inputs to SQLite before
+	// resuming. Without validation, byte ff becomes the replacement character.
+	root := fixtureProject(t, "", `schema-version: 1
+cases:
+  - name: binary-input
+    skill: sample
+    inputs: {task: !!binary /w==}
+    operations: [{uses: agent/run, prompt: "�", result: {text: altered}}]
+    expect: {state: succeeded, outputs: {result: altered}, invocation-count: 1}
+`)
+	r := Test(t.Context(), root)
+	if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+		t.Fatalf("lossy input reached interpreter: %+v", r)
+	}
+	for _, field := range []string{
+		"inputs: {task: {nested: !!binary /w==}}",
+		"operations: [{uses: agent/run, result: {nested: !!binary /w==}}]",
+		"operations: [{uses: agent/run, result: {!!binary /w==: value}}]",
+		"actions: {probe: read_only}\n    operations: [{uses: action/probe, evidence: {proof: !!binary /w==}}]",
+		"actions: {probe: read_only}\n    operations: [{uses: action/probe, receipt: {id: !!binary /w==}}]",
+		"controls: [{action: answer, step: approval, value: {nested: !!binary /w==}}]",
+		"expect: {state: succeeded, invocation-count: 0, outputs: {nested: !!binary /w==}}",
+	} {
+		source := "schema-version: 1\ncases:\n  - name: nested-binary\n    skill: sample\n    " + field + "\n"
+		if !strings.HasPrefix(field, "expect:") {
+			source += "    expect: {error: required input, invocation-count: 0}\n"
+		}
+		r := Test(t.Context(), fixtureProject(t, "", source))
+		if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+			t.Fatalf("lossy nested value reached execution: %+v", r)
+		}
+	}
 }
 func TestPluginFixtureRejectsNonJSONValuesBeforeExecution(t *testing.T) {
 	valid := `schema-version: 1
@@ -400,11 +460,10 @@ cases:
 		t.Fatalf("not rendered: %+v", q)
 	}
 }
-func TestPluginFixtureMissingAmbiguousAndUnusedNeverPassAsExpectedFailure(t *testing.T) {
+func TestPluginFixtureMissingAndAmbiguousNeverPassAsExpectedFailure(t *testing.T) {
 	for name, operations := range map[string]string{
 		"missing":   "[]",
 		"ambiguous": "[{uses: agent/run, result: {text: a}}, {uses: agent/run, result: {text: b}}]",
-		"unused":    "[{uses: agent/run, result: {text: a}}, {uses: github/pr, result: {url: unused}}]",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := fixtureProject(t, "", fmt.Sprintf("schema-version: 1\ncases:\n  - name: invalid\n    skill: sample\n    inputs: {task: work}\n    operations: %s\n    expect: {error: fixture response, invocation-count: 0}\n", operations))
@@ -413,6 +472,25 @@ func TestPluginFixtureMissingAmbiguousAndUnusedNeverPassAsExpectedFailure(t *tes
 				t.Fatal("invalid coverage passed", r)
 			}
 		})
+	}
+}
+func TestPluginFixtureUnusedResponseIsTheOnlyFailure(t *testing.T) {
+	for _, unused := range []bool{false, true} {
+		operations := "[{uses: agent/run, result: {text: done}}]"
+		if unused {
+			operations = "[{uses: agent/run, result: {text: done}}, {uses: github/pr, result: {url: unused}}]"
+		}
+		root := fixtureProject(t, "", fmt.Sprintf("schema-version: 1\ncases:\n  - name: unused\n    skill: sample\n    inputs: {task: work}\n    operations: %s\n    expect: {state: succeeded, outputs: {result: done}, invocation-count: 1}\n", operations))
+		r := Test(t.Context(), root)
+		if !unused {
+			if !r.Passed {
+				t.Fatal("complete fixture failed", r)
+			}
+			continue
+		}
+		if r.Passed || len(r.Diagnostics) != 1 || r.Diagnostics[0].Reason != "unused fixture operation 2 (github/pr)" || len(r.Cases) != 1 || r.Cases[0].State != "succeeded" || r.Cases[0].InvocationCount != 1 {
+			t.Fatalf("unused response was not the sole failure: %+v", r)
+		}
 	}
 }
 func TestPluginFixtureStrictContractAndEmptyCoverage(t *testing.T) {

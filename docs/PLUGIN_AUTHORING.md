@@ -244,18 +244,19 @@ observed states, outputs, operation transcripts and remaining worker turns.
 
 Author YAML files anywhere below `fixtures/`; every bound skill requires at least
 one case. File/case names must be unique across the suite. Empty imported templates
-fail until their behavior is authored. Unknown keys, aliases, unsupported schema
-versions, ambiguous responses and unused responses fail. A file is limited to
-1 MiB, a suite to 100 cases and 256 YAML files, and a case to 1000 responses and
-128 controls. A case has ten seconds; the complete execution suite has two minutes.
+fail until their behavior is authored. Unknown keys, aliases, YAML merges,
+unsupported schema versions, ambiguous responses and unused responses fail. A
+file is limited to 1 MiB, a suite to 100 cases and 256 YAML files, and a case to
+1000 responses and 128 controls. A case has ten seconds; the complete execution suite has two minutes.
 Cleanup cancels workers and waits up to two seconds for shutdown before removing
 case-owned disposable state. A shutdown timeout fails the fixture; it does not
 establish that every worker joined before removal.
 
 Versions, call selectors and count assertions require YAML integers; fractional
 or quoted numeric values fail. Inputs, results, evidence, receipts, answers and
-expected outputs must be JSON representable, including nested values. Nonfinite
-numbers fail fixture validation before any case executes.
+expected outputs must be JSON representable, including nested values. Invalid
+UTF-8 strings or mapping keys and nonfinite numbers fail fixture validation before
+any case executes.
 
 ```yaml
 schema-version: 1

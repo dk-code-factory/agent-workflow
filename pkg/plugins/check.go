@@ -7,7 +7,8 @@ import (
 )
 
 // Diagnostic is shared by structural checks and behavioral fixture reports.
-// File is package-relative; Reason retains the actionable validator explanation.
+// File identifies a package member, or the supplied root when opening it fails.
+// Reason retains the actionable validator explanation.
 type Diagnostic struct {
 	Code   string `json:"code"`
 	File   string `json:"file"`

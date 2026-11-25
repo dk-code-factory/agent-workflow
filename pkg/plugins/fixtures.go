@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
@@ -105,6 +107,21 @@ func fixtureSchemaNodes(document *yaml.Node) (err error) {
 			err = invalidFixture("", caseName, err)
 		}
 	}()
+	var merges func(*yaml.Node) error
+	merges = func(node *yaml.Node) error {
+		if node.Tag == "!!merge" {
+			return fmt.Errorf("YAML merges are unsupported in fixtures")
+		}
+		for _, child := range node.Content {
+			if err := merges(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := merges(document); err != nil {
+		return err
+	}
 	field := func(node *yaml.Node, key string) *yaml.Node {
 		if node == nil || node.Kind != yaml.MappingNode {
 			return nil
@@ -246,6 +263,9 @@ func readFixtures(root string, captured *CapturedPackage) ([]fixtureSource, erro
 	return out, nil
 }
 func validateFixture(c FixtureCase, captured *CapturedPackage) error {
+	if err := fixtureUTF8(reflect.ValueOf(c), "case"); err != nil {
+		return err
+	}
 	// All authored boundary values must survive JSON transport unchanged. Check
 	// the whole suite before any case executes, including expected negative cases.
 	type jsonField struct {
@@ -364,6 +384,55 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 		}
 		if control.InvocationCount != nil && *control.InvocationCount < 0 {
 			return fmt.Errorf("control invocation-count must be nonnegative")
+		}
+	}
+	return nil
+}
+
+// JSON replaces invalid UTF-8 strings and keys without returning an error.
+// Inspect decoded fixture data without converting numbers or JSON null values.
+func fixtureUTF8(value reflect.Value, location string) error {
+	if !value.IsValid() {
+		return nil
+	}
+	switch value.Kind() {
+	case reflect.String:
+		if !utf8.ValidString(value.String()) {
+			return fmt.Errorf("%s contains invalid UTF-8", location)
+		}
+	case reflect.Interface, reflect.Pointer:
+		if !value.IsNil() {
+			return fixtureUTF8(value.Elem(), location)
+		}
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Type().Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+			if err := fixtureUTF8(value.Field(i), location+"."+name); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		keys := value.MapKeys()
+		sort.Slice(keys, func(i, j int) bool {
+			return fmt.Sprintf("%T:%#v", keys[i].Interface(), keys[i].Interface()) < fmt.Sprintf("%T:%#v", keys[j].Interface(), keys[j].Interface())
+		})
+		for _, key := range keys {
+			if err := fixtureUTF8(key, location+".<key>"); err != nil {
+				return err
+			}
+			if err := fixtureUTF8(value.MapIndex(key), location+".<value>"); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if err := fixtureUTF8(value.Index(i), fmt.Sprintf("%s[%d]", location, i)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
