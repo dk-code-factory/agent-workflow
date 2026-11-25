@@ -292,6 +292,10 @@ func verifyAssetBundleDirectory(directory string, bundle *AssetBundle) error {
 		return err
 	}
 	defer root.Close()
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		return fmt.Errorf("retained asset storage identity changed while opening")
+	}
 	for _, name := range []string{"owner.json", "bundle.json", "files"} {
 		if err = noSymlinkComponents(root, name); err != nil {
 			return err
@@ -377,10 +381,13 @@ func (s *SQLiteStore) VerifyAssetBundle(bundle *AssetBundle) error {
 
 // AssetBundlePath returns only a verified engine-owned materialization.
 func (s *SQLiteStore) AssetBundlePath(bundle *AssetBundle) (string, error) {
-	if err := s.VerifyAssetBundle(bundle); err != nil {
+	directory, err := s.assetBundleDirectory(bundle)
+	if err != nil {
 		return "", err
 	}
-	directory, _ := s.assetBundleDirectory(bundle)
+	if err = verifyAssetBundleDirectory(directory, bundle); err != nil {
+		return "", err
+	}
 	return filepath.Join(directory, "files"), nil
 }
 
