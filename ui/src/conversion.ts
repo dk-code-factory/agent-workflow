@@ -8,6 +8,7 @@ export function stepConversion(step: Step, kind: string) {
   const command = kind === 'argv' || kind === 'shell';
   const agent = kind === 'agent/run';
   const conversation = kind === 'conversation';
+  const definition = kind === 'definition';
   const block = kind === 'parallel' || kind === 'sequence';
   const remove: Path[] = [];
   if (!command && !kind.startsWith('docker://')) for (const key of ['protocol', 'effect', 'input-schema', 'output-schema', 'input', 'env']) if (Object.hasOwn(step, key)) remove.push([key]);
@@ -18,7 +19,11 @@ export function stepConversion(step: Step, kind: string) {
   for (const key of ['onResult', 'onComplete', 'onIncomplete']) if (!agent) drop(key);
   if (!agent && !command) for (const key of ['onError', 'onFailure', 'finally', 'handlerTimeout']) drop(key);
   for (const key of ['parallel', 'sequence']) if (key !== kind) drop(key);
-  if (block) {
+  if (!definition) drop('use-definition');
+  if (definition) {
+    for (const key of ['uses', 'agent', 'prompt', 'with', 'argv', 'run', 'shell', 'timeout', 'working-directory', 'context']) drop(key);
+    if (!Object.hasOwn(step, 'use-definition')) set.push({ path: ['use-definition'], value: '' });
+  } else if (block) {
     for (const key of ['uses', 'agent', 'prompt', 'with', 'argv', 'run', 'shell', 'timeout', 'working-directory', 'context', 'continue-on-error']) drop(key);
     if (!Object.hasOwn(step, kind)) set.push({ path: [kind], value: [{ argv: ['echo', 'Hello'] }] });
   } else if (conversation) {

@@ -299,6 +299,7 @@ export class WorkflowDocument {
     }
     this.edit(doc => {
       const path: Path = ['jobs', id, 'steps', index];
+      if (kind === 'definition' && !step.id) doc.setIn([...path, 'id'], effectiveStepID(step, index));
       for (const key of plan.remove) doc.deleteIn([...path, ...key]);
       if (plan.set.some(entry => entry.path[0] === 'with') && !isMap(doc.getIn([...path, 'with'], true))) doc.setIn([...path, 'with'], doc.createNode({}));
       for (const entry of plan.set) doc.setIn([...path, ...entry.path], entry.value);

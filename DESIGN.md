@@ -1,5 +1,20 @@
 # Workflow runtime design
 
+## Admission-time step reuse
+
+Workflow-local `step-definitions` declare typed parameters and a step template.
+`use-definition` expands before ordinary parsing, graph/scope validation, native
+definition admission and helper asset pinning. Each explicit instance ID owns its
+root; structural children use instance-prefixed IDs and definition-local result
+references are rewritten before caller bindings are substituted. Handler-local
+IDs retain their existing scopes. Bounded expansion rejects cycles, unknown
+bindings, collisions and excessive materialization without adding runtime calls
+or relaxing placement constraints. Runtime expression binding types are checked
+before the corresponding instance effects. Immutable snapshots retain source
+declarations, expanded execution structure and source provenance. Recovery uses
+existing instance receipts and retained provider budgets. The editor keeps the
+authoring representation. See [syntax and limits](docs/REUSABLE_STEPS.md).
+
 ## Agent checklists
 
 `agent/run` admits literal `with.checklist` stage structure and shared/local

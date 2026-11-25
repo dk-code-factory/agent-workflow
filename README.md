@@ -11,6 +11,9 @@ A Go controller for single-user Claude/Codex workflows on Linux and macOS. It
 supports durable workflow admission, guarded recovery, command steps, bounded
 iterations, worker mailboxes, isolated Git workspaces, and GitHub publication.
 
+Workflows can [reuse parameterized step definitions](docs/REUSABLE_STEPS.md)
+inside existing jobs without adding child workflow calls.
+
 Embedding Go applications can also [register typed application actions](docs/REGISTERED_ACTIONS.md)
 with durable provenance, checkpoint validation, and receipt-based mutation recovery.
 

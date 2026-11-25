@@ -74,6 +74,13 @@ Diagnostics identify their `source` (`parser`, `browser`, or `host`), severity, 
 
 The browser does not evaluate expressions or provide a complete runner/runtime admission substitute. It inspects recognized dot-path references in `${{ ... }}` expressions and bare `if`/`repeat.until` conditions, excluding quoted operands. Only fields evaluated by the runner participate; names, callable defaults, and imported metadata remain literal. Bracket/computed paths are not rewritten. Role availability and reusable resolution can use optional `agents` and `workflows` catalogs; these checks are advisory and do not resolve files or nested calls. Structured output contracts need the runner's schema admission (including Go RE2 semantics), which is explicitly marked as a host check.
 
+Workflow-local `step-definitions` and `use-definition` references remain in their
+authoring form through visual edits, export and Undo/Redo. Imported uses show
+**Reusable steps** and a **Step definition** field; declarations use YAML and
+bindings use YAML or **Advanced parameters**. Basic names and bindings are checked
+in the browser; the host admits expansion, types, placement, assets and expanded
+result scopes. See [reusable step definitions](../docs/REUSABLE_STEPS.md).
+
 Agent tasks use `uses: agent/run` with `with.agent` naming a native Codex TOML definition or an expression returning an opaque agent reference. The inspector edits the definition reference, prompt, typed input, output contract, and all six ordered hook lists. Conversion review, Undo/Redo, and export preserve these declarations. Removed shorthand and role targets produce diagnostics. See [native agent tasks](../docs/AGENT_TASKS.md).
 
 Choose **Conversation** to author a bounded conversation among 2–16 declared

@@ -40,6 +40,7 @@ type StepLifecycle struct {
 }
 
 type StepExecution struct {
+	Reuse              *StepReuse     `json:"reuse,omitempty"`
 	Lifecycle          *StepLifecycle `json:"lifecycle,omitempty"`
 	FailureClass       string         `json:"failure_class,omitempty"`
 	UnsafeFailureClass string         `json:"unsafe_failure_class,omitempty"`

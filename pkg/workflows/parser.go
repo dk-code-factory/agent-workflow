@@ -31,11 +31,16 @@ func Parse(data []byte) (*Workflow, error) {
 	if err := checkNode(node.Content[0], reflect.TypeOf(Workflow{}), 0); err != nil {
 		return nil, err
 	}
+	sources, err := expandStepDefinitions(node.Content[0])
+	if err != nil {
+		return nil, err
+	}
 	var w Workflow
 	if err := node.Decode(&w); err != nil {
 		return nil, err
 	}
 	for id, job := range w.Jobs {
+		attachReuseSources(job.Steps, yamlField(yamlField(yamlField(node.Content[0], "jobs"), id), "steps"), sources)
 		var err error
 		job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) { return normalizeAgentStep(step) })
 		if err != nil {
