@@ -22,7 +22,7 @@ finally:
 class AcceptancePreflightTests(unittest.TestCase):
     def test_native_plugin_namespace_and_identity(self):
         expected = {name: {"name": "agent-workflow:" + name, "pluginId": "agent-workflow@agent-workflow", "enabled": True}
-                    for name in ("setup", "build-workflow", "run-workflow", "report-bug")}
+                    for name in ("setup", "build-workflow", "run-workflow", "report-bug", "convert-agent")}
         listing = {"data": [{"skills": [*expected.values(), {"name": "build-workflow", "pluginId": None, "enabled": True}]}]}
         self.assertEqual(acceptance.discovered_skills(listing), expected)
 

@@ -1,8 +1,11 @@
 # Agent Workflow for Codex
 
-This plugin packages four skills: `agent-workflow:setup`,
-`agent-workflow:build-workflow`, `agent-workflow:run-workflow` and
-`agent-workflow:report-bug`. It requires Python 3.11+, GitHub CLI with attestation
+This plugin packages five skills: `agent-workflow:setup`,
+`agent-workflow:build-workflow`, `agent-workflow:run-workflow`,
+`agent-workflow:report-bug` and `agent-workflow:convert-agent`. The conversion
+skill uses the offline engine CLI to migrate Codex TOML and Claude Markdown
+definitions to YAML, reporting omitted options for explicit review. It requires
+Python 3.11+, GitHub CLI with attestation
 verification, and the Codex version in [compatibility.json](compatibility.json).
 
 Install from an exact release tag:

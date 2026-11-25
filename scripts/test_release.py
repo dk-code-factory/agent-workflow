@@ -197,6 +197,17 @@ class PluginArchiveTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('archive ', result.stderr)
 
+    def test_conversion_skill_is_required_unchanged_in_each_engine_distribution(self):
+        skill = 'plugins/agent-workflow/skills/convert-agent/SKILL.md'
+        changes = [lambda files: files.pop(skill),
+                   lambda files: files.__setitem__(skill, (b'changed conversion skill', 0o644)),
+                   lambda files: files.__setitem__(skill, (files[skill][0], 0o755))]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                result = self.verify_fixture(directory, change)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(skill, result.stderr)
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.expected = {'scenario': 'native-codex-smoke', 'provider': 'codex-cli', 'authentication': 'native', 'os': 'linux', 'arch': 'amd64'}
