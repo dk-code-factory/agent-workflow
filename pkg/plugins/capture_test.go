@@ -187,6 +187,9 @@ func TestCaptureDigestSurvivesRelocation(t *testing.T) {
 func TestCaptureDigestTracksDeclaredChanges(t *testing.T) {
 	for _, change := range []string{"descriptor bytes", "skill bytes", "workflow bytes", "agent bytes", "resource bytes", "file mode", "directory mode", "add empty directory", "remove empty directory"} {
 		t.Run(change, func(t *testing.T) {
+			if runtime.GOOS == "windows" && (change == "file mode" || change == "directory mode") {
+				t.Skip("Windows does not retain distinct POSIX permission bits for these mode changes")
+			}
 			root, _, files := capturedFixture(t)
 			original, err := Capture(root)
 			if err != nil {
@@ -270,18 +273,21 @@ func TestCaptureRejectsInvalidClosure(t *testing.T) {
 }
 
 func TestCaptureDigestEncodingV1(t *testing.T) {
-	root := t.TempDir()
+	// Use explicit captured modes so the encoding fixture is independent of
+	// filesystem permission semantics. Other tests exercise public Capture.
+	collected := &collector{files: map[string]file{}}
 	for name, text := range map[string]string{
 		DescriptorFile:         "schema-version: 1\nname: demo\nversion: 1.0.0\nengine-version: 0.2.2\nhosts: [codex]\nskills: [{name: demo, path: skills/demo/SKILL.md, workflow: workflows/main.yml}]\n",
 		"skills/demo/SKILL.md": "---\nname: demo\ndescription: Captured workflow\n---\nRun the workflow.\n",
 		"workflows/main.yml":   "jobs: {main: {steps: [{argv: [echo, captured]}]}}\n",
 	} {
-		put(t, root, name, text)
-		if err := os.Chmod(filepath.Join(root, filepath.FromSlash(name)), 0644); err != nil {
-			t.Fatal(err)
-		}
+		collected.files[name] = file{data: []byte(text), mode: 0644}
 	}
-	p, err := Capture(root)
+	descriptor, err := Parse(collected.files[DescriptorFile].data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := newCapturedPackage(descriptor, collected)
 	if err != nil {
 		t.Fatal(err)
 	}
