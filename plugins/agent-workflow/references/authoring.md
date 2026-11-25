@@ -4,8 +4,8 @@ This reference targets engine 0.2.2. Validate generated definitions with the
 matching packaged engine. Use `exec -- <command>` via the plugin launcher.
 Flags precede positional arguments. Engine examples below omit that prefix.
 
-Default paths: `workflows/<name>.yml`, `workflows/agents/<role>.toml` and an
-existing repository `agents.yml`. Agent TOML paths resolve from their owning
+Default paths: `workflows/<name>.yml`, `workflows/agents/<role>.yaml` and an
+existing repository `agents.yml`. Agent definition paths resolve from their owning
 workflow. Reusable workflow paths resolve from the workspace and stay inside
 `workflows/` directories. Preserve repository conventions when they differ.
 
@@ -21,17 +21,17 @@ agents:
 
 Use `workspace-write` only for an approved editing task. Native authentication
 uses the selected provider-owned route; never copy credentials into workflow
-files. Runtime permissions and budgets belong to configuration, not agent TOML.
+files. Runtime permissions and budgets belong to configuration, not agent YAML.
 
-```toml
-name = "reviewer"
-description = "Inspect the assigned repository scope."
-developer_instructions = "Inspect files without edits or publication. Return the requested structured findings."
+```yaml
+name: "reviewer"
+description: "Inspect the assigned repository scope."
+instructions: "Inspect files without edits or publication. Return the requested structured findings."
 ```
 
 These three fields are required. Optional fields: `model` and
-`model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
-Do not add sandbox, provider, tools, authentication or permission fields to TOML.
+`reasoning-effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
+Do not add sandbox, provider, tools, authentication or permission fields to YAML.
 
 ## Independent jobs with a dependent result
 
@@ -49,7 +49,7 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: agents/reviewer.toml
+          agent: agents/reviewer.yaml
           turns: 4
           prompt: 'Review correctness without edits: ${{ inputs.scope }}'
           output:
@@ -67,7 +67,7 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: agents/reviewer.toml
+          agent: agents/reviewer.yaml
           turns: 4
           prompt: 'Review security without edits: ${{ inputs.scope }}'
           output:
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: agent/run
         with:
-          agent: agents/reviewer.toml
+          agent: agents/reviewer.yaml
           turns: 4
           prompt: 'Combine findings: ${{ needs.correctness.outputs.findings }}; ${{ needs.security.outputs.findings }}'
 ```
@@ -109,7 +109,7 @@ jobs:
       - id: implement
         uses: agent/run
         with:
-          agent: agents/fixer.toml
+          agent: agents/fixer.yaml
           turns: 4
           prompt: Repair only the approved fixture. Do not publish.
       - id: test
