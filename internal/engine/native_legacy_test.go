@@ -42,6 +42,7 @@ for line in sys.stdin:
  def out(v): print(json.dumps(v),flush=True)
  if m=='initialize': out({'id':i,'result':{'userAgent':'codex_cli_rs/` + clirunner.CodexProtocolVersion + ` (fixture)'}})
  elif m=='account/login/start': out({'id':i,'result':{}})
+ elif m=='skills/list': out({'id':i,'result':{'data':[{'cwd':f['params']['cwds'][0],'skills':[],'errors':[]}]}})
  elif m in ('thread/start','thread/resume'):
   with open(` + strconv.Quote(models) + `,'a') as model: model.write(json.dumps(f['params'].get('model'))+'\n')
   out({'id':i,'result':{'thread':{'id':'legacy-thread'}}})
@@ -50,6 +51,7 @@ for line in sys.stdin:
   out({'id':i,'result':{'turn':{'id':'legacy-turn'}}})
   out({'method':'item/completed','params':{'threadId':'legacy-thread','turnId':'legacy-turn','item':{'type':'agentMessage','text':'{"approved":true}'}}})
   out({'method':'turn/completed','params':{'threadId':'legacy-thread','turn':{'id':'legacy-turn','status':'completed'}}})
+ elif i is not None: out({'id':i,'error':{'code':-32601,'message':'unsupported fixture method'}})
 `
 	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli " + clirunner.CodexProtocolVersion + "'; exit 0; fi\nexec '" + python + "' -c '" + strings.ReplaceAll(fixture, "'", "'\\''") + "'\n"
 	if err := os.WriteFile(command, []byte(script), 0700); err != nil {

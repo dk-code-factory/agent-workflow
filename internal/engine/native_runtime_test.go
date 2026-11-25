@@ -226,6 +226,7 @@ else:
   f=json.loads(line);m=f.get('method');i=f.get('id');p=f.get('params') or {}
   if m=='initialize': out({'id':i,'result':{'userAgent':'codex_cli_rs/` + clirunner.CodexProtocolVersion + ` (fixture)'}})
   elif m=='account/login/start': out({'id':i,'result':{}})
+  elif m=='skills/list': out({'id':i,'result':{'data':[{'cwd':p['cwds'][0],'skills':[],'errors':[]}]}})
   elif m in ('thread/start','thread/resume'):
    settings=dict(model=p.get('model'),instructions=p.get('baseInstructions'));session=p.get('threadId') or '';out({'id':i,'result':{'thread':{'id':'retained-session'}}})
   elif m=='turn/start':
@@ -234,6 +235,7 @@ else:
    out({'method':'thread/tokenUsage/updated','params':{'threadId':'retained-session','tokenUsage':{'total':{'inputTokens':14 if session else 7,'outputTokens':6 if session else 3}}}})
    out({'method':'item/completed','params':{'threadId':'retained-session','turnId':'retained-turn','item':{'type':'agentMessage','text':'{"approved":true}'}}})
    out({'method':'turn/completed','params':{'threadId':'retained-session','turn':{'id':'retained-turn','status':'completed'}}})
+  elif i is not None: out({'id':i,'error':{'code':-32601,'message':'unsupported fixture method'}})
 `
 	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli " + clirunner.CodexProtocolVersion + "'; exit 0; fi\nexec '" + python + "' -c '" + strings.ReplaceAll(fixture, "'", "'\\''") + "'\n"
 	if err := os.WriteFile(command, []byte(script), 0700); err != nil {

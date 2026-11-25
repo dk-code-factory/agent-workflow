@@ -10,7 +10,11 @@
     "v2/TurnInterruptParams.json": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b",
     "v2/LoginAccountParams.json": "48fb9bea54d7e0890052653ac06737efb3200ba2261515b2c4014027f36bea3d",
     "DynamicToolCallParams.json": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc",
-    "DynamicToolCallResponse.json": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02"
+    "DynamicToolCallResponse.json": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02",
+    "v2/SkillsListParams.json": "1d245374e64c5acc9739dfc68a4fe5114c6c9147af04c480886f1846d2ca6239",
+    "v2/SkillsListResponse.json": "d11084bd4bfa50f747e880ab9a08eb8e8073c67d67c79907f4cff090db7b48f4",
+    "v2/SkillsConfigWriteParams.json": "6e7dea83b649bfd118828b60446eb2eab2f5ce3cafe287c933b830c9cae9b170",
+    "v2/SkillsConfigWriteResponse.json": "628bc112ca64f5475eb02a0eda718e82d670c40299444494e02a8dc278a772c7"
   },
   "managed_policy_certified": false,
   "live_provider_verified": false

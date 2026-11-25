@@ -133,6 +133,12 @@ func run() error {
 				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.167.1 (fixture)"}})
 			case "account/login/start":
 				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{}})
+			case "skills/list":
+				cwds, ok := f.Params["cwds"].([]any)
+				if !ok || len(cwds) != 1 {
+					return fmt.Errorf("expected fixture workspace discovery")
+				}
+				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"data": []any{map[string]any{"cwd": cwds[0], "skills": []any{}, "errors": []any{}}}}})
 			case "thread/start", "thread/resume":
 				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"thread": map[string]any{"id": "fixture-thread"}}})
 			case "turn/start":
@@ -148,6 +154,10 @@ func run() error {
 				encoder.Encode(map[string]any{"id": f.ID, "result": map[string]any{"turn": map[string]any{"id": "fixture-turn"}}})
 				encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "fixture-thread", "turnId": "fixture-turn", "item": map[string]any{"type": "agentMessage", "text": "contained"}}})
 				encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "fixture-thread", "turn": map[string]any{"id": "fixture-turn", "status": "completed"}}})
+			default:
+				if f.ID != nil {
+					encoder.Encode(map[string]any{"id": f.ID, "error": map[string]any{"code": -32601, "message": "unsupported fixture method"}})
+				}
 			}
 		}
 		return scanner.Err()

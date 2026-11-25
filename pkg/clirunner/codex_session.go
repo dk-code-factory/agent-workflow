@@ -33,11 +33,16 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if req.Workspace != "" {
 		workspace = req.Workspace
 	}
+	absoluteWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return result, err
+	}
+	workspace = absoluteWorkspace
 	command := agent.Command
 	if command == "" {
 		command = "codex"
 	}
-	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`}
+	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`, "--config", "skills.bundled.enabled=false", "--config", "skills.include_instructions=false", "--config", "features.plugins=false"}
 	args = append(args, agent.Args...)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
@@ -140,6 +145,9 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if req.SessionID != "" {
 		method = "thread/resume"
 		params["threadId"] = req.SessionID
+	}
+	if err = isolateCodexSkills(rpc, workspace); err != nil {
+		return result, err
 	}
 	raw, err := rpc.call(method, params)
 	if err != nil {

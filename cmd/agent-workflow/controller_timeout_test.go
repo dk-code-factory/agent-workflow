@@ -48,10 +48,12 @@ for line in sys.stdin:
     def send(x): print(json.dumps(x),flush=True)
     if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.1 (fixture)'}})
     elif method=='account/login/start': send({'id':i,'result':{}})
+    elif method=='skills/list': send({'id':i,'result':{'data':[{'cwd':f['params']['cwds'][0],'skills':[],'errors':[]}]}})
     elif method in ('thread/start','thread/resume'): send({'id':i,'result':{'thread':{'id':'fixture-thread'}}})
     elif method=='turn/start':
         send({'id':i,'result':{'turn':{'id':'turn-1'}}})
         time.sleep(60)
+    elif i is not None: send({'id':i,'error':{'code':-32601,'message':'unsupported fixture method'}})
 `,
 	}
 	for name, value := range files {
