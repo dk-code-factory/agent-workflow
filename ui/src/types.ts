@@ -3,6 +3,7 @@ export type Mapping = Record<string, unknown>;
 export interface Step extends Mapping {
  files?: string[] | null; protocol?: string; effect?: string; input?: Mapping; env?: Record<string, string>;
  'input-schema'?: Mapping | string; 'output-schema'?: Mapping | string;
+  'use-definition'?: string;
   id?: string; name?: string; uses?: string; agent?: string; prompt?: string; argv?: string[]; run?: string; shell?: string;
   with?: Mapping; if?: string; 'continue-on-error'?: boolean;
   onResult?: Step[]; onComplete?: Step[]; onIncomplete?: Step[]; onError?: Step[]; onFailure?: Step[]; finally?: Step[]; handlerTimeout?: string;
@@ -15,7 +16,8 @@ export interface Job extends Mapping {
   'for-each'?: { items: unknown[] | string; key: string; concurrency?: number | string } | null;
   repeat?: { 'max-attempts': number | string; until: string } | null; if?: string;
 }
-export interface Workflow extends Mapping { name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
+export interface StepDefinition { parameters?: Record<string, WorkflowInput>; step: Mapping }
+export interface Workflow extends Mapping { 'step-definitions'?: Record<string, StepDefinition>; name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
 export interface Diagnostic {
   severity: 'error' | 'warning' | 'info'; code: string; message: string; path: Path;
   location?: { line: number; column: number; offset: number; endOffset: number };

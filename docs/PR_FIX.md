@@ -192,11 +192,15 @@ preserves engine failure metadata and rechecks continuation and audience evidenc
 when reusing a checkpoint, without a separate result-selection container.
 Retry context retains the original immutable assignment reference so combining
 acceptance and native report outputs cannot duplicate a large assignment body.
-The deepest native-turn workflow keeps inline helper calls to preserve the
-engine's eight-level reusable-workflow limit, including a caller
-wrapper. An original attempt and its optional same-session retry feed one
-checklist continuation loop. CI polling keeps two bounded loops and the retained
-absolute deadline, with each observation and delay inside `ci-poll.yml`.
+The deepest native-turn workflow shares its prepare and acceptance helper
+settings through a workflow-local `retained-helper` step definition. Expansion
+keeps both operations inside their original jobs without an extra runtime call.
+See [reusable step definitions](REUSABLE_STEPS.md). The engine now permits 200 nested calls
+and 201 distinct workflow definitions, including the entry workflow; caller
+wrappers count toward those limits. An original attempt and its optional
+same-session retry feed one checklist continuation loop. CI polling keeps two
+bounded loops and the retained absolute deadline, with each observation and
+delay inside `ci-poll.yml`.
 
 An existing controller retains its admitted runtime configuration. After its
 owned work stops, restart it when changing `agents.yml`; passing another config

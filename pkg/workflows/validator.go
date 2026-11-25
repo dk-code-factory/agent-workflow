@@ -151,6 +151,12 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 			return fmt.Errorf("job %s: invalid or duplicate step id %q", id, sid)
 		}
 		seen[sid] = true
+		if step.UseDefinition != "" {
+			return fmt.Errorf("step %s: unexpanded definition use; load workflow YAML through Parse", sid)
+		}
+		if step.Reuse != nil {
+			sid += fmt.Sprintf(" (definition %s, instance %s, use line %d)", step.Reuse.Definition, step.Reuse.Instance, step.Reuse.UseLine)
+		}
 		if err := validateContainerProtocol(w, id, step); err != nil {
 			return fmt.Errorf("job %s step %s: %w", id, sid, err)
 		}

@@ -828,3 +828,13 @@ sources are the [UI guide](../ui/README.md),
 - **Starting point:** I select a job with a container or a Docker step.
 - **My flow:** I enter relative files or recursive directories in **Job helper files (YAML)**. For a Docker sibling I optionally declare **Docker helper files (YAML)** to replace the inherited job bundle, using `[]` for an empty replacement.
 - **What I see:** Export retains the declared paths. The host captures them relative to their owning workflow, mounts retained content read-only at `/actions`, and validates checksums during recovery. Browser validation identifies traversal and misplaced declarations; host admission also checks symlinks, file types and bundle limits.
+
+### UF-51 — Reuse step definitions inside a job
+
+**UI tests**: [UI tests](../ui/test/browser/flows/uf-51.spec.ts)
+
+- **Coverage:** Imported declarations and two independently bound uses remain in authoring form during inspection and a visual name edit. Export matches the source and reparses with the original declaration. Undo/Redo restore exact source, an unknown definition diagnostic clears after repair, and converting a use into a command removes the reference with one Undo restoring it.
+
+- **Starting point:** Workflow YAML declares `step-definitions` and steps with explicit IDs and `use-definition` references.
+- **My flow:** I select a use, inspect **Reusable steps** and **Step definition**, edit its name or reference, review diagnostics and export. Declarations and parameter bindings can be edited in YAML; bindings also use **Advanced parameters**.
+- **What I see:** The editor preserves declarations and references instead of exporting expanded copies. Unknown definitions and missing or unknown bindings are diagnosed. The host runner validates expansion, parameter types, assets, placement and expanded result scopes before executing the admitted steps.

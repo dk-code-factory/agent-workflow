@@ -32,6 +32,7 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	result = StepExecution{ID: step.ID, Status: RunStatusSucceeded}
 	ec.Attempt = nil
 	defer func() {
+		result.Reuse = step.Reuse
 		if onlyError(err, ErrExternalInputCanceled) {
 			result.Status, result.Error, result.FailureClass, err = RunStatusWaiting, "", "", nil
 		} else if err != nil {
@@ -51,6 +52,9 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	}
 	if !allowed {
 		result.Status = RunStatusSkipped
+		return
+	}
+	if err = validateReuseBindings(step, ec); err != nil {
 		return
 	}
 	if isStepBlock(step) {

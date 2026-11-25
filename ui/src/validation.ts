@@ -143,7 +143,7 @@ const input: Shape = { type: 'string', required: 'boolean', default: 'any' };
 const entity: Shape = { ids: 'list', types: 'list', attributes: { '*': 'list' } };
 const stepShape: { [key: string]: Shape } = {
  files: ['string'], protocol:'string', effect:'string', 'input-schema':'any', 'output-schema':'any', input:{'*':'any'}, env:{'*':'string'},
-  id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
+  'use-definition': 'strict-string', id: 'string', name: 'string', uses: 'string', agent: 'strict-string', prompt: 'strict-string', if: 'string', 'continue-on-error': 'boolean', with: { '*': 'any' }, context,
   conversation: ['strict-string'], start: 'strict-string', finishBy: 'strict-string', maxTurns: 'strict-integer', maxMessages: 'strict-integer',
   argv: ['string'], run: 'string', shell: 'string', 'working-directory': 'string', timeout: 'string', handlerTimeout: 'string',
 };
@@ -152,6 +152,7 @@ export const handlerKinds = ['onResult', 'onComplete', 'onIncomplete', 'onError'
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
+  'step-definitions': { '*': { parameters: { '*': input }, step: 'any' } },
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
     manual: { '*': 'any' }, schedule: [{ cron: 'string' }],
@@ -381,8 +382,21 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
     inspectSchema(declaration, ['schemas', name]);
     add('host-schema', 'Named schema constraints require runner schema admission', ['schemas', name], undefined, 'host', 'info');
   }
+  for (const [name, definition] of Object.entries(w['step-definitions'] ?? {})) {
+    const path: Path = ['step-definitions', name];
+    if (!identifier.test(name)) add('identifier', 'Invalid step definition name', path);
+    if (!mapping(definition.step)) add('step-definition', 'Definition requires a step mapping', [...path, 'step']);
+    else if (Object.hasOwn(definition.step, 'id')) add('step-definition', 'Root ID belongs on the definition use', [...path, 'step', 'id']);
+    for (const [name, spec] of Object.entries(definition.parameters ?? {})) {
+      if (!identifier.test(name)) add('identifier', 'Invalid parameter name', [...path, 'parameters', name]);
+      if (spec.type && !['string', 'boolean', 'number', 'object', 'array'].includes(spec.type)) add('input-type', 'Unsupported parameter type', [...path, 'parameters', name, 'type']);
+    }
+    add('host-step-definition', 'Expansion, parameter types, assets and expanded result scopes require runner admission', path, undefined, 'host', 'info');
+  }
   const dependencySets = new Map<string, Set<string>>();
   const trees = new Map(Object.entries(jobs).map(([id, job]) => [id, stepEntries(job.steps)]));
+  const reusableIDs = new Map([...trees].map(([id, entries]) => [id, entries.filter(entry => entry.step['use-definition']).map(entry => entry.id)]));
+  const expanded = (job: string, name: string) => (reusableIDs.get(job) ?? []).some(id => name.startsWith(id + '__'));
   const stepIndexes = new Map([...trees].map(([id, entries]) => [id, new Map(entries.map((entry, index) => [entry.id, index]))]));
   if (!Object.keys(jobs).length) add('jobs', 'At least one job is required', ['jobs']);
   if (mapping(w.gates) && Object.keys(w.gates).length) add('standalone', 'Gates require PicoClaw', ['gates']);
@@ -436,6 +450,18 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
       const sp = [...p, ...path];
       if (!identifier.test(sid) || seen.has(sid)) add('identifier', 'Invalid or duplicate effective step ID', [...sp, 'id']);
       seen.add(sid);
+      if (Object.hasOwn(step, 'use-definition')) {
+        const definitions = w['step-definitions'] ?? {};
+        const definition = Object.hasOwn(definitions, step['use-definition']!) ? definitions[step['use-definition']!] : undefined;
+        if (!step.id || !identifier.test(step.id)) add('step-definition', 'Definition use requires an explicit valid ID', [...sp, 'id']);
+        if (!identifier.test(step['use-definition']!) || !definition) add('step-definition', 'Unknown step definition', [...sp, 'use-definition']);
+        for (const key of Object.keys(step)) if (!['id', 'name', 'if', 'with', 'use-definition', 'continue-on-error', ...handlerKinds, 'handlerTimeout'].includes(key)) add('step-definition', `Definition use cannot combine with ${key}`, [...sp, key]);
+        if (definition) {
+          for (const key of Object.keys(step.with ?? {})) if (!Object.hasOwn(definition.parameters ?? {}, key)) add('step-definition', `Unknown parameter "${key}"`, [...sp, 'with', key]);
+          for (const [key, spec] of Object.entries(definition.parameters ?? {})) if (spec.required && spec.default === undefined && !Object.hasOwn(step.with ?? {}, key)) add('step-definition', `Required parameter "${key}" is missing`, [...sp, 'with', key]);
+        }
+        return;
+      }
       const kind = blockKind(step);
       const docker = step.uses?.startsWith('docker://');
       if (step.files != null) { validateFiles(step.files, [...sp, 'files']); if (!docker) add('files', 'Step files require a Docker step; use container.files for job helpers', [...sp, 'files']); }
@@ -640,6 +666,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
           }
           continue;
         }
+        if (ref.scope === 'steps' && jobID && expanded(jobID, ref.id) || ref.step !== undefined && expanded(ref.id, ref.step)) continue;
         const exists = ref.scope === 'steps' ? jobID && stepIndexes.get(jobID)?.has(ref.id) : Object.hasOwn(jobs, ref.id);
         if (!exists) add('expression-reference', `Unknown ${ref.scope} reference "${ref.id}"`, path);
         if (exists && ref.scope === 'needs' && jobID && !dependencySets.get(jobID)?.has(ref.id) && !warnedProducers.has(ref.id)) {

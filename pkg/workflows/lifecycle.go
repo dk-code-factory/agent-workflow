@@ -178,6 +178,7 @@ func restoreLifecycleHandlers(step Step, life *StepLifecycle, attempts map[strin
 func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expressionContext, slots chan struct{}, retry bool, child bool) (result StepExecution, returned error) {
 	result = StepExecution{ID: step.ID, Status: RunStatusSucceeded}
 	defer func() {
+		result.Reuse = step.Reuse
 		if returned != nil {
 			returned = lifecycleContextError(ctx, returned)
 			result.Status = executionFailureStatus(ctx, returned)
@@ -201,6 +202,9 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 		result.Status = executionFailureStatus(ctx, err)
 		result.Error = err.Error()
 		result.FailureClass = classifyFailure(err)
+		return result, err
+	}
+	if err := validateReuseBindings(step, ec); err != nil {
 		return result, err
 	}
 	if step.Protocol == ContainerActionV1 {
