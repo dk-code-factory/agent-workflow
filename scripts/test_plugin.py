@@ -16,7 +16,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from plugin_package import ROOT, PLUGIN, build_plugin, validate_plugin, verify_plugin
+from plugin_package import (ROOT, PLUGIN, build_plugin, validate_plugin, verify_plugin,
+                            validate_builtin_profile, write_archive, verify_archive)
 
 
 def module(name, path):
@@ -464,6 +465,43 @@ class InstallerTests(unittest.TestCase):
 
 
 class PackageTests(unittest.TestCase):
+    def test_generic_archive_checks_are_independent_of_builtin_identity(self):
+        files = {"third-party/scripts/run": (b"#!/bin/sh\n", 0o755),
+                 "third-party/plugin.json": (b'{"version":"9.8.7"}', 0o644)}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plugin.zip"
+            write_archive(path, files)
+            original = path.read_bytes()
+            verify_archive(path, files)
+            write_archive(path, dict(reversed(list(files.items()))))
+            self.assertEqual(path.read_bytes(), original)
+            for invalid in ("../escape", "/absolute", "bad\\path", "line\nbreak"):
+                with self.assertRaisesRegex(ValueError, "unsafe"):
+                    write_archive(path, {invalid: (b"bad", 0o644)})
+
+    def test_builtin_profile_keeps_release_policy_and_exact_inventory(self):
+        for changed in ("identity", "license", "version", "inventory"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shutil.copytree(ROOT / PLUGIN, root / PLUGIN)
+                (root / "images").mkdir()
+                shutil.copyfile(ROOT / "images/pins.json", root / "images/pins.json")
+                for name in ("LICENSE", "NOTICE"):
+                    shutil.copyfile(ROOT / name, root / name)
+                plugin = root / PLUGIN
+                if changed in ("identity", "version"):
+                    manifest = json.loads((plugin / "plugin.json").read_text())
+                    manifest["name" if changed == "identity" else "version"] = "different" if changed == "identity" else "9.9.9"
+                    (plugin / "plugin.json").write_text(json.dumps(manifest))
+                elif changed == "license":
+                    (plugin / "LICENSE").write_text("changed")
+                else:
+                    skill = plugin / "skills/convert-agent"
+                    skill.mkdir()
+                    (skill / "SKILL.md").write_text("future stage")
+                with self.assertRaises(ValueError):
+                    validate_builtin_profile(VERSION, root)
+
     def test_reproducible_complete_package_modes_and_references(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
