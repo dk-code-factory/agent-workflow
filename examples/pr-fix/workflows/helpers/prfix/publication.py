@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from .capture import MAX_PAGES
 from .core import auth, canonical, digest, text
 
 
@@ -24,18 +25,101 @@ class UncertainEffect(PublicationError):
     pass
 
 
+def _review_identity(value):
+    if not isinstance(value, str) or not value or any(c.isspace() or c == "\x00" for c in value):
+        raise PublicationError("repository review request identity unavailable")
+    return value
+
+
+def _pending_reviewer(node):
+    if not isinstance(node, dict) or not isinstance(node.get("requestedReviewer"), dict):
+        raise PublicationError("repository review request identity unavailable")
+    _review_identity(node.get("id"))
+    reviewer = node["requestedReviewer"]
+    _review_identity(reviewer.get("id"))
+    kind = reviewer.get("__typename")
+    if kind == "User":
+        return "user @" + _review_identity(reviewer.get("login"))
+    if kind == "Team" and isinstance(reviewer.get("organization"), dict):
+        return "team @" + _review_identity(reviewer["organization"].get("login")) + "/" + _review_identity(reviewer.get("slug"))
+    raise PublicationError("repository review request type unavailable or unsupported")
+
+
 def repository_merge_requirements(provider, pr, metadata, head):
+    """Read complete current requests; earlier approvals never discharge them."""
     if metadata.get("mergeable") is not True or metadata.get("mergeable_state") != "clean" or metadata.get("draft"):
         raise PublicationError("repository merge requirements are not currently satisfied")
-    query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isDraft mergeable mergeStateStatus reviewDecision}}}"
-    response = provider.request("POST", "graphql", {"query": query, "variables": {
-        "owner": pr["owner"], "name": pr["name"], "number": pr["number"]}})
-    if response.get("errors"):
-        raise PublicationError("repository merge requirements unavailable")
-    actual = response.get("data", {}).get("repository", {}).get("pullRequest", {})
-    if actual.get("headRefOid") != head or actual.get("isDraft") is not False or actual.get("mergeable") != "MERGEABLE" or actual.get("mergeStateStatus") != "CLEAN" or actual.get("reviewDecision") == "CHANGES_REQUESTED":
-        raise PublicationError("repository merge requirements changed or remain unsatisfied")
-    return actual
+    query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String){
+      repository(owner:$owner,name:$name){pullRequest(number:$number){
+        headRefOid isDraft mergeable mergeStateStatus reviewDecision
+        reviewRequests(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor}
+          nodes{id requestedReviewer{__typename ... on User{id login}
+            ... on Team{id slug organization{login}}}}}}}}"""
+    cursor, baseline, total = None, None, None
+    cursors, request_ids, reviewer_ids = set(), set(), set()
+    requests, pending = [], []
+    fields = ("headRefOid", "isDraft", "mergeable", "mergeStateStatus", "reviewDecision")
+    for _ in range(MAX_PAGES):
+        response = provider.request("POST", "graphql", {"query": query, "variables": {
+            "owner": pr["owner"], "name": pr["name"], "number": pr["number"], "cursor": cursor}})
+        if not isinstance(response, dict) or response.get("errors"):
+            raise PublicationError("repository merge requirements unavailable")
+        actual = response
+        for key in ("data", "repository", "pullRequest"):
+            actual = actual.get(key) if isinstance(actual, dict) else None
+        if not isinstance(actual, dict) or any(key not in actual for key in fields):
+            raise PublicationError("repository merge requirements incomplete")
+        state = {key: actual[key] for key in fields}
+        if baseline is None:
+            baseline = state
+        if (state != baseline or actual["headRefOid"] != head or actual["isDraft"] is not False
+                or actual["mergeable"] != "MERGEABLE" or actual["mergeStateStatus"] != "CLEAN"):
+            raise PublicationError("repository merge requirements changed or remain unsatisfied")
+        connection = actual.get("reviewRequests")
+        if not isinstance(connection, dict):
+            raise PublicationError("repository review requests unavailable")
+        count, nodes, page = connection.get("totalCount"), connection.get("nodes"), connection.get("pageInfo")
+        if (isinstance(count, bool) or not isinstance(count, int) or count < 0
+                or not isinstance(nodes, list) or len(nodes) > 100 or not isinstance(page, dict)
+                or type(page.get("hasNextPage")) is not bool or "endCursor" not in page):
+            raise PublicationError("repository review requests incomplete")
+        if total is None:
+            total = count
+        if count != total:
+            raise PublicationError("repository review requests changed during enumeration")
+        for node in nodes:
+            label = _pending_reviewer(node)
+            reviewer = node["requestedReviewer"]
+            identity = (reviewer["__typename"], reviewer["id"])
+            if node["id"] in request_ids or identity in reviewer_ids:
+                raise PublicationError("repository review requests repeated during enumeration")
+            request_ids.add(node["id"])
+            reviewer_ids.add(identity)
+            requests.append(node)
+            pending.append(label)
+        if len(requests) > total:
+            raise PublicationError("repository review requests incomplete")
+        end = page["endCursor"]
+        if end is not None:
+            _review_identity(end)
+        if not page["hasNextPage"]:
+            if len(requests) != total:
+                raise PublicationError("repository review requests incomplete")
+            break
+        if not nodes or not end or end in cursors or len(requests) >= total:
+            raise PublicationError("repository review requests pagination incomplete")
+        cursors.add(end)
+        cursor = end
+    else:
+        raise PublicationError("repository review requests exceed bounded pagination")
+    if pending:
+        raise PublicationError("outstanding repository review requests: " + ", ".join(pending))
+    # GitHub returns explicit null when no repository review decision applies.
+    # An omitted/unknown value cannot establish readiness; REVIEW_REQUIRED holds
+    # even when no individual reviewer has been requested.
+    if baseline["reviewDecision"] not in ("APPROVED", None):
+        raise PublicationError("repository merge requirements review decision unsatisfied or unavailable")
+    return {**baseline, "reviewRequests": {"totalCount": total, "nodes": requests}}
 
 
 KINDS = {
@@ -755,6 +839,10 @@ class Publication:
                 result = {"pr": meta, "commit": commit}
             absent = (not merged and meta.get("state") == "open" and
                       meta.get("head", {}).get("sha") == intent["head"] and meta.get("base", {}).get("sha") == intent["target"])
+            # An open PR may still have an in-flight merge. A lost response is
+            # never authority to send a second merge request.
+            if saved["state"] == "uncertain":
+                absent = False
         elif kind == "split_pr":
             retained = saved.get("receipt") or {}
             response = retained.get("dispatch_response", retained.get("result", {}))

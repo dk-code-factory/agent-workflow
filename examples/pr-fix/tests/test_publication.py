@@ -8,17 +8,29 @@ import tempfile
 import subprocess
 import threading
 import unittest
+from unittest.mock import patch
 import git_fixture
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows" / "helpers"))
 from prfix.core import Ledger, canonical, digest, identity
-from prfix.publication import Publication, PublicationError, UncertainEffect
+from prfix.publication import Publication, PublicationError, UncertainEffect, repository_merge_requirements
 
 HEAD = "a" * 40
 BASE = "b" * 40
 OTHER = "c" * 40
 MERGE = "d" * 40
 AUTH = {"request_id": "user-1", "instruction": "Fix and publish this PR; merge when ready", "source": "chat:1"}
+
+
+def review_request(kind="User", name="alice"):
+    reviewer = {"__typename": kind, "id": kind + "_" + name}
+    reviewer.update({"login": name} if kind == "User" else {"slug": name, "organization": {"login": "o"}})
+    return {"id": "request_" + reviewer["id"], "requestedReviewer": reviewer}
+
+
+def review_page(nodes=(), total=None, next_cursor=None):
+    return {"totalCount": len(nodes) if total is None else total, "nodes": list(nodes),
+            "pageInfo": {"hasNextPage": next_cursor is not None, "endCursor": next_cursor}}
 
 
 class FakeGitHub:
@@ -39,6 +51,7 @@ class FakeGitHub:
         self.capture_error = False
         self.run = {"id": 14, "head_sha": HEAD, "run_attempt": 1, "status": "completed", "conclusion": "failure"}
         self.requested = {"users": [], "teams": []}
+        self.review_pages = None
         self.merge_state = {"headRefOid": HEAD, "isDraft": False, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewDecision": "APPROVED"}
         self.parents = [BASE, HEAD]
         self.split_pulls = []
@@ -61,7 +74,12 @@ class FakeGitHub:
         if method == "GET" and "/git/commits/" in path:
             return {"sha": MERGE, "parents": [{"sha": s} for s in self.parents]}
         if method == "POST" and path == "graphql" and payload["query"].startswith("query"):
-            return {"data": {"repository": {"pullRequest": copy.deepcopy(self.merge_state)}}}
+            state = copy.deepcopy(self.merge_state)
+            nodes = [review_request("User", user["login"]) for user in self.requested["users"]]
+            nodes += [review_request("Team", team["slug"]) for team in self.requested["teams"]]
+            state["reviewRequests"] = (copy.deepcopy(self.review_pages[payload["variables"]["cursor"]])
+                                       if self.review_pages is not None else review_page(nodes))
+            return {"data": {"repository": {"pullRequest": state}}}
         if method == "PATCH":
             self.ev["metadata"].update(payload)
             result = copy.deepcopy(self.ev["metadata"])
@@ -337,6 +355,69 @@ class PublicationTests(unittest.TestCase):
         self.provider.parents = [BASE, HEAD]
         self.assertEqual(self.publication.reconcile(prepared["id"])["outcome"], "completed")
 
+    def test_renewed_same_head_request_holds_dispatch_until_fulfilled(self):
+        self.provider.ev["reviews"] = [{"id": 41, "state": "APPROVED", "commit_id": HEAD,
+                                        "user": {"login": "alice"}}]
+        prepared = self.propose("merge", {"merge_method": "merge"})
+        # The request arrives after preparation, with the old approval intact.
+        self.provider.requested = {"users": [{"login": "alice"}], "teams": [{"slug": "maintainers"}]}
+        with self.assertRaisesRegex(PublicationError, "user @alice, team @o/maintainers"):
+            self.publication.execute(prepared["id"], self.audience(prepared))
+        self.assertEqual(self.provider.writes, [])
+        self.assertEqual(self.publication._load(prepared["id"])["state"], "prepared")
+        self.assertEqual(self.provider.requested["users"], [{"login": "alice"}])
+        self.provider.requested = {"users": [], "teams": []}
+        receipt = self.publication.execute(prepared["id"], self.audience(prepared))
+        self.assertTrue(receipt["result"]["pr"]["merged"])
+        self.assertEqual(len(self.provider.writes), 1)
+
+    def test_prepared_merge_restart_requires_current_complete_requests(self):
+        prepared = self.propose("merge", {"merge_method": "merge"})
+        self.ledger.close()
+        reopened = Ledger(self.root, "fixture", self.pr["url"])
+        self.addCleanup(reopened.close)
+        publication = Publication(reopened, self.provider, self.root, self.plan,
+                                  readiness=lambda intent: copy.deepcopy(self.ready), source_validator=lambda source: True)
+        for page in (None, {}, review_page([review_request("Team", "maintainers")])):
+            with self.subTest(page=page):
+                self.provider.review_pages = {None: page}
+                with self.assertRaises(PublicationError):
+                    publication.execute(prepared["id"], self.audience(prepared))
+                self.assertEqual(publication._load(prepared["id"])["state"], "prepared")
+                self.assertEqual(self.provider.writes, [])
+
+    def test_uncertain_merge_never_resends_after_restart_or_lost_acknowledgement(self):
+        prepared = self.propose("merge", {"merge_method": "merge"})
+        original = self.provider.request
+
+        def delayed(method, path, payload=None):
+            if method == "PUT" and path.endswith("/merge"):
+                self.provider.calls.append((method, path, copy.deepcopy(payload)))
+                raise OSError("merge acknowledgement lost; visibility delayed")
+            return original(method, path, payload)
+
+        with patch.object(self.provider, "request", side_effect=delayed):
+            with self.assertRaisesRegex(OSError, "acknowledgement lost"):
+                self.publication.execute(prepared["id"], self.audience(prepared))
+        self.ledger.close()
+        reopened = Ledger(self.root, "fixture", self.pr["url"])
+        self.addCleanup(reopened.close)
+        publication = Publication(reopened, self.provider, self.root, self.plan)
+        # No readiness callback/checkpoint is needed to reconcile an already
+        # dispatched operation, and unavailable new request data cannot replay it.
+        self.provider.review_pages = {None: None}
+        for _ in range(2):
+            self.assertEqual(publication.reconcile(prepared["id"])["outcome"], "unknown")
+            with self.assertRaises(UncertainEffect):
+                publication.execute(prepared["id"], self.audience(prepared))
+        self.assertEqual(len(self.provider.writes), 1)
+        self.assertEqual(publication._load(prepared["id"])["state"], "uncertain")
+        self.provider.ev["metadata"].update(state="closed", merged=True, merge_commit_sha=MERGE, merged_by={"id": 11})
+        receipt = publication.execute(prepared["id"], self.audience(prepared))
+        self.assertTrue(receipt["result"]["pr"]["merged"])
+        self.assertEqual(publication.execute(prepared["id"], self.audience(prepared)), receipt)
+        self.assertEqual(len(self.provider.writes), 1)
+
     def test_restart_retains_unknown_creation_and_original_intent(self):
         prepared = self.propose()
         self.provider.delay_creation = self.provider.lose_response = True
@@ -469,6 +550,133 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises((ValueError, RuntimeError, sqlite3.OperationalError)):
             publication.prepare({"kind": "reply", "head": HEAD, "target": BASE,
                                  "payload": {"body": "Another"}, "sources": ["accepted:report"]})
+
+
+class RepositoryMergeRequirementsTests(unittest.TestCase):
+    def setUp(self):
+        self.provider = FakeGitHub()
+        self.pr = identity("https://github.com/o/r/pull/7")
+
+    def requirements(self):
+        return repository_merge_requirements(self.provider, self.pr, self.provider.ev["metadata"], HEAD)
+
+    def test_user_and_team_requests_hold_every_aggregate_decision(self):
+        for decision in ("APPROVED", None, "", "REVIEW_REQUIRED", "CHANGES_REQUESTED"):
+            for kind, label in (("User", "user @alice"), ("Team", "team @o/alice")):
+                with self.subTest(decision=decision, kind=kind):
+                    self.provider.merge_state["reviewDecision"] = decision
+                    self.provider.review_pages = {None: review_page([review_request(kind)])}
+                    with self.assertRaisesRegex(PublicationError, label):
+                        self.requirements()
+        self.assertEqual(self.provider.writes, [])
+
+    def test_only_complete_approved_or_explicit_null_decisions_allow_merge(self):
+        for decision in ("APPROVED", None):
+            with self.subTest(decision=decision):
+                self.provider.merge_state["reviewDecision"] = decision
+                result = self.requirements()
+                self.assertEqual(result["reviewRequests"], {"totalCount": 0, "nodes": []})
+        for decision in ("", "REVIEW_REQUIRED", "CHANGES_REQUESTED", "UNKNOWN", False, {}, []):
+            with self.subTest(decision=decision):
+                self.provider.merge_state["reviewDecision"] = decision
+                with self.assertRaises(PublicationError):
+                    self.requirements()
+        del self.provider.merge_state["reviewDecision"]
+        with self.assertRaisesRegex(PublicationError, "incomplete"):
+            self.requirements()
+
+    def test_missing_malformed_and_partial_graphql_envelopes_hold(self):
+        state = {**self.provider.merge_state, "reviewRequests": review_page()}
+        for response in (None, [], {}, {"data": None}, {"data": {"repository": None}},
+                         {"data": {"repository": {"pullRequest": None}}},
+                         {"data": {"repository": {"pullRequest": state}}, "errors": [{"message": "partial"}]}):
+            with self.subTest(response=response), patch.object(self.provider, "request", return_value=response):
+                with self.assertRaises(PublicationError):
+                    self.requirements()
+        with patch.object(self.provider, "request", side_effect=OSError("enumeration unavailable")):
+            with self.assertRaisesRegex(OSError, "enumeration unavailable"):
+                self.requirements()
+
+    def test_incomplete_connections_never_imply_empty_requests(self):
+        for page in (None, [], {}, {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+                     {"totalCount": 0, "nodes": []},
+                     {"totalCount": True, "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+                     {"totalCount": 0, "nodes": None, "pageInfo": {"hasNextPage": False, "endCursor": None}},
+                     {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False}},
+                     {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": 0, "endCursor": None}},
+                     review_page(total=1), review_page(total=-1), review_page(next_cursor="next")):
+            with self.subTest(page=page):
+                self.provider.review_pages = {None: page}
+                with self.assertRaises(PublicationError):
+                    self.requirements()
+
+    def test_null_unknown_and_incomplete_reviewer_identities_hold(self):
+        user = review_request()
+        team = review_request("Team", "maintainers")
+        for node in (None, {}, {"id": "request", "requestedReviewer": None},
+                     {**user, "id": None}, {**user, "requestedReviewer": {"__typename": "User", "login": "alice"}},
+                     {**user, "requestedReviewer": {**user["requestedReviewer"], "login": ""}},
+                     {**user, "requestedReviewer": {**user["requestedReviewer"], "__typename": "Mannequin"}},
+                     {**team, "requestedReviewer": {**team["requestedReviewer"], "organization": None}},
+                     {**team, "requestedReviewer": {**team["requestedReviewer"], "slug": "bad\x00slug"}}):
+            with self.subTest(node=node):
+                self.provider.review_pages = {None: review_page([node])}
+                with self.assertRaises(PublicationError):
+                    self.requirements()
+
+    def test_enumerates_all_pages_and_identifies_later_team_request(self):
+        users = [review_request("User", "reviewer" + str(i)) for i in range(100)]
+        self.provider.review_pages = {None: review_page(users, 101, "page2"),
+                                      "page2": review_page([review_request("Team", "maintainers")], 101)}
+        with self.assertRaisesRegex(PublicationError, "team @o/maintainers"):
+            self.requirements()
+        self.assertEqual([call[2]["variables"]["cursor"] for call in self.provider.calls], [None, "page2"])
+        query = self.provider.calls[0][2]["query"]
+        self.assertIn("... on User{id login}", query)
+        self.assertIn("... on Team{id slug organization{login}}", query)
+
+    def test_unavailable_incomplete_repeated_and_changing_later_pages_hold(self):
+        first = review_request()
+        for second in (None, review_page([], 2), review_page([first], 2),
+                       review_page([review_request("Team", "maintainers")], 3),
+                       review_page([review_request("Team", "maintainers")], 3, "page2")):
+            with self.subTest(second=second):
+                self.provider.review_pages = {None: review_page([first], 2, "page2"), "page2": second}
+                with self.assertRaises(PublicationError):
+                    self.requirements()
+        self.provider.review_pages = {None: review_page([first], 3, "page2"),
+                                      "page2": review_page([review_request("Team", "maintainers")], 3, "page2")}
+        with self.assertRaisesRegex(PublicationError, "pagination incomplete"):
+            self.requirements()
+        original = self.provider.request
+
+        def changed(method, path, payload=None):
+            if payload["variables"]["cursor"]:
+                self.provider.merge_state["headRefOid"] = OTHER
+            return original(method, path, payload)
+
+        with patch.object(self.provider, "request", side_effect=changed):
+            with self.assertRaisesRegex(PublicationError, "requirements changed"):
+                self.requirements()
+        self.assertEqual(self.provider.writes, [])
+
+    def test_request_pagination_is_bounded_and_later_transport_failure_holds(self):
+        self.provider.review_pages = {None: review_page([review_request()], 2, "page2"),
+                                      "page2": review_page([review_request("Team", "maintainers")], 2)}
+        with patch("prfix.publication.MAX_PAGES", 1):
+            with self.assertRaisesRegex(PublicationError, "bounded pagination"):
+                self.requirements()
+        original = self.provider.request
+
+        def unavailable(method, path, payload=None):
+            if payload["variables"]["cursor"]:
+                raise OSError("later request page unavailable")
+            return original(method, path, payload)
+
+        with patch.object(self.provider, "request", side_effect=unavailable):
+            with self.assertRaisesRegex(OSError, "later request page unavailable"):
+                self.requirements()
+        self.assertEqual(self.provider.writes, [])
 
 
 if __name__ == "__main__":

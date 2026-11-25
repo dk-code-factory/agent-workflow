@@ -13,7 +13,7 @@ from prfix.core import Ledger, artifact, canonical, digest, identity
 from prfix.prepare import CHECKLIST
 from action import dispatch as application_dispatch
 from prfix.publication import PublicationError, UncertainEffect
-from test_publication import AUTH, BASE, HEAD, FakeGitHub
+from test_publication import AUTH, BASE, HEAD, FakeGitHub, review_page, review_request
 
 PRODUCER = "agent_" + "1" * 32
 AUDIENCE = "agent_" + "2" * 32
@@ -302,6 +302,47 @@ class PublishingTests(unittest.TestCase):
                 result = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
                 self.assertFalse(result["ready"])
                 self.assertIn("requirements unavailable", result["blockers"])
+        self.assertEqual(self.provider.writes, [])
+
+    def test_readiness_and_merge_proposal_hold_current_user_and_team_requests(self):
+        self.accepted("description")
+        self.accepted("review")
+        self.accepted("finding_verification", agent=VERIFIER)
+        self.provider.ev["reviews"] = [{"id": 41, "state": "APPROVED", "commit_id": HEAD,
+                                        "user": {"login": "alice"}}]
+        with patch.object(app, "coverage", side_effect=lambda *args: copy.deepcopy(self.covered)):
+            for decision in ("APPROVED", None, "", "REVIEW_REQUIRED"):
+                for kind, label in (("User", "user @alice"), ("Team", "team @o/alice")):
+                    with self.subTest(decision=decision, kind=kind):
+                        self.provider.merge_state["reviewDecision"] = decision
+                        self.provider.review_pages = {None: review_page([review_request(kind)])}
+                        current = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
+                        self.assertTrue(current["complete"])
+                        self.assertFalse(current["ready"], current)
+                        self.assertTrue(any(label in blocker for blocker in current["blockers"]), current)
+                        self.assertFalse(publishing.merge_proposal(self.root, self.provider, self.ledger, self.plan, {})["invoke"])
+            self.provider.merge_state["reviewDecision"] = "APPROVED"
+            self.provider.review_pages = {None: review_page()}
+            self.assertTrue(publishing.merge_proposal(self.root, self.provider, self.ledger, self.plan, {})["invoke"])
+        self.assertEqual(self.provider.writes, [])
+
+    def test_readiness_requires_complete_request_enumeration_each_time(self):
+        self.accepted("description")
+        self.accepted("review")
+        self.accepted("finding_verification", agent=VERIFIER)
+        with patch.object(app, "coverage", side_effect=lambda *args: copy.deepcopy(self.covered)):
+            self.assertTrue(publishing.readiness(self.root, self.provider, self.ledger, self.plan)["ready"])
+            for page in (None, {}, review_page(total=1), review_page(next_cursor="page2")):
+                with self.subTest(page=page):
+                    self.provider.review_pages = {None: page}
+                    current = publishing.readiness(self.root, self.provider, self.ledger, self.plan)
+                    self.assertFalse(current["ready"], current)
+                    self.assertTrue(any("review requests" in blocker for blocker in current["blockers"]), current)
+            self.provider.review_pages = {None: review_page()}
+            self.provider.merge_state["reviewDecision"] = "REVIEW_REQUIRED"
+            self.assertFalse(publishing.readiness(self.root, self.provider, self.ledger, self.plan)["ready"])
+            self.provider.merge_state["reviewDecision"] = None
+            self.assertTrue(publishing.readiness(self.root, self.provider, self.ledger, self.plan)["ready"])
         self.assertEqual(self.provider.writes, [])
 
     def test_controlled_commit_receipt_supplies_exact_push_before_other_proposals(self):
