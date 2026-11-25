@@ -1,0 +1,9 @@
+# Review and copy into the TARGET workspace. The reported writable bridge cache
+# comes from explicit launcher ensure --host claude --claude-bridge.
+agent-runtime: task
+agents:
+  task:
+    provider: claude-sdk
+    bridge: /absolute/path/from/explicit/setup/bridge.mjs
+    authentication: {mode: native, credential-env: CLAUDE_CODE_OAUTH_TOKEN}
+    tools: []

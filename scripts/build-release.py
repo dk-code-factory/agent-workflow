@@ -72,9 +72,10 @@ for target in targets:
             shutil.copyfile(ROOT / item, stage / item)
         for directory in ["workflows", "docs", "examples", "conformance", "plugins/network-runtime", "plugins/agent-workflow"]:
             shutil.copytree(ROOT / directory, stage / directory, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
-        marketplace = stage / ".agents" / "plugins"
-        marketplace.mkdir(parents=True)
-        shutil.copyfile(ROOT / ".agents/plugins/marketplace.json", marketplace / "marketplace.json")
+        for catalog in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+            catalog_target = stage / catalog
+            catalog_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / catalog, catalog_target)
         licenses = stage / "licenses"
         licenses.mkdir()
         shutil.copyfile(goroot / "LICENSE", licenses / "Go-LICENSE.txt")

@@ -5,7 +5,9 @@ description: Start or manage requested durable Agent Workflow runs, inspect prog
 
 Use the plugin's absolute `scripts/agent-workflow` launcher with `exec --` before
 engine arguments. Resolve the plugin root two directories above this skill.
-Use `check` and, if needed for the requested run, `ensure`. Read the packaged
+Use `check` and, if needed for the requested run, `ensure`. For a Claude host,
+pass `--host claude` before the launcher separator; workspace `agent-runtime`
+chooses the execution provider independently. Read the packaged
 [run and recovery reference](../../references/recovery.md) before mutations.
 
 Identify the workspace and requested definition or existing durable run ID.

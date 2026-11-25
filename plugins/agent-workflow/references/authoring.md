@@ -9,7 +9,8 @@ existing repository `agents.yml`. Agent definition paths resolve from their owni
 workflow. Reusable workflow paths resolve from the workspace and stay inside
 `workflows/` directories. Preserve repository conventions when they differ.
 
-The runtime configuration must include a `codex` role using `codex-app-server`:
+Workspace `agent-runtime` selects a role for native tasks and defaults to `codex`.
+A Codex configuration is:
 
 ```yaml
 agents:
@@ -18,6 +19,23 @@ agents:
     authentication: {mode: native}
     sandbox: read-only
 ```
+
+For Claude SDK, select a separate workspace role explicitly:
+
+```yaml
+agent-runtime: task
+agents:
+  task:
+    provider: claude-sdk
+    bridge: /absolute/writable/cache/bridge/bridge.mjs
+    authentication: {mode: native, credential-env: CLAUDE_CODE_OAUTH_TOKEN}
+    tools: []
+```
+
+The locked Node bridge needs explicit setup. A Claude-only machine needs no Codex
+executable; host packaging targets are independent from this provider selection.
+Neither backend gains capabilities from an agent file. Preserve current tool,
+isolation and output-repair restrictions; full managed parity is a separate follow-up.
 
 Use `workspace-write` only for an approved editing task. Native authentication
 uses the selected provider-owned route; never copy credentials into workflow
@@ -167,3 +185,7 @@ controller restart. Read [recovery](recovery.md) for answer correlation.
 Test valid/invalid input, contract failures, exhausted limits, declined approval,
 stale evidence and recovery. Validate before executing. Models and remote
 publication remain separate from deterministic validation.
+
+For distributable skills, read [plugin authoring](plugin-authoring.md). New agent
+admissions require YAML; use the convert-agent skill for native sources. Historical
+admitted snapshots retain their original bytes and runtime binding during recovery.

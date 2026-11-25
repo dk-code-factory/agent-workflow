@@ -1,8 +1,11 @@
 # Exact-version installation
 
 Python 3.11+ and GitHub CLI with attestation verification are required. The
-supported Codex version is declared in `../compatibility.json`. The launcher
-never installs or changes Codex, logs in, or uses an engine from PATH.
+supported Codex version is declared in `../compatibility.json`. The default
+launcher profile checks that version; a Claude host uses
+`--host claude` on every check/ensure/exec invocation before `--`, without a
+Codex prerequisite. The launcher never installs or changes Codex, logs in, or
+uses an engine from PATH.
 
 Register the marketplace at an exact release tag, for example:
 
@@ -17,8 +20,8 @@ its own installation. Upgrades require installing a newer tagged plugin; the
 engine version always equals the plugin version. See the official
 [plugin packaging documentation](https://developers.openai.com/plugins/build/plugins).
 
-The portable release ZIP unpacks to `agent-workflow/`, containing both
-`plugin.json` and the `.codex-plugin/plugin.json` compatibility manifest, skills,
+The portable release ZIP unpacks to `agent-workflow/`, containing `plugin.json`,
+the `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json` manifests, skills,
 references and Python scripts. An engine distribution contains the same plugin
 under `plugins/agent-workflow` and a local marketplace catalog.
 
@@ -53,3 +56,20 @@ This reports **UNCERTIFIED CANDIDATE** and uses
 `candidate/<version>/<os>-<arch>-<digest>`. It verifies local digest and build
 identity but makes no release certification claim. Release mode never searches
 this cache and never switches to it on a download or verification failure.
+
+## Claude host and offline conversion
+
+The repository also contains a Claude marketplace catalog. For a requested local
+installation, register the distribution directory as a local Claude marketplace
+and install `agent-workflow@agent-workflow`. This does not select the execution
+provider; workspace `agent-runtime` does that separately. Explicit
+`ensure --host claude --claude-bridge` needs Node/npm and prepares locked SDK
+dependencies in a separate writable cache. Use its reported bridge path and an
+explicit credential environment reference in the target workspace; no Codex
+executable or credential refresh is required for the Claude SDK route.
+
+`check --cached-only` inspects a verified release cache without external tool
+discovery. `exec --cached-only -- agent convert ...` runs only the offline converter
+from that cache. It refuses missing/corrupt/mismatched receipts, candidates,
+setup/bridge requests and other engine commands. It never downloads an engine.
+See [plugin authoring](plugin-authoring.md) for the full flow and migration boundary.

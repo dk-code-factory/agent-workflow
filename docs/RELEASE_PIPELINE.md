@@ -93,8 +93,8 @@ interruption, and Claude structured output. Phase two requires nine records:
 Claude discovery isolation, nested workers at capacity one, uncertain external MCP
 responses, mixed development through CLI and MCP, and container execution and
 owner loss on Docker and rootless Podman. Mixed scenarios require actual recorded
-invocations and versions from both providers. `agent/run` accepts native Codex
-definitions; conformance-only registered Go actions execute managed Claude turns.
+invocations and versions from both providers. `agent/run` accepts canonical YAML definitions and uses the workspace-selected
+runtime; conformance-only registered Go actions also execute managed Claude turns.
 
 The job installs locked provider dependencies, including the pinned Claude CLI
 in `conformance/providers`, the existing Codex CLI and the packaged SDK lock.
@@ -174,7 +174,9 @@ The platform-independent `agent-workflow-plugin-<version>.zip` is reproduced
 alongside the four engine archives, included in archive provenance and the
 release manifest, and checked again after draft download and immutable
 publication. Every engine archive includes the matching plugin and marketplace;
-plugin/engine version drift or Codex compatibility drift from `images/pins.json`
+the built-in five-skill inventory, LICENSE/NOTICE identity, both host manifests
+and marketplace catalogs are deterministic requirements. Built-in plugin/engine
+version drift or Codex compatibility drift from `images/pins.json`
 blocks packaging. Native plugin model acceptance remains a separate manual
 procedure in [conformance/plugin](../conformance/plugin/README.md); it is not a
 new recurring release prerequisite or a substitute for existing certification.

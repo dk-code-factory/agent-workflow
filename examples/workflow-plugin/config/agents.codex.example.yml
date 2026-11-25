@@ -1,0 +1,8 @@
+# Review and copy into the TARGET workspace; never install this as plugin authority.
+# Omitted agent-runtime defaults to codex.
+agent-runtime: codex
+agents:
+  codex:
+    provider: codex-app-server
+    authentication: {mode: api-key, credential-env: OPENAI_API_KEY}
+    sandbox: read-only

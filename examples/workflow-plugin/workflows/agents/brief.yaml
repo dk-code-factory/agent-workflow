@@ -1,0 +1,3 @@
+name: brief
+description: Draft and finalize a concise brief within the supplied scope.
+instructions: Produce only the requested text. Do not edit files or publish. Respect the target workspace permissions and the supplied approval decision.

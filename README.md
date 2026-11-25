@@ -1,11 +1,14 @@
 # Agent Workflow
 
-The [Agent Workflow Codex plugin](plugins/agent-workflow/README.md) installs the
+The [Agent Workflow plugin](plugins/agent-workflow/README.md) installs the
 matching signed-tag engine release, guides workflow design through explicit
 plan approval, manages durable runs and prepares reviewed bug reports. Install
 its marketplace at an exact version tag; Python 3.11+, GitHub CLI and the
-repository-pinned Codex version are required. The plugin is included in every
-engine distribution and as a platform-independent release ZIP.
+repository-pinned Codex version are required for the default Codex host profile.
+Claude hosts use the explicit Claude profile; execution provider selection remains
+workspace-owned. See the [plugin developer walkthrough](examples/workflow-plugin/README.md)
+for deterministic dual-target builds, setup and both runtime configurations.
+The plugin is included in every engine distribution and as a platform-independent release ZIP.
 
 A Go controller for single-user Claude/Codex workflows on Linux and macOS. It
 supports durable workflow admission, guarded recovery, command steps, bounded

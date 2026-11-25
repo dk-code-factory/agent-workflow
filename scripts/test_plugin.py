@@ -545,7 +545,7 @@ class PackageTests(unittest.TestCase):
                     validate_plugin(VERSION, root)
 
     def test_builtin_release_identity_and_pinned_compatibility_remain_required(self):
-        for name, field in (("plugin.json", "version"), (".codex-plugin/plugin.json", "version"),
+        for name, field in (("plugin.json", "version"), (".codex-plugin/plugin.json", "version"), (".claude-plugin/plugin.json", "version"),
                             ("compatibility.json", "engine_version"), ("compatibility.json", "codex_versions")):
             with self.subTest(manifest=name, field=field), tempfile.TemporaryDirectory() as directory:
                 root = self.copy_source(directory)
@@ -568,6 +568,13 @@ class PackageTests(unittest.TestCase):
         names = {path.read_text().splitlines()[1].removeprefix("name: ")
                  for path in (plugin / native["skills"]).glob("*/SKILL.md")}
         self.assertEqual(names, self.skills)
+        claude_catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
+        claude_entry, = claude_catalog["plugins"]
+        self.assertEqual(claude_entry, {"name": "agent-workflow", "source": "./plugins/agent-workflow"})
+        claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
+        self.assertEqual(claude["name"], entry["name"])
+        self.assertEqual(claude["version"], native["version"])
+        self.assertEqual(claude["skills"], native["skills"])
 
     def test_reproducible_complete_package_modes_and_references(self):
         with tempfile.TemporaryDirectory() as directory:

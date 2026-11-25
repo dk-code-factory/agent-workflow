@@ -1,0 +1,10 @@
+schema-version: 1
+name: brief-workflow
+version: 0.1.0
+engine-version: 0.2.2
+hosts: [codex, claude]
+skills:
+  - name: brief
+    path: skills/brief/SKILL.md
+    workflow: workflows/brief.yml
+resources: [references/scope.md]

@@ -15,7 +15,7 @@ conformance manifests/executable, bridge sources and exact dependency lockfile.
 `agent-workflow version`, health, MCP and conformance share one engine version.
 Release builds also record commit, dirty state and an exact source fingerprint.
 
-The `agent-workflow` Codex plugin ships under `plugins/agent-workflow` in all
+The `agent-workflow` Codex/Claude plugin ships under `plugins/agent-workflow` in all
 four distributions and as `agent-workflow-plugin-<version>.zip`. The ZIP has
 normalized ordering, timestamps and executable modes; repeat builds must match.
 It participates in checksums, archive provenance, the release manifest and
@@ -23,7 +23,13 @@ immutable download verification. The existing `network-runtime` plugin remains
 separate in the same marketplace. See [plugin installation](../plugins/agent-workflow/references/installation.md)
 for exact-tag installs, upgrades, private offline caches and explicitly selected
 uncertified candidates. Python 3.11+ and GitHub CLI are plugin prerequisites;
-the engine version must exactly match the installed plugin.
+the engine version must exactly match the built-in installed plugin. Third-party
+workflow plugins pin an exact engine version independently of their own version.
+Both native manifests and marketplace catalogs are included, with the same five
+built-in skills and unchanged repository licensing. The default launcher profile
+checks pinned Codex compatibility; every Claude-host launcher invocation uses
+`--host claude` instead. See the [developer walkthrough](../examples/workflow-plugin/README.md)
+for generated packages, explicit bridge setup and workspace-owned credentials.
 
 Plugin model acceptance is manual and separate from all recurring release
 gates. See [the three acceptance subjects](../conformance/plugin/README.md).

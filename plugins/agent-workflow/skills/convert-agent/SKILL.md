@@ -9,8 +9,9 @@ Both formats use the same engine YAML contract: required `name`, `description`
 and `instructions`, with optional `model` and `reasoning-effort`.
 
 Resolve the installed plugin root two directories above this skill. Run
-`python3 <plugin>/scripts/agent-workflow check` by absolute, quoted path. Use
-`exec --` only when `check` reports an installed verified engine; otherwise
+`python3 <plugin>/scripts/agent-workflow check --cached-only` by absolute, quoted
+path. Use `exec --cached-only --` only when `check` reports an installed verified
+engine; otherwise
 report the missing prerequisites or engine and use the setup skill only when
 installation is requested. Conversion itself is offline and needs no provider,
 workspace initialization, host settings or credentials. Do not install a host
@@ -20,14 +21,14 @@ Use the deterministic CLI, rather than translating definitions yourself. Flags
 precede positional arguments; this command accepts flags only. For Codex TOML:
 
 ```sh
-python3 "<plugin>/scripts/agent-workflow" exec -- agent convert \
+python3 "<plugin>/scripts/agent-workflow" exec --cached-only -- agent convert \
   --from codex --input "<source>.toml" --output "<destination>.yaml"
 ```
 
 For Claude Markdown with YAML frontmatter:
 
 ```sh
-python3 "<plugin>/scripts/agent-workflow" exec -- agent convert \
+python3 "<plugin>/scripts/agent-workflow" exec --cached-only -- agent convert \
   --from claude --input "<source>.md" --output "<destination>.yaml"
 ```
 

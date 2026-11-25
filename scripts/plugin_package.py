@@ -22,14 +22,15 @@ def validate_builtin_profile(version, root=ROOT):
     plugin = root / PLUGIN
     portable = json.loads((plugin / "plugin.json").read_text())
     native = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
+    claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
     config = json.loads((plugin / "compatibility.json").read_text())
-    if portable["version"] != version or native["version"] != version or config["engine_version"] != version:
+    if portable["version"] != version or native["version"] != version or config["engine_version"] != version or claude["version"] != version:
         raise ValueError("plugin and engine release versions must match")
     if config["codex_versions"] != [json.loads((root / "images/pins.json").read_text())["codex_cli"]]:
         raise ValueError("plugin Codex compatibility must match the repository pin")
-    if portable["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" or native["skills"] != "./skills/":
+    if portable["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" or native["skills"] != "./skills/" or claude["skills"] != "./skills/":
         raise ValueError("invalid plugin manifest")
-    if portable["name"] != "agent-workflow" or native["name"] != "agent-workflow":
+    if portable["name"] != "agent-workflow" or native["name"] != "agent-workflow" or claude["name"] != "agent-workflow":
         raise ValueError("invalid plugin name")
     for name in ("LICENSE", "NOTICE"):
         if (plugin / name).read_bytes() != (root / name).read_bytes():
