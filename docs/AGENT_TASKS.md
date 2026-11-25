@@ -106,9 +106,39 @@ outputs are never overwritten. Previously admitted TOML snapshots retain their
 original bytes, hashes, identities and Codex bindings without reopening sources;
 this is a source-format change for new runs, not a snapshot migration.
 
-The configured `codex` runtime must use `codex-app-server`. It supplies
-credentials, execution policy, limits and tool grants. Definitions cannot expand
-these boundaries. Codex managed tool subsets and tool-free output repair retain
+Workspace `agents.yml` selects the configured role for every native task with
+`agent-runtime`. Omit it to use `codex`. The selected role must use
+`codex-app-server` or `claude-sdk`; this selection is independent of the YAML
+definition's name. For example:
+
+```yaml
+agent-runtime: task
+agents:
+  task:
+    provider: claude-sdk
+    bridge: bridge/claude/bridge.mjs
+    model: claude-sonnet-4-6
+    tools: []
+    authentication:
+      mode: native
+      credential-env: CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Install the locked bridge dependencies before selecting Claude SDK. Native
+Claude authentication requires an explicit token environment reference. Gateway
+authentication instead requires `mode: gateway`, an `endpoint` and a
+`credential-env` API-key reference. Native tasks do not log in or import host
+settings, hooks or plugins. Claude-only workspaces need no Codex binary.
+
+Admission retains the selected role, model, instructions, credential references,
+execution policy, limits and tool grants. Definitions cannot expand these
+boundaries. Changing current configuration cannot switch an admitted task or its
+continued session to another provider. Snapshots admitted before runtime
+selection retain Codex and their original definition bytes without migration.
+
+Definitions can override the model with a string accepted by the chosen
+provider or gateway. Claude SDK rejects definition `reasoning-effort`; use a
+portable definition without that field when switching providers. Codex managed tool subsets and tool-free output repair retain
 their existing unsupported status. Set `repair-attempts: 0` for contracts that
 must fail validation directly into `onError` without requesting an unsupported
 repair turn.

@@ -324,3 +324,42 @@ func TestNativeProviderEnvironmentSeparatesCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeClaudeAdmissionRejectsUnsupportedOptionsBeforeLaunch(t *testing.T) {
+	runner := &Runner{Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "claude-sdk", Model: "gateway/model-alias", Command: "/must-not-launch"}}}}
+	definition := &workflows.AgentDefinition{Name: "fixture"}
+	admitted, err := runner.AdmitNativeTask(definition)
+	if err != nil || admitted.Model != "gateway/model-alias" {
+		t.Fatalf("portable definition: %+v %v", admitted, err)
+	}
+	if definition.Model != "" {
+		t.Fatal("admission mutated source definition")
+	}
+	definition.ReasoningEffort = "high"
+	if _, err := runner.AdmitNativeTask(definition); err == nil {
+		t.Fatal("Claude reasoning silently accepted")
+	}
+	_, err = runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "native", Definition: definition}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "reasoning-effort") {
+		t.Fatalf("did not reject before provider launch: %v", err)
+	}
+	definition.ReasoningEffort = ""
+	if err := runner.AdmitNativeOutput(&workflows.AgentOutputContract{Schema: map[string]any{"properties": map[string]any{"__proto__": map[string]any{"type": "string"}}}}); err == nil {
+		t.Fatal("unsupported Claude schema accepted")
+	}
+	runner.Config.Agents["native"] = Agent{Provider: "codex-app-server"}
+	if err := runner.AdmitNativeOutput(&workflows.AgentOutputContract{Format: "json", RepairAttempts: 1}); err == nil {
+		t.Fatal("unsupported Codex repair accepted")
+	}
+	if err := runner.AdmitNativeOutput(&workflows.AgentOutputContract{Format: "json"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeSessionRejectsDifferentAdmittedRuntimeRole(t *testing.T) {
+	runner := &Runner{Config: Config{AgentRuntime: "selected", Agents: map[string]Agent{"selected": {Provider: "claude-sdk"}, "other": {Provider: "claude-sdk", Command: "/must-not-launch"}}}}
+	_, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "other", Definition: &workflows.AgentDefinition{Name: "fixture"}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "runtime role binding changed") {
+		t.Fatalf("misbound native request accepted: %v", err)
+	}
+}

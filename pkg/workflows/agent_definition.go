@@ -182,6 +182,23 @@ func (e *Executor) admitAgentDefinitions(w *Workflow, path string) error {
 			if step.Uses != "agent/run" {
 				return step, nil
 			}
+			// This loader runs only for new admissions. Recovery consumes saved
+			// definitions directly, preserving historical accepted contracts.
+			if validator, ok := e.Agents.(interface {
+				AdmitNativeOutput(*AgentOutputContract) error
+			}); ok {
+				output, err := resolveNamedOutput(w, step.With["output"])
+				if err != nil {
+					return step, err
+				}
+				contract, err := ParseAgentOutputContract(output)
+				if err != nil {
+					return step, err
+				}
+				if err := validator.AdmitNativeOutput(contract); err != nil {
+					return step, err
+				}
+			}
 			load := func(reference string) (*AgentDefinition, error) {
 				if !filepath.IsAbs(reference) {
 					reference = filepath.Join(filepath.Dir(path), reference)

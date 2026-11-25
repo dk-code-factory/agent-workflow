@@ -39,7 +39,7 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 						return fmt.Errorf("agent/run requires durable step receipts")
 					}
 					if _, ok := e.Agents.(NativeTaskRunner); !ok {
-						return fmt.Errorf("agent/run requires the configured Codex runtime")
+						return fmt.Errorf("agent/run requires a configured native runtime")
 					}
 				}
 			}
@@ -101,7 +101,7 @@ func (e *Executor) preflightAgents(ctx context.Context, all map[string]*Workflow
 					set[role] = true
 				}
 				if strings.HasPrefix(step.Uses, "agent/") {
-					set[agentRole(step)] = true
+					set[e.nativeRole()] = true
 				}
 			}
 		}

@@ -77,6 +77,8 @@ export interface JobResultPreview {
 export interface WorkflowOptions {
   source: string; theme?: 'light' | 'dark' | 'system';
   tokens?: Record<`--aw-${string}`, string>;
+  /** Workspace role used for native agent/run tasks; defaults to codex. */
+  agentRuntime?: string;
   agents?: CatalogEntry[]; workflows?: WorkflowCatalogEntry[]; actions?: ActionDefinition[];
   layout?: LayoutState;
   onLayoutChange?: (layout: LayoutState) => void;

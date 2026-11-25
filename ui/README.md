@@ -118,9 +118,15 @@ host action forms. The browser validates identifier syntax and reports registrat
 availability and typed schema validation as host checks. See the
 [Go action contract](../docs/REGISTERED_ACTIONS.md) for execution and recovery.
 
+The host can pass `agentRuntime` with the workspace's selected native task role.
+Native task catalog warnings use this role, defaulting to `codex` when omitted.
+Updating this metadata refreshes warnings without editing workflow YAML. Catalog
+membership does not verify runtime authentication or provider capabilities.
+
 ```ts
 const options = {
   source: yamlSource,
+  agentRuntime: 'claude',
   agents: [{ id: 'claude', label: 'Claude' }],
   workflows: [{ id: 'workflows/classify.yml', label: 'Classifier', interface: {
     inputs: { task: { type: 'string', required: true }, retries: { type: 'number', default: 3 } },

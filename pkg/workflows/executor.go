@@ -179,7 +179,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 							return nil, fmt.Errorf("%s references unconfigured conversation agent %q", ref, role)
 						}
 					}
-					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(agentRole(s)) {
+					if strings.HasPrefix(s.Uses, "agent/") && !catalog.HasAgent(e.nativeRole()) {
 						return nil, fmt.Errorf("%s references unconfigured agent %q", ref, s.Uses)
 					}
 				}
@@ -213,6 +213,9 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 
 	all, err := e.Load(req.Ref)
 	if err != nil {
+		return nil, err
+	}
+	if err = e.discoverExecution(ctx); err != nil {
 		return nil, err
 	}
 	if err = e.preflight(ctx, all); err != nil {
@@ -851,7 +854,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	if err != nil {
 		return nil, err
 	}
-	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: agentRole(step), Definition: step.Definition, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
+	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: e.nativeRole(), Definition: step.Definition, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
 	if step.Uses != "agent/run" {
 		return nil, fmt.Errorf("only agent/run accepts native definitions")
 	}

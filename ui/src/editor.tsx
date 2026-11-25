@@ -447,7 +447,7 @@ function ReactWorkflow({ options, readOnly }: { options: WorkflowOptions; readOn
       hostSource.current = source;
       store.update({ ...next, source });
     } else store.update(next);
-  }, [store, options.source, options.theme, options.tokens, options.agents, options.workflows, options.actions, options.layout, options.validationKey, options.exportFilename, !!options.onSave, !!options.validate]);
+  }, [store, options.source, options.theme, options.tokens, options.agents, options.agentRuntime, options.workflows, options.actions, options.layout, options.validationKey, options.exportFilename, !!options.onSave, !!options.validate]);
   return <WorkflowSurface store={store} />;
 }
 export function WorkflowEditor(options: WorkflowOptions) { return <ReactWorkflow options={options} readOnly={false} />; }

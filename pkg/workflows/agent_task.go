@@ -12,7 +12,14 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
 )
 
-func agentRole(Step) string { return "codex" }
+// nativeRole is resolved from the admitted runner, never current workspace
+// configuration. Runners predating runtime selection retain Codex behavior.
+func (e *Executor) nativeRole() string {
+	if selector, ok := e.Agents.(interface{ NativeTaskRole() string }); ok {
+		return selector.NativeTaskRole()
+	}
+	return "codex"
+}
 
 type AgentTaskDispatch struct {
 	Reference string         `json:"agent"`
@@ -62,7 +69,7 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		if err != nil {
 			return nil, err
 		}
-		if worker.Definition == nil || worker.Role != "codex" || worker.SessionID == "" {
+		if worker.Definition == nil || worker.Role != request.AgentID || worker.SessionID == "" {
 			return nil, fmt.Errorf("%w: invalid agent session binding", ErrActionIntegrity)
 		}
 		if request.Workspace != "" && request.Workspace != worker.TaskWorkspace {
@@ -89,13 +96,32 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	if ec.Attempt.AgentTask != nil && ec.Attempt.AgentTask.Operation == operation && actionHash(ec.Attempt.AgentTask) != actionHash(dispatch) {
 		return nil, fmt.Errorf("%w: task dispatch inputs changed", ErrActionIntegrity)
 	}
+	// Existing dispatch messages were validated before their first enqueue.
+	// Reuse them without revalidating or replaying completed provider work.
+	if validator, ok := e.Agents.(interface {
+		ValidateNativeOutput(*AgentOutputContract) error
+	}); ok {
+		_, lookupErr := e.Workers.taskMessage(ctx, reference, operation)
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			if modelValidator, ok := e.Agents.(interface{ ValidateNativeModel(any) error }); ok {
+				if err := modelValidator.ValidateNativeModel(args["model"]); err != nil {
+					return nil, err
+				}
+			}
+			if err := validator.ValidateNativeOutput(request.Output); err != nil {
+				return nil, err
+			}
+		} else if lookupErr != nil {
+			return nil, lookupErr
+		}
+	}
 	ec.Attempt.AgentTask = dispatch
 	if err = e.Store.(Journal).RecordAttempt(ctx, *ec.Attempt); err != nil {
 		return nil, errors.Join(errStepPersistence, err)
 	}
 	e.Workers.registerTaskSecrets(owner, e.redactions(ec.Secrets))
 	fence, _ := ctx.Value(fenceKey{}).(executionFence)
-	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: "codex", StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Definition: request.Definition, Turns: request.Turns})
+	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: request.AgentID, StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Definition: request.Definition, Turns: request.Turns})
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +135,7 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 			return nil, lookupErr
 		}
 		if errors.Is(lookupErr, sql.ErrNoRows) && (worker.Status == "closed" || worker.Status == RunStatusNeedsAttention) {
-			if err = e.Workers.reopenAgentTask(ctx, owner, worker.ID); err != nil {
+			if err = e.Workers.reopenAgentTask(ctx, owner, worker.ID, request.AgentID); err != nil {
 				return nil, err
 			}
 			worker, err = e.Workers.Get(ctx, owner, worker.ID)
@@ -192,7 +218,7 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		if outcome.UnsafeFailureClass != "" && outcome.UnsafeFailureClass != "canceled" {
 			break
 		}
-		if err = e.Workers.reopenAgentTask(ctx, owner, worker.ID); err != nil {
+		if err = e.Workers.reopenAgentTask(ctx, owner, worker.ID, request.AgentID); err != nil {
 			return nil, err
 		}
 		worker, err = e.Workers.Get(ctx, owner, worker.ID)
@@ -268,7 +294,7 @@ func (e *Executor) settleAgentTask(ctx context.Context, ec expressionContext, li
 
 // Reopen only a known original session after owned work and tool effects have
 // settled. This changes no grants, state owner, definition, or remaining turns.
-func (m *WorkerManager) reopenAgentTask(ctx context.Context, run, id string) error {
+func (m *WorkerManager) reopenAgentTask(ctx context.Context, run, id, role string) error {
 	m.mu.Lock()
 	done := m.done[id]
 	m.mu.Unlock()
@@ -316,7 +342,7 @@ func (m *WorkerManager) reopenAgentTask(ctx context.Context, run, id string) err
 	if err = decodeJSONWithNumbers(raw, &worker); err != nil {
 		return err
 	}
-	if worker.Definition == nil || worker.Role != "codex" || worker.SessionID == "" {
+	if worker.Definition == nil || worker.Role != role || worker.SessionID == "" {
 		return fmt.Errorf("%w: original agent session binding is unknown", ErrActionIntegrity)
 	}
 	if worker.Status != "closed" && worker.Status != RunStatusNeedsAttention {

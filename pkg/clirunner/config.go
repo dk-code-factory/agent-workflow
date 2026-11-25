@@ -75,13 +75,17 @@ type Agent struct {
 }
 
 type Config struct {
-	Controller         operational.Config            `yaml:"controller"`
-	Execution          Execution                     `yaml:"execution"`
-	CatalogFingerprint string                        `yaml:"-"`
-	MCPServers         map[string]MCPServer          `yaml:"mcp-servers"`
-	ToolCatalog        []workflows.ToolDefinition    `yaml:"-"`
-	Publication        development.PublicationPolicy `yaml:"publication"`
-	Agents             map[string]Agent              `yaml:"agents"`
+	// NativeTaskAdmission versions fresh task checks independently of
+	// definition identity. Zero preserves historical admitted behavior.
+	NativeTaskAdmission int                           `yaml:"-" json:",omitempty"`
+	AgentRuntime        string                        `yaml:"agent-runtime,omitempty" json:",omitempty"`
+	Controller          operational.Config            `yaml:"controller"`
+	Execution           Execution                     `yaml:"execution"`
+	CatalogFingerprint  string                        `yaml:"-"`
+	MCPServers          map[string]MCPServer          `yaml:"mcp-servers"`
+	ToolCatalog         []workflows.ToolDefinition    `yaml:"-"`
+	Publication         development.PublicationPolicy `yaml:"publication"`
+	Agents              map[string]Agent              `yaml:"agents"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -164,7 +168,25 @@ func LoadConfig(path string) (Config, error) {
 	return cfg, cfg.Validate()
 }
 
+// NativeRole defaults legacy configurations and retained snapshots to Codex.
+// It does not modify the configuration or its retained representation.
+func (c Config) NativeRole() string {
+	if c.AgentRuntime == "" {
+		return "codex"
+	}
+	return c.AgentRuntime
+}
+
 func (c Config) Validate() error {
+	if c.AgentRuntime != "" {
+		role, ok := c.Agents[c.AgentRuntime]
+		if !ok {
+			return fmt.Errorf("agent-runtime references unconfigured agent %q", c.AgentRuntime)
+		}
+		if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
+			return fmt.Errorf("agent-runtime requires provider codex-app-server or claude-sdk")
+		}
+	}
 	if err := c.Controller.Validate(); err != nil {
 		return err
 	}

@@ -62,7 +62,7 @@ export class WorkflowDocument {
     } else { this.snapshot = { ...this.snapshot }; this.listeners.forEach(fn => fn()); }
     // An accepted source may already have validated the merged options. A
     // staged or context-only update still needs its own refresh.
-    if (this.epoch === validationEpoch && (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows))) void this.validate();
+    if (this.epoch === validationEpoch && (this.options.validate !== previous.validate || this.options.validationKey !== previous.validationKey || this.options.agentRuntime !== previous.agentRuntime || JSON.stringify(this.options.agents) !== JSON.stringify(previous.agents) || JSON.stringify(this.options.workflows) !== JSON.stringify(previous.workflows))) void this.validate();
   }
   /** @internal Invalidates renderer ownership after arbitrary source/history or structural edits. */
   getInspectorGeneration = () => this.inspectorGeneration;
@@ -614,7 +614,7 @@ export class WorkflowDocument {
       if (job.uses && this.options.workflows && !this.options.workflows.some(item => item.id.replace(/^\.\//, '') === job.uses!.replace(/^\.\//, ''))) diagnostics.push({ code: 'workflow-catalog', message: `Workflow ${job.uses} is unavailable in the host catalog`, path: ['jobs', id, 'uses'], source: 'host', severity: 'warning' });
       stepEntries(job.steps).forEach(({ step, path }) => {
         for (const [index, role] of (step.conversation ?? []).entries()) if (this.options.agents && !this.options.agents.some(agent => agent.id === role)) diagnostics.push({ code: 'agent-catalog', message: `Agent ${role} is unavailable in the host catalog`, path: ['jobs', id, ...path, 'conversation', index], source: 'host', severity: 'warning' });
-        if (stepAction(step) === 'agent/run' && this.options.agents && !this.options.agents.some(a => a.id === 'codex')) diagnostics.push({ code: 'agent-catalog', message: `Agent ${stepAction(step)} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
+        if (stepAction(step) === 'agent/run' && this.options.agents && !this.options.agents.some(a => a.id === (this.options.agentRuntime ?? 'codex'))) diagnostics.push({ code: 'agent-catalog', message: `Native runtime ${this.options.agentRuntime ?? 'codex'} is unavailable in the host catalog`, path: ['jobs', id, ...path, Object.hasOwn(step, 'agent') ? 'agent' : 'uses'], source: 'host', severity: 'warning' });
       });
     }
     this.snapshot = { ...this.snapshot, diagnostics: [...this.parsed.diagnostics, ...diagnostics], validating: !!this.options.validate }; this.emit();

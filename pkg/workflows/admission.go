@@ -28,6 +28,9 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = e.discoverExecution(ctx); err != nil {
+		return nil, err
+	}
 	if err = e.preflight(ctx, all); err != nil {
 		return nil, err
 	}
