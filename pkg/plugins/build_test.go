@@ -238,6 +238,56 @@ func TestBuildSkillRemappingDoesNotDependOnSourceOrder(t *testing.T) {
 	}
 }
 
+func TestBuildImportedStandaloneRootHelpersRoundTrip(t *testing.T) {
+	source, _ := rootHelperCaptureFixture(t)
+	output := filepath.Join(t.TempDir(), "distribution")
+	result, err := Build(source, output, []string{"codex", "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := filepath.Join(t.TempDir(), "installed with spaces")
+	extractBuild(t, filepath.Join(output, result.Archive), extracted)
+	root := filepath.Join(extracted, "demo/plugins/demo")
+	installed, err := Capture(root)
+	if err != nil || installed.Digest() != result.PackageDigest {
+		t.Fatal("imported root helpers changed runtime identity after extraction", err)
+	}
+	prefix := "imports/demo/workflows"
+	var helperPaths []string
+	for _, entry := range installed.Manifest().Entries {
+		if entry.Path == "." {
+			t.Fatal("structural installation root entered payload")
+		}
+		if entry.Path == prefix || strings.HasPrefix(entry.Path, prefix+"/") {
+			helperPaths = append(helperPaths, entry.Path)
+			wantMode := uint32(0644)
+			if entry.Kind == "directory" || strings.HasSuffix(entry.Path, "/run.sh") {
+				wantMode = 0755
+			}
+			if entry.Mode != wantMode {
+				t.Fatalf("wrong normalized imported mode: %+v", entry)
+			}
+		}
+	}
+	want := []string{prefix, prefix + "/helpers", prefix + "/helpers/empty", prefix + "/helpers/run.sh", prefix + "/main.yml"}
+	if !reflect.DeepEqual(helperPaths, want) {
+		t.Fatalf("root helper closure lost children or acquired transport metadata: %v", helperPaths)
+	}
+	before, _ := os.ReadFile(filepath.Join(source, prefix, "main.yml"))
+	after, err := installed.ReadFile(prefix + "/main.yml")
+	if err != nil || !bytes.Equal(before, after) || !bytes.Contains(after, []byte("files: [.]")) {
+		t.Fatalf("rewrote imported helper declaration: %s %v", after, err)
+	}
+	if err := os.Chmod(root, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0755) })
+	readonly, err := Capture(root)
+	if err != nil || readonly.Digest() != result.PackageDigest {
+		t.Fatal("transport root permissions changed extracted payload identity", err)
+	}
+}
+
 func TestBuildRejectsIncompleteOrCollidingOutput(t *testing.T) {
 	for _, scenario := range []string{"missing", "native", "metadata", "manifest", "other host manifest", "bootstrap", "ancestor", "case", "discovery", "targets", "duplicate targets", "engine prerelease", "line break", "marketplace collision"} {
 		t.Run(scenario, func(t *testing.T) {
