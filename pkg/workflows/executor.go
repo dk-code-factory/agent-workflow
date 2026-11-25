@@ -72,6 +72,9 @@ type Executor struct {
 	applicationActions map[string]*registeredAction
 	actionContracts    map[string]ActionContract
 	ActionFactory      func(json.RawMessage) (ActionRunner, error)
+	DefinitionRoot     string
+	packageBinding     *PackageBinding
+	packageFiles       map[string]AssetInput
 	WorkspaceDir       string
 	DefinitionsDir     string
 	Agents             AgentRunner
@@ -83,6 +86,8 @@ type Executor struct {
 }
 
 type RunRequest struct {
+	Package           *PackageSource
+	packageBinding    *PackageBinding
 	TaskGroup         string
 	credentialAliases map[string]string
 	Execution         runtimeexec.Policy
@@ -110,7 +115,7 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if depth > maxReusableWorkflowDepth {
 			return fmt.Errorf("reusable workflow depth exceeds %d", maxReusableWorkflowDepth)
 		}
-		resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
+		resolved, err := (Resolver{WorkspaceDir: e.sourceRoot(), DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
 		if err != nil {
 			return err
 		}
@@ -121,14 +126,24 @@ func (e *Executor) Load(ref string) (map[string]*Workflow, error) {
 		if all[ref] != nil {
 			return nil
 		}
-		f, err := os.Open(resolved.Path)
-		if err != nil {
-			return err
-		}
-		data, readErr := readDefinition(f)
-		_ = f.Close()
-		if readErr != nil {
-			return readErr
+		var data []byte
+		if e.packageFiles != nil {
+			entry, ok := e.packageFiles[ref]
+			if !ok || entry.Mode.IsDir() {
+				return fmt.Errorf("workflow %s is absent from captured package", ref)
+			}
+			data = entry.Data
+		} else {
+			f, err := os.Open(resolved.Path)
+			if err != nil {
+				return err
+			}
+			var readErr error
+			data, readErr = readDefinition(f)
+			_ = f.Close()
+			if readErr != nil {
+				return readErr
+			}
 		}
 		w, err := Parse(data)
 		if err != nil {
@@ -211,6 +226,12 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 		e.Store = redactedStore{Journal: j, secrets: e.redactions(req.Secrets)}
 	}
 
+	if err := e.pinPackage(ctx, req.Package); err != nil {
+		return nil, err
+	}
+	if e.packageBinding != nil && req.Ref != e.packageBinding.Workflow {
+		return nil, fmt.Errorf("package workflow binding changed")
+	}
 	all, err := e.Load(req.Ref)
 	if err != nil {
 		return nil, err
@@ -254,6 +275,7 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 }
 
 func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all map[string]*Workflow, slots chan struct{}, depth int, existing *Run) (*Run, error) {
+	req.packageBinding = e.packageBinding
 	if depth > maxReusableWorkflowDepth {
 		return nil, fmt.Errorf("reusable workflow depth exceeds %d", maxReusableWorkflowDepth)
 	}
@@ -264,7 +286,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 		}
 	}
 	if depth == 0 {
-		e.executionFingerprint = admittedFingerprint(all, e.Roles, req.Execution)
+		e.executionFingerprint = admittedFingerprint(all, e.Roles, req.Execution, e.packageBinding)
 	}
 	ctx = context.WithValue(ctx, definitionKey{}, ref)
 	if req.credentialAliases == nil {
@@ -438,7 +460,7 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 	if w.On.WorkflowCall != nil && runErr == nil && run.Status == RunStatusSucceeded {
 		run.Outputs = map[string]any{}
 		for key, output := range w.On.WorkflowCall.Outputs {
-			value, err := renderString(output.Value, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Jobs: run.Jobs})
+			value, err := renderString(output.Value, expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Jobs: run.Jobs})
 			if err != nil {
 				runErr = err
 				run.Status = RunStatusFailed
@@ -544,7 +566,7 @@ func (e *Executor) executeJob(ctx context.Context, id string, job Job, inputs ma
 		if job.Repeat == nil || result.Status != RunStatusSucceeded {
 			return result
 		}
-		allowed, err := evalIf(job.Repeat.Until, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: result.Steps, Iteration: map[string]any{"number": iteration, "previous": previous, "outputs": result.Outputs, "status": result.Status}})
+		allowed, err := evalIf(job.Repeat.Until, expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: result.Steps, Iteration: map[string]any{"number": iteration, "previous": previous, "outputs": result.Outputs, "status": result.Status}})
 		if err != nil {
 			result.Status = executionFailureStatus(ctx, err)
 			result.FailureClass = classifyFailure(err)
@@ -585,7 +607,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		out.FailureClass = classifyFailure(err)
 		return out
 	}
-	ec := expressionContext{CredentialAliases: req.credentialAliases, Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
+	ec := expressionContext{Package: e.packageContext(), CredentialAliases: req.credentialAliases, Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Steps: out.Steps, Metadata: req.Metadata, RunID: req.runID, JobID: id, Ordered: req.ordered, IterationNumber: req.iteration, Iteration: map[string]any{"number": req.iteration, "previous": previous}}
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
@@ -619,7 +641,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 	if req.iteration == 1 && job.Repeat != nil && job.Repeat.MaxAttemptsExpression != "" {
 		// Resolve only admitted jobs, before their first body dispatch. Skipped
 		// or canceled jobs may have no dependency output or a disabled bound.
-		limit, err := resolveInteger(job.Repeat.MaxAttemptsExpression, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}, 1, 100)
+		limit, err := resolveInteger(job.Repeat.MaxAttemptsExpression, expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}, 1, 100)
 		if err == nil {
 			journal := iterationJournal(e.Store)
 			if journal == nil {
@@ -1010,8 +1032,11 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 			return nil, err
 		}
 	}
+	if err := e.restorePackage(ctx, run.ID, snap); err != nil {
+		return nil, err
+	}
 	e.CommandExecution = snap.Execution
-	e.executionFingerprint = admittedFingerprint(snap.Definitions, snap.Roles, snap.Execution)
+	e.executionFingerprint = admittedFingerprint(snap.Definitions, snap.Roles, snap.Execution, snap.Package)
 	if origin := nativeString(snap.Metadata, "origin_run_id"); origin != "" && origin != run.ID {
 		return nil, fmt.Errorf("resume originating run %s", origin)
 	}

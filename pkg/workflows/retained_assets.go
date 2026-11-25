@@ -15,6 +15,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/dk-code-factory/agent-workflow/internal/ownership"
+
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -490,4 +492,45 @@ func removeOwnedAssetDirectory(directory string, expected fs.FileInfo) error {
 	// Remove only the empty outer directory by pathname; recursive removal is
 	// anchored to the original descriptor above, even if that path is replaced.
 	return os.Remove(directory)
+}
+
+// RemoveRetainedAssetOrigin removes one already-retiring origin's owned tree,
+// including read-only materializations. The caller journals this removal in the
+// existing retention plan before invoking it. Descriptor-relative cleanup never
+// follows replaced paths or child symlinks when changing directory permissions.
+func (s *SQLiteStore) RemoveRetainedAssetOrigin(ctx context.Context, origin string, owner *ownership.Lock) error {
+	if !owner.Holds(s.Dir) || len(origin) != 32 || !hexID(origin) {
+		return fmt.Errorf("asset retention requires exclusive owned origin")
+	}
+	plan, err := s.Retention(ctx, origin)
+	if err != nil {
+		return err
+	}
+	directory := filepath.Join(s.Dir, "assets", origin)
+	if plan.State != "removing" {
+		return fmt.Errorf("asset origin has no active retention removal")
+	}
+	admitted := false
+	for _, removal := range plan.Removals {
+		if removal.Kind == "directory" && removal.Path == directory && removal.State == "removing" {
+			admitted = true
+		}
+	}
+	if !admitted {
+		return fmt.Errorf("asset origin removal is not journaled")
+	}
+	if _, err := s.OriginRuns(ctx, origin); err != nil {
+		return err
+	}
+	if err := s.checkAssetAncestors(filepath.Dir(directory)); err != nil {
+		return err
+	}
+	info, err := os.Lstat(directory)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return removeOwnedAssetDirectory(directory, info)
 }

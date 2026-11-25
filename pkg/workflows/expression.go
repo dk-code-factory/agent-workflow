@@ -16,6 +16,7 @@ var (
 )
 
 type expressionContext struct {
+	Package           map[string]any
 	CredentialAliases map[string]string
 	Hook              bool
 	NoShellEvent      bool
@@ -262,6 +263,8 @@ func lookupPath(path string, ctx expressionContext) (any, error) {
 		cur = ctx.Item
 	case "iteration":
 		cur = ctx.Iteration
+	case "package":
+		cur = ctx.Package
 	case "inputs":
 		cur = ctx.Inputs
 	case "private":

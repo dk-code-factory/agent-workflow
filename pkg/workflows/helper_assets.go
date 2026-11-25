@@ -470,7 +470,7 @@ func (s *SQLiteStore) linkHelperAssets(ctx context.Context, tx *sql.Tx, r *Run, 
 			return err
 		}
 	}
-	return nil
+	return s.linkPackageAssets(ctx, tx, r, snap)
 }
 func (s *SQLiteStore) verifyRunHelperAssets(ctx context.Context, run string, snap Snapshot) error {
 	for _, bundle := range helperBundles(snap.Definitions) {
@@ -600,7 +600,7 @@ func (e *Executor) pinHelperBundles(ctx context.Context, all map[string]*Workflo
 			if p.Bundle != nil {
 				return store.VerifyHelperBundle(p.Bundle)
 			}
-			resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
+			resolved, err := (Resolver{WorkspaceDir: e.sourceRoot(), DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
 			if err != nil {
 				return err
 			}

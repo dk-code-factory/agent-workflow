@@ -42,6 +42,11 @@ native CI and release packaging all use this same check.
 Node 22+ and selected native provider CLIs remain explicit prerequisites.
 `agent-workflow bridge setup` installs only locked npm dependencies with lifecycle
 scripts disabled. It never installs/updates provider CLIs or refreshes login.
+Generated packages share the maintained Python bootstrap described in the
+[authoring contract](PLUGIN_AUTHORING.md#shared-verified-bootstrap). Its explicit
+`ensure --claude-bridge` setup uses a separately receipted writable cache; the
+verified engine tree stays unchanged. The built-in four instruction-only skills
+retain their existing version and Codex compatibility requirements.
 
 ```sh
 python3 scripts/build-release.py --smoke

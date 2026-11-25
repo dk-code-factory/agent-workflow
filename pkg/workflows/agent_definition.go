@@ -203,7 +203,18 @@ func (e *Executor) admitAgentDefinitions(w *Workflow, path string) error {
 				if !filepath.IsAbs(reference) {
 					reference = filepath.Join(filepath.Dir(path), reference)
 				}
-				definition, err := LoadAgentDefinition(reference)
+				if e.DefinitionRoot != "" {
+					if !workflowPathStrictlyInside(e.DefinitionRoot, reference) {
+						return nil, fmt.Errorf("package agent definition escapes source root")
+					}
+				}
+				var definition *AgentDefinition
+				var err error
+				if e.packageFiles != nil {
+					definition, err = e.capturedAgent(reference)
+				} else {
+					definition, err = LoadAgentDefinition(reference)
+				}
 				if err == nil {
 					if runner, ok := e.Agents.(NativeTaskRunner); ok {
 						definition, err = runner.AdmitNativeTask(definition)

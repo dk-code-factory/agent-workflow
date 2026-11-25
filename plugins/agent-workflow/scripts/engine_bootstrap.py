@@ -35,6 +35,7 @@ WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 HELPERS = ("agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance")
+BRIDGE_FILES = ("bridge.mjs", "package.json", "package-lock.json")
 
 
 class InstallError(Exception):
@@ -274,11 +275,83 @@ def ensure(cache, version, goos, arch, candidate=None, expected=None):
         return cached(path, version, goos, arch, mode)
 
 
+def bridge_tree_identity(root):
+    """Allow npm's relative bin links only when their targets stay in this cache."""
+    identity = {}
+    for path in sorted(root.rglob("*")):
+        name = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            target = os.readlink(path)
+            require(not Path(target).is_absolute() and path.resolve(strict=True).is_relative_to(root.resolve()),
+                    "Claude bridge cache link escapes its installation.")
+            identity[name] = ["symlink", target]
+        elif path.is_file():
+            identity[name] = [digest(path), stat.S_IMODE(path.stat().st_mode)]
+        else:
+            require(path.is_dir(), "Claude bridge cache contains a special file.")
+    return identity
+
+
+def setup_claude_bridge(distribution, cache):
+    """Explicit setup only: npm writes to a separate cache, never the verified engine."""
+    engine_receipt = distribution.parent / "receipt.json"
+    require(not engine_receipt.is_symlink(), "Verified engine receipt must not be a symlink.")
+    engine = json.loads(engine_receipt.read_text())
+    require(engine.get("mode") in ("uncertified-candidate", "release") and HEX.fullmatch(engine.get("archive_sha256", ""))
+            and isinstance(engine.get("build"), dict), "Verified engine receipt unavailable for Claude bridge setup.")
+    source = distribution / "bridge" / "claude"
+    captured = {}
+    for name in BRIDGE_FILES:
+        path = source / name
+        require(path.is_file() and not path.is_symlink(), "Locked Claude bridge source unavailable: " + name)
+        captured[name] = path.read_bytes()
+    # Candidate setup must never seed a certified engine's dependency cache,
+    # even when the archive contains identical locked bridge sources.
+    identity = hashlib.sha256(json.dumps({"engine": {key: engine[key] for key in ("mode", "archive_sha256", "build")},
+                                         "sources": {name: hashlib.sha256(data).hexdigest()
+                                                     for name, data in captured.items()}}, sort_keys=True).encode()).hexdigest()
+    destination = cache / "bridges" / identity
+    with locked(cache):
+        require(not any(path.is_symlink() for path in (destination, *destination.parents)),
+                "Claude bridge cache paths must not contain symlinks.")
+        if destination.exists():
+            require(not (destination / "receipt.json").is_symlink() and not (destination / "bridge").is_symlink(),
+                    "Claude bridge receipt/root must not be a symlink.")
+            receipt = json.loads((destination / "receipt.json").read_text())
+            require(receipt.get("source_identity") == identity and bridge_tree_identity(destination / "bridge") == receipt.get("files"),
+                    "Cached Claude bridge is corrupt; remove its cache directory and rerun explicit setup.")
+            return destination / "bridge" / "bridge.mjs"
+        # Only private, incomplete bridge stages are replaced on explicit setup.
+        for stale in cache.glob(".bridge-*"):
+            require(stale.is_dir() and not stale.is_symlink(), "Unsafe Claude bridge staging path.")
+            shutil.rmtree(stale)
+        with tempfile.TemporaryDirectory(prefix=".bridge-", dir=cache) as temporary:
+            stage = Path(temporary)
+            bridge = stage / "bridge"
+            bridge.mkdir(mode=0o700)
+            for name, data in captured.items():
+                (bridge / name).write_bytes(data)
+            command([str(distribution / "agent-workflow"), "bridge", "setup", "--directory", str(bridge)])
+            # Existing bridge setup verifies the pinned SDK and uses locked npm ci
+            # with lifecycle scripts disabled. It never changes credentials/config.
+            require(all((bridge / name).read_bytes() == data for name, data in captured.items()),
+                    "Claude bridge setup changed locked source files.")
+            sdk = json.loads((bridge / "node_modules/@anthropic-ai/claude-agent-sdk/package.json").read_text())
+            expected_sdk = json.loads(captured["package.json"])["dependencies"]["@anthropic-ai/claude-agent-sdk"]
+            require(sdk.get("version") == expected_sdk, "Claude bridge setup installed a different SDK version.")
+            receipt = {"source_identity": identity, "files": bridge_tree_identity(bridge)}
+            (stage / "receipt.json").write_text(json.dumps(receipt, sort_keys=True) + "\n")
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            stage.rename(destination)
+        return destination / "bridge" / "bridge.mjs"
+
+
 def main(package_root, argv=None, *, builtin=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=["check", "ensure", "exec"])
     parser.add_argument("--candidate-archive", type=Path, help="explicit local uncertified archive; never used for release fallback")
     parser.add_argument("--sha256", help="required expected digest with --candidate-archive")
+    parser.add_argument("--claude-bridge", action="store_true", help="ensure only: explicitly install locked bridge dependencies into a separate writable cache")
     # Split at -- so engine flags are never interpreted as installer options.
     args = list(sys.argv[1:] if argv is None else argv)
     split = args.index("--") if "--" in args else len(args)
@@ -291,6 +364,7 @@ def main(package_root, argv=None, *, builtin=False):
         require(bool(opts.candidate_archive) == bool(opts.sha256), "Candidate mode requires both --candidate-archive and --sha256.")
         require(opts.operation == "exec" or not engine_args, "Engine arguments require exec --.")
         require(opts.operation != "exec" or bool(engine_args), "Supply exec -- <engine arguments>.")
+        require(not opts.claude_bridge or opts.operation == "ensure", "Claude bridge setup requires explicit ensure --claude-bridge.")
         cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "agent-workflow"
         if opts.operation == "check":
             require(not opts.candidate_archive, "check is read-only; use ensure for candidate installation.")
@@ -303,7 +377,10 @@ def main(package_root, argv=None, *, builtin=False):
         if opts.candidate_archive:
             print("agent-workflow: UNCERTIFIED CANDIDATE installation", file=sys.stderr)
         if opts.operation == "ensure":
-            print(json.dumps({"distribution": str(root), "certified_release": not bool(opts.candidate_archive)}))
+            result = {"distribution": str(root), "certified_release": not bool(opts.candidate_archive)}
+            if opts.claude_bridge:
+                result["claude_bridge"] = str(setup_claude_bridge(root, cache))
+            print(json.dumps(result))
             return 0
         # Replace this process to preserve signals, stdout/stderr and exact engine exit status.
         executable = str(root / "agent-workflow")

@@ -57,7 +57,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return agentCommand(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "plugin" {
-		return pluginCommand(args[1:], stdout, stderr)
+		return pluginCommand(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "bridge" {
 		return bridgeSetup(ctx, args[1:], stdout, stderr)
@@ -75,6 +75,9 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	packaged := fs.Bool("packaged", false, "select a skill from --plugin-root")
+	pluginRoot := fs.String("plugin-root", "", "immutable package root; positional argument selects its skill")
+	admittedRun := fs.String("admitted-run", "", "controller recovery bootstrap from an existing admission; fresh launches are disabled")
 	workspace := fs.String("workspace", ".", "workspace containing workflows/")
 	configPath := fs.String("config", "agents.yml", "role configuration relative to workspace")
 	parallel := fs.Int("parallel", 4, "maximum active executions across jobs and runs")
@@ -110,7 +113,8 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		return err
 	}
-	noArg := verb == "list" || verb == "controller" || verb == "doctor" || verb == "init" || verb == "mcp" || verb == "stop" || verb == "worker"
+	requestStatus := verb == "status" && *workerRequest != ""
+	noArg := requestStatus || verb == "list" || verb == "controller" || verb == "doctor" || verb == "init" || verb == "mcp" || verb == "stop" || verb == "worker"
 	if (noArg && fs.NArg() != 0) || (!noArg && fs.NArg() != 1) {
 		return fmt.Errorf("%s: incorrect argument count; flags must precede arguments", verb)
 	}
@@ -133,6 +137,15 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err := workflows.ValidateTaskGroup(*taskGroup); err != nil {
 			return err
 		}
+	}
+	if *packaged && *pluginRoot == "" {
+		return fmt.Errorf("plugin run requires --plugin-root")
+	}
+	if *admittedRun != "" && verb != "controller" {
+		return fmt.Errorf("admitted-run is only valid for controller recovery bootstrap")
+	}
+	if (*pluginRoot != "" || *packaged) && (verb != "run" || *foreground || *workerRequest == "") {
+		return fmt.Errorf("plugin run requires --request-id and durable controller execution")
 	}
 	root, err := filepath.Abs(*workspace)
 	if err != nil {
@@ -218,6 +231,16 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 			return err
 		}
 		defer store.Close()
+		if requestStatus {
+			if len(*workerRequest) > 128 {
+				return fmt.Errorf("request-id exceeds 128 bytes")
+			}
+			run, _, err := store.AdmissionRequest(ctx, *workerRequest)
+			if err != nil {
+				return fmt.Errorf("admission request %q unavailable: %w", *workerRequest, err)
+			}
+			return encode(run)
+		}
 		switch verb {
 		case "task-state":
 			v, err := store.InspectTaskState(ctx, id)
@@ -348,8 +371,17 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
-	cfg, err := clirunner.LoadConfig(path)
-	if err != nil && !os.IsNotExist(err) {
+	retainedRun := *admittedRun
+	if verb == "resume" {
+		retainedRun = id
+	}
+	var cfg clirunner.Config
+	if retainedRun != "" {
+		cfg, err = retainedControllerConfig(ctx, dir, retainedRun)
+	} else {
+		cfg, err = clirunner.LoadConfig(path)
+	}
+	if err != nil && (retainedRun != "" || !os.IsNotExist(err)) {
 		return err
 	}
 	roles, err := json.Marshal(cfg)
@@ -405,7 +437,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if *controllerRunTimeout > 0 {
 			runTimeout = *controllerRunTimeout
 		}
-		return (&controller.Server{Executor: executor, Store: store, Dir: dir, Workers: workers, Operational: cfg.Controller, Logger: logger, MaxQueued: cfg.Controller.MaxQueued, MaxRuns: cfg.Controller.MaxRuns, RunTimeout: runTimeout}).Serve(ctx)
+		return (&controller.Server{RecoveryOnly: retainedRun != "", Executor: executor, Store: store, Dir: dir, Workers: workers, Operational: cfg.Controller, Logger: logger, MaxQueued: cfg.Controller.MaxQueued, MaxRuns: cfg.Controller.MaxRuns, RunTimeout: runTimeout}).Serve(ctx)
 	}
 	if verb == "mcp" {
 		if err = ensureController(ctx, controller.NewClient(dir), root, path, *parallel, stderr); err != nil {
@@ -496,7 +528,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	client := controller.NewClient(dir)
 	if verb == "run" || verb == "resume" {
-		if err = ensureController(ctx, client, root, path, *parallel, stderr); err != nil {
+		if err = ensureController(ctx, client, root, path, *parallel, stderr, retainedRun); err != nil {
 			return err
 		}
 	}
@@ -542,6 +574,14 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		req, err := parseStart(id, inputFlags, secretFlags)
 		if err != nil {
 			return err
+		}
+		if *pluginRoot != "" {
+			packagePath, err := filepath.Abs(*pluginRoot)
+			if err != nil {
+				return err
+			}
+			req.Package = &controller.PackageRequest{Root: packagePath, Skill: id}
+			req.Ref = ""
 		}
 		req.RequestID = *workerRequest
 		req.TaskGroup = *taskGroup
@@ -635,12 +675,38 @@ func pause(ctx context.Context, d time.Duration) error {
 		return nil
 	}
 }
-func ensureController(ctx context.Context, c *controller.Client, root, path string, parallel int, stderr io.Writer) error {
+func retainedControllerConfig(ctx context.Context, dir, run string) (clirunner.Config, error) {
+	var cfg clirunner.Config
+	if len(run) != 32 || strings.Trim(run, "0123456789abcdef") != "" {
+		return cfg, fmt.Errorf("invalid admitted run id")
+	}
+	store, err := workflows.OpenSQLiteInspection(dir)
+	if err != nil {
+		return cfg, err
+	}
+	defer store.Close()
+	_, snapshot, err := store.Load(ctx, run)
+	if err != nil {
+		return cfg, err
+	}
+	if len(snapshot.Roles) == 0 {
+		return cfg, fmt.Errorf("admitted runtime settings unavailable")
+	}
+	err = json.Unmarshal(snapshot.Roles, &cfg)
+	return cfg, err
+}
+
+func ensureController(ctx context.Context, c *controller.Client, root, path string, parallel int, stderr io.Writer, retained ...string) error {
 	var health struct {
 		RolesHash string `json:"roles_hash"`
 		Parallel  int    `json:"parallel"`
 	}
 	if c.Call(ctx, "GET", "/health", nil, &health) == nil {
+		// A retained resume restores its own Roles; current workspace settings
+		// cannot reselect the runtime or block a healthy controller's recovery.
+		if len(retained) > 0 && retained[0] != "" {
+			return nil
+		}
 		cfg, err := clirunner.LoadConfig(path)
 		if err != nil && !os.IsNotExist(err) {
 			return err
@@ -668,7 +734,11 @@ func ensureController(ctx context.Context, c *controller.Client, root, path stri
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(executable, "controller", "--workspace", root, "--config", path, "--parallel", fmt.Sprint(parallel))
+	args := []string{"controller", "--workspace", root, "--config", path, "--parallel", fmt.Sprint(parallel)}
+	if len(retained) > 0 && retained[0] != "" {
+		args = append(args, "--admitted-run", retained[0])
+	}
+	cmd := exec.Command(executable, args...)
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.Stdin = nil

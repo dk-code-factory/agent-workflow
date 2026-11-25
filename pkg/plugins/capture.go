@@ -84,6 +84,13 @@ func newCapturedPackage(descriptor *Descriptor, captured *collector) (*CapturedP
 	// This struct contains only integers, strings and slices, so encoding cannot
 	// fail. Its field order and JSON tags define the version-1 digest encoding.
 	encoded, _ := json.Marshal(p.manifest)
+	entries := make([]workflows.AssetEntry, 0, len(p.manifest.Entries))
+	for _, entry := range p.manifest.Entries {
+		entries = append(entries, workflows.AssetEntry{Path: entry.Path, Kind: entry.Kind, Mode: entry.Mode, Size: entry.Size, SHA256: entry.SHA256})
+	}
+	if err := workflows.ValidateAssetEntries(entries); err != nil {
+		return nil, err
+	}
 	hash := sha256.Sum256(encoded)
 	p.digest = hex.EncodeToString(hash[:])
 	return p, nil
@@ -122,6 +129,22 @@ func (p *CapturedPackage) Manifest() PackageManifest {
 // Raw descriptor and skill bytes participate through their file digests, so
 // metadata edits change identity even when their parsed meaning is unchanged.
 func (p *CapturedPackage) Digest() string { return p.digest }
+
+// Admission adapts this exact validated capture to provider-neutral engine data.
+// It never rewalks the installation or reuses a digest for transformed files.
+func (p *CapturedPackage) Admission(name string) (*workflows.PackageSource, error) {
+	skill, err := p.Binding(name)
+	if err != nil {
+		return nil, err
+	}
+	d := p.descriptor
+	out := &workflows.PackageSource{Binding: workflows.PackageBinding{Version: 1, Name: d.Name, PackageVersion: d.Version, EngineVersion: d.EngineVersion, Skill: skill.Name, Workflow: skill.Workflow, Digest: p.digest}}
+	for _, entry := range p.manifest.Entries {
+		source := p.files[entry.Path]
+		out.Entries = append(out.Entries, workflows.AssetInput{Path: entry.Path, Mode: source.mode, Data: bytes.Clone(source.data)})
+	}
+	return out, nil
+}
 
 // ReadFile returns a copy of a declared file's captured bytes. It never reads the
 // installation; directories and undeclared or escaping paths are rejected.

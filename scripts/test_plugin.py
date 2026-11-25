@@ -49,6 +49,8 @@ class InstallerTests(unittest.TestCase):
         executable_build = build if executable_build is None else executable_build
         files = {"build.json": (json.dumps(build).encode(), 0o644),
                  "docs/distribution.txt": (b"complete distribution", 0o644)}
+        for name in launcher.BRIDGE_FILES:
+            files["bridge/claude/" + name] = ((ROOT / "bridge/claude" / name).read_bytes(), 0o644)
         engine_body = engine_body or "print('engine stdout'); print('engine stderr',file=sys.stderr); sys.exit(7)"
         code = ("#!" + sys.executable + "\nimport json,sys\n"
                 "if sys.argv[1:] == ['version']: print(" + repr(json.dumps(executable_build)) + ")\n"
@@ -369,6 +371,78 @@ class InstallerTests(unittest.TestCase):
                                              (VERSION, self.os, self.arch, "../candidate")):
             with self.subTest(version=version, system=system, arch=arch, digest=digest), self.assertRaises(launcher.InstallError):
                 launcher.installation_path(self.cache, version, system, arch, digest)
+
+    def fake_bridge_setup(self, arguments):
+        self.assertEqual(arguments[1:4], ["bridge", "setup", "--directory"])
+        bridge = Path(arguments[4])
+        package = bridge / "node_modules/@anthropic-ai/claude-agent-sdk"
+        package.mkdir(parents=True)
+        expected = json.loads((bridge / "package.json").read_text())["dependencies"]["@anthropic-ai/claude-agent-sdk"]
+        (package / "package.json").write_text(json.dumps({"version": expected}))
+        (package / "cli.js").write_text("// locked SDK fixture\n")
+        bins = bridge / "node_modules/.bin"
+        bins.mkdir()
+        (bins / "sdk").symlink_to("../@anthropic-ai/claude-agent-sdk/cli.js")
+        return ""
+
+    def test_explicit_bridge_setup_preserves_verified_distribution_and_is_cached(self):
+        distribution = self.candidate()
+        before = launcher.tree_identity(distribution)
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup) as setup:
+            bridge = launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertEqual(setup.call_count, 1)
+        self.assertTrue(bridge.is_relative_to(self.cache / "bridges"))
+        self.assertEqual(launcher.tree_identity(distribution), before)
+        self.assertEqual(self.candidate(), distribution)
+        with patch.object(launcher, "command", side_effect=AssertionError("cached setup must be offline")):
+            self.assertEqual(launcher.setup_claude_bridge(distribution, self.cache), bridge)
+        (bridge.parent / "node_modules/@anthropic-ai/claude-agent-sdk/cli.js").write_text("corrupt")
+        with patch.object(launcher, "command", side_effect=AssertionError("must not silently reinstall")), self.assertRaisesRegex(launcher.InstallError, "corrupt"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+
+    def test_bridge_setup_interruption_and_escaping_links_never_publish_cache(self):
+        distribution = self.candidate()
+        with patch.object(launcher, "command", side_effect=launcher.InstallError("setup interrupted")), self.assertRaisesRegex(launcher.InstallError, "interrupted"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse(list(self.cache.glob(".bridge-*")))
+        outside = self.root / "outside"
+        outside.write_text("untouched")
+        def setup_with_link(arguments):
+            self.fake_bridge_setup(arguments)
+            (Path(arguments[4]) / "outside").symlink_to(outside)
+            return ""
+        with patch.object(launcher, "command", side_effect=setup_with_link), self.assertRaisesRegex(launcher.InstallError, "escapes"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse(list(self.cache.glob(".bridge-*")))
+        self.assertFalse((self.cache / "bridges").exists())
+        self.assertEqual(outside.read_text(), "untouched")
+
+    def test_bridge_cache_isolates_engine_receipt_and_candidate_authority(self):
+        candidate = self.candidate()
+        other = self.root / "verified-release"
+        shutil.copytree(candidate.parent, other)
+        receipt_path = other / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["mode"] = "release"
+        receipt_path.write_text(json.dumps(receipt))
+        # The setup caller has already verified the selected engine receipt;
+        # this fixture changes only that receipt's release/candidate binding.
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup) as setup:
+            candidate_bridge = launcher.setup_claude_bridge(candidate, self.cache)
+            release_bridge = launcher.setup_claude_bridge(other / "distribution", self.cache)
+        self.assertEqual(setup.call_count, 2)
+        self.assertNotEqual(candidate_bridge, release_bridge)
+        (candidate_bridge.parent / "node_modules/@anthropic-ai/claude-agent-sdk/cli.js").write_text("candidate mutation")
+        with patch.object(launcher, "command", side_effect=AssertionError("verified release cache must remain offline")):
+            self.assertEqual(launcher.setup_claude_bridge(other / "distribution", self.cache), release_bridge)
+
+    def test_bridge_dependency_setup_is_never_an_execution_side_effect(self):
+        root, _, _ = self.generic_package()
+        with patch.object(launcher, "prerequisites"), patch.object(launcher.sys, "stderr", new_callable=io.StringIO), \
+                patch.object(launcher, "ensure", side_effect=AssertionError("invalid operation must not install")), \
+                patch.object(launcher, "setup_claude_bridge", side_effect=AssertionError("must not setup on exec/check")):
+            self.assertEqual(launcher.main(root, ["exec", "--claude-bridge", "--", "version"]), 1)
+            self.assertEqual(launcher.main(root, ["check", "--claude-bridge"]), 1)
 
 
 class PackageTests(unittest.TestCase):

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/plugins"
 )
 
-func pluginCommand(args []string, stdout, stderr io.Writer) error {
+func pluginCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow plugin <init|add-skill> [flags] NAME\n\ninit [--workflow FILE] NAME\nadd-skill --plugin DIR --workflow FILE NAME\n\nFlags precede positional arguments. Scaffolding is offline.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow plugin <init|add-skill|run> [flags] NAME\n\ninit [--workflow FILE] NAME\nadd-skill --plugin DIR --workflow FILE NAME\n\nrun --plugin-root DIR --workspace REPO --request-id ID [--input NAME=VALUE] [--secret-env NAME=ENV] SKILL\n\nFlags precede positional arguments. Scaffolding is offline.")
 		return nil
 	}
 	verb := args[0]
+	if verb == "run" {
+		return command(ctx, append([]string{"run", "--packaged"}, args[1:]...), stdout, stderr)
+	}
 	if verb != "init" && verb != "add-skill" {
 		return fmt.Errorf("unknown plugin command %q", verb)
 	}
