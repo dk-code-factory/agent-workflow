@@ -66,6 +66,52 @@ receive an empty fixture template that needs cases for the imported behavior.
 Fixture execution and platform generation are later delivery stages; these
 commands do not claim live host activation or provider acceptance.
 
+## Packaged execution
+
+Run a selected binding against a separate target workspace:
+
+```sh
+agent-workflow plugin run --plugin-root ./example-plugin --workspace /path/to/repo --request-id review-42 --input count=2 --input 'label="001"' --secret-env token=REVIEW_TOKEN example-plugin
+```
+
+Flags precede SKILL. Inputs use the existing run parser: a complete JSON value
+keeps its type and number precision; other text is a string. Quote numeric-looking
+strings as JSON strings. Secret flags retain environment references, not values.
+Packaged execution requires a request ID and the durable workspace controller.
+The running engine must exactly match `engine-version`.
+
+Admission captures the validated declared closure once, before request-ID
+comparison. Its versioned digest covers exact descriptor, SKILL, workflow, agent
+and resource bytes, original permissions and declared empty directories. Another
+fresh launch with the same request ID must capture identical bytes and match all
+other request fields. Changed or missing installations fail that fresh launch.
+For a lost acknowledgement, use `agent-workflow status --workspace REPO
+--request-id ID` without a run positional argument. This read-only lookup returns
+the original run; ordinary `resume --workspace REPO RUN` then uses its retained
+binding, definitions, runtime settings, effects and turn allowances. Recovery
+does not reselect the package or replenish budgets.
+If recovery starts a controller from retained runtime settings, that controller
+accepts recovery operations only. Stop it and start normally with reviewed current
+workspace configuration before admitting fresh work.
+
+`${{ package.root }}` names the verified retained resource tree for this run;
+`package.name`, `package.version` and `package.digest` expose its admitted identity.
+Relative workflow and agent references resolve inside that tree. Commands and
+provider sessions still work in the target workspace. Concurrent packages have
+private execution contexts. Retained files are read-only (0444, or 0555 if any
+source execute bit was set), and directories are 0555; the manifest preserves
+original modes separately. Resource paths must be canonical relative UTF-8 paths.
+To support Linux/macOS materialization, admission conservatively rejects names
+that collide after Unicode canonical normalization and full case folding,
+including inferred parent directories, while preserving accepted spellings.
+The complete tree is limited to 4096 files/directories, excluding only its root,
+and 32 MiB of file content. This does not claim Windows runtime support.
+
+Reusable children retain references to the same package assets. SQLite backup
+contains snapshots and asset references, not external asset bytes; recovery
+requires those bytes or the recovery bundle. Missing or corrupt retained assets
+fail before execution. Existing uncertain-effect acknowledgements still apply.
+
 Runtime configuration, credentials and authority belong to the target workspace's
 `agents.yml`. The examples are templates only: no target configuration is created
 or changed. A host target does not select an execution provider. Claude SDK
@@ -81,3 +127,30 @@ Repeat `--acknowledge-loss FIELD` for each explicitly accepted omission. Convers
 preserves instruction text and compatible metadata, never runs imported hooks,
 and never overwrites source or existing output. Historical admitted snapshots
 retain their original bytes and runtime bindings without source migration.
+
+## Shared verified bootstrap
+
+Builders can call `plugins.BootstrapFiles(exactEngineVersion)` to obtain fresh
+`scripts/engine_bootstrap.py` and `compatibility.json` bytes. Copy the maintained
+script unchanged. A package-relative Python entrypoint sets
+`sys.dont_write_bytecode = True` before import and calls
+`engine_bootstrap.main(Path(__file__).resolve().parents[1], argv)`. Host plugin
+versions may differ from the engine version. Generated/remapped instructions or
+normalized modes change output identity: compute the final runtime package digest
+from its actual files, independently of source provenance.
+
+The invocation contract is `check`, `ensure`, and `exec -- ENGINE ARGS...`.
+`check` reports an already verified cache; `ensure` obtains the exact tagged
+official release and verifies digest, repository/workflow provenance and build
+identity before atomic cache publication; `exec` uses that cache offline. There
+is no latest lookup or PATH-engine fallback. Explicit local candidate archives
+require their expected SHA-256 and use a separate cache. Python 3.11+ and GitHub
+CLI are prerequisites; authentication remains explicit.
+
+Claude SDK setup is an explicit `ensure --claude-bridge` operation with Node 22+
+and npm installed. It copies the verified locked bridge sources to a separate
+writable cache and invokes the engine's locked setup with lifecycle scripts
+disabled. The returned `claude_bridge` path can be used in reviewed target
+workspace configuration. Subsequent setup verifies the retained bridge receipt;
+it never mutates the verified engine distribution, selects a provider, writes
+workspace configuration, installs provider CLIs or refreshes login implicitly.

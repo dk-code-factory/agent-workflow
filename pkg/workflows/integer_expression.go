@@ -112,7 +112,7 @@ func (f ForEach) MarshalYAML() (any, error) {
 
 // Ownership coordinates change for each execution; implementation/configuration
 // identity does not. Never expose runtime configuration or credentials to helpers.
-func admittedFingerprint(all map[string]*Workflow, roles json.RawMessage, execution runtimeexec.Policy) string {
+func admittedFingerprint(all map[string]*Workflow, roles json.RawMessage, execution runtimeexec.Policy, packages ...*PackageBinding) string {
 	b, _ := json.Marshal(all)
 	var definitions map[string]*Workflow
 	_ = decodeJSONWithNumbers(b, &definitions)
@@ -129,6 +129,11 @@ func admittedFingerprint(all map[string]*Workflow, roles json.RawMessage, execut
 			job.Steps, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) { clearOwner(step.ContainerImplementation); return step, nil })
 			w.Jobs[id] = job
 		}
+	}
+	if len(packages) > 0 && packages[0] != nil {
+		b := *packages[0]
+		b.Assets = nil
+		return actionHash([]any{definitions, roles, execution, b})
 	}
 	return actionHash([]any{definitions, roles, execution})
 }

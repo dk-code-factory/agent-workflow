@@ -470,7 +470,7 @@ func (s *SQLiteStore) linkHelperAssets(ctx context.Context, tx *sql.Tx, r *Run, 
 			return err
 		}
 	}
-	return nil
+	return s.linkPackageAssets(ctx, tx, r, snap)
 }
 func (s *SQLiteStore) verifyRunHelperAssets(ctx context.Context, run string, snap Snapshot) error {
 	for _, bundle := range helperBundles(snap.Definitions) {
@@ -534,8 +534,17 @@ func (s *SQLiteStore) CleanupHelperStaging(ctx context.Context, owner *ownership
 				continue
 			}
 			directory := filepath.Join(groupPath, entry.Name())
+			expected, err := entry.Info()
+			if err != nil || !expected.IsDir() || expected.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
 			root, err := os.OpenRoot(directory)
 			if err != nil {
+				continue
+			}
+			opened, openErr := root.Stat(".")
+			if openErr != nil || !os.SameFile(expected, opened) {
+				_ = root.Close()
 				continue
 			}
 			raw, err := readRegularAsset(root, "owner.json", 4097)
@@ -563,7 +572,7 @@ func (s *SQLiteStore) CleanupHelperStaging(ctx context.Context, owner *ownership
 					continue
 				}
 			}
-			if err = os.RemoveAll(directory); err != nil {
+			if err = removeOwnedAssetDirectory(directory, expected); err != nil {
 				return err
 			}
 		}
@@ -591,7 +600,7 @@ func (e *Executor) pinHelperBundles(ctx context.Context, all map[string]*Workflo
 			if p.Bundle != nil {
 				return store.VerifyHelperBundle(p.Bundle)
 			}
-			resolved, err := (Resolver{WorkspaceDir: e.WorkspaceDir, DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
+			resolved, err := (Resolver{WorkspaceDir: e.sourceRoot(), DefinitionsDir: e.DefinitionsDir}).ResolveLocal(ref)
 			if err != nil {
 				return err
 			}

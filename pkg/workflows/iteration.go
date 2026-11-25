@@ -83,7 +83,7 @@ func (e *Executor) iterationEvidence(ctx context.Context, req RunRequest) error 
 	return e.validateActionRecovery(ctx, origin, Snapshot{ActionContracts: e.actionContracts})
 }
 func (e *Executor) iterationPlan(id string, job Job, inputs map[string]any, req RunRequest, needs map[string]JobExecution, all map[string]*Workflow) (IterationPlan, error) {
-	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Metadata: req.Metadata}
+	ec := expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Metadata: req.Metadata}
 	raw := job.ForEach.Items
 	if text, ok := raw.(string); ok {
 		var err error
@@ -227,7 +227,7 @@ func (e *Executor) executeIteration(ctx context.Context, id string, job Job, inp
 		out.FailureClass = classifyFailure(err)
 		return finish()
 	}
-	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
+	ec := expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
@@ -370,7 +370,7 @@ func (e *Executor) executeIterationItem(ctx context.Context, id string, job Job,
 		out.FailureClass = classifyFailure(err)
 		return out
 	}
-	ec := expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
+	ec := expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs}
 	var err error
 	if err = ctx.Err(); err != nil {
 		return fail(err)
@@ -414,7 +414,7 @@ func (e *Executor) executeIterationItem(ctx context.Context, id string, job Job,
 				}
 			}
 			if allSucceeded {
-				childSecrets, secretErr := callSecrets(job.Secrets, req.Secrets, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Item: item.Item, Iteration: map[string]any{"number": item.Number, "key": item.Key}})
+				childSecrets, secretErr := callSecrets(job.Secrets, req.Secrets, expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: req.Event, Needs: needs, Item: item.Item, Iteration: map[string]any{"number": item.Number, "key": item.Key}})
 				if secretErr != nil {
 					return fail(secretErr)
 				}
@@ -782,7 +782,7 @@ func (e *Executor) validateIterationRecovery(ctx context.Context, run *Run, snap
 					needs[dep] = result
 				}
 			}
-			ec := expressionContext{Inputs: inputs, Secrets: credentials, Event: s.Event, Needs: needs}
+			ec := expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: credentials, Event: s.Event, Needs: needs}
 			if job.Repeat != nil && job.Repeat.MaxAttemptsExpression != "" {
 				checkpoint, err := j.IterationRun(ctx, r.ID, nativeString(s.Metadata, "iteration_logical_run_id"), "$repeat/"+id)
 				if err != nil {

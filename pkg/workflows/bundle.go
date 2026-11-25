@@ -166,30 +166,50 @@ func (s *SQLiteStore) RecoveryBundle(ctx context.Context, destination string, ow
 	if err != nil {
 		return err
 	}
-	var bundles []*HelperBundle
+	var bundles []json.RawMessage
 	for rows.Next() {
 		var raw []byte
 		if err = rows.Scan(&raw); err != nil {
 			rows.Close()
 			return err
 		}
-		var b HelperBundle
-		if err = json.Unmarshal(raw, &b); err != nil {
-			rows.Close()
-			return err
-		}
-		bundles = append(bundles, &b)
+		bundles = append(bundles, raw)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return err
 	}
-	for _, b := range bundles {
-		if err = s.VerifyHelperBundle(b); err != nil {
+	for _, raw := range bundles {
+		var version struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(raw, &version); err != nil {
 			return err
 		}
-		root, _ := s.bundleDirectory(b)
+		var root string
+		if version.Version != 0 {
+			var bundle AssetBundle
+			if err := json.Unmarshal(raw, &bundle); err != nil {
+				return err
+			}
+			if err := s.VerifyAssetBundle(&bundle); err != nil {
+				return err
+			}
+			root, err = s.assetBundleDirectory(&bundle)
+		} else {
+			var bundle HelperBundle
+			if err := json.Unmarshal(raw, &bundle); err != nil {
+				return err
+			}
+			if err := s.VerifyHelperBundle(&bundle); err != nil {
+				return err
+			}
+			root, err = s.bundleDirectory(&bundle)
+		}
+		if err != nil {
+			return err
+		}
 		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr

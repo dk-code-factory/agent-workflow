@@ -22,17 +22,29 @@ import (
 
 	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
 	"github.com/dk-code-factory/agent-workflow/pkg/operational"
+	"github.com/dk-code-factory/agent-workflow/pkg/plugins"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 type StartRequest struct {
+	Package    *PackageRequest   `json:"package,omitempty"`
 	TaskGroup  string            `json:"task_group,omitempty"`
 	RequestID  string            `json:"request_id,omitempty"`
 	Ref        string            `json:"ref"`
 	Inputs     map[string]any    `json:"inputs,omitempty"`
 	SecretRefs map[string]string `json:"secret_refs,omitempty"`
 }
+
+// PackageRequest selects a local immutable package, never execution authority.
+// The controller captures and hashes its own validated bytes before deduplication.
+type PackageRequest struct {
+	Root  string `json:"root"`
+	Skill string `json:"skill"`
+}
 type Server struct {
+	// RecoveryOnly bootstraps operational settings from a retained run. Those
+	// settings never authorize new admissions; restart normally to launch work.
+	RecoveryOnly       bool
 	Operational        operational.Config
 	Logger             *slog.Logger
 	schedulerHeartbeat atomic.Int64
@@ -340,6 +352,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			encode(v)
 			return
 		case "POST":
+			if s.RecoveryOnly {
+				fail(409, fmt.Errorf("recovery controller cannot admit fresh work; restart with current workspace configuration"))
+				return
+			}
 			var req StartRequest
 			d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
 			d.UseNumber()
@@ -351,6 +367,26 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 			s.mu.Lock()
 			defer s.mu.Unlock()
+			var packageSource *workflows.PackageSource
+			if req.Package != nil {
+				if req.RequestID == "" || req.Package.Root == "" || !filepath.IsAbs(req.Package.Root) || req.Ref != "" {
+					fail(400, fmt.Errorf("packaged admission requires request_id, absolute package root and skill, without ref"))
+					return
+				}
+				captured, err := plugins.Capture(req.Package.Root)
+				if err == nil {
+					packageSource, err = captured.Admission(req.Package.Skill)
+				}
+				if err != nil {
+					fail(400, err)
+					return
+				}
+				if packageSource.Binding.EngineVersion != buildinfo.Version {
+					fail(400, fmt.Errorf("package requires exact engine %s; running %s", packageSource.Binding.EngineVersion, buildinfo.Version))
+					return
+				}
+				req.Ref = packageSource.Binding.Workflow
+			}
 			if req.RequestID != "" {
 				if len(req.RequestID) > 128 {
 					fail(400, fmt.Errorf("request_id exceeds 128 bytes"))
@@ -362,7 +398,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 					c, _ := json.Marshal(req.SecretRefs)
 					d, _ := json.Marshal(snap.SecretRefs)
 					group, _ := snap.Metadata["task_group"].(string)
-					if existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) || req.TaskGroup != group {
+					var packageBinding *workflows.PackageBinding
+					if packageSource != nil {
+						packageBinding = &packageSource.Binding
+					}
+					if !workflows.SamePackage(packageBinding, snap.Package) || existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) || req.TaskGroup != group {
 						fail(409, fmt.Errorf("request_id reused with different content"))
 						return
 					}
@@ -395,7 +435,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				fail(429, fmt.Errorf("queued run limit reached"))
 				return
 			}
-			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{TaskGroup: req.TaskGroup, RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
+			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{Package: packageSource, TaskGroup: req.TaskGroup, RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
 			if err != nil {
 				fail(400, err)
 				return

@@ -150,7 +150,7 @@ func (e *Executor) inputSuspension(ctx context.Context, child *Run, runErr error
 				for _, dep := range definition.Needs {
 					needs[dep] = run.Jobs[dep]
 				}
-				args, err := renderMap(step.With, expressionContext{Inputs: inputs, Secrets: req.Secrets, Event: snapshot.Event, Needs: needs, Metadata: snapshot.Metadata, Iteration: map[string]any{"number": gate.Iteration}})
+				args, err := renderMap(step.With, expressionContext{Package: e.packageContext(), Inputs: inputs, Secrets: req.Secrets, Event: snapshot.Event, Needs: needs, Metadata: snapshot.Metadata, Iteration: map[string]any{"number": gate.Iteration}})
 				if err != nil {
 					return false, err
 				}

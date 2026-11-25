@@ -23,6 +23,7 @@ const RunStatusNeedsAttention = "needs_attention"
 // Snapshot is the admitted definition closure and nonsecret execution context.
 // Credentials are resolved again on resume; values never belong here.
 type Snapshot struct {
+	Package           *PackageBinding           `json:"package,omitempty"`
 	CredentialAliases map[string]string         `json:"credential_aliases,omitempty"`
 	ActionContracts   map[string]ActionContract `json:"application_actions,omitempty"`
 	Execution         runtimeexec.Policy        `json:"execution,omitempty"`
@@ -144,7 +145,7 @@ func newID() string { // crypto/rand is shared with the executor's admission hel
 	return randomID()
 }
 func snapshotFor(all map[string]*Workflow, req RunRequest, roles json.RawMessage, parallel int) (Snapshot, error) {
-	s := Snapshot{CredentialAliases: req.credentialAliases, RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
+	s := Snapshot{Package: req.packageBinding, CredentialAliases: req.credentialAliases, RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
 	s.Execution = req.Execution
 	s.ActionContracts = req.actionContracts
 	for k, w := range all {

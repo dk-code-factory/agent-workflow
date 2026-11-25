@@ -8,3 +8,9 @@ import "embed"
 //
 //go:embed workflows/*.yml workflows/agents/*.yaml agents.yml
 var Examples embed.FS
+
+// PluginBootstrap is the maintained, package-relative bootstrap source. Builders
+// copy it unchanged; generated configuration selects an exact engine release.
+//
+//go:embed plugins/agent-workflow/scripts/engine_bootstrap.py
+var PluginBootstrap embed.FS

@@ -26,7 +26,7 @@ def module(name, path):
     return result
 
 
-launcher = module("plugin_launcher", ROOT / PLUGIN / "scripts/launcher.py")
+launcher = module("engine_bootstrap", ROOT / PLUGIN / "scripts/engine_bootstrap.py")
 reports = module("plugin_reports", ROOT / PLUGIN / "scripts/bug-report.py")
 VERSION = json.loads((ROOT / PLUGIN / "plugin.json").read_text())["version"]
 
@@ -43,15 +43,18 @@ class InstallerTests(unittest.TestCase):
                       "commit": "a" * 40, "source_fingerprint": "b" * 64, "dirty": "false"}
         self.archive = self.make_archive()
 
-    def make_archive(self, extra=None, build=None, executable_build=None):
+    def make_archive(self, extra=None, build=None, executable_build=None, engine_body=None):
         path = self.root / ("fixture-" + str(len(list(self.root.glob("*.tar.gz")))) + ".tar.gz")
         build = self.build if build is None else build
         executable_build = build if executable_build is None else executable_build
         files = {"build.json": (json.dumps(build).encode(), 0o644),
                  "docs/distribution.txt": (b"complete distribution", 0o644)}
+        for name in launcher.BRIDGE_FILES:
+            files["bridge/claude/" + name] = ((ROOT / "bridge/claude" / name).read_bytes(), 0o644)
+        engine_body = engine_body or "print('engine stdout'); print('engine stderr',file=sys.stderr); sys.exit(7)"
         code = ("#!" + sys.executable + "\nimport json,sys\n"
                 "if sys.argv[1:] == ['version']: print(" + repr(json.dumps(executable_build)) + ")\n"
-                "else:\n print('engine stdout'); print('engine stderr',file=sys.stderr); sys.exit(7)\n").encode()
+                "else:\n " + engine_body + "\n").encode()
         for helper in launcher.HELPERS:
             files[helper] = (code, 0o755)
         with tarfile.open(path, "w:gz") as bundle:
@@ -273,11 +276,191 @@ class InstallerTests(unittest.TestCase):
 
     def test_missing_dependency_incompatible_codex_and_version_drift(self):
         with patch.object(launcher.shutil, "which", return_value=None), self.assertRaisesRegex(launcher.InstallError, "Missing dependency"):
-            launcher.prerequisites(launcher.configuration())
+            launcher.prerequisites(launcher.configuration(ROOT / PLUGIN, builtin=True), require_codex=True)
         with patch.object(launcher.shutil, "which", return_value="tool"), patch.object(launcher, "command", return_value="codex-cli 0.1.0"), self.assertRaisesRegex(launcher.InstallError, "Incompatible Codex"):
-            launcher.prerequisites(launcher.configuration())
+            launcher.prerequisites(launcher.configuration(ROOT / PLUGIN, builtin=True), require_codex=True)
         with self.assertRaisesRegex(ValueError, "versions must match"):
             validate_plugin("9.9.9")
+
+    def generic_package(self):
+        root = self.root / "independent-plugin"
+        scripts = root / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copyfile(ROOT / PLUGIN / "scripts/engine_bootstrap.py", scripts / "engine_bootstrap.py")
+        config = {"schema_version": 1, "engine_version": VERSION,
+                  "repository": launcher.REPOSITORY, "release_workflow": launcher.WORKFLOW}
+        (root / launcher.CONFIG_FILENAME).write_text(json.dumps(config))
+        # Third-party host manifests may carry a version independent of the engine.
+        (root / "plugin.json").write_text(json.dumps({"version": "9.8.7"}))
+        entry = scripts / "engine"
+        entry.write_text("import sys\nsys.dont_write_bytecode = True\nfrom pathlib import Path\n"
+                         "from engine_bootstrap import main\n"
+                         "sys.exit(main(Path(__file__).resolve().parents[1]))\n")
+        return root, entry, config
+
+    def test_shared_configuration_preserves_builtin_coupling_and_release_authority(self):
+        root, _, config = self.generic_package()
+        self.assertEqual(launcher.configuration(root), config)
+        with self.assertRaisesRegex(launcher.InstallError, "Plugin/engine version mismatch"):
+            launcher.configuration(root, builtin=True)
+        for change in ({"schema_version": 2}, {"schema_version": True}, {"engine_version": "latest"},
+                       {"engine_version": "../release"}, {"engine_version": "01.2.3"},
+                       {"repository": "plugin-owner/engine"}, {"release_workflow": "foreign/workflow.yml"}):
+            with self.subTest(change=change):
+                (root / launcher.CONFIG_FILENAME).write_text(json.dumps(dict(config, **change)))
+                with self.assertRaises(launcher.InstallError):
+                    launcher.configuration(root)
+        with patch.object(launcher.shutil, "which", side_effect=lambda name: "gh" if name == "gh" else None), \
+                patch.object(launcher, "command", return_value="--source-ref --source-digest --signer-digest --signer-workflow --bundle") as call:
+            launcher.prerequisites(config)
+        self.assertEqual(call.call_args.args[0], ["gh", "attestation", "verify", "--help"])
+
+    def test_shared_readonly_relocated_package_exec_is_offline_and_preserves_arguments(self):
+        root, entry, _ = self.generic_package()
+        archive = self.make_archive(engine_body="print(json.dumps(sys.argv[1:])); sys.exit(7)")
+        # Warm the release cache through fake exact-tag GitHub commands.
+        self.archive = archive
+        self.release()
+        environment = self.fake_tools()
+        cache = Path(environment["XDG_CACHE_HOME"]) / "agent-workflow"
+        with patch.object(launcher, "command", side_effect=self.release_command):
+            distribution = launcher.ensure(cache, VERSION, self.os, self.arch)
+        # Only local help inspection is allowed on this cached invocation.
+        tools = Path(environment["PATH"].split(os.pathsep)[0])
+        (tools / "codex").unlink()
+        (tools / "gh").write_text("#!" + sys.executable + "\nimport sys\n"
+                                  "if sys.argv[1:] != ['attestation','verify','--help']: sys.exit(99)\n"
+                                  "print('--source-ref --source-digest --signer-digest --signer-workflow --bundle')\n")
+        environment["PATH"] = str(tools)
+        relocated = root.with_name("relocated-readonly")
+        root.rename(relocated)
+        entry = relocated / "scripts/engine"
+        def restore_writable_directories():
+            for directory in (relocated, relocated / "scripts"):
+                directory.chmod(0o755)
+        self.addCleanup(restore_writable_directories)
+        for child in relocated.rglob("*"):
+            child.chmod(0o555 if child.is_dir() else 0o444)
+        relocated.chmod(0o555)
+        before = launcher.tree_identity(relocated)
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        (workspace / "engine_bootstrap.py").write_text("raise AssertionError('workspace import')\n")
+        (workspace / "compatibility.json").write_text("invalid workspace config")
+        engine_args = ["plugin", "run", "--input", "task=literal space", "--secret-env", "token=TOKEN", "skill"]
+        result = subprocess.run([sys.executable, str(entry), "exec", "--", *engine_args], cwd=workspace,
+                                env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(json.loads(result.stdout), engine_args)
+        self.assertEqual(launcher.tree_identity(relocated), before)
+        self.assertFalse(list(relocated.rglob("__pycache__")))
+        self.assertEqual(launcher.cached(distribution.parent, VERSION, self.os, self.arch, "release"), distribution)
+
+    def test_shared_commands_reject_operation_argument_mixing_before_installing(self):
+        root, _, _ = self.generic_package()
+        with patch.object(launcher, "prerequisites"), patch.object(launcher, "ensure", side_effect=AssertionError("must not install")), \
+                patch.object(launcher.sys, "stderr", new_callable=io.StringIO):
+            for args in (["ensure", "--", "workflow"], ["exec"], ["check", "--candidate-archive", str(self.archive), "--sha256", launcher.digest(self.archive)],
+                         ["ensure", "--candidate-archive", str(self.archive)]):
+                with self.subTest(args=args):
+                    self.assertEqual(launcher.main(root, args), 1)
+
+    def test_shared_cache_paths_reject_unpinned_or_escaping_identity(self):
+        for version, system, arch, digest in (("latest", self.os, self.arch, None), ("../engine", self.os, self.arch, None),
+                                             (VERSION, "../linux", self.arch, None), (VERSION, self.os, "../arm64", None),
+                                             (VERSION, self.os, self.arch, "../candidate")):
+            with self.subTest(version=version, system=system, arch=arch, digest=digest), self.assertRaises(launcher.InstallError):
+                launcher.installation_path(self.cache, version, system, arch, digest)
+
+    def fake_bridge_setup(self, arguments, *, failure_message=None):
+        self.assertEqual(arguments[1:4], ["bridge", "setup", "--directory"])
+        bridge = Path(arguments[4])
+        package = bridge / "node_modules/@anthropic-ai/claude-agent-sdk"
+        package.mkdir(parents=True)
+        expected = json.loads((bridge / "package.json").read_text())["dependencies"]["@anthropic-ai/claude-agent-sdk"]
+        (package / "package.json").write_text(json.dumps({"version": expected}))
+        (package / "cli.js").write_text("// locked SDK fixture\n")
+        bins = bridge / "node_modules/.bin"
+        bins.mkdir()
+        (bins / "sdk").symlink_to("../@anthropic-ai/claude-agent-sdk/cli.js")
+        return ""
+
+    def test_explicit_bridge_setup_reports_safe_node_and_npm_prerequisites(self):
+        root, _, _ = self.generic_package()
+        for error in ("Node 22+ is required: node not found", "Node 22+ is required"):
+            with self.subTest(error=error):
+                archive = self.make_archive(engine_body="print(" + repr(error + "; private-token") + ", file=sys.stderr); sys.exit(1)")
+                distribution = self.candidate(archive)
+                before = launcher.tree_identity(distribution)
+                with patch.object(launcher, "prerequisites"), patch.object(launcher, "ensure", return_value=distribution), \
+                        patch.object(launcher.sys, "stderr", new_callable=io.StringIO) as diagnostics:
+                    self.assertEqual(launcher.main(root, ["ensure", "--claude-bridge"]), 1)
+                self.assertIn("Node 22+", diagnostics.getvalue())
+                self.assertIn("npm", diagnostics.getvalue())
+                self.assertIn("ensure --claude-bridge", diagnostics.getvalue())
+                self.assertNotIn("private-token", diagnostics.getvalue())
+                self.assertEqual(launcher.tree_identity(distribution), before)
+                self.assertFalse(list(self.cache.glob(".bridge-*")))
+                self.assertFalse((self.cache / "bridges").exists())
+
+    def test_explicit_bridge_setup_preserves_verified_distribution_and_is_cached(self):
+        distribution = self.candidate()
+        before = launcher.tree_identity(distribution)
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup) as setup:
+            bridge = launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertEqual(setup.call_count, 1)
+        self.assertTrue(bridge.is_relative_to(self.cache / "bridges"))
+        self.assertEqual(launcher.tree_identity(distribution), before)
+        self.assertEqual(self.candidate(), distribution)
+        with patch.object(launcher, "command", side_effect=AssertionError("cached setup must be offline")):
+            self.assertEqual(launcher.setup_claude_bridge(distribution, self.cache), bridge)
+        (bridge.parent / "node_modules/@anthropic-ai/claude-agent-sdk/cli.js").write_text("corrupt")
+        with patch.object(launcher, "command", side_effect=AssertionError("must not silently reinstall")), self.assertRaisesRegex(launcher.InstallError, "corrupt"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+
+    def test_bridge_setup_interruption_and_escaping_links_never_publish_cache(self):
+        distribution = self.candidate()
+        with patch.object(launcher, "command", side_effect=launcher.InstallError("setup interrupted")), self.assertRaisesRegex(launcher.InstallError, "interrupted"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse(list(self.cache.glob(".bridge-*")))
+        outside = self.root / "outside"
+        outside.write_text("untouched")
+        def setup_with_link(arguments, *, failure_message=None):
+            self.fake_bridge_setup(arguments)
+            (Path(arguments[4]) / "outside").symlink_to(outside)
+            return ""
+        with patch.object(launcher, "command", side_effect=setup_with_link), self.assertRaisesRegex(launcher.InstallError, "escapes"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse(list(self.cache.glob(".bridge-*")))
+        self.assertFalse((self.cache / "bridges").exists())
+        self.assertEqual(outside.read_text(), "untouched")
+
+    def test_bridge_cache_isolates_engine_receipt_and_candidate_authority(self):
+        candidate = self.candidate()
+        other = self.root / "verified-release"
+        shutil.copytree(candidate.parent, other)
+        receipt_path = other / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["mode"] = "release"
+        receipt_path.write_text(json.dumps(receipt))
+        # The setup caller has already verified the selected engine receipt;
+        # this fixture changes only that receipt's release/candidate binding.
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup) as setup:
+            candidate_bridge = launcher.setup_claude_bridge(candidate, self.cache)
+            release_bridge = launcher.setup_claude_bridge(other / "distribution", self.cache)
+        self.assertEqual(setup.call_count, 2)
+        self.assertNotEqual(candidate_bridge, release_bridge)
+        (candidate_bridge.parent / "node_modules/@anthropic-ai/claude-agent-sdk/cli.js").write_text("candidate mutation")
+        with patch.object(launcher, "command", side_effect=AssertionError("verified release cache must remain offline")):
+            self.assertEqual(launcher.setup_claude_bridge(other / "distribution", self.cache), release_bridge)
+
+    def test_bridge_dependency_setup_is_never_an_execution_side_effect(self):
+        root, _, _ = self.generic_package()
+        with patch.object(launcher, "prerequisites"), patch.object(launcher.sys, "stderr", new_callable=io.StringIO), \
+                patch.object(launcher, "ensure", side_effect=AssertionError("invalid operation must not install")), \
+                patch.object(launcher, "setup_claude_bridge", side_effect=AssertionError("must not setup on exec/check")):
+            self.assertEqual(launcher.main(root, ["exec", "--claude-bridge", "--", "version"]), 1)
+            self.assertEqual(launcher.main(root, ["check", "--claude-bridge"]), 1)
 
 
 class PackageTests(unittest.TestCase):

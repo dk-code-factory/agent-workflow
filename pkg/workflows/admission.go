@@ -24,6 +24,13 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	if !ok {
 		return nil, fmt.Errorf("durable store required")
 	}
+	if err := e.pinPackage(ctx, req.Package); err != nil {
+		return nil, err
+	}
+	if e.packageBinding != nil && req.Ref != e.packageBinding.Workflow {
+		return nil, fmt.Errorf("package workflow binding changed")
+	}
+	req.packageBinding = e.packageBinding
 	all, err := e.Load(req.Ref)
 	if err != nil {
 		return nil, err

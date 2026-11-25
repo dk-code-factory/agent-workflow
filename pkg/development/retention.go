@@ -137,6 +137,10 @@ func (r *Runtime) CleanupOwned(ctx context.Context, id string, owner *ownership.
 					break
 				}
 			}
+		} else if removal.Path == filepath.Join(state, "assets", id) {
+			if err = r.Store.RemoveRetainedAssetOrigin(ctx, id, owner); err != nil {
+				return err
+			}
 		} else if err = os.RemoveAll(removal.Path); err != nil {
 			return err
 		}
