@@ -45,6 +45,8 @@ references) and the helper files explicitly declared on job containers and Docke
 steps. It visits nested blocks and lifecycle handlers. It preserves relative
 agent/helper resolution, declared input contracts and executable modes. Reusable
 job references are rewritten into a skill-specific `imports/NAME/` namespace.
+Workflow YAML is reserialized. Decoded defaults, prompts, command arguments
+and lifecycle values remain unchanged, including leading blank lines.
 For a workflow with reusable calls, import checks the exact declared references
 at ancestor roots and requires one root containing the complete closure. This
 preserves workspace-relative namespaces, including sibling namespaces. Ambiguous

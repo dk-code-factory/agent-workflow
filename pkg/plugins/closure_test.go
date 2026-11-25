@@ -3,6 +3,7 @@ package plugins
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -90,5 +91,143 @@ func TestPluginLoadChecksEveryReusableEdge(t *testing.T) {
 				t.Fatalf("accepted invalid reusable edge: %v", err)
 			}
 		})
+	}
+}
+
+func TestPluginImportPreservesDefaultLeadingNewline(t *testing.T) {
+	source := t.TempDir()
+	put(t, source, "custom.yaml", `on:
+  workflow_call:
+    inputs:
+      payload:
+        type: string
+        default: |-
+
+          payload
+jobs:
+  main:
+    steps:
+      - argv: [printf, '%s', '${{ inputs.payload }}']
+`)
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", filepath.Join(source, "custom.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, descriptor.Skills[0].Workflow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := workflows.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := imported.On.WorkflowCall.Inputs["payload"].Default; got != "\npayload" {
+		t.Fatalf("default changed: got %q, want %q", got, "\npayload")
+	}
+}
+
+func TestPluginImportPreservesBlockScalarValues(t *testing.T) {
+	for _, command := range []string{"init", "add-skill"} {
+		for _, style := range []string{"|-", "|", "|+", ">-", ">", ">+", "!!str |-", "!message |-"} {
+			t.Run(command+"/"+style, func(t *testing.T) {
+				source := t.TempDir()
+				workflow := strings.ReplaceAll(`on:
+  workflow_call:
+    inputs:
+      payload:
+        type: string
+        default: STYLE
+
+          payload
+
+jobs:
+  call:
+    uses: workflows/child.yml
+  main:
+    steps:
+      - argv:
+          - printf
+          - STYLE
+
+            command
+
+      - uses: agent/run
+        with:
+          agent: agents/task.yaml
+          prompt: STYLE
+
+
+            prompt
+
+        finally:
+          - argv:
+              - printf
+              - STYLE
+
+
+                lifecycle
+
+`, "STYLE", style)
+				put(t, source, "workflows/main.yml", workflow)
+				put(t, source, "workflows/child.yml", "on: {workflow_call: {}}\njobs: {main: {steps: [{argv: [echo, child]}]}}\n")
+				put(t, source, "workflows/agents/task.yaml", exampleAgent)
+				original, err := workflows.Parse([]byte(workflow))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := workflows.Validate(original); err != nil {
+					t.Fatal(err)
+				}
+				if value, ok := original.On.WorkflowCall.Inputs["payload"].Default.(string); !ok || !strings.HasPrefix(value, "\n") {
+					t.Fatalf("fixture lost its leading newline: %q", value)
+				}
+				root := filepath.Join(t.TempDir(), "demo")
+				skillName := "demo"
+				if command == "init" {
+					err = Init(root, "demo", "0.2.2", filepath.Join(source, "workflows/main.yml"))
+				} else {
+					err = Init(root, "demo", "0.2.2", "")
+					if err == nil {
+						skillName = "extra"
+						err = AddSkill(root, skillName, filepath.Join(source, "workflows/main.yml"))
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				descriptor, err := Load(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				importedBytes, err := os.ReadFile(filepath.Join(root, descriptor.Skills[len(descriptor.Skills)-1].Workflow))
+				if err != nil {
+					t.Fatal(err)
+				}
+				imported, err := workflows.Parse(importedBytes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				values := func(workflow *workflows.Workflow) map[string]any {
+					steps := workflow.Jobs["main"].Steps
+					return map[string]any{"default": workflow.On.WorkflowCall.Inputs["payload"].Default, "command": steps[0].Argv[1], "lifecycle": steps[1].Finally[0].Argv[1], "prompt": steps[1].With["prompt"]}
+				}
+				got := values(imported)
+				for name, want := range values(original) {
+					if !reflect.DeepEqual(got[name], want) {
+						t.Errorf("%s changed: got %q, want %q", name, got[name], want)
+					}
+				}
+				if ref := imported.Jobs["call"].Uses; ref != "imports/"+skillName+"/workflows/child.yml" {
+					t.Fatalf("reusable reference not rewritten: %s", ref)
+				}
+				if current, err := os.ReadFile(filepath.Join(source, "workflows/main.yml")); err != nil || string(current) != workflow {
+					t.Fatalf("source changed: %v", err)
+				}
+			})
+		}
 	}
 }

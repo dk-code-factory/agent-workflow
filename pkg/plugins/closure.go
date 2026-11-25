@@ -350,8 +350,8 @@ func (c *collector) visit(ref string, depth int) error {
 	return nil
 }
 
-// rewriteWorkflow changes only reusable job references. Native relative paths,
-// step definitions and input declarations retain their author-owned YAML values.
+// rewriteWorkflow rewrites reusable job references and serializes workflow YAML.
+// Relative paths, steps and input declarations retain their decoded values.
 func rewriteWorkflow(data []byte, prefix string) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -386,5 +386,17 @@ func rewriteWorkflow(data []byte, prefix string) ([]byte, error) {
 			}
 		}
 	}
+	quoteLeadingNewlines(&doc)
 	return yaml.Marshal(&doc)
+}
+
+func quoteLeadingNewlines(node *yaml.Node) {
+	// The block emitter can consume an initial newline as its header break.
+	// Quoted scalars keep the decoded leading newlines explicit.
+	if node.Kind == yaml.ScalarNode && strings.HasPrefix(node.Value, "\n") {
+		node.Style = node.Style&yaml.TaggedStyle | yaml.DoubleQuotedStyle
+	}
+	for _, child := range node.Content {
+		quoteLeadingNewlines(child)
+	}
 }
