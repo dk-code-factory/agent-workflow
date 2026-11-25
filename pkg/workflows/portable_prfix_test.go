@@ -91,7 +91,7 @@ elif method=='POST' and route=='graphql':
     if 'reviewThreads' in request['query']:
         result={'data':{'repository':{'pullRequest':{'reviewThreads':{'totalCount':0,'nodes':[], 'pageInfo':{'hasNextPage':False,'endCursor':None}}}}}}
     else:
-        result={'data':{'repository':{'pullRequest':{'headRefOid':metadata['head']['sha'],'isDraft':False,'mergeable':'MERGEABLE','mergeStateStatus':'CLEAN','reviewDecision':'APPROVED'}}}}
+        result={'data':{'repository':{'pullRequest':{'headRefOid':metadata['head']['sha'],'isDraft':False,'mergeable':'MERGEABLE','mergeStateStatus':'CLEAN','reviewDecision':'APPROVED','reviewRequests':{'totalCount':0,'nodes':[],'pageInfo':{'hasNextPage':False,'endCursor':None}}}}}}
 elif method=='GET' and route.endswith('/check-runs'):
     state=metadata['fixture_ci_status']
     result={'total_count':1,'check_runs':[{'id':11,'head_sha':metadata['head']['sha'],'name':'Required','status':state,'conclusion':metadata.get('fixture_ci_conclusion','success') if state=='completed' else None,'html_url':'https://github.com/fixture/repository/checks/11'}]}
