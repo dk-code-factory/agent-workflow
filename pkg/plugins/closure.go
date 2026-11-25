@@ -18,12 +18,15 @@ type file struct {
 	mode fs.FileMode
 }
 type collector struct {
-	root   string
-	files  map[string]file
-	active map[string]bool
-	loaded map[string]*workflows.Workflow
-	open   func(*os.Root, string) (*os.File, error)
-	total  int
+	root  string
+	files map[string]file
+	// A file can be both an instruction source and a helper/resource. Retain
+	// that role even when read returns bytes already captured under another role.
+	resourceFiles map[string]bool
+	active        map[string]bool
+	loaded        map[string]*workflows.Workflow
+	open          func(*os.Root, string) (*os.File, error)
+	total         int
 }
 
 func newCollector(root string) *collector {
@@ -195,6 +198,12 @@ func (c *collector) resourcePath(name string, allowRoot bool) error {
 			return nil
 		}
 		_, err = c.read(filepath.ToSlash(rel))
+		if err == nil {
+			if c.resourceFiles == nil {
+				c.resourceFiles = map[string]bool{}
+			}
+			c.resourceFiles[filepath.ToSlash(rel)] = true
+		}
 		return err
 	})
 }

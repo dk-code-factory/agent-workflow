@@ -43,6 +43,9 @@ type CapturedPackage struct {
 	files      map[string]file
 	manifest   PackageManifest
 	digest     string
+	// Derived solely from validated descriptor/workflow declarations. This is
+	// build-planning provenance, not another part of the versioned file identity.
+	resourceFiles map[string]bool
 }
 
 // Capture validates and retains the complete declared package closure in one
@@ -57,9 +60,10 @@ func Capture(root string) (*CapturedPackage, error) {
 
 func newCapturedPackage(descriptor *Descriptor, captured *collector) (*CapturedPackage, error) {
 	p := &CapturedPackage{
-		descriptor: cloneDescriptor(*descriptor),
-		files:      make(map[string]file, len(captured.files)),
-		manifest:   PackageManifest{Version: PackageManifestVersion, Entries: make([]PackageEntry, 0, len(captured.files))},
+		descriptor:    cloneDescriptor(*descriptor),
+		files:         make(map[string]file, len(captured.files)),
+		manifest:      PackageManifest{Version: PackageManifestVersion, Entries: make([]PackageEntry, 0, len(captured.files))},
+		resourceFiles: make(map[string]bool, len(captured.resourceFiles)),
 	}
 	paths := make([]string, 0, len(captured.files))
 	for name := range captured.files {
@@ -73,6 +77,9 @@ func newCapturedPackage(descriptor *Descriptor, captured *collector) (*CapturedP
 	for _, name := range paths {
 		source := captured.files[name]
 		p.files[name] = file{data: bytes.Clone(source.data), mode: source.mode}
+		if captured.resourceFiles[name] {
+			p.resourceFiles[name] = true
+		}
 		entry := PackageEntry{Path: name, Kind: "directory", Mode: uint32(source.mode.Perm())}
 		if !source.mode.IsDir() {
 			entry.Kind, entry.Size = "file", int64(len(source.data))

@@ -58,13 +58,77 @@ symlinks, path escapes, unsupported definitions and output collisions fail.
 Import copies no undeclared repository files. The project-level `resources` list
 can explicitly declare additional contained files or directories for packaging.
 
-Developer-owned sources are separate from future generated platform output.
+Developer-owned sources are separate from generated platform output.
 Scaffolds include a portable native-agent example, provider configuration
 examples in `config/` and scripted fixture source data in `fixtures/`. Imports
 receive an empty fixture template that needs cases for the imported behavior.
 `add-skill` creates that template at `fixtures/NAME/example.yaml`.
-Fixture execution and platform generation are later delivery stages; these
-commands do not claim live host activation or provider acceptance.
+Fixture execution is a later delivery stage; these commands do not claim live
+host activation or provider acceptance.
+
+## Build a portable marketplace
+
+```sh
+agent-workflow plugin build --target codex,claude --output ./dist/example ./example-plugin
+```
+
+The output directory must not exist, and its parent must exist. Both targets must
+be declared in `plugin.yaml`; use `--target codex` or `--target claude` for one
+host. The command captures and validates the declared source closure once. It
+does not execute fixtures, install tools, download an engine, contact providers,
+log in or publish.
+
+The output contains `NAME/`, an installable marketplace with
+`plugins/NAME/`, the portable root manifest and requested native manifests.
+Codex uses `NAME/.agents/plugins/marketplace.json`; Claude Code uses
+`NAME/.claude-plugin/marketplace.json`. Both catalogs reference the same plugin
+and canonical `skills/SKILL/SKILL.md` identities. `NAME-VERSION.zip` contains that
+entire marketplace directory. `SHA256SUMS` covers the ZIP, build report and every
+marketplace file. `build.json` records requested targets, supported engine
+platforms, minimum Python version, exact engine version, source provenance digest
+and final runtime package digest. It stays outside the
+runtime payload to avoid a self-referential digest.
+
+Generated skills combine developer instructions with shared engine invocation and
+durable recovery guidance. Canonical source skills receive the guidance directly.
+For a source at another path, the generated entrypoint explicitly requires reading
+the original instruction file before invoking the engine. Original files outside
+`skills/` stay at their declared paths, including when workflows use them as
+helpers. Original files within `skills/` become `workflow-instructions.md` beside
+their declared resources so hosts do not discover additional skills. A conflicting
+`workflow-instructions.md` fails the build. Original bytes and relative resource
+context are preserved. Developer instructions describe the workflow; generated
+guidance delegates execution to `plugin run` rather than asking the host to
+interpret workflow YAML.
+
+A source inside `skills/` cannot also be a required workflow helper or explicit
+resource: generating its host entrypoint would replace required bytes. This
+includes helpers declared through a directory or `.`. Build validation rejects
+that overlap before creating output. Move the instruction source outside
+`skills/` and update its descriptor binding and any helper references; its exact
+bytes then remain available at the declared path.
+
+Only declared resources, discovered workflow/YAML-agent dependencies and named
+generated assets are shipped. Config examples and fixtures are omitted unless
+explicitly declared. Generated paths are reserved, and additional unbound
+`skills/**/SKILL.md` files fail rather than silently extending host discovery.
+All output paths share runtime containment, Unicode/case collision and the
+complete 4096-path limit. The 32-MiB content limit applies to the runtime payload;
+the distribution also contains its ZIP and reports. Paths containing line breaks
+are rejected because the checksum file uses one entry per line. Accepted paths
+keep their spelling.
+
+Directories and executable files use mode 0755; other files use 0644. ZIP members
+are sorted with fixed 1980-01-01 timestamps and explicit Unix modes. Identical
+captured sources and target sets produce identical artifacts, independently of
+target argument order, source timestamps, installation path and host umask.
+Extractors must preserve the ZIP's Unix executable modes. Linux and macOS are
+supported bootstrap platforms; this does not claim Windows runtime support or
+live host/provider acceptance. The generated compatibility file pins the official
+engine repository/workflow and an exact X.Y.Z engine release; prerelease/build
+engine versions fail before output is created. Third-party plugin versions remain
+independent. The built-in instruction-only release plugin keeps its separate
+four-skill inventory, licensing, version coupling and certification gates.
 
 ## Packaged execution
 
