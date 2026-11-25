@@ -106,7 +106,20 @@ func ConvertAgent(from, input, output string, acknowledged []string) (AgentConve
 			return report, fmt.Errorf("acknowledged field %q is not an omitted native option", field)
 		}
 	}
-	encoded, err := yaml.Marshal(normalized)
+	// Quoted scalars preserve native text exactly. The literal-block emitter can
+	// drop a leading blank line, changing an otherwise compatible instruction.
+	keys := make([]string, 0, len(normalized))
+	for key := range normalized {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	node := yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, key := range keys {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: normalized[key]})
+	}
+	encoded, err := yaml.Marshal(&node)
 	if err != nil {
 		return report, err
 	}

@@ -46,6 +46,26 @@ func TestAgentConvertOfflinePreservesCompatibleInstructions(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentConvertPreservesLeadingBlankInstructions(t *testing.T) {
+	dir := t.TempDir()
+	input, output := filepath.Join(dir, "reviewer.md"), filepath.Join(dir, "reviewer.yaml")
+	instructions := "\n\nPreserve these leading blank lines.\n\n"
+	source := "---\nname: reviewer\ndescription: Review changes\n---\n" + instructions
+	if err := os.WriteFile(input, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConvertAgent("claude", input, output, nil); err != nil {
+		t.Fatal(err)
+	}
+	definition, err := LoadAgentDefinition(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.DeveloperInstructions != instructions {
+		t.Fatalf("instructions changed: got %q, want %q", definition.DeveloperInstructions, instructions)
+	}
+}
 func TestAgentConvertRefusesUnacknowledgedPolicyAndHooks(t *testing.T) {
 	t.Setenv("PATH", "")
 	for _, from := range []string{"codex", "claude"} {
