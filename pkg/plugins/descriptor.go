@@ -224,8 +224,12 @@ func loadCollected(files *collector) (*Descriptor, error) {
 
 // Inputs returns the workflow declarations directly, without a duplicate schema.
 func Inputs(root string, skill Skill) (map[string]workflows.Input, error) {
+	ref, err := workflows.CanonicalLocalRef(skill.Workflow)
+	if err != nil {
+		return nil, fmt.Errorf("skill %s workflow: %w", skill.Name, err)
+	}
 	c := newCollector(root)
-	b, err := c.read(skill.Workflow)
+	b, err := c.read(ref)
 	if err != nil {
 		return nil, err
 	}

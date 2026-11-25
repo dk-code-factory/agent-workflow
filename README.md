@@ -433,6 +433,7 @@ jobs:
           prompt: Review the change.
           output:
             format: json
+            repair-attempts: 0
             schema:
               type: object
               properties: {approved: {type: boolean}}
@@ -688,7 +689,7 @@ jobs:
         with:
           agent: reviewer.yaml
           prompt: Review the tests.
-          output: {schema: Review}
+          output: {schema: Review, repair-attempts: 0}
 ```
 
 `output.schema` accepts a literal schema name or the existing inline mapping.

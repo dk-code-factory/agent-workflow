@@ -80,6 +80,39 @@ func TestPluginInitOffline(t *testing.T) {
 		t.Fatal("overwrote project")
 	}
 }
+
+func TestPluginInputsUsesAdmittedWorkflowBinding(t *testing.T) {
+	for _, binding := range []string{"workflows/main.yml", "./workflows/main.yml", " \t./workflows/main.yml \n"} {
+		t.Run(binding, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "demo")
+			if err := Init(root, "demo", "0.2.2", ""); err != nil {
+				t.Fatal(err)
+			}
+			d, err := ReadDescriptor(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Skills[0].Workflow = binding
+			data, err := yaml.Marshal(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			put(t, root, DescriptorFile, string(data))
+			d, err = Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Skills[0].Workflow != binding {
+				t.Fatalf("descriptor binding changed: %q", d.Skills[0].Workflow)
+			}
+			inputs, err := Inputs(root, d.Skills[0])
+			if err != nil || len(inputs) != 1 || inputs["task"].Type != "string" || !inputs["task"].Required {
+				t.Fatalf("admitted workflow inputs: %v, %v", inputs, err)
+			}
+		})
+	}
+}
+
 func TestPluginDescriptorDiagnostics(t *testing.T) {
 	valid := Descriptor{SchemaVersion: 1, Name: "demo", Version: "1.0.0", EngineVersion: "0.2.2", Hosts: []string{"codex"}, Skills: []Skill{{Name: "demo", Path: "skills/demo/SKILL.md", Workflow: "workflows/main.yml"}}}
 	for _, tc := range []struct {
