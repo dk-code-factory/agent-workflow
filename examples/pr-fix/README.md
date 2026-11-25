@@ -63,6 +63,13 @@ observation and delay within its bounded polling chunk.
 A selected stage grants no publication authority. Every remote write needs its
 configured permission and retained exact authorization. Merge additionally needs
 current independent review, verification, final-head CI and repository readiness.
+Readiness and merge dispatch each require complete current user and team review
+requests. Any outstanding request holds merge, including a renewed request after
+approval at the same head. Missing, unsupported or incomplete request data also
+holds merge. The blocker identifies pending users and teams; merge authority does
+not withdraw their requests or grant authority to approve. Once requests are
+fulfilled or separately withdrawn through an authorized action, all ordinary
+readiness requirements are checked again.
 The `complete` and `ready` outputs remain distinct.
 
 Resume an interrupted original run with stock `resume`. Engine snapshots and
@@ -71,6 +78,8 @@ sessions. Replacement executions for the same PR keep its `logical_run`, consume
 allowances and absolute CI deadlines. Unknown external effects must reconcile
 before retry. Back up application state with the engine recovery bundle; preserve
 historical generated closures belonging to existing admitted runs.
+An uncertain merge is never resent merely because the PR still appears open;
+its exact merged effect must be reconciled before the operation can complete.
 
 For migration from the former JSON orchestration fields and deterministic
 verification commands, see [the guide](../../docs/PR_FIX.md#state-backup-and-compatibility).
