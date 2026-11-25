@@ -29,6 +29,7 @@ type authorFile interface {
 type authorIO struct {
 	create func(string, fs.FileMode) (authorFile, error)
 	rename func(string, string) error
+	load   func(string) (*Descriptor, []byte, error)
 }
 
 func authoringIO() authorIO {
@@ -37,6 +38,7 @@ func authoringIO() authorIO {
 			return os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		},
 		rename: os.Rename,
+		load:   loadCaptured,
 	}
 }
 
@@ -88,10 +90,14 @@ func initProject(directory, name, engineVersion, workflow string, disk authorIO)
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if _, err = disk.writeFiles(stage, files); err != nil {
+	cleanupStage, err := disk.writeFiles(stage, files)
+	if err != nil {
 		return err
 	}
 	if _, err = Load(stage); err != nil {
+		return errors.Join(err, cleanupStage())
+	}
+	if err = cleanupStage(); err != nil {
 		return err
 	}
 	// Mkdir reserves the destination without replacing an existing empty directory.
@@ -125,7 +131,7 @@ func addSkill(root, name, workflow string, disk authorIO) (err error) {
 	}
 	lock.Close()
 	defer os.Remove(filepath.Join(root, ".plugin-author.lock"))
-	d, err := Load(root)
+	d, original, err := disk.load(root)
 	if err != nil {
 		return err
 	}
@@ -145,10 +151,6 @@ func addSkill(root, name, workflow string, disk authorIO) (err error) {
 		return err
 	}
 	data, err := yaml.Marshal(d)
-	if err != nil {
-		return err
-	}
-	original, err := os.ReadFile(filepath.Join(root, DescriptorFile))
 	if err != nil {
 		return err
 	}
@@ -376,9 +378,45 @@ func createParents(root, name string, created *[]createdPath) error {
 	return nil
 }
 
+func setDirectoryMode(entry createdPath, mode fs.FileMode) error {
+	current, err := os.Lstat(entry.name)
+	if err != nil {
+		return err
+	}
+	if !current.IsDir() || !os.SameFile(entry.info, current) {
+		return fmt.Errorf("%s changed identity; directory permissions retained", entry.name)
+	}
+	directory, err := os.Open(entry.name)
+	if err != nil {
+		return err
+	}
+	opened, err := directory.Stat()
+	if err == nil && !os.SameFile(entry.info, opened) {
+		err = fmt.Errorf("%s changed identity; directory permissions retained", entry.name)
+	}
+	if err == nil {
+		err = directory.Chmod(mode)
+	}
+	return errors.Join(err, directory.Close())
+}
+
 func (disk authorIO) writeFiles(root string, files map[string]file) (undo func() error, err error) {
 	var created []createdPath
-	undo = func() error { return rollbackPaths(created) }
+	var directories []struct {
+		entry createdPath
+		mode  fs.FileMode
+	}
+	undo = func() error {
+		var failures []error
+		// Finalized read-only directories must be writable before owned children
+		// can be removed. Existing or replacement directories are never chmodded.
+		for _, directory := range directories {
+			if err := setDirectoryMode(directory.entry, directory.mode|0700); err != nil && !os.IsNotExist(err) {
+				failures = append(failures, err)
+			}
+		}
+		return errors.Join(append(failures, rollbackPaths(created))...)
+	}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, undo())
@@ -398,7 +436,7 @@ func (disk authorIO) writeFiles(root string, files map[string]file) (undo func()
 			return undo, err
 		}
 		if files[p].mode.IsDir() {
-			if err := os.Mkdir(target, files[p].mode.Perm()); err != nil {
+			if err := os.Mkdir(target, files[p].mode.Perm()|0700); err != nil {
 				return undo, err
 			}
 			info, err := os.Lstat(target)
@@ -406,6 +444,10 @@ func (disk authorIO) writeFiles(root string, files map[string]file) (undo func()
 				return undo, err
 			}
 			created = append(created, createdPath{target, info})
+			directories = append(directories, struct {
+				entry createdPath
+				mode  fs.FileMode
+			}{createdPath{target, info}, files[p].mode.Perm()})
 			continue
 		}
 		f, err := disk.create(target, files[p].mode)
@@ -428,6 +470,13 @@ func (disk authorIO) writeFiles(root string, files map[string]file) (undo func()
 		}
 		if closeErr != nil {
 			return undo, closeErr
+		}
+	}
+	// Populate every child before applying declared permissions. Finalize deepest
+	// directories first while their parents are still writable and searchable.
+	for i := len(directories) - 1; i >= 0; i-- {
+		if err := setDirectoryMode(directories[i].entry, directories[i].mode); err != nil {
+			return undo, err
 		}
 	}
 	return undo, nil

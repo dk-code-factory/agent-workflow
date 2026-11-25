@@ -177,7 +177,19 @@ func ReadMetadata(data []byte) (*Metadata, error) {
 
 // Load validates metadata, bindings and the complete declared dependency closure.
 func Load(root string) (*Descriptor, error) {
+	return loadCollected(newCollector(root))
+}
+
+func loadCaptured(root string) (*Descriptor, []byte, error) {
 	files := newCollector(root)
+	descriptor, err := loadCollected(files)
+	if err != nil {
+		return nil, nil, err
+	}
+	return descriptor, files.files[DescriptorFile].data, nil
+}
+
+func loadCollected(files *collector) (*Descriptor, error) {
 	b, err := files.read(DescriptorFile)
 	if err != nil {
 		return nil, err

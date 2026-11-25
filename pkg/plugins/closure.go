@@ -341,7 +341,11 @@ func rewriteWorkflow(data []byte, prefix string) ([]byte, error) {
 			job := jobs.Content[j]
 			for k := 0; k < len(job.Content); k += 2 {
 				if job.Content[k].Value == "uses" {
-					ref, err := workflows.CanonicalLocalRef(job.Content[k+1].Value)
+					value := job.Content[k+1]
+					if value.Tag == "!!null" || value.Value == "" {
+						continue
+					}
+					ref, err := workflows.CanonicalLocalRef(value.Value)
 					if err != nil {
 						return nil, err
 					}

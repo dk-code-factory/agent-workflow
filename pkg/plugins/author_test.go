@@ -3,9 +3,11 @@ package plugins
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -632,5 +634,129 @@ func TestPluginImportExplicitCurrentDirectoryHelpers(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPluginAddSkillPreservesDescriptorEditAfterCapture(t *testing.T) {
+	source := t.TempDir()
+	put(t, source, "custom.yaml", exampleWorkflow)
+	put(t, source, "agents/task.yaml", exampleAgent)
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", ""); err != nil {
+		t.Fatal(err)
+	}
+	disk := authoringIO()
+	load := disk.load
+	var edited []byte
+	disk.load = func(root string) (*Descriptor, []byte, error) {
+		descriptor, captured, err := load(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Change a valid descriptor immediately after it was parsed, before the
+		// import or any destination writes. A late baseline misses this edit.
+		concurrent := *descriptor
+		concurrent.Version = "0.2.0"
+		edited, err = yaml.Marshal(&concurrent)
+		if err == nil {
+			err = os.WriteFile(filepath.Join(root, DescriptorFile), edited, 0600)
+		}
+		return descriptor, captured, err
+	}
+	if err := addSkill(root, "second", filepath.Join(source, "custom.yaml"), disk); err == nil || !strings.Contains(err.Error(), "changed during import") {
+		t.Fatalf("missed concurrent descriptor edit: %v", err)
+	}
+	current, err := os.ReadFile(filepath.Join(root, DescriptorFile))
+	if err != nil || !bytes.Equal(current, edited) {
+		t.Fatalf("overwrote concurrent descriptor edit: %s (%v)", current, err)
+	}
+	for _, name := range []string{"imports/second", "skills/second", "fixtures/second", ".plugin-author.lock"} {
+		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("failed import retained %s: %v", name, err)
+		}
+	}
+}
+
+func TestPluginImportPreservesEmptyJobUses(t *testing.T) {
+	for _, uses := range []string{"''", "null", "~"} {
+		t.Run(uses, func(t *testing.T) {
+			source := t.TempDir()
+			workflow := "on: {workflow_call: {}}\njobs: {main: {uses: " + uses + ", steps: [{argv: [echo, hello]}]}}\n"
+			put(t, source, "custom.yaml", workflow)
+			parsed, err := workflows.Parse([]byte(workflow))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = workflows.Validate(parsed); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(t.TempDir(), "demo")
+			if err := Init(root, "demo", "0.2.2", filepath.Join(source, "custom.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			descriptor, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := (&workflows.Executor{WorkspaceDir: root}).Load(descriptor.Skills[0].Workflow)
+			if err != nil || loaded[descriptor.Skills[0].Workflow].Jobs["main"].Uses != "" || len(loaded[descriptor.Skills[0].Workflow].Jobs["main"].Steps) != 1 {
+				t.Fatalf("changed local job: %+v (%v)", loaded, err)
+			}
+		})
+	}
+}
+
+func TestPluginImportReadOnlyHelperDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows directory modes do not enforce POSIX owner write permissions")
+	}
+	source := t.TempDir()
+	put(t, source, "custom.yaml", "on: {workflow_call: {}}\njobs: {main: {container: {image: python:3, files: [helpers]}, steps: [{argv: [python, helpers/report.py]}]}}\n")
+	put(t, source, "helpers/report.py", "print('declared')\n")
+	if err := os.Chmod(filepath.Join(source, "helpers"), 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(source, "helpers"), 0755) })
+	root := filepath.Join(t.TempDir(), "demo")
+	disk := authoringIO()
+	create := disk.create
+	writes := 0
+	disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+		if filepath.Base(name) == "report.py" {
+			parent, err := os.Stat(filepath.Dir(name))
+			if err != nil {
+				return nil, err
+			}
+			// Assert ordinary-user creation permissions even when run as root.
+			if parent.Mode().Perm()&0300 != 0300 {
+				return nil, fmt.Errorf("helper directory is not writable/searchable during population: %o", parent.Mode().Perm())
+			}
+			writes++
+		}
+		return create(name, mode)
+	}
+	if err := initProject(root, "demo", "0.2.2", filepath.Join(source, "custom.yaml"), disk); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(root, "imports/demo/workflows/helpers")
+	info, err := os.Stat(helper)
+	if err != nil || info.Mode().Perm() != 0555 || writes != 2 {
+		t.Fatalf("helper modes/writes: %v, %d (%v)", info, writes, err)
+	}
+	contents, err := os.ReadFile(filepath.Join(helper, "report.py"))
+	if err != nil || string(contents) != "print('declared')\n" {
+		t.Fatalf("helper contents: %q (%v)", contents, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(helper, 0755) })
+	// A later descriptor failure must still roll back files inside finalized
+	// read-only directories, preserving the existing project and source tree.
+	disk.rename = func(_, _ string) error { return errors.New("injected descriptor failure") }
+	if err := addSkill(root, "second", filepath.Join(source, "custom.yaml"), disk); err == nil || !strings.Contains(err.Error(), "injected descriptor failure") {
+		t.Fatalf("missing descriptor failure: %v", err)
+	}
+	for _, name := range []string{"imports/second", "skills/second", "fixtures/second"} {
+		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("rollback retained %s: %v", name, err)
+		}
 	}
 }
