@@ -71,8 +71,7 @@ func initProject(directory, name, engineVersion, workflow string, disk authorIO)
 	files[d.Skills[0].Path] = file{data: skillText(name), mode: 0644}
 	files["config/agents.codex.example.yml"] = file{data: []byte(codexTemplate), mode: 0644}
 	files["config/agents.claude.example.yml"] = file{data: []byte(claudeTemplate), mode: 0644}
-	// This stage defines fixture source data. The plugin test interpreter is a
-	// later stage; importing an unknown workflow must not invent passing behavior.
+	// Importing an unknown workflow must not invent passing fixture behavior.
 	files["fixtures/example.yaml"] = file{data: []byte(fixtureText(name, workflow != "")), mode: 0644}
 	files["README.md"] = file{data: []byte(projectReadme), mode: 0644}
 	if err := d.Validate(); err != nil {
@@ -509,7 +508,7 @@ func fixtureText(name string, imported bool) string {
 	if imported {
 		return "schema-version: 1\n# Add scripted responses and assertions for the imported workflow before plugin test.\ncases: []\n"
 	}
-	return "schema-version: 1\ncases:\n  - name: success\n    skill: " + name + "\n    inputs: {task: Say hello}\n    operations:\n      - uses: agent/run\n        result: {text: Hello}\n    expect:\n      state: completed\n      invocation-count: 1\n"
+	return "schema-version: 1\ncases:\n  - name: success\n    skill: " + name + "\n    inputs: {task: Say hello}\n    operations:\n      - uses: agent/run\n        result: {text: Hello}\n    expect:\n      state: succeeded\n      invocation-count: 1\n"
 }
 
 const exampleWorkflow = `name: Example workflow skill
@@ -569,7 +568,7 @@ The example uses agent/run with a portable YAML definition. Edit the workflow an
 skill instructions, and maintain scripted fixture responses and assertions.
 Imported workflows receive an empty fixture template that needs authored cases.
 Fixtures are deterministic control-flow evidence, not live host/model acceptance.
-The fixture runner and generated host packaging are delivered in later stages.
+Use plugin check, plugin test and plugin build for deterministic validation and packaging.
 
 Provider credentials, runtime limits and permissions belong to the target
 workspace's agents.yml. config/ contains examples only and is never installed as

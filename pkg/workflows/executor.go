@@ -53,6 +53,7 @@ type RunStore interface {
 }
 
 type Executor struct {
+	Boundary                   ExecutionBoundary
 	ContainerGuardianDirectory string
 	bundleOrigin               string
 	executionFingerprint       string
