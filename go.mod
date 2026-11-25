@@ -8,8 +8,8 @@ require (
 	github.com/cilium/ebpf v0.22.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/google/jsonschema-go v0.4.3
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/sys v0.50.0
