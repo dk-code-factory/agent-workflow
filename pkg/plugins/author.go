@@ -509,7 +509,7 @@ func fixtureText(name string, imported bool) string {
 	if imported {
 		return "schema-version: 1\n# Add scripted responses and assertions for the imported workflow before plugin test.\ncases: []\n"
 	}
-	return "schema-version: 1\ncases:\n  - name: success\n    skill: " + name + "\n    inputs: {task: Say hello}\n    operations:\n      - uses: agent/run\n        result: {text: Hello}\n    expect:\n      state: completed\n      invocation-count: 1\n"
+	return "schema-version: 1\ncases:\n  - name: success\n    skill: " + name + "\n    inputs: {task: Say hello}\n    operations:\n      - uses: agent/run\n        result: {text: Hello}\n    expect:\n      state: succeeded\n      invocation-count: 1\n"
 }
 
 const exampleWorkflow = `name: Example workflow skill

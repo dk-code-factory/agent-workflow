@@ -13,12 +13,19 @@ import (
 
 func pluginCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow plugin <init|add-skill|build|run> [flags] NAME\n\ninit [--workflow FILE] NAME\nadd-skill --plugin DIR --workflow FILE NAME\nbuild --target codex,claude --output DIR SOURCE\n\nrun --plugin-root DIR --workspace REPO --request-id ID [--input NAME=VALUE] [--secret-env NAME=ENV] SKILL\n\nFlags precede positional arguments. Scaffolding and building are offline.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow plugin <init|add-skill|check|test|build|run> [flags] NAME\n\ninit [--workflow FILE] NAME\nadd-skill --plugin DIR --workflow FILE NAME\ncheck [--json] DIR\ntest [--json] DIR\nbuild --target codex,claude --output DIR SOURCE\n\nrun --plugin-root DIR --workspace REPO --request-id ID [--input NAME=VALUE] [--secret-env NAME=ENV] SKILL\n\nFlags precede positional arguments. Authoring, checking, fixture testing and building are offline.")
 		return nil
 	}
 	verb := args[0]
 	if verb == "build" {
 		return pluginBuild(args[1:], stdout, stderr)
+	}
+	if verb == "check" {
+		return pluginCheckCommand(args[1:], stdout, stderr)
+	}
+	if verb == "test" {
+		return pluginTestCommand(ctx, args[1:], stdout, stderr)
+
 	}
 	if verb == "run" {
 		return command(ctx, append([]string{"run", "--packaged"}, args[1:]...), stdout, stderr)

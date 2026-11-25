@@ -124,6 +124,19 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		}
 		inputJSON = append(inputJSON, '\n')
 	}
+	if e.Boundary != nil {
+		dir := step.WorkingDirectory
+		if dir == "" {
+			dir = e.WorkspaceDir
+		} else if !filepath.IsAbs(dir) {
+			dir = filepath.Join(e.WorkspaceDir, dir)
+		}
+		out, err := e.Boundary.RunCommand(ctx, CommandRequest{RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Iteration: ec.IterationNumber, Argv: argv, Environment: env, Directory: dir, Input: inputJSON})
+		if err != nil {
+			return out, err
+		}
+		return validateCommandOutput(out, step, ec)
+	}
 	if isDockerStep(step) || ctx.Value(jobContainerKey{}) != nil {
 		ctx = context.WithValue(ctx, commandInputKey{}, inputJSON)
 		out, err := e.executeContainerCommand(ctx, step, argv, slots)

@@ -9,6 +9,14 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if e.Boundary != nil {
+		if err := e.Boundary.CheckPolicy(e.CommandExecution); err != nil {
+			return err
+		}
+		if err := e.Boundary.CheckDefinitions(all); err != nil {
+			return err
+		}
+	}
 	if err := e.pinContainers(ctx, all); err != nil {
 		return err
 	}

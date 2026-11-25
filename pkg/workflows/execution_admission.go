@@ -10,6 +10,11 @@ import (
 // resulting runner is private to this execution; concurrent runs never mutate
 // the controller's configuration.
 func (e *Executor) pinExecution(ctx context.Context) error {
+	if e.Boundary != nil {
+		if err := e.Boundary.CheckPolicy(e.CommandExecution); err != nil {
+			return err
+		}
+	}
 	p, err := runtimeexec.PinPolicy(ctx, e.CommandExecution)
 	if err != nil {
 		return err
