@@ -132,7 +132,8 @@ func (d *Descriptor) Validate() error {
 		if !identity.MatchString(s.Name) || names[s.Name] {
 			return fmt.Errorf("invalid or duplicate skill identity %q", s.Name)
 		}
-		if _, err := localPath(s.Path); err != nil {
+		skillPath, err := localPath(s.Path)
+		if err != nil {
 			return fmt.Errorf("skill %s path: %w", s.Name, err)
 		}
 		if filepath.Ext(s.Path) != ".md" || filepath.Base(s.Path) != "SKILL.md" {
@@ -142,7 +143,6 @@ func (d *Descriptor) Validate() error {
 		if err != nil {
 			return fmt.Errorf("skill %s workflow: %w", s.Name, err)
 		}
-		skillPath, _ := localPath(s.Path)
 		if paths[skillPath] || bindings[canonical] {
 			return fmt.Errorf("skill %s duplicates a path or workflow binding", s.Name)
 		}
@@ -180,13 +180,13 @@ func Load(root string) (*Descriptor, error) {
 	return loadCollected(newCollector(root))
 }
 
-func loadCaptured(root string) (*Descriptor, []byte, error) {
+func loadCaptured(root string) (*Descriptor, *collector, error) {
 	files := newCollector(root)
 	descriptor, err := loadCollected(files)
 	if err != nil {
 		return nil, nil, err
 	}
-	return descriptor, files.files[DescriptorFile].data, nil
+	return descriptor, files, nil
 }
 
 func loadCollected(files *collector) (*Descriptor, error) {

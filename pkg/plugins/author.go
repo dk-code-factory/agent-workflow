@@ -29,7 +29,7 @@ type authorFile interface {
 type authorIO struct {
 	create func(string, fs.FileMode) (authorFile, error)
 	rename func(string, string) error
-	load   func(string) (*Descriptor, []byte, error)
+	load   func(string) (*Descriptor, *collector, error)
 }
 
 func authoringIO() authorIO {
@@ -83,21 +83,7 @@ func initProject(directory, name, engineVersion, workflow string, disk authorIO)
 		return err
 	}
 	files[DescriptorFile] = file{data: data, mode: 0644}
-	// Validate a private copy before reserving the destination.
-	parent := filepath.Dir(directory)
-	stage, err := os.MkdirTemp(parent, ".plugin-init-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(stage)
-	cleanupStage, err := disk.writeFiles(stage, files)
-	if err != nil {
-		return err
-	}
-	if _, err = Load(stage); err != nil {
-		return errors.Join(err, cleanupStage())
-	}
-	if err = cleanupStage(); err != nil {
+	if err = validateProjectFiles(filepath.Dir(directory), files, disk); err != nil {
 		return err
 	}
 	// Mkdir reserves the destination without replacing an existing empty directory.
@@ -131,10 +117,11 @@ func addSkill(root, name, workflow string, disk authorIO) (err error) {
 	}
 	lock.Close()
 	defer os.Remove(filepath.Join(root, ".plugin-author.lock"))
-	d, original, err := disk.load(root)
+	d, captured, err := disk.load(root)
 	if err != nil {
 		return err
 	}
+	original := captured.files[DescriptorFile].data
 	for _, s := range d.Skills {
 		if s.Name == name {
 			return fmt.Errorf("%s: skill %q already exists", DescriptorFile, name)
@@ -158,6 +145,19 @@ func addSkill(root, name, workflow string, disk authorIO) (err error) {
 		if err := checkNewPath(root, p); err != nil {
 			return err
 		}
+	}
+	// Admit the complete proposed project from the exact captured source bytes.
+	// A fresh collector applies the same aggregate limits as a subsequent Load.
+	combined := make(map[string]file, len(captured.files)+len(files))
+	for name, source := range captured.files {
+		combined[name] = source
+	}
+	for name, source := range files {
+		combined[name] = source
+	}
+	combined[DescriptorFile] = file{data: data, mode: 0644}
+	if err = validateProjectFiles(root, combined, authoringIO()); err != nil {
+		return err
 	}
 	// Prepare the updated descriptor before writing new sources, then rename it
 	// atomically only after all exclusive file creations succeed.
@@ -191,6 +191,27 @@ func addSkill(root, name, workflow string, disk authorIO) (err error) {
 		return fmt.Errorf("%s changed during import; descriptor update refused", DescriptorFile)
 	}
 	return disk.rename(tmpName, filepath.Join(root, DescriptorFile))
+}
+
+// validateProjectFiles validates only the supplied declared files in a private
+// directory. Cleanup reopens owned read-only directories before removing them.
+func validateProjectFiles(parent string, files map[string]file, disk authorIO) (err error) {
+	stage, err := os.MkdirTemp(parent, ".plugin-validate-")
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(stage)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, rollbackPaths([]createdPath{{stage, info}})) }()
+	cleanup, err := disk.writeFiles(stage, files)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
+	_, err = Load(stage)
+	return err
 }
 
 func importWorkflow(name, source string) (Skill, map[string]file, error) {

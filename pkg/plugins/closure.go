@@ -224,6 +224,14 @@ func (c *collector) agent(name string) error {
 		if len(candidates) != 1 {
 			return fmt.Errorf("%s: agent directory requires exactly one YAML definition", name)
 		}
+		if _, exists := c.files[name]; !exists {
+			if len(c.files) >= 4096 {
+				return fmt.Errorf("%s: dependency closure exceeds 4096 entries", name)
+			}
+			// Retain the declared directory so imports preserve its mode and
+			// reject a target directory containing unrelated definitions.
+			c.files[name] = file{mode: fs.ModeDir | info.Mode().Perm()}
+		}
 		name = candidates[0]
 	}
 	if ext := strings.ToLower(path.Ext(name)); ext != ".yaml" && ext != ".yml" {

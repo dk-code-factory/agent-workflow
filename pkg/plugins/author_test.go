@@ -648,7 +648,7 @@ func TestPluginAddSkillPreservesDescriptorEditAfterCapture(t *testing.T) {
 	disk := authoringIO()
 	load := disk.load
 	var edited []byte
-	disk.load = func(root string) (*Descriptor, []byte, error) {
+	disk.load = func(root string) (*Descriptor, *collector, error) {
 		descriptor, captured, err := load(root)
 		if err != nil {
 			return nil, nil, err
@@ -674,6 +674,49 @@ func TestPluginAddSkillPreservesDescriptorEditAfterCapture(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
 			t.Fatalf("failed import retained %s: %v", name, err)
 		}
+	}
+}
+
+func TestPluginValidationPreservesReplacedStage(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "demo")
+	disk := authoringIO()
+	create := disk.create
+	var stage string
+	var replacement fs.FileInfo
+	disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+		if stage == "" {
+			// The first scaffold file is README.md in the private stage root.
+			stage = filepath.Dir(name)
+			if !strings.HasPrefix(filepath.Base(stage), ".plugin-validate-") {
+				t.Fatalf("unexpected validation path: %s", name)
+			}
+			if err := os.Rename(stage, stage+"-original"); err != nil {
+				return nil, err
+			}
+			if err := os.Mkdir(stage, 0700); err != nil {
+				return nil, err
+			}
+			var err error
+			replacement, err = os.Lstat(stage)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return create(name, mode)
+	}
+	if err := initProject(root, "demo", "0.2.2", "", disk); err == nil || !strings.Contains(err.Error(), "changed identity; retained during rollback") {
+		t.Fatalf("removed or missed replaced stage: %v", err)
+	}
+	current, err := os.Lstat(stage)
+	if err != nil || !os.SameFile(replacement, current) {
+		t.Fatalf("replaced stage was removed: %v", err)
+	}
+	entries, err := os.ReadDir(stage)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("owned stage children were not cleaned: %v (%v)", entries, err)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatalf("failed validation reserved destination: %v", err)
 	}
 }
 
