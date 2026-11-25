@@ -42,14 +42,14 @@ jobs:
     steps:
       - id: run
         uses: agent/run
-        with: {prompt: first, agent: claude.toml}
+        with: {prompt: first, agent: claude.yaml}
   second:
     outputs:
       text: ${{ steps.run.outputs.text }}
     steps:
       - id: run
         uses: agent/run
-        with: {prompt: second, agent: codex.toml}
+        with: {prompt: second, agent: codex.yaml}
   combine:
     needs: [first, second]
     outputs:
@@ -59,7 +59,7 @@ jobs:
         uses: agent/run
         with:
           prompt: "${{ needs.first.outputs.text }} + ${{ needs.second.outputs.text }}"
-          agent: claude.toml
+          agent: claude.yaml
 `
 
 func TestParallelJobsWaitForBothAndPassOutputs(t *testing.T) {
@@ -186,7 +186,7 @@ jobs:
               required: [answer]
               properties:
                 answer: {type: string}
-          agent: claude.toml
+          agent: claude.yaml
 `)
 	writeWorkflow(t, root, "main.yml", `on:
   workflow_call:
@@ -268,9 +268,9 @@ func TestStrictParseAndValidation(t *testing.T) {
 		}
 	}
 	for _, source := range []string{
-		"on: {schedule: [{cron: '* * * * *'}]}\njobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
-		"jobs: {x: {needs: y, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
-		"jobs: {x: {needs: x, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.toml}}]}}\n",
+		"on: {schedule: [{cron: '* * * * *'}]}\njobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: claude.yaml}}]}}\n",
+		"jobs: {x: {needs: y, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.yaml}}]}}\n",
+		"jobs: {x: {needs: x, steps: [{uses: agent/run, with: {prompt: hi, agent: claude.yaml}}]}}\n",
 		"jobs: {x: {steps: [{uses: tool/shell, with: {prompt: hi}}]}}",
 		"jobs: {x: {steps: [{run: echo hi}]}}",
 	} {

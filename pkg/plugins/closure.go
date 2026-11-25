@@ -165,12 +165,12 @@ func (c *collector) agent(name string) error {
 		}
 		var candidates []string
 		for _, e := range entries {
-			if !e.IsDir() && strings.EqualFold(path.Ext(e.Name()), ".toml") {
+			if !e.IsDir() && (strings.EqualFold(path.Ext(e.Name()), ".yaml") || strings.EqualFold(path.Ext(e.Name()), ".yml")) {
 				candidates = append(candidates, path.Join(name, e.Name()))
 			}
 		}
 		if len(candidates) != 1 {
-			return fmt.Errorf("%s: agent directory requires exactly one TOML file", name)
+			return fmt.Errorf("%s: agent directory requires exactly one YAML definition", name)
 		}
 		name = candidates[0]
 	}

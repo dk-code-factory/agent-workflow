@@ -46,8 +46,8 @@ class AppFixture:
         (root / "roles").mkdir()
         roles = {}
         for key in ("leaf", "reviewer", "verifier", "fixer", "audience"):
-            path = root / "roles" / (key + ".toml")
-            path.write_text(f'name = "{key}"\ndescription = "Fixture"\ndeveloper_instructions = "Follow the exact bounded assignment and retain evidence."\n')
+            path = root / "roles" / (key + ".yaml")
+            path.write_text(f'name: "{key}"\ndescription: "Fixture"\ninstructions: "Follow the exact bounded assignment and retain evidence."\n')
             roles[key] = path.relative_to(root).as_posix()
         git(root, "add", ".")
         git(root, "commit", "-m", "Create review fixture")

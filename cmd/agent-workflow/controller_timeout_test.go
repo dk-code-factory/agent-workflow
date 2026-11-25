@@ -37,8 +37,8 @@ func TestControllerDeadlineOverridePreservesRoleIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"workflows/main.yml":     "jobs: {task: {steps: [{uses: agent/run, with: {agent: fixture.toml, prompt: wait}}]}}\n",
-		"workflows/fixture.toml": "name='fixture'\ndescription='Fixture'\ndeveloper_instructions='Wait for cancellation.'\n",
+		"workflows/main.yml":     "jobs: {task: {steps: [{uses: agent/run, with: {agent: fixture.yaml, prompt: wait}}]}}\n",
+		"workflows/fixture.yaml": "name: 'fixture'\ndescription: 'Fixture'\ninstructions: 'Wait for cancellation.'\n",
 		"agents.yml":             "controller: {run-timeout: 30m}\nagents:\n  codex:\n    provider: codex-app-server\n    command: " + filepath.Join(root, "fake-codex") + "\n    authentication: {mode: api-key, credential-env: WORKFLOW_DEADLINE_FIXTURE_KEY}\n",
 		"fake-codex": `#!/usr/bin/env python3
 import json,sys,time

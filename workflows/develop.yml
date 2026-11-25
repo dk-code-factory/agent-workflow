@@ -16,7 +16,7 @@ jobs:
               uses: agent/run
               with:
                 prompt: 'Plan this task without editing or publishing: ${{ inputs.task }}'
-                agent: agents/planner.toml
+                agent: agents/planner.yaml
     iterate:
         needs: plan
         uses: workflows/develop-iteration.yml
@@ -57,7 +57,7 @@ jobs:
                         additionalProperties: false
                         required: [clean]
                         properties: {clean: {type: boolean}}
-                agent: agents/review_correctness.toml
+                agent: agents/review_correctness.yaml
     review_two:
         needs: iterate
         outputs:
@@ -80,7 +80,7 @@ jobs:
                         additionalProperties: false
                         required: [clean]
                         properties: {clean: {type: boolean}}
-                agent: agents/review_security.toml
+                agent: agents/review_security.yaml
     publish:
         needs: [iterate, test, review_one, review_two]
         steps:

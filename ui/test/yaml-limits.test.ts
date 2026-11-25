@@ -14,7 +14,7 @@ jobs:
     uses: examples/pr-fix/workflows/task.yml
     for-each: {items: [], key: item.id, concurrency: "\${{ inputs.bound }}"}
   native:
-    steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: "\${{ inputs.bound }}"}}]
+    steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: Review, turns: "\${{ inputs.bound }}"}}]
 `;
   const doc = new WorkflowDocument({ source });
   expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);

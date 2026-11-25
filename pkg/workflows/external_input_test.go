@@ -22,16 +22,16 @@ const waitSource = `jobs:
     steps:
       - id: before
         uses: agent/run
-        with: {prompt: preparation, agent: a.toml}
+        with: {prompt: preparation, agent: a.yaml}
       - id: question
         uses: input/wait
         with: {prompt: Choose a policy, evidence-id: evidence-v1, payload: {choices: [a, b]}}
       - id: after
         uses: agent/run
-        with: {prompt: '${{ steps.question.outputs.answer }}', agent: a.toml}
+        with: {prompt: '${{ steps.question.outputs.answer }}', agent: a.yaml}
   dependent:
     needs: decide
-    steps: [{uses: agent/run, with: {prompt: dependent, agent: a.toml}}]
+    steps: [{uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]
 `
 
 func inputGate(t *testing.T, s *SQLiteStore, id string) ExternalInputGate {
@@ -298,7 +298,7 @@ func TestExternalInputNestedRepeatAndOrderedItems(t *testing.T) {
 				calls.Add(1)
 				return map[string]any{}, nil
 			}))
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\n"+waitSource[:len(waitSource)-len("  dependent:\n    needs: decide\n    steps: [{uses: agent/run, with: {prompt: dependent, agent: a.toml}}]\n")])
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\n"+waitSource[:len(waitSource)-len("  dependent:\n    needs: decide\n    steps: [{uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]\n")])
 			run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != RunStatusWaiting {
 				t.Fatalf("first %+v %v", run, err)
@@ -538,7 +538,7 @@ func TestExternalInputDrainsIndependentWorkAndActiveInterrupt(t *testing.T) {
 			release := make(chan struct{})
 			e, s := durableExecutor(t, `jobs:
   question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  independent: {steps: [{uses: agent/run, with: {prompt: independent, agent: a.toml}}]}
+  independent: {steps: [{uses: agent/run, with: {prompt: independent, agent: a.yaml}}]}
 `, agentFunc(func(ctx context.Context, _ AgentRequest) (map[string]any, error) {
 				close(started)
 				select {
@@ -926,7 +926,7 @@ func TestExternalInputPendingResumePreservesUncertainty(t *testing.T) {
 func TestExternalInputCancellationControlDoesNotLeakGenerations(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
-	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: agent/run, with: {prompt: resume, agent: a.toml}}]}}
+	e, s := durableExecutor(t, `jobs: {x: {steps: [{uses: agent/run, with: {prompt: resume, agent: a.yaml}}]}}
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{}, nil
@@ -1073,7 +1073,7 @@ func TestExternalInputPauseDeniedConsumption(t *testing.T) {
 			var calls atomic.Int32
 			e, s := durableExecutor(t, `jobs:
   ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  dependent: {needs: ask, steps: [{uses: agent/run, with: {prompt: dependent, agent: a.toml}}]}
+  dependent: {needs: ask, steps: [{uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]}
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 				calls.Add(1)
 				return map[string]any{}, nil

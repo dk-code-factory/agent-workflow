@@ -17,7 +17,7 @@ jobs:
       - id: report
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: '\${{ steps.solution.approved }}'
 `;
 
@@ -38,7 +38,7 @@ describe('YAML conversations', () => {
 jobs:
   solve:
     steps:
-      - { id: seed, uses: agent/run, with: { agent: builder.toml, prompt: Prepare } }
+      - { id: seed, uses: agent/run, with: { agent: builder.yaml, prompt: Prepare } }
       - id: solution
         conversation: [ builder, reviewer ]
         finishBy: reviewer
@@ -46,11 +46,11 @@ jobs:
         with: { output: { schema: Decision } }
       - id: report
         finally:
-          - with: { output: { schema: Decision }, agent: builder.toml, prompt: '\${{ steps.solution.answer }}' }
+          - with: { output: { schema: Decision }, agent: builder.yaml, prompt: '\${{ steps.solution.answer }}' }
             uses: agent/run
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Report
 ` });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
@@ -103,7 +103,7 @@ jobs:
   });
 
   it('keeps prompts and compatible contracts when converting through conversations', () => {
-    const doc = new WorkflowDocument({ source: `jobs: { solve: { steps: [ { with: { model: chosen, message: Old, output: { format: json }, agent: claude.toml, prompt: Work }, uses: agent/run } ] } }
+    const doc = new WorkflowDocument({ source: `jobs: { solve: { steps: [ { with: { model: chosen, message: Old, output: { format: json }, agent: claude.yaml, prompt: Work }, uses: agent/run } ] } }
 ` });
     expect(stepConversionImpact(doc.getSnapshot().workflow!.jobs.solve.steps![0], 'conversation')).toEqual(['uses', 'with.message', 'with.agent', 'with.prompt']);
     doc.setStepKind('solve', 0, 'conversation');
@@ -138,7 +138,7 @@ jobs:
 
   it('wires conversation results across jobs and reverses the dependency and prompt together', () => {
     const doc = new WorkflowDocument({ source: source + `  report:
-    steps: [ { uses: agent/run, with: { agent: reviewer.toml, prompt: Review } } ]
+    steps: [ { uses: agent/run, with: { agent: reviewer.yaml, prompt: Review } } ]
 ` });
     const before = doc.getSnapshot().source;
     doc.applyJobResult(doc.previewJobResult({ target: ['jobs', 'report', 'steps', 0, 'with', 'prompt'], producer: 'solve', source: { kind: 'result', step: 0, field: 'approved' } }));

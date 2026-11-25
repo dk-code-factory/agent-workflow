@@ -15,7 +15,7 @@ jobs:
           prompt: |
             Line one
             Line two
-          agent: claude.toml
+          agent: claude.yaml
 `;
   const ui = await open(page, source); await ui.getByRole('button', { name: 'Split', exact: true }).click();
   await field(page, 'Name', 'Renamed');

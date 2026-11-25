@@ -68,8 +68,8 @@ func TestExternalInputInterruptRetainsIndependentFailure(t *testing.T) {
 			defer cancel()
 			e, s := durableExecutor(t, `jobs:
   question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  failure: {steps: [{uses: agent/run, with: {prompt: failure, agent: a.toml}}]}
-  active: {steps: [{uses: agent/run, with: {prompt: active, agent: a.toml}}]}
+  failure: {steps: [{uses: agent/run, with: {prompt: failure, agent: a.yaml}}]}
+  active: {steps: [{uses: agent/run, with: {prompt: active, agent: a.yaml}}]}
 `, agentFunc(func(ctx context.Context, req AgentRequest) (map[string]any, error) {
 				if req.Prompt == "failure" {
 					return nil, errors.New("independent failure diagnostic")
@@ -138,9 +138,9 @@ func testExternalInputOrderedGateCommit(t *testing.T, nested bool) {
 jobs:
   x:
     steps:
-      - {id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}
+      - {id: before, uses: agent/run, with: {prompt: before, agent: a.yaml}}
       - {id: question, uses: input/wait, with: {prompt: q, evidence-id: e}}
-      - {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}
+      - {id: after, uses: agent/run, with: {prompt: after, agent: a.yaml}}
 `)
 			wrapper := &executionBoundaryJournal{SQLiteStore: s}
 			wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
@@ -297,11 +297,11 @@ func testExternalInputUnsafeChild(t *testing.T, nested bool) {
 			source := `on: {workflow_call: {}}
 jobs:
   question: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
+  independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.yaml}}]}
 `
 			if mode == "no-gate" {
 				source = `on: {workflow_call: {}}
-jobs: {independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}}
+jobs: {independent: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.yaml}}]}}
 `
 			}
 			if nested {
@@ -387,10 +387,10 @@ func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				started := make(chan struct{})
-				job := `{steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
+				job := `{steps: [{uses: agent/run, with: {prompt: effect, agent: a.yaml}}]}
 `
 				if boundary == "repeat" {
-					job = `{repeat: {max-attempts: 2, until: 'iteration.number == 2'}, steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}
+					job = `{repeat: {max-attempts: 2, until: 'iteration.number == 2'}, steps: [{uses: agent/run, with: {prompt: effect, agent: a.yaml}}]}
 `
 				}
 				if boundary == "reusable" {
@@ -405,7 +405,7 @@ func TestExternalInputFailureReturningAfterCancellation(t *testing.T) {
 					return nil, errors.Join(cause.err, ctx.Err())
 				}))
 				if boundary == "reusable" {
-					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {effect: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.toml}}]}}\n")
+					writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {effect: {steps: [{uses: agent/run, with: {prompt: effect, agent: a.yaml}}]}}\n")
 				}
 				wrapper := &executionBoundaryJournal{SQLiteStore: s}
 				wrapper.afterGate = func(ctx context.Context, g ExternalInputGate) error {
@@ -471,13 +471,13 @@ func TestExternalInputRepeatedOrderedInterruptions(t *testing.T) {
 jobs:
   x:
     steps:
-      - {uses: agent/run, with: {prompt: before, agent: a.toml}}
+      - {uses: agent/run, with: {prompt: before, agent: a.yaml}}
       - {id: q1, uses: input/wait, with: {prompt: one, evidence-id: e1}}
-      - {uses: agent/run, with: {prompt: middle-one, agent: a.toml}}
+      - {uses: agent/run, with: {prompt: middle-one, agent: a.yaml}}
       - {id: q2, uses: input/wait, with: {prompt: two, evidence-id: e2}}
-      - {uses: agent/run, with: {prompt: middle-two, agent: a.toml}}
+      - {uses: agent/run, with: {prompt: middle-two, agent: a.yaml}}
       - {id: q3, uses: input/wait, with: {prompt: three, evidence-id: e3}}
-      - {uses: agent/run, with: {prompt: after, agent: a.toml}}
+      - {uses: agent/run, with: {prompt: after, agent: a.yaml}}
 `)
 			wrapper := &executionBoundaryJournal{SQLiteStore: s}
 			e.Store = wrapper
@@ -592,7 +592,7 @@ func TestExternalInputDeadlineOutcomeCompatibility(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	e := nativeTestExecutor(t, &Executor{})
-	definitions := map[string]*Workflow{"main": {Jobs: map[string]Job{"x": {Steps: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}}}}}
+	definitions := map[string]*Workflow{"main": {Jobs: map[string]Job{"x": {Steps: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.yaml"}}}}}}}
 	run, err := e.execute(ctx, "main", RunRequest{Ref: "main"}, definitions, make(chan struct{}, 1), 0, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || run == nil || run.Status != RunStatusCanceled || run.FailureClass != "timeout" {
 		t.Fatalf("deadline run outcome changed: %+v %v", run, err)
@@ -908,7 +908,7 @@ func TestExternalInputOrderedCancelAtAcceptedConsumption(t *testing.T) {
 					if progression == "repeat" {
 						spec += ", repeat: {max-attempts: 2, until: 'iteration.number == 2'}"
 					}
-					source := "jobs:\n  review: {" + spec + "}\n  dependent:\n    needs: review\n    steps: [{uses: agent/run, with: {agent: a.toml, prompt: root-dependent}}]\n"
+					source := "jobs:\n  review: {" + spec + "}\n  dependent:\n    needs: review\n    steps: [{uses: agent/run, with: {agent: a.yaml, prompt: root-dependent}}]\n"
 					e, s := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 						calls.Add(1)
 						return map[string]any{}, nil
@@ -923,10 +923,10 @@ jobs:
   question:
     steps:
       - {uses: input/wait, with: {prompt: q, evidence-id: e}}
-      - {uses: agent/run, with: {prompt: dependent-step, agent: a.toml}}
+      - {uses: agent/run, with: {prompt: dependent-step, agent: a.yaml}}
   dependent:
     needs: question
-    steps: [{uses: agent/run, with: {prompt: dependent-job, agent: a.toml}}]
+    steps: [{uses: agent/run, with: {prompt: dependent-job, agent: a.yaml}}]
 `)
 					run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml"})
 					if err != nil || run.Status != RunStatusWaiting {

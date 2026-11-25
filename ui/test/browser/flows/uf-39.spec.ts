@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { open, snapshot, field, job } from './harness';
 
 test('declare producer output and insert it in dependent prompt', async ({ page }) => {
-  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.toml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: Summarize, agent: claude.toml } } ] } }
+  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.yaml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: Summarize, agent: claude.yaml } } ] } }
 `);
   await job(page, 'review'); await ui.getByText('Job outputs', { exact: true }).click();
   await ui.getByRole('button', { name: 'Add output', exact: true }).click();
@@ -17,7 +17,7 @@ test('declare producer output and insert it in dependent prompt', async ({ page 
 });
 
 test('preview and cancel result wiring, then apply and Undo the complete transaction', async ({ page }) => {
-  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.toml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: "Summarize: ", model: keep, agent: claude.toml } } ] } }
+  const ui = await open(page, `jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { prompt: Review, agent: claude.yaml } } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { prompt: "Summarize: ", model: keep, agent: claude.yaml } } ] } }
 `);
   await job(page, 'summarize');
   await ui.getByRole('button', { name: '1. summary', exact: true }).click();
@@ -42,13 +42,13 @@ test('preview and cancel result wiring, then apply and Undo the complete transac
   const jobs = (await snapshot(page)).workflow.jobs;
   expect(jobs.review.outputs).toEqual({ report: '${{ steps.analyze.outputs.text }}' });
   expect(jobs.summarize.needs).toEqual(['review']);
-  expect(jobs.summarize.steps[0].with).toEqual({ agent: 'claude.toml', prompt: 'Summarize: ${{ needs.review.outputs.report }}', model: 'keep' });
+  expect(jobs.summarize.steps[0].with).toEqual({ agent: 'claude.yaml', prompt: 'Summarize: ${{ needs.review.outputs.report }}', model: 'keep' });
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(before);
 });
 
 test('existing outputs are reusable and changed documents require a new preview', async ({ page }) => {
-  const ui = await open(page, `jobs: { review: { outputs: { report: "\${{ steps.analyze.outputs.text }}" }, steps: [ { id: analyze, argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.toml } } ] } }
+  const ui = await open(page, `jobs: { review: { outputs: { report: "\${{ steps.analyze.outputs.text }}" }, steps: [ { id: analyze, argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.yaml } } ] } }
 `);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
   await ui.getByRole('button', { name: 'Use job result in Prompt', exact: true }).click();
@@ -72,7 +72,7 @@ test('existing outputs are reusable and changed documents require a new preview'
 
 
 test('Escape closes the native result dialog and restores field focus without editing', async ({ page }) => {
-  const ui = await open(page, `jobs: { review: { steps: [ { argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.toml } } ] } }
+  const ui = await open(page, `jobs: { review: { steps: [ { argv: [ echo ] } ] }, summarize: { steps: [ { uses: agent/run, with: { prompt: Summary, agent: claude.yaml } } ] } }
 `);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. step_1', exact: true }).click();
   const before = (await snapshot(page)).source;
@@ -85,7 +85,7 @@ test('Escape closes the native result dialog and restores field focus without ed
 
 test('named step result wiring inserts a nested field without declaring a job output', async ({ page }) => {
   const ui = await open(page, `schemas: { Review: { type: object, properties: { details: { type: object, properties: { reason: { type: string } } } } } }
-jobs: { review: { steps: [ { id: analyze, with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { agent: claude.toml, prompt: "Read: " } } ] } }
+jobs: { review: { steps: [ { id: analyze, with: { output: { schema: Review }, agent: claude.yaml, prompt: Review }, uses: agent/run } ] }, summarize: { steps: [ { id: summary, uses: agent/run, with: { agent: claude.yaml, prompt: "Read: " } } ] } }
 `);
   await job(page, 'summarize'); await ui.getByRole('button', { name: '1. summary', exact: true }).click();
   const prompt = ui.getByLabel('Prompt', { exact: true });
@@ -113,8 +113,8 @@ test('named result picker bounds schema fields and typed prefixes reach a later 
   const source = JSON.stringify({
     schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
     jobs: {
-      review: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}}] },
-      summarize: { steps: [{id: 'summary', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+      review: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Review'}}] },
+      summarize: { steps: [{id: 'summary', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
     },
   });
   const ui = await open(page, source);

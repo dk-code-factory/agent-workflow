@@ -259,7 +259,7 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 	if e != nil {
 		return Prepared{}, e
 	}
-	definition := []byte("name = 'prfix'\ndescription = 'Execute one retained PR maintenance assignment.'\ndeveloper_instructions = 'Follow the supplied retained assignment, policies, claims and publication boundaries. Return original evidence and explicit completion. Do not coordinate workers or bypass application publication gates.'\n")
+	definition := []byte("name: 'prfix'\ndescription: 'Execute one retained PR maintenance assignment.'\ninstructions: 'Follow the supplied retained assignment, policies, claims and publication boundaries. Return original evidence and explicit completion. Do not coordinate workers or bypass application publication gates.'\n")
 	p.Sources["agent_definition"] = digest(string(definition))
 	p.Sources["reader"] = digest(string(reader))
 	p.Fingerprint = digest(p)
@@ -287,7 +287,7 @@ func Prepare(ctx context.Context, root string, provider Provider, req PrepareReq
 		return Prepared{}, fmt.Errorf("plan exceeds engine closure limit of 128 definitions (%d)", len(definitions))
 	}
 
-	if e = writeImmutable(filepath.Join(root, filepath.FromSlash(dir), "prfix.toml"), definition); e != nil {
+	if e = writeImmutable(filepath.Join(root, filepath.FromSlash(dir), "prfix.yaml"), definition); e != nil {
 		return Prepared{}, e
 	}
 	for ref, b := range definitions {

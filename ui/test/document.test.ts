@@ -16,7 +16,7 @@ jobs:
           prompt: |
             Hello
             world \${{ inputs.task }}
-          agent: claude.toml
+          agent: claude.yaml
       - argv: [ echo, done ]
   test:
     needs: build
@@ -25,7 +25,7 @@ jobs:
 `;
 describe('document edits', () => {
   it.each(['010', '+010', '-010', '000', '08', '-00', '0.10000000000000001', '1.0000000000000001', '1.234567890123456789e-20', '-0.0'])('retains exact typed numeric token %s across input and unrelated edits', token => {
-    const original = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: Review, input: {fraction: ${token}}}}]}}`;
+    const original = `jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: Review, input: {fraction: ${token}}}}]}}`;
     const doc = new WorkflowDocument({ source: original });
     const path = ['jobs', 'review', 'steps', 0, 'with', 'input'];
     expect(doc.getFieldYAML(path)).toContain(token);
@@ -47,14 +47,14 @@ describe('document edits', () => {
       - null
       - uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
           input:
             exact: 9007199254740993
         onError:
           - null
           - uses: agent/run
-            with: {agent: reviewer.toml, prompt: Recover, input: [9007199254740995, null]}
+            with: {agent: reviewer.yaml, prompt: Recover, input: [9007199254740995, null]}
 `;
     const doc = new WorkflowDocument({ source });
     expect(doc.getFieldYAML(['jobs', 'review', 'steps', 0, 'with', 'input'])).toContain('9007199254740993');
@@ -76,7 +76,7 @@ jobs:
   build:
     steps:
       - uses: agent/run
-        with: { prompt: Review, output: { schema: Review, repair-attempts: 0 }, agent: claude.toml }
+        with: { prompt: Review, output: { schema: Review, repair-attempts: 0 }, agent: claude.yaml }
 `;
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
@@ -99,7 +99,7 @@ jobs:
     ['Review: {type: object, properties: {answer: {anyOf: []}}}', ['schemas', 'Review', 'properties', 'answer', 'anyOf'], 'Unsupported schema keyword'],
   ])('reports named-schema declarations at their original field: %s', (declaration, path, message) => {
     const text = `schemas: { ${declaration} }
-jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Review, agent: claude.toml } } ] } }
+jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Review, agent: claude.yaml } } ] } }
 `;
     const doc = new WorkflowDocument({ source: text });
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'schema', path, message: expect.stringContaining(message) }));
@@ -112,7 +112,7 @@ jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Review, agent: clau
     type: object
     description: '\${{ inputs.task }}'
     properties: { $ref: { enum: [ { $ref: literal } ] } }
-jobs: { build: { steps: [ { uses: agent/run, with: { prompt: '\${{ inputs.task }}', output: { schema: Review }, agent: claude.toml } } ] } }
+jobs: { build: { steps: [ { uses: agent/run, with: { prompt: '\${{ inputs.task }}', output: { schema: Review }, agent: claude.yaml } } ] } }
 ` });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     doc.setField(['on', 'workflow_call', 'inputs'], { task: { type: 'string' } });
@@ -125,7 +125,7 @@ jobs: { build: { steps: [ { uses: agent/run, with: { prompt: '\${{ inputs.task }
     const original = `on: { workflow_call: { inputs: { task: { type: string } } } }
 schemas:
   Review: { type: string, enum: [ '\${{ inputs.task }}' ] }
-jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.toml } } ] } }
+jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.yaml } } ] } }
 `;
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.code === 'expression-reference')).toEqual([]);
@@ -147,12 +147,12 @@ jobs:
     needs: build
     steps:
       - { id: local, argv: [ echo, local ] }
-      - { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.toml } }
+      - { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.yaml } }
   second:
     needs: build
     steps:
       - { id: local, argv: [ echo, second ] }
-      - { with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run }
+      - { with: { output: { schema: Review }, agent: claude.yaml, prompt: Review }, uses: agent/run }
 ` });
     expect(doc.getSnapshot().diagnostics.filter(d => d.code.startsWith('expression-'))).toEqual([]);
     doc.setField(['jobs', 'second', 'needs'], []);
@@ -161,7 +161,7 @@ jobs:
     expect(doc.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'expression-reference', path: ['schemas', 'Review', 'enum', 0], message: 'Unknown steps reference "local"' }));
   });
   it.each([false, true])('renames local named-schema references with shared consumers: %s', shared => {
-    const original = `schemas:\n  Review: # preserve declaration comment\n    type: string\n    enum: ['\${{ steps.local.outputs.text }}']\n  Review_review: {type: boolean}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/run, with: {agent: claude.toml, prompt: Review, output: {schema: Review, repair: false}}}\n      - {uses: agent/run, with: {agent: claude.toml, prompt: Again, output: {schema: Review}}}\n${shared ? '  second:\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {uses: agent/run, with: {agent: claude.toml, prompt: Review, output: {schema: Review}}}\n' : ''}`;
+    const original = `schemas:\n  Review: # preserve declaration comment\n    type: string\n    enum: ['\${{ steps.local.outputs.text }}']\n  Review_review: {type: boolean}\njobs:\n  review:\n    steps:\n      - {id: local, argv: [echo, local]}\n      - {uses: agent/run, with: {agent: claude.yaml, prompt: Review, output: {schema: Review, repair: false}}}\n      - {uses: agent/run, with: {agent: claude.yaml, prompt: Again, output: {schema: Review}}}\n${shared ? '  second:\n    steps:\n      - {id: local, argv: [echo, second]}\n      - {uses: agent/run, with: {agent: claude.yaml, prompt: Review, output: {schema: Review}}}\n' : ''}`;
     const doc = new WorkflowDocument({ source: original });
     doc.renameStep('review', 0, 'renamed');
     const edited = doc.getSnapshot();
@@ -185,7 +185,7 @@ jobs:
   review:
     steps:
       - { id: local, argv: [ echo, local ] }
-      - { with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run }
+      - { with: { output: { schema: Review }, agent: claude.yaml, prompt: Review }, uses: agent/run }
   other: { steps: [ { id: local, argv: [ echo, other ] } ] }
 ` });
     expect(doc.deletionImpact('review', 0)).toEqual([['schemas', 'Review', 'enum', 0]]);
@@ -200,16 +200,16 @@ jobs:
   it('keeps agent parameters, YAML comments and block prompts across definition changes', () => {
     const doc = new WorkflowDocument({ source });
     const before = doc.getSnapshot().workflow!.jobs.build.steps![0].with!;
-    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'agent'], 'codex.toml');
+    doc.setField(['jobs', 'build', 'steps', 0, 'with', 'agent'], 'codex.yaml');
     const changed = doc.getSnapshot().source;
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with).toEqual({ ...before, agent: 'codex.toml' });
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with).toEqual({ ...before, agent: 'codex.yaml' });
     expect(changed).not.toBe(source);
     expect(changed).toContain('# prompt comment');
     expect(changed).toContain('prompt: |');
     expect(changed).toContain('# preserved header');
     doc.undo(); expect(doc.getSnapshot().source).toBe(source);
     doc.redo(); expect(doc.getSnapshot().source).toBe(changed);
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.agent).toBe('codex.toml');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![0].with!.agent).toBe('codex.yaml');
   });
   it('retains common controller parameters and initializes null action parameters', () => {
     const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: git/commit, with: { path: /work, message: Keep } }, { uses: agent/run, with: null } ] } }
@@ -227,7 +227,7 @@ jobs:
     doc.undo(); expect(doc.getSnapshot().source).toBe(original);
   });
   it.each(['argv', 'shell'])('initializes a usable %s command when imported command fields are empty', kind => {
-    const original = `jobs: { build: { steps: [ { id: run, uses: agent/run, with: { prompt: Hello, agent: claude.toml }, argv: [], run: '' } ] } }
+    const original = `jobs: { build: { steps: [ { id: run, uses: agent/run, with: { prompt: Hello, agent: claude.yaml }, argv: [], run: '' } ] } }
 `;
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics).toEqual([]);
@@ -873,7 +873,7 @@ describe('host source replacement protection', () => {
 
 describe('guided writes and renderer ownership', () => {
   it('preserves owners for argument leaves and result wiring, and invalidates whole step lists', () => {
-    const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Hello, agent: claude.toml } }, { uses: agent/run, with: { prompt: Other, agent: claude.toml } } ] }, producer: { steps: [ { argv: [ echo, first, second ] } ] } }
+    const doc = new WorkflowDocument({ source: `jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Hello, agent: claude.yaml } }, { uses: agent/run, with: { prompt: Other, agent: claude.yaml } } ] }, producer: { steps: [ { argv: [ echo, first, second ] } ] } }
 ` });
     const generation = doc.getInspectorGeneration();
     doc.setField(['jobs', 'build', 'steps', 0, 'with', 'model'], 'Sibling model');

@@ -41,11 +41,11 @@ func TestValidateCommandChecksWorkflowAndAgentBindings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "agents.yml"), []byte("agents:\n  codex:\n    provider: codex-app-server\n    authentication: {mode: native}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "workflows", "codex.toml"), []byte("name='codex'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "workflows", "codex.yaml"), []byte("name: 'codex'\ndescription: 'Fixture'\ninstructions: 'Execute fixture.'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "workflows", "main.yml")
-	if err := os.WriteFile(path, []byte("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with: {prompt: hello, agent: codex.toml}\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with: {prompt: hello, agent: codex.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -55,7 +55,7 @@ func TestValidateCommandChecksWorkflowAndAgentBindings(t *testing.T) {
 	if stdout.String() != "Valid: workflows/main.yml\n" {
 		t.Fatal(stdout.String())
 	}
-	if err := os.WriteFile(path, []byte("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with: {prompt: hello, agent: missing.toml}\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with: {prompt: hello, agent: missing.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := command(context.Background(), []string{"validate", "--workspace", root, "workflows/main.yml"}, &stdout, &stderr); err == nil {

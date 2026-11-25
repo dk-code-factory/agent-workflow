@@ -201,7 +201,7 @@ def make_mixed_fixture(state):
     (repo / 'workflows').mkdir()
     shutil.copyfile(ROOT / 'conformance/workflows/mixed-development.yml', repo / 'workflows/mixed-development.yml')
     for role in ['builder', 'reviewer']:
-        (repo / 'workflows' / (role + '.toml')).write_text("name='" + role + "'\ndescription='Bounded release conformance'\ndeveloper_instructions='Complete only the disposable conformance task.'\n")
+        (repo / 'workflows' / (role + '.yaml')).write_text("name: '" + role + "'\ndescription: 'Bounded release conformance'\ninstructions: 'Complete only the disposable conformance task.'\n")
     subprocess.run(['git', 'init', '-q', '-b', 'main', str(repo)], check=True)
     subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Conformance', '-c', 'user.email=conformance@example.invalid',

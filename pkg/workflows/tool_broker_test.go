@@ -218,7 +218,7 @@ func (*nestedToolRunner) RunTurn(ctx context.Context, req SessionRequest, _ func
 
 func TestWorkflowToChildToGrandchildAtCapacityOne(t *testing.T) {
 	runner := &nestedToolRunner{}
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: root, agent: parent.toml}}]}}\n", runner)
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: root, agent: parent.yaml}}]}}\n", runner)
 	pool := &Capacity{Slots: make(chan struct{}, 1)}
 	e.Slots = pool.Slots
 	e.Capacity = pool

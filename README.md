@@ -429,7 +429,7 @@ jobs:
       - id: decision
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review the change.
           output:
             format: json
@@ -439,14 +439,14 @@ jobs:
               required: [approved]
       - uses: agent/run
         with:
-          agent: reporter.toml
+          agent: reporter.yaml
           prompt: 'Approved: ${{ steps.decision.approved }}'
   publish:
     needs: [review]
     steps:
       - uses: agent/run
         with:
-          agent: reporter.toml
+          agent: reporter.yaml
           prompt: 'Review: ${{ needs.review.steps.decision.text }}'
 ```
 
@@ -602,7 +602,7 @@ Legacy JSON stores cannot execute iteration workflows.
 
 ### Native agent tasks
 
-Use `agent/run` with a native Codex TOML definition. Paths resolve relative to
+Use `agent/run` with a shared YAML agent definition. Paths resolve relative to
 this workflow; the configured `codex` runtime must use `codex-app-server`.
 Agent `with.turns` also accepts a whole expression resolving to a positive integer
 within the existing signed 32-bit limit. Resolved allowances are validated before
@@ -615,7 +615,7 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: ../.codex/agents/reviewer.toml
+          agent: ../.codex/agents/reviewer.yaml
           prompt: Review the change.
           input: {focus: correctness}
           output:
@@ -624,8 +624,8 @@ jobs:
             schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
 ```
 
-Definitions support `name`, `description`, `developer_instructions`, `model`, and
-`model_reasoning_effort`. Admission captures the definition and effective runtime
+Definitions support `name`, `description`, `instructions`, `model`, and
+`reasoning-effort`. Admission captures the definition and effective runtime
 settings. An explicit definition creates an independent agent; use
 `${{ steps.review.outputs.agent }}` as another task's `with.agent` to continue
 its session. Identity survives retries and execution generations.
@@ -636,8 +636,8 @@ To select a fresh agent from a fixed catalog, supply an object instead of a path
 agent:
   select: ${{ inputs.role }}
   definitions:
-    review: ../.codex/agents/reviewer.toml
-    fix: ../.codex/agents/fixer.toml
+    review: ../.codex/agents/reviewer.yaml
+    fix: ../.codex/agents/fixer.yaml
 ```
 
 The catalog contains 1–32 literal names and definition paths. Admission loads and
@@ -647,7 +647,7 @@ dispatch. Recovery uses the admitted definitions even when their files change.
 A string expression retains its existing meaning as an opaque session reference.
 The UI preserves catalog objects and edits them through structured YAML controls.
 
-See [agent tasks and event hooks](docs/AGENT_TASKS.md) for the supported TOML
+See [agent tasks and event hooks](docs/AGENT_TASKS.md) for the supported YAML
 subset, typed inputs, completion verification, six ordered hook lists, and
 recovery rules. Quote date-like prompts such as `"2026-11-06"`. Removed forms
 `agent: ROLE` and `uses: agent/ROLE` are rejected.
@@ -681,12 +681,12 @@ jobs:
     steps:
       - uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review the change.
           output: {format: json, schema: Review, repair-attempts: 0}
       - uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review the tests.
           output: {schema: Review}
 ```

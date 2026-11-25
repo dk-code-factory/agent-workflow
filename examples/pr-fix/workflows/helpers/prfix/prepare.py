@@ -6,7 +6,6 @@ belong here. The checked-in YAML owns all orchestration.
 import hashlib
 import os
 from pathlib import Path
-import tomllib
 
 from .core import (FORMAT, STATE, Ledger, artifact, auth, digest,
                    identity, owned_directory, text)
@@ -88,11 +87,11 @@ def _definition(root, raw):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 1 << 20:
         raise ValueError("native definition must be a bounded regular file")
     data = path.read_bytes()
-    value = tomllib.loads(data.decode())
-    allowed = {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}
-    if set(value) - allowed or not all(isinstance(value.get(key), str) and value[key].strip()
-                                       for key in ("name", "description", "developer_instructions")):
-        raise ValueError("unsupported native definition")
+    if path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ValueError("agent definition requires YAML; use agent convert for native sources")
+    # The engine validates the complete YAML definition closure before starting
+    # this helper. This helper records original source evidence, not a second
+    # YAML interpreter or a source of execution authority.
     return data
 
 
@@ -145,7 +144,7 @@ def prepare(root, request, controls, execution_fingerprint, provider=None, defin
     if type(turns) is not int or not 5 <= turns <= 2147483647:
         raise ValueError("turn allowance must support at least five retained turns")
     source = Path(__file__).resolve().parent.parent
-    definitions = definitions or {role: _definition(source.parent, "agents/" + role + ".toml")
+    definitions = definitions or {role: _definition(source.parent, "agents/" + role + ".yaml")
                                   for role in ("leaf", "reviewer", "verifier", "fixer", "audience")}
     if set(definitions) != {"leaf", "reviewer", "verifier", "fixer", "audience"}:
         raise ValueError("five explicit native definitions required")

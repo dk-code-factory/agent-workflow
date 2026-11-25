@@ -43,7 +43,7 @@ immutable request and plan in `.pr-fix-state`, and dispatches no agents or remot
 writes. Default task order, finalizers, reviewer groups, adapters, permissions,
 settings, resources and limits are declared inputs in `main.yml`. Override them
 with ordinary `--input NAME=JSON` values or a reusable wrapper. Agent definitions
-live in [TOML](workflows/agents/); deployment settings belong in `agents.yml`.
+live in [YAML](workflows/agents/); deployment settings belong in `agents.yml`.
 The sample permissions and authorizations disable remote writes.
 
 Names such as `read-feedback` select local adapter assignments. Explicit stage
@@ -52,7 +52,7 @@ and `{"stage":"ci"}`. These selectors do not invoke installed plugin skills.
 Legacy qualified names and `skill` objects remain accepted. Shared helper calls
 use [helper.yml](workflows/helper.yml). [native.yml](workflows/native.yml) shares
 one report contract across initial turns, eligible retries and checklist
-continuations and selects fresh roles from a fixed admitted TOML catalog;
+continuations and selects fresh roles from a fixed admitted YAML catalog;
 retry and checklist modes preserve the original native session. Result selection
 and report acceptance share one retained helper operation.
 [batch.yml](workflows/batch.yml) shares ordered task groups and their optional

@@ -36,7 +36,7 @@ jobs:
           output: {schema: Decision}
       - uses: agent/run
         with:
-          agent: reporter.toml
+          agent: reporter.yaml
           prompt: 'Decision: ${{ steps.solution.approved }}; ${{ steps.solution.summary }}'
 ```
 

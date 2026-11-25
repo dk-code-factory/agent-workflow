@@ -224,7 +224,7 @@ func TestIterationRetryReconciliationPreservesCancellation(t *testing.T) {
 	for _, independent := range []error{nil, process.ErrCleanup, errors.New("storage failure")} {
 		t.Run(classifyFailure(independent), func(t *testing.T) {
 			e, store := iterationExecutor(t, nil)
-			child := strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1)
+			child := strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.yaml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1)
 			if child == iterationChild {
 				t.Fatal("mutation recovery fixture did not replace its native task")
 			}

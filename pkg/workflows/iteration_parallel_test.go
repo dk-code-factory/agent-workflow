@@ -450,7 +450,7 @@ jobs:
       - id: run
         if: inputs.task != 'gate'
         uses: agent/run
-        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.yaml}
 `)
 				if nested {
 					writeWorkflow(t, e.WorkspaceDir, "child.yml", `on:
@@ -483,7 +483,7 @@ jobs:
   work:
     steps:
       - uses: agent/run
-        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.yaml}
 `)
 				}
 				wrapper := &executionBoundaryJournal{SQLiteStore: s}

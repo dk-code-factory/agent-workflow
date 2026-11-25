@@ -21,7 +21,7 @@ func TestNativeAgentTaskRejectsSecretsBeforeRetainingDispatch(t *testing.T) {
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review the task.
           input: {credential: '${{ secrets.token }}'}
 `, func(SessionRequest) (map[string]any, error) {
@@ -65,7 +65,7 @@ func testNativeObservedFailure(t *testing.T, checklist string) {
     steps:
       - id: review
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: Review%s}
+        with: {agent: reviewer.yaml, prompt: Review%s}
 `, checklist), func(SessionRequest) (map[string]any, error) {
 		return map[string]any{"text": "retained partial work"}, fmt.Errorf("%w: ordinary provider rejection", ErrProviderFailure)
 	})
@@ -143,7 +143,7 @@ func agentTaskFixture(t *testing.T, source string, respond func(SessionRequest) 
 	t.Helper()
 	f := &nativeTaskFixture{respond: respond}
 	e, s := durableExecutor(t, source, f)
-	if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows", "reviewer.toml"), []byte("name = 'reviewer'\ndescription = 'Review changes'\ndeveloper_instructions = 'Review admitted changes.'\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows", "reviewer.yaml"), []byte("name: 'reviewer'\ndescription: 'Review changes'\ninstructions: 'Review admitted changes.'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	e.Slots = make(chan struct{}, 1)
@@ -165,13 +165,13 @@ func TestNativeAgentTaskIdentityContinuationAndIndependentAgent(t *testing.T) {
     steps:
       - id: first
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: first, input: {number: 9007199254740993, flag: true}}
+        with: {agent: reviewer.yaml, prompt: first, input: {number: 9007199254740993, flag: true}}
       - id: followup
         uses: agent/run
         with: {agent: '${{ steps.first.outputs.agent }}', prompt: next}
       - id: independent
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: independent}
+        with: {agent: reviewer.yaml, prompt: independent}
 `, func(req SessionRequest) (map[string]any, error) {
 		return map[string]any{"text": req.Prompt, "session_id": "private-provider-session"}, nil
 	})
@@ -204,7 +204,7 @@ func TestNativeAgentTaskDefinitionSnapshotAndHooks(t *testing.T) {
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: first
           output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete, count], properties: {complete: {type: boolean}, count: {type: integer}}}}
         onResult:
@@ -221,7 +221,7 @@ func TestNativeAgentTaskDefinitionSnapshotAndHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows", "reviewer.toml"), []byte("invalid = true"), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows", "reviewer.yaml"), []byte("invalid = true"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// Run admitted snapshot through the same queued owner entry used by controllers.
@@ -260,7 +260,7 @@ func TestNativeAgentTaskIncompleteAndBoundedFollowup(t *testing.T) {
     steps:
       - id: review
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: first, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
+        with: {agent: reviewer.yaml, prompt: first, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
         onResult:
           - argv: [python3, -c, 'import json,sys; json.load(sys.stdin); print("{\"complete\":true}")']
         onIncomplete:
@@ -292,8 +292,8 @@ func TestNativeAgentDefinitionLoading(t *testing.T) {
 	if _, err := LoadAgentDefinition(dir); err == nil {
 		t.Fatal("empty directory accepted")
 	}
-	valid := "name = 'review'\ndescription = 'Review'\ndeveloper_instructions = 'Review changes.'\nmodel = 'configured-model'\nmodel_reasoning_effort = 'high'\n"
-	path := filepath.Join(dir, "review.toml")
+	valid := "name: 'review'\ndescription: 'Review'\ninstructions: 'Review changes.'\nmodel: 'configured-model'\nreasoning-effort: 'high'\n"
+	path := filepath.Join(dir, "review.yaml")
 	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -301,13 +301,13 @@ func TestNativeAgentDefinitionLoading(t *testing.T) {
 	if err != nil || d.Bytes != valid || d.Model != "configured-model" {
 		t.Fatal(d, err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "second.toml"), []byte(valid), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "second.yaml"), []byte(valid), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = LoadAgentDefinition(dir); err == nil {
 		t.Fatal("ambiguous directory accepted")
 	}
-	for _, field := range []string{"sandbox_mode = 'danger-full-access'", "approval_policy = 'never'", "[mcp_servers]", "tools = ['shell']"} {
+	for _, field := range []string{"sandbox_mode: 'danger-full-access'", "approval_policy: 'never'", "mcp_servers: {}", "tools: ['shell']"} {
 		if err = os.WriteFile(path, []byte(valid+field+"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -333,11 +333,11 @@ func TestNativeAgentTaskRecoveryAndReportingFailures(t *testing.T) {
     steps:
       - id: review
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: first, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
+        with: {agent: reviewer.yaml, prompt: first, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
         onResult:
 ` + verifier + `        onError:
           - uses: agent/run
-            with: {agent: reviewer.toml, prompt: recover, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
+            with: {agent: reviewer.yaml, prompt: recover, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
         onFailure:
           - {argv: [true]}
         finally:
@@ -387,10 +387,10 @@ func TestNativeAgentTaskProviderFailureRecoveryAcknowledgesOriginal(t *testing.T
     steps:
       - id: review
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: first}
+        with: {agent: reviewer.yaml, prompt: first}
         onError:
           - uses: agent/run
-            with: {agent: reviewer.toml, prompt: recover}
+            with: {agent: reviewer.yaml, prompt: recover}
 `, func(req SessionRequest) (map[string]any, error) {
 		if req.Prompt == "first" {
 			return map[string]any{"text": "original failure"}, ErrProviderFailure
@@ -484,7 +484,7 @@ func TestNativeTaskLostCompletionReusesAuthoritativeTurn(t *testing.T) {
     steps:
       - id: task
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: work, turns: 2}
+        with: {agent: reviewer.yaml, prompt: work, turns: 2}
 `, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "original"}, nil })
 	e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
 	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
@@ -513,11 +513,11 @@ func TestNativeAgentAIVerificationRejectsDeclaredCompletion(t *testing.T) {
     steps:
       - id: task
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: work, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
+        with: {agent: reviewer.yaml, prompt: work, output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}}
         onResult:
           - id: verifier
             uses: agent/run
-            with: {agent: reviewer.toml, prompt: verify}
+            with: {agent: reviewer.yaml, prompt: verify}
         onComplete:
           - argv: [false]
         onIncomplete:
@@ -556,19 +556,19 @@ func TestNativeTaskUsageRetainsExplicitModelWithoutUsageEvents(t *testing.T) {
   task:
     steps:
       - uses: agent/run
-        with: {agent: reviewer.toml, model: explicit-model, prompt: work}
+        with: {agent: reviewer.yaml, model: explicit-model, prompt: work}
 `, func(req SessionRequest) (map[string]any, error) {
 		if req.Model != "explicit-model" {
 			t.Errorf("request model: %q", req.Model)
 		}
 		return map[string]any{"text": "done"}, nil
 	})
-	path := filepath.Join(e.WorkspaceDir, "workflows", "reviewer.toml")
+	path := filepath.Join(e.WorkspaceDir, "workflows", "reviewer.yaml")
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, writeErr := file.WriteString("model = 'definition-model'\n")
+	_, writeErr := file.WriteString("model: 'definition-model'\n")
 	closeErr := file.Close()
 	if writeErr != nil || closeErr != nil {
 		t.Fatal(writeErr, closeErr)

@@ -9,7 +9,7 @@ jobs:
       - id: greeting
         name: Shared step
         uses: agent/run
-        with: { prompt: Needle prompt from build, agent: claude.toml }
+        with: { prompt: Needle prompt from build, agent: claude.yaml }
       - argv: [ echo, Needle direct command ]
       - id: deploy
         name: Deploy shell
@@ -22,7 +22,7 @@ jobs:
       - id: greeting
         name: Shared step
         uses: agent/run
-        with: { prompt: Needle prompt from test, agent: claude.toml }
+        with: { prompt: Needle prompt from test, agent: claude.yaml }
   docs:
     needs: test
     steps:
@@ -104,7 +104,7 @@ test('activate duplicate names with Tab, arrows, Enter and Space and reveal YAML
   await expect(ui.getByRole('button', { name: 'Expand test', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await expect(buttons.nth(1)).toBeFocused();
   await expectStepInCanvas(ui, 'test', 0);
-  await expect(ui.locator('.cm-line').filter({ hasText: 'with: { prompt: Needle prompt from test, agent: claude.toml }' })).toBeInViewport();
+  await expect(ui.locator('.cm-line').filter({ hasText: 'with: { prompt: Needle prompt from test, agent: claude.yaml }' })).toBeInViewport();
   await page.keyboard.press('ArrowUp'); await page.keyboard.press('Space');
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Needle prompt from build');
   await expectStepInCanvas(ui, 'build', 0);

@@ -8,5 +8,5 @@ jobs:
         working-directory: ''
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Review

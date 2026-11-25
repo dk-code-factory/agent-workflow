@@ -3,7 +3,7 @@ import { WorkflowDocument } from '../src/document';
 import { parseWorkflow } from '../src/validation';
 
 describe('native agent tasks', () => {
-  it.each(['agent: reviewer, prompt: Review','uses: agent/reviewer, with: {prompt: Review}','uses: agent/run, with: {prompt: Review}','uses: agent/run, prompt: Review, with: {agent: reviewer.toml}'])('rejects removed or incomplete syntax: %s', step => {
+  it.each(['agent: reviewer, prompt: Review','uses: agent/reviewer, with: {prompt: Review}','uses: agent/run, with: {prompt: Review}','uses: agent/run, prompt: Review, with: {agent: reviewer.yaml}'])('rejects removed or incomplete syntax: %s', step => {
     expect(parseWorkflow(`jobs: {review: {steps: [{${step}}]}}`).diagnostics.some(d => d.severity === 'error')).toBe(true);
   });
   it('retains typed input and six hooks through editing and history', () => {
@@ -12,7 +12,7 @@ describe('native agent tasks', () => {
     steps:
       - uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
           input: {count: 7, enabled: true}
           output: {format: json, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}

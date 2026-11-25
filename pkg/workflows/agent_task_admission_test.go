@@ -18,7 +18,7 @@ func TestNativeTaskRejectsEscapedCredentialsBeforeDispatch(t *testing.T) {
 				} else {
 					input = "{credential: '${{ secrets.token }}'}"
 				}
-				source := fmt.Sprintf("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with:\n          agent: reviewer.toml\n          prompt: '%s'\n          input: %s\n", prompt, input)
+				source := fmt.Sprintf("jobs:\n  review:\n    steps:\n      - uses: agent/run\n        with:\n          agent: reviewer.yaml\n          prompt: '%s'\n          input: %s\n", prompt, input)
 				executor, store, fake := agentTaskFixture(t, source, func(SessionRequest) (map[string]any, error) {
 					return map[string]any{"text": "unexpected dispatch"}, nil
 				})
@@ -77,7 +77,7 @@ jobs:
   review:
     steps:
       - uses: agent/run
-        with: {agent: reviewer.toml, prompt: x, input: '${{ inputs.payload }}'}
+        with: {agent: reviewer.yaml, prompt: x, input: '${{ inputs.payload }}'}
 `, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "unexpected"}, nil })
 	run, err := executor.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"payload": strings.Repeat("&", (1<<20)/2)}})
 	// Each ampersand takes six bytes in the actual JSON prompt.
@@ -127,7 +127,7 @@ func TestNativeTaskTurnAllowanceCannotBeExtended(t *testing.T) {
     steps:
       - id: first
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: first, turns: 1}
+        with: {agent: reviewer.yaml, prompt: first, turns: 1}
       - id: second
         uses: agent/run
         with: {agent: '${{ steps.first.outputs.agent }}', prompt: second%s}
@@ -153,7 +153,7 @@ func TestNativeTaskTurnAllowanceCannotBeExtended(t *testing.T) {
 func TestNativeTaskTurnAllowanceRejectsInvalidAndExcessiveLimits(t *testing.T) {
 	for _, turns := range []string{"0", "-1", "1.5", "'5'", "999", "2147483648"} {
 		t.Run(turns, func(t *testing.T) {
-			source := fmt.Sprintf("jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: review, turns: %s}}]}}", turns)
+			source := fmt.Sprintf("jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: review, turns: %s}}]}}", turns)
 			executor, _, fake := agentTaskFixture(t, source, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "unexpected"}, nil })
 			_, err := executor.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 			if err == nil {

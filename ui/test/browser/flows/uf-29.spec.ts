@@ -50,7 +50,7 @@ test('author a durable input request, correct validation errors and edit advance
         with: { prompt: Choose a policy, evidence-id: pinned-v1, payload: { choices: [ a, b ] } }
       - id: apply
         uses: agent/run
-        with: { prompt: '\${{ steps.question.outputs.answer }}', agent: claude.toml }
+        with: { prompt: '\${{ steps.question.outputs.answer }}', agent: claude.yaml }
 `;
   await yaml.fill(source);
   await expect(ui.getByRole('button', { name: 'Inspect job decide', exact: true })).toBeVisible();
@@ -77,7 +77,7 @@ test('paste native task YAML, reject removed shorthand and recover canonical for
   const ui = await open(page);
   await ui.getByRole('button', { name: 'Split', exact: true }).click();
   const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
-  const source = `jobs: { review: { steps: [ { id: ask, with: { model: sonnet, agent: claude.toml, prompt: Review }, uses: agent/run } ] } }
+  const source = `jobs: { review: { steps: [ { id: ask, with: { model: sonnet, agent: claude.yaml, prompt: Review }, uses: agent/run } ] } }
 `;
   await yaml.fill(source);
   await expect(ui.getByRole('button', { name: 'ask agent/run', exact: true })).toBeVisible();
@@ -96,6 +96,6 @@ test('paste native task YAML, reject removed shorthand and recover canonical for
   await yaml.fill(source);
   await ui.getByRole('button', { name: 'ask agent/run', exact: true }).click();
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review');
-  expect((await snapshot(page)).workflow.jobs.review.steps[0]).toEqual({id: 'ask', uses: 'agent/run', with: {agent: "claude.toml", model: 'sonnet', prompt: 'Review'}});
+  expect((await snapshot(page)).workflow.jobs.review.steps[0]).toEqual({id: 'ask', uses: 'agent/run', with: {agent: "claude.yaml", model: 'sonnet', prompt: 'Review'}});
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });

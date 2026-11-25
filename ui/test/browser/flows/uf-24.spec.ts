@@ -19,7 +19,7 @@ test('named callable entries can be renamed and deleted with impact review', asy
   await page.goto('/test/browser.html'); const first = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: `on: { workflow_call: { inputs: { task: { type: string } } } }
 schemas: { Review: { type: string, enum: [ "\${{ inputs.task }}" ] } }
-jobs: { build: { steps: [ { uses: agent/run, with: { prompt: "\${{ inputs.task }}", output: { schema: Review }, agent: claude.toml } } ] } }
+jobs: { build: { steps: [ { uses: agent/run, with: { prompt: "\${{ inputs.task }}", output: { schema: Review }, agent: claude.yaml } } ] } }
 ` }));
   await first.getByText('Callable inputs', { exact: true }).click();
   await first.getByLabel('Identifier: task', { exact: true }).fill('request'); await page.keyboard.press('Enter');
@@ -40,11 +40,11 @@ jobs:
   review:
     steps:
       - { id: local, argv: [ echo, local ] }
-      - { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.toml } }
+      - { uses: agent/run, with: { prompt: Review, output: { schema: Review }, agent: claude.yaml } }
   second:
     steps:
       - { id: local, argv: [ echo, second ] }
-      - { with: { output: { schema: Review }, agent: claude.toml, prompt: Review }, uses: agent/run }
+      - { with: { output: { schema: Review }, agent: claude.yaml, prompt: Review }, uses: agent/run }
 ` }));
   await first.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await first.getByRole('button', { name: 'local direct command', exact: true }).first().click();
@@ -66,7 +66,7 @@ jobs:
 test('step renames update concise local and dependency results and deletion reviews consumers', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: `schemas: { Result: { type: string, enum: [ "\${{ needs.review.steps.analyze.text }}" ] } }
-jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { agent: claude.toml, prompt: Review } }, { id: finish, uses: agent/run, with: { agent: claude.toml, prompt: "\${{ steps.analyze.text }}" } } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Result }, agent: claude.toml, prompt: "\${{ needs.review.steps.analyze.text }}" }, uses: agent/run } ] } }
+jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { agent: claude.yaml, prompt: Review } }, { id: finish, uses: agent/run, with: { agent: claude.yaml, prompt: "\${{ steps.analyze.text }}" } } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Result }, agent: claude.yaml, prompt: "\${{ needs.review.steps.analyze.text }}" }, uses: agent/run } ] } }
 ` }));
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await editor.getByRole('button', { name: '1. analyze', exact: true }).click();
@@ -86,7 +86,7 @@ jobs: { review: { steps: [ { id: analyze, uses: agent/run, with: { agent: claude
 
 test('YAML next-line whitespace keeps legacy references in rename and deletion review', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
-  const source = String.raw`jobs: { review: { steps: [ { id: first, uses: agent/run, with: { agent: claude.toml, prompt: Review } }, { id: consume, uses: agent/run, with: { agent: claude.toml, prompt: "${'${{'} \u0085steps.first.outputs.text\u0085 }}" } } ] } }
+  const source = String.raw`jobs: { review: { steps: [ { id: first, uses: agent/run, with: { agent: claude.yaml, prompt: Review } }, { id: consume, uses: agent/run, with: { agent: claude.yaml, prompt: "${'${{'} \u0085steps.first.outputs.text\u0085 }}" } } ] } }
 `;
   await page.evaluate(source => (window as any).first.update({ source }), source);
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();

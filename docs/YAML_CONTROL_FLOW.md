@@ -13,23 +13,23 @@ jobs:
           - id: correctness
             uses: agent/run
             with:
-              agent: review_correctness.toml
+              agent: review_correctness.yaml
               prompt: Check correctness.
           - sequence:
               - id: security
                 uses: agent/run
                 with:
-                  agent: review_security.toml
+                  agent: review_security.yaml
                   prompt: Check security.
               - id: verify
                 uses: agent/run
                 with:
-                  agent: review_security.toml
+                  agent: review_security.yaml
                   prompt: 'Verify these findings: ${{ steps.security.outputs.text }}'
       - id: combine
         uses: agent/run
         with:
-          agent: task.toml
+          agent: task.yaml
           prompt: |
             Combine these findings:
             ${{ steps.correctness.outputs.text }}

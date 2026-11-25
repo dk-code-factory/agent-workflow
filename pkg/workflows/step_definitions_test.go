@@ -20,10 +20,10 @@ const reusableStepsWorkflow = `step-definitions:
       sequence:
         - id: check
           uses: agent/run
-          with: {agent: a.toml, prompt: '${{ parameters.prompt }}', turns: 1}
+          with: {agent: a.yaml, prompt: '${{ parameters.prompt }}', turns: 1}
         - id: refine
           uses: agent/run
-          with: {agent: a.toml, prompt: '${{ steps.check.outputs.text }} refined', turns: 1}
+          with: {agent: a.yaml, prompt: '${{ steps.check.outputs.text }} refined', turns: 1}
 jobs:
   review:
     steps:
@@ -150,7 +150,7 @@ jobs:
 
 func TestStepDefinitionsPlacementAndBindingsBeforeEffects(t *testing.T) {
 	for _, tc := range []struct{ body, job, want string }{
-		{"uses: agent/run, with: {agent: a.toml, prompt: hi}", "container: ubuntu\n", "shared containers"},
+		{"uses: agent/run, with: {agent: a.yaml, prompt: hi}", "container: ubuntu\n", "shared containers"},
 		{"argv: [python3], protocol: action-v1, effect: read_only, input-schema: {type: object}, output-schema: {type: object}", "", "requires a job container"},
 	} {
 		w, err := Parse([]byte("step-definitions: {s: {step: {" + tc.body + "}}}\njobs:\n  x:\n    " + tc.job + "    steps: [{id: use, use-definition: s}]\n"))
@@ -198,7 +198,7 @@ func TestStepDefinitionsRestartPinsExpansionAndAgentAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Native definition paths are retained too; resumed work cannot reread them.
-	if err := os.Remove(filepath.Join(e.WorkspaceDir, "workflows", "a.toml")); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(filepath.Join(e.WorkspaceDir, "workflows", "a.yaml")); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	e.Store = store
@@ -435,7 +435,7 @@ step-definitions:
         - {id: seed, argv: [echo, seed]}
         - id: choose
           uses: agent/run
-          with: {agent: a.toml, prompt: Choose, output: {format: json, schema: Choice}}
+          with: {agent: a.yaml, prompt: Choose, output: {format: json, schema: Choice}}
 jobs:
   x:
     steps:

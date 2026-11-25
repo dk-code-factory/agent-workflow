@@ -19,20 +19,20 @@ func TestLifecycleArgumentFailurePreservesPromptContext(t *testing.T) {
       - id: seed
         uses: agent/run
         with:
-          agent: seed.toml
+          agent: seed.yaml
           prompt: Seed
       - id: work
         uses: agent/run
         with:
-          agent: primary.toml
+          agent: primary.yaml
 ` + "          " + field + `: 'original ${{ secrets.token }}'
           workspace: '${{ steps.seed.text.foo }}'
         onFailure:
           - uses: agent/run
-            with: {agent: observer.toml, prompt: '${{ failed.prompt }}'}
+            with: {agent: observer.yaml, prompt: '${{ failed.prompt }}'}
         finally:
           - uses: agent/run
-            with: {agent: cleanup.toml, prompt: '${{ failed.prompt }}'}
+            with: {agent: cleanup.yaml, prompt: '${{ failed.prompt }}'}
 `
 			var calls []string
 			e, _ := lifecycleArgumentExecutor(t, source, ordered, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
@@ -70,17 +70,17 @@ func TestLifecycleFallbackRecoversArgumentFailure(t *testing.T) {
       - id: seed
         uses: agent/run
         with:
-          agent: seed.toml
+          agent: seed.yaml
           prompt: Seed
       - id: work
         with:
           workspace: '${{ steps.seed.text.foo }}'
-          agent: primary.toml
+          agent: primary.yaml
           prompt: original
         onError:
           - uses: agent/run
             with:
-              agent: backup.toml
+              agent: backup.yaml
               prompt: Recover
         uses: agent/run
 `
@@ -131,7 +131,7 @@ func lifecycleArgumentExecutor(t *testing.T, source string, ordered bool, runner
 	}
 	e, store := durableExecutor(t, source, runner)
 	if ordered {
-		writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{uses: agent/run, with: {agent: unused.toml, prompt: unused}}]}}\n")
+		writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {child: {steps: [{uses: agent/run, with: {agent: unused.yaml, prompt: unused}}]}}\n")
 	}
 	return e, store
 }
@@ -140,9 +140,9 @@ func TestLifecycleOrderedArgumentFailureRetainsAdmissionGuards(t *testing.T) {
 	ctx := context.Background()
 	store, run := executionStore(t)
 	e := nativeTestExecutor(t, &Executor{Store: store})
-	step := Step{ID: "work", Uses: "agent/run", With: map[string]any{"agent": "a.toml",
+	step := Step{ID: "work", Uses: "agent/run", With: map[string]any{"agent": "a.yaml",
 		"prompt": "${{ inputs.prompt }}", "workspace": "${{ steps.seed.text.foo }}",
-	}, OnError: []Step{{Uses: "agent/run", With: map[string]any{"agent": "backup.toml"}}}}
+	}, OnError: []Step{{Uses: "agent/run", With: map[string]any{"agent": "backup.yaml"}}}}
 	ec := expressionContext{Ordered: true, RunID: run.ID, JobID: "task", IterationNumber: 1,
 		Inputs: map[string]any{"prompt": "original"}, Steps: map[string]StepExecution{"seed": {ID: "seed", Status: RunStatusSucceeded, Outputs: map[string]any{"text": "seed"}}}}
 	attempt, reused, err := e.beginIterationStep(ctx, store, step, ec, false)
@@ -188,11 +188,11 @@ func TestLifecycleOrderedArgumentFailureResumesOriginalReceipt(t *testing.T) {
   task:
     outputs: {result: '${{ steps.work.text }}'}
     steps:
-      - {id: seed, uses: agent/run, with: {agent: seed.toml, prompt: Seed}}
+      - {id: seed, uses: agent/run, with: {agent: seed.yaml, prompt: Seed}}
       - id: work
-        with: {workspace: '${{ steps.seed.text.foo }}', agent: primary.toml, prompt: original}
-        onError: [{uses: agent/run, with: {agent: backup.toml, prompt: Recover}}]
-        finally: [{uses: agent/run, with: {agent: cleanup.toml, prompt: Cleanup}}]
+        with: {workspace: '${{ steps.seed.text.foo }}', agent: primary.yaml, prompt: original}
+        onError: [{uses: agent/run, with: {agent: backup.yaml, prompt: Recover}}]
+        finally: [{uses: agent/run, with: {agent: cleanup.yaml, prompt: Cleanup}}]
         uses: agent/run
 `
 	var calls []string

@@ -10,7 +10,7 @@ jobs:
     steps:
       - id: greet
         uses: agent/run
-        with: { prompt: Hello, agent: claude.toml }
+        with: { prompt: Hello, agent: claude.yaml }
   test:
     needs: build
     steps:

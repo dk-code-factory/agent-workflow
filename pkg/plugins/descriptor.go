@@ -41,6 +41,28 @@ type Metadata struct {
 var identity = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 var version = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
+func exactVersion(value string) bool {
+	if !version.MatchString(value) {
+		return false
+	}
+	core := strings.SplitN(value, "+", 2)[0]
+	if _, pre, ok := strings.Cut(core, "-"); ok {
+		for _, part := range strings.Split(pre, ".") {
+			numeric := true
+			for _, r := range part {
+				if r < '0' || r > '9' {
+					numeric = false
+					break
+				}
+			}
+			if numeric && len(part) > 1 && part[0] == '0' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func strictYAML(data []byte, out any) error {
 	var node yaml.Node
 	d := yaml.NewDecoder(bytes.NewReader(data))
@@ -92,7 +114,7 @@ func (d *Descriptor) Validate() error {
 	if !identity.MatchString(d.Name) {
 		return fmt.Errorf("name must be a lowercase hyphenated identity")
 	}
-	if !version.MatchString(d.Version) || !version.MatchString(d.EngineVersion) {
+	if !exactVersion(d.Version) || !exactVersion(d.EngineVersion) {
 		return fmt.Errorf("version and engine-version must be exact semantic versions (without v or ranges)")
 	}
 	hosts := map[string]bool{}
@@ -116,13 +138,15 @@ func (d *Descriptor) Validate() error {
 		if filepath.Ext(s.Path) != ".md" || filepath.Base(s.Path) != "SKILL.md" {
 			return fmt.Errorf("skill %s path must name SKILL.md", s.Name)
 		}
-		if _, err := workflows.CanonicalLocalRef(s.Workflow); err != nil {
+		canonical, err := workflows.CanonicalLocalRef(s.Workflow)
+		if err != nil {
 			return fmt.Errorf("skill %s workflow: %w", s.Name, err)
 		}
-		if paths[s.Path] || bindings[s.Workflow] {
+		skillPath, _ := localPath(s.Path)
+		if paths[skillPath] || bindings[canonical] {
 			return fmt.Errorf("skill %s duplicates a path or workflow binding", s.Name)
 		}
-		names[s.Name], paths[s.Path], bindings[s.Workflow] = true, true, true
+		names[s.Name], paths[skillPath], bindings[canonical] = true, true, true
 	}
 	for _, r := range d.Resources {
 		if _, err := localPath(r); err != nil {

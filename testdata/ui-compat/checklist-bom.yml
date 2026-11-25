@@ -1,1 +1,1 @@
-jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 0, stages: [!!binary 77u/]}}}]}}
+jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.yaml, prompt: Work, checklist: {max-retries: 0, stages: [!!binary 77u/]}}}]}}

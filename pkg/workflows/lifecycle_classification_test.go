@@ -29,16 +29,16 @@ func TestLifecycleRestartPreservesRedactedOrdinaryClasses(t *testing.T) {
         onFailure:
           - uses: agent/run
             with:
-              agent: observer.toml
+              agent: observer.yaml
               prompt: report
         finally:
           - uses: agent/run
             with:
-              agent: cleanup.toml
+              agent: cleanup.yaml
               prompt: cleanup
         uses: agent/run
         with:
-          agent: primary.toml
+          agent: primary.yaml
           prompt: original
 `, agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
 						calls = append(calls, request.AgentID)

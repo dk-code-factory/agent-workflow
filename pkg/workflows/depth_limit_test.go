@@ -17,7 +17,7 @@ jobs:
     steps:
       - id: task
         uses: agent/run
-        with: {agent: reviewer.toml, prompt: work}
+        with: {agent: reviewer.yaml, prompt: work}
 `
 
 func writeDepthLimitChain(t *testing.T, root string, depth int) string {

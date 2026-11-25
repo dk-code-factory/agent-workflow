@@ -18,7 +18,7 @@ jobs:
           payload: {choices: [strict, permissive]}
       - uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: 'Use the selected policy: ${{ steps.question.outputs.answer }}'
 ```
 

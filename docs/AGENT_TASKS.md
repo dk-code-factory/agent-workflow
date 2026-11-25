@@ -4,8 +4,8 @@ Native tasks can declare an ordered [verification checklist](AGENT_CHECKLISTS.md
 under `with.checklist`, with shared and per-stage retry limits, prompt stages,
 and command checks whose failures return to the original agent for repair.
 
-Use `agent/run` with a native Codex agent TOML file or a directory containing
-exactly one TOML file. Paths resolve from the workflow that owns the step.
+Use `agent/run` with a shared YAML agent file or a directory containing
+exactly one YAML file. Paths resolve from the workflow that owns the step.
 Admission captures the file bytes and effective settings; resume uses that
 snapshot even if the file changes.
 
@@ -21,8 +21,8 @@ before agent dispatch. For example:
 agent:
   select: ${{ inputs.role }}
   definitions:
-    review: agents/reviewer.toml
-    fix: agents/fixer.toml
+    review: agents/reviewer.yaml
+    fix: agents/fixer.yaml
 ```
 
 The selected definition creates a fresh session. Continue it with the returned
@@ -41,7 +41,7 @@ JSON-encoded typed input, must fit the mailbox's 1 MiB limit.
 - id: review
   uses: agent/run
   with:
-    agent: ../.codex/agents/reviewer.toml
+    agent: ../.codex/agents/reviewer.yaml
     prompt: Review the changes.
     input: {target: main}
     output:
@@ -62,7 +62,7 @@ JSON-encoded typed input, must fit the mailbox's 1 MiB limit.
   onError:
     - uses: agent/run
       with:
-        agent: ../.codex/agents/recovery.toml
+        agent: ../.codex/agents/recovery.yaml
         prompt: Recover the failed review using the supplied event.
         output:
           format: json
@@ -79,18 +79,32 @@ JSON-encoded typed input, must fit the mailbox's 1 MiB limit.
     - argv: [python3, scripts/finalize-review.py]
 ```
 
-The supported [native Codex agent definition](https://learn.chatgpt.com/docs/agent-configuration/subagents)
-subset is `name`, `description`, `developer_instructions`, `model`, and
-`model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, or `xhigh`). The first three fields are required. Unknown settings
-are rejected, including tool, provider, authentication, sandbox, permission,
-MCP, skill and feature overrides. Example:
+The shared YAML agent definition requires `name`, `description` and
+`instructions`, with optional `model` and `reasoning-effort` (`none`, `minimal`,
+`low`, `medium`, `high`, or `xhigh`). Unknown settings are rejected, including
+tool, provider, authentication, sandbox, permission, MCP and execution overrides.
+Starter definitions omit model and reasoning settings for portability:
 
-```toml
-name = "reviewer"
-description = "Review changes for correctness."
-developer_instructions = "Inspect the changes and report concrete findings."
-model_reasoning_effort = "high"
+```yaml
+name: reviewer
+description: Review changes for correctness.
+instructions: Inspect the changes and report concrete findings.
 ```
+
+New runs accept YAML sources only. Convert native definitions offline with:
+
+```sh
+agent-workflow agent convert --from codex --input reviewer.toml --output reviewer.yaml
+agent-workflow agent convert --from claude --input reviewer.md --output reviewer.yaml
+```
+
+Conversion preserves compatible metadata and instruction text, reports omitted
+options and required workspace runtime-policy changes, and creates no output
+until each omitted field is explicitly acknowledged with repeatable
+`--acknowledge-loss FIELD` flags. Hooks are never executed. Sources and existing
+outputs are never overwritten. Previously admitted TOML snapshots retain their
+original bytes, hashes, identities and Codex bindings without reopening sources;
+this is a source-format change for new runs, not a snapshot migration.
 
 The configured `codex` runtime must use `codex-app-server`. It supplies
 credentials, execution policy, limits and tool grants. Definitions cannot expand

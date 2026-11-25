@@ -102,7 +102,7 @@ jobs:
 step-definitions:
   invoke:
     parameters:
-      definition: {type: string, default: agents/task.toml}
+      definition: {type: string, default: agents/task.yaml}
     step:
       uses: agent/run
       with: {agent: '${{ parameters.definition }}', prompt: '${{ inputs.task }}'}
@@ -115,7 +115,7 @@ jobs:
         with: {entrypoint: python, args: helpers/report.py}
         files: [helpers]
 `)
-	put(t, source, "workflows/nested/agents/task.toml", exampleAgent)
+	put(t, source, "workflows/nested/agents/task.yaml", exampleAgent)
 	put(t, source, "workflows/nested/helpers/report.py", "print('hello')\n")
 	if err := os.Chmod(filepath.Join(source, "workflows/nested/helpers/report.py"), 0755); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ jobs:
 	if len(all) != 2 {
 		t.Fatalf("closure %v", all)
 	}
-	for _, p := range []string{"imports/demo/workflows/main.yml", "imports/demo/workflows/nested/child.yml", "imports/demo/workflows/nested/agents/task.toml", "imports/demo/workflows/nested/helpers/report.py"} {
+	for _, p := range []string{"imports/demo/workflows/main.yml", "imports/demo/workflows/nested/child.yml", "imports/demo/workflows/nested/agents/task.yaml", "imports/demo/workflows/nested/helpers/report.py"} {
 		if _, err = os.Stat(filepath.Join(root, p)); err != nil {
 			t.Fatal(err)
 		}
@@ -159,7 +159,7 @@ jobs:
 func TestPluginStandaloneAndAddSkillPreserveSources(t *testing.T) {
 	source := t.TempDir()
 	put(t, source, "custom.yaml", exampleWorkflow)
-	put(t, source, "agents/task.toml", exampleAgent)
+	put(t, source, "agents/task.yaml", exampleAgent)
 	root := filepath.Join(t.TempDir(), "demo")
 	if err := Init(root, "demo", "0.2.2", ""); err != nil {
 		t.Fatal(err)
@@ -201,33 +201,33 @@ func TestPluginRejectUnsafeAndMissingClosure(t *testing.T) {
 		name, agent, uses, resource string
 		symlink                     bool
 	}{
-		{name: "missing agent", agent: "missing.toml"},
+		{name: "missing agent", agent: "missing.yaml"},
 		{name: "absolute agent", agent: "/etc/passwd"},
-		{name: "escaping agent", agent: "../../outside.toml"},
+		{name: "escaping agent", agent: "../../outside.yaml"},
 		{name: "remote reusable", uses: "org/repo/workflows/main.yml@main"},
 		{name: "escaping reusable", uses: "workflows/../main.yml"},
-		{name: "missing resource", agent: "agents/task.toml", resource: "missing"},
-		{name: "escaping resource", agent: "agents/task.toml", resource: "../../outside"},
-		{name: "symlink", agent: "agents/task.toml", symlink: true},
+		{name: "missing resource", agent: "agents/task.yaml", resource: "missing"},
+		{name: "escaping resource", agent: "agents/task.yaml", resource: "../../outside"},
+		{name: "symlink", agent: "agents/task.yaml", symlink: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := t.TempDir()
-			put(t, source, "workflows/agents/task.toml", exampleAgent)
+			put(t, source, "workflows/agents/task.yaml", exampleAgent)
 			w := exampleWorkflow
 			if tc.uses != "" {
 				w = "on: {workflow_call: {}}\njobs:\n  main:\n    uses: " + tc.uses + "\n"
 			} else {
-				w = strings.ReplaceAll(w, "agents/task.toml", tc.agent)
+				w = strings.ReplaceAll(w, "agents/task.yaml", tc.agent)
 			}
 			if tc.resource != "" {
 				w += "      - uses: docker://python:3\n        with: {entrypoint: python, args: helper.py}\n        files: [" + tc.resource + "]\n"
 			}
 			put(t, source, "workflows/main.yml", w)
 			if tc.symlink {
-				if err := os.Symlink(filepath.Join(source, "workflows/agents/task.toml"), filepath.Join(source, "workflows/link.toml")); err != nil {
+				if err := os.Symlink(filepath.Join(source, "workflows/agents/task.yaml"), filepath.Join(source, "workflows/link.yaml")); err != nil {
 					t.Fatal(err)
 				}
-				put(t, source, "workflows/main.yml", strings.ReplaceAll(w, "agents/task.toml", "link.toml"))
+				put(t, source, "workflows/main.yml", strings.ReplaceAll(w, "agents/task.yaml", "link.yaml"))
 			}
 			root := filepath.Join(t.TempDir(), "demo")
 			if err := Init(root, "demo", "0.2.2", filepath.Join(source, "workflows/main.yml")); err == nil {
@@ -253,14 +253,14 @@ jobs:
           agent:
             select: primary
             definitions:
-              primary: ../agents/task.toml
+              primary: ../agents/task.yaml
               secondary: ../agents/other
           prompt: hello
         finally:
           - uses: agent/run
-            with: {agent: ../agents/final.toml, prompt: finish}
+            with: {agent: ../agents/final.yaml, prompt: finish}
 `)
-	for _, p := range []string{"workflows/agents/task.toml", "workflows/agents/other/definition.toml", "workflows/agents/final.toml"} {
+	for _, p := range []string{"workflows/agents/task.yaml", "workflows/agents/other/definition.yaml", "workflows/agents/final.yaml"} {
 		put(t, source, p, exampleAgent)
 	}
 	root := filepath.Join(t.TempDir(), "demo")
@@ -274,7 +274,7 @@ jobs:
 	if _, err = (&workflows.Executor{WorkspaceDir: root}).Load(d.Skills[0].Workflow); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"task.toml", "other/definition.toml", "final.toml"} {
+	for _, p := range []string{"task.yaml", "other/definition.yaml", "final.yaml"} {
 		if _, err = os.Stat(filepath.Join(root, "imports/demo/workflows/agents", p)); err != nil {
 			t.Fatal(err)
 		}

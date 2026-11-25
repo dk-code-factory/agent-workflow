@@ -33,7 +33,7 @@ jobs:
                     Task: ${{ inputs.task }}
                     Plan: ${{ inputs.plan }}
                     Previous findings: ${{ inputs.previous.outputs.findings }}
-                agent: agents/builder.toml
+                agent: agents/builder.yaml
             - id: commit
               uses: git/commit
               with:
@@ -75,7 +75,7 @@ jobs:
                         properties:
                             clean: {type: boolean}
                             findings: {type: array, items: {type: string}}
-                agent: agents/review_correctness.toml
+                agent: agents/review_correctness.yaml
     review_two:
         needs: [implement, test]
         outputs:
@@ -100,4 +100,4 @@ jobs:
                         properties:
                             clean: {type: boolean}
                             findings: {type: array, items: {type: string}}
-                agent: agents/review_security.toml
+                agent: agents/review_security.yaml

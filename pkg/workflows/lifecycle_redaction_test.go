@@ -67,7 +67,7 @@ func TestCommandErrorHookEventRedactsSecretsBeforeNativeRecovery(t *testing.T) {
         argv: ['${{ secrets.token }}']
         onError:
           - uses: agent/run
-            with: {agent: reviewer.toml, prompt: recover}
+            with: {agent: reviewer.yaml, prompt: recover}
 `, func(req SessionRequest) (map[string]any, error) {
 		called = true
 		event, ok := req.Input.(map[string]any)

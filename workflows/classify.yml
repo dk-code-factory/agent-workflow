@@ -19,6 +19,7 @@ jobs:
                 prompt: "Classify this task: ${{ inputs.task }}"
                 output:
                     format: json
+                    repair-attempts: 0
                     schema:
                         type: object
                         additionalProperties: false
@@ -27,4 +28,4 @@ jobs:
                             category:
                                 type: string
                                 enum: [bug, feature, question]
-                agent: agents/task.toml
+                agent: agents/task.yaml

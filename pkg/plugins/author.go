@@ -28,7 +28,7 @@ func Init(directory, name, engineVersion, workflow string) error {
 	d := &Descriptor{SchemaVersion: SchemaVersion, Name: name, Version: "0.1.0", EngineVersion: engineVersion, Hosts: []string{"codex", "claude"}}
 	if workflow == "" {
 		files["workflows/main.yml"] = file{data: []byte(exampleWorkflow), mode: 0644}
-		files["workflows/agents/task.toml"] = file{data: []byte(exampleAgent), mode: 0644}
+		files["workflows/agents/task.yaml"] = file{data: []byte(exampleAgent), mode: 0644}
 		d.Skills = []Skill{{Name: name, Path: path.Join("skills", name, "SKILL.md"), Workflow: "workflows/main.yml"}}
 	} else {
 		skill, imported, err := importWorkflow(name, workflow)
@@ -276,12 +276,12 @@ jobs:
       - id: task
         uses: agent/run
         with:
-          agent: agents/task.toml
+          agent: agents/task.yaml
           prompt: ${{ inputs.task }}
 `
-const exampleAgent = `name = "task"
-description = "Complete the supplied workflow task."
-developer_instructions = "Complete the supplied task. Respect the target workspace permissions."
+const exampleAgent = `name: "task"
+description: "Complete the supplied workflow task."
+instructions: "Complete the supplied task. Respect the target workspace permissions."
 `
 const codexTemplate = `# Example only: review and copy into the TARGET workspace's agents.yml.
 # Scaffolding never changes target configuration or invokes a provider.
@@ -311,7 +311,7 @@ SKILL.md owns discovery names, descriptions and instructions. The descriptor bin
 each skill to a workflow. Workflow on.workflow_call.inputs owns the input contract.
 Plugin version and exact engine-version are independent semantic versions.
 
-The example uses agent/run with a portable TOML definition. Edit the workflow and
+The example uses agent/run with a portable YAML definition. Edit the workflow and
 skill instructions, and maintain scripted fixture responses and assertions.
 Imported workflows receive an empty fixture template that needs authored cases.
 Fixtures are deterministic control-flow evidence, not live host/model acceptance.

@@ -281,7 +281,7 @@ test('renderer replacement and destruction release only their own pending contri
   expect((await snapshot(page)).source).toBe(incoming + '\n# clean');
   await page.evaluate(() => {
     const host = (window as any);
-    host.second.update({ source: `jobs: { other: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.toml } } ] } }
+    host.second.update({ source: `jobs: { other: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.yaml } } ] } }
 `, actions: [host.raw.action] });
   });
   await page.locator('#b').getByRole('button', { name: /step_1/ }).first().click();
@@ -365,7 +365,7 @@ test('anonymous step replacement invalidates old raw callbacks before React clea
   // Prepare two anonymous steps with the same action for local YAML authoring.
   await page.evaluate(() => {
     const host = (window as any);
-    host.first.update({ source: `jobs: { build: { steps: [ { uses: agent/run, with: { prompt: First, agent: claude.toml } }, { uses: agent/run, with: { prompt: Second, agent: claude.toml } } ] } }
+    host.first.update({ source: `jobs: { build: { steps: [ { uses: agent/run, with: { prompt: First, agent: claude.yaml } }, { uses: agent/run, with: { prompt: Second, agent: claude.yaml } } ] } }
 ` });
     host.first.resolveSourceReplacement('use-incoming');
   });
@@ -382,7 +382,7 @@ test('anonymous step replacement invalidates old raw callbacks before React clea
     } });
   });
   // Filling CodeMirror is a local arbitrary source edit, not a host candidate.
-  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(`jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.toml } }, { uses: agent/run, with: { prompt: First, agent: claude.toml } } ] } }
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(`jobs: { build: { steps: [ { uses: agent/run, with: { prompt: Second, agent: claude.yaml } }, { uses: agent/run, with: { prompt: First, agent: claude.yaml } } ] } }
 
 # reordered
 `);
@@ -404,7 +404,7 @@ test('whole anonymous-step edits and undo invalidate the prior renderer callback
   await raw.fill('First raw buffer');
   await page.evaluate(() => {
     const host = (window as any); host.beforeStepEdit = host.raw.contexts.at(-1);
-    host.beforeStepEdit.setField([], {uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Replacement anonymous step'}});
+    host.beforeStepEdit.setField([], {uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Replacement anonymous step'}});
     host.beforeStepEdit.setField(['with', 'prompt'], 'Wrong immediate owner');
   });
   await expect(raw).toHaveValue('Replacement anonymous step');

@@ -21,31 +21,31 @@ const blockWorkflow = `jobs:
       - id: seed
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: seed
       - id: reviews
         parallel:
           - id: left
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: '${{ steps.seed.outputs.text }} left'
           - id: right_branch
             sequence:
               - id: right
                 uses: agent/run
                 with:
-                  agent: a.toml
+                  agent: a.yaml
                   prompt: '${{ steps.seed.outputs.text }} right'
               - id: refine
                 uses: agent/run
                 with:
-                  agent: a.toml
+                  agent: a.yaml
                   prompt: '${{ steps.right.outputs.text }} refined'
       - id: combine
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: '${{ steps.left.outputs.text }} + ${{ steps.refine.outputs.text }}'
 `
 
@@ -59,7 +59,7 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 		{"forward in sequence", "steps.seed.outputs.text }} right", "steps.refine.text }} right", "unavailable"},
 		{"mixed fields", "parallel:\n", "uses: agent/a\n        parallel:\n", "cannot combine"},
 		{"block continuation", "parallel:\n", "continue-on-error: false\n        parallel:\n", "cannot combine"},
-		{"invalid nested command", "uses: agent/run\n                with:\n                  agent: a.toml\n                  prompt: '${{ steps.right.outputs.text }} refined'", "run: echo hi", "explicit shell"},
+		{"invalid nested command", "uses: agent/run\n                with:\n                  agent: a.yaml\n                  prompt: '${{ steps.right.outputs.text }} refined'", "run: echo hi", "explicit shell"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := blockWorkflow
@@ -81,7 +81,7 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 			t.Errorf("accepted invalid block %s", block)
 		}
 	}
-	steps := []Step{{ID: "outer", Parallel: []Step{{Sequence: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}}}}, {Uses: "agent/run", With: map[string]any{"agent": "a.toml"}}}
+	steps := []Step{{ID: "outer", Parallel: []Step{{Sequence: []Step{{Uses: "agent/run", With: map[string]any{"agent": "a.yaml"}}}}}}, {Uses: "agent/run", With: map[string]any{"agent": "a.yaml"}}}
 	got := []string{}
 	for _, step := range FlattenSteps(steps) {
 		got = append(got, step.ID)
@@ -91,8 +91,8 @@ func TestStepBlocksAdmissionAndScopes(t *testing.T) {
 		t.Fatalf("IDs: %v", got)
 	}
 	steps[0].Parallel[0].Sequence[0].ID = "step_2"
-	steps[0].Parallel[0].Sequence[0].With = map[string]any{"agent": "a.toml", "prompt": "x"}
-	steps[1].With = map[string]any{"agent": "a.toml", "prompt": "x"}
+	steps[0].Parallel[0].Sequence[0].With = map[string]any{"agent": "a.yaml", "prompt": "x"}
+	steps[1].With = map[string]any{"agent": "a.yaml", "prompt": "x"}
 	w := &Workflow{Jobs: map[string]Job{"x": {Steps: steps}}}
 	if err := Validate(w); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("nested implicit ID collision accepted: %v", err)
@@ -178,21 +178,21 @@ func TestStepBlocksFailureCancelsAndJoinsSibling(t *testing.T) {
           - id: fail
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: fail
           - id: sibling
             sequence:
               - uses: agent/run
                 with:
-                  agent: a.toml
+                  agent: a.yaml
                   prompt: sibling
               - uses: agent/run
                 with:
-                  agent: a.toml
+                  agent: a.yaml
                   prompt: forbidden
       - uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: forbidden
 `)
 	started := make(chan struct{})
@@ -309,12 +309,12 @@ func TestStepBlocksInputWaitJoinsAndResumesCompletedSibling(t *testing.T) {
           - id: sibling
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: sibling
       - id: after
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: '${{ steps.question.outputs.answer }} ${{ steps.sibling.outputs.text }}'
 `, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
@@ -390,7 +390,7 @@ jobs:
 func TestStepBlocksNormalizationErrorIdentifiesStep(t *testing.T) {
 	for _, test := range []struct{ name, steps, id string }{
 		{"top-level explicit", "[{id: bad, uses: agent/removed}]\n", "bad"},
-		{"top-level anonymous", "[{uses: agent/run, with: {agent: a.toml, prompt: ok}}, {uses: agent/removed}]\n", "step_2"},
+		{"top-level anonymous", "[{uses: agent/run, with: {agent: a.yaml, prompt: ok}}, {uses: agent/removed}]\n", "step_2"},
 		{"nested explicit", "[{parallel: [{sequence: [{id: bad, uses: agent/removed}]}]}]\n", "bad"},
 		{"nested anonymous", "[{parallel: [{sequence: [{uses: agent/removed}]}]}]\n", "step_1_parallel_1_sequence_1"},
 	} {
@@ -416,11 +416,11 @@ func TestStepBlocksPersistenceFailureCannotContinue(t *testing.T) {
             continue-on-error: true
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: fail
       - uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: forbidden
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		calls.Add(1)
@@ -448,7 +448,7 @@ jobs:
       - parallel:
           - sequence:
               - id: result
-                with: {output: {schema: Decision, repair-attempts: 0}, agent: nested.toml, prompt: Decide}
+                with: {output: {schema: Decision, repair-attempts: 0}, agent: nested.yaml, prompt: Decide}
                 uses: agent/run
 `
 	root := t.TempDir()
@@ -480,7 +480,7 @@ jobs:
       - parallel:
           - uses: agent/run
             with:
-              agent: nested.toml
+              agent: nested.yaml
               prompt: forbidden
           - sequence:
               - uses: action/missing
@@ -506,7 +506,7 @@ func TestStepBlocksConditionalAndContinuedFailure(t *testing.T) {
           - id: forbidden
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: forbidden
       - id: branches
         parallel:
@@ -514,18 +514,18 @@ func TestStepBlocksConditionalAndContinuedFailure(t *testing.T) {
             continue-on-error: true
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: fail
           - id: success
             sequence:
               - uses: agent/run
                 with:
-                  agent: a.toml
+                  agent: a.yaml
                   prompt: success
       - id: after
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: after
 `)
 	var calls atomic.Int32
@@ -558,7 +558,7 @@ func TestStepBlocksCallerCancellationJoinsEveryBranch(t *testing.T) {
 	deadline, stopDeadline := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stopDeadline()
 	root := t.TempDir()
-	writeWorkflow(t, root, "main.yml", `jobs: {x: {steps: [{parallel: [{uses: agent/run, with: {agent: a.toml, prompt: left}}, {uses: agent/run, with: {agent: a.toml, prompt: right}}]}]}}
+	writeWorkflow(t, root, "main.yml", `jobs: {x: {steps: [{parallel: [{uses: agent/run, with: {agent: a.yaml, prompt: left}}, {uses: agent/run, with: {agent: a.yaml, prompt: right}}]}]}}
 `)
 	started := make(chan struct{}, 2)
 	var stopped atomic.Int32

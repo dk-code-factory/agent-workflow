@@ -241,7 +241,7 @@ def main():
     credential = isolated_credential(args.credential_file)
     (home / "auth.json").write_text(json.dumps(credential))
     (home / "auth.json").chmod(0o600)
-    (home / "config.toml").write_text('approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\nwritable_roots = ' + json.dumps([str(evidence), str(cache)]) + '\n[plugins."agent-workflow@agent-workflow"]\nenabled = true\n[projects.' + json.dumps(str(workspace)) + ']\ntrust_level = "trusted"\n')
+    (home / "config.yaml").write_text('approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\nwritable_roots = ' + json.dumps([str(evidence), str(cache)]) + '\n[plugins."agent-workflow@agent-workflow"]\nenabled = true\n[projects.' + json.dumps(str(workspace)) + ']\ntrust_level = "trusted"\n')
     run(["git", "init", "-q", str(workspace)])
     seed(workspace, args.scenario)
     # Copy the marketplace sources. Native installation, not a synthetic skill injection.

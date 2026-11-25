@@ -28,7 +28,7 @@ Claude and Codex physical invocation identities and versions.
 Workflow scenarios clone an explicitly supplied local `--repository-path`
 independently and require `--workflow` relative to that clone. The mixed-provider
 template is `workflows/mixed-development.yml` in this directory; copy it into the
-disposable fixture repository and add native `builder.toml` and `reviewer.toml` Codex definitions; the registered
+disposable fixture repository and add shared `builder.yaml` and `reviewer.yaml` definitions; the registered
 Claude action selects the admitted `claude` SDK role. Publication uses the existing development workflow
 and matching allowlisted policy in an explicitly supplied disposable repository.
 Container owner-loss requires a container role with a long-running approved shell

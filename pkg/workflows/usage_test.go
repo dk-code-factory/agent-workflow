@@ -118,7 +118,7 @@ func TestRepairsAndCheckpointReuseHaveDistinctUsageIdentities(t *testing.T) {
             format: json
             repair-attempts: 1
             schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}
-          agent: a.toml
+          agent: a.yaml
 `, runner)
 	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
 	if err == nil {
@@ -138,7 +138,7 @@ func TestRepairsAndCheckpointReuseHaveDistinctUsageIdentities(t *testing.T) {
 }
 
 func TestFailedProviderCallUsageIsCounted(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.yaml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"usage": usageTokens(9, 2), "cost_usd": 0.02}, errors.New("provider failed after reporting usage")
 	}))
 	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
@@ -152,7 +152,7 @@ func TestFailedProviderCallUsageIsCounted(t *testing.T) {
 }
 
 func TestMigrationBackfillsHistoricalProviderUsage(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.yaml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": "done", "provider": "claude-cli", "usage": map[string]any{"input_tokens": 8, "cache_read_input_tokens": 2, "output_tokens": 1}, "cost_usd": 0.03}, nil
 	}))
 	run, err := nativeTestExecutor(t, e).Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
@@ -180,7 +180,7 @@ func TestMigrationBackfillsHistoricalProviderUsage(t *testing.T) {
 }
 
 func TestInterruptedCallRetainsDurablePartialUsage(t *testing.T) {
-	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.toml}}]}}\n", agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
+	e, store := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: task, agent: a.yaml}}]}}\n", agentFunc(func(_ context.Context, request AgentRequest) (map[string]any, error) {
 		if request.ObserveUsage == nil {
 			return nil, errors.New("observer not installed")
 		}

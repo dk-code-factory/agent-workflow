@@ -12,7 +12,7 @@ import (
 )
 
 func checklistWorkflow(config string) string {
-	return "jobs:\n  review:\n    steps:\n      - id: task\n        uses: agent/run\n        with:\n          agent: reviewer.toml\n          prompt: implement\n          checklist: " + config + "\n"
+	return "jobs:\n  review:\n    steps:\n      - id: task\n        uses: agent/run\n        with:\n          agent: reviewer.yaml\n          prompt: implement\n          checklist: " + config + "\n"
 }
 
 func checklistResponse(complete bool) map[string]any {

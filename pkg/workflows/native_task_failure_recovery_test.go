@@ -35,7 +35,7 @@ func testNativeContinuedFailureLostCompletion(t *testing.T, checklist, fault str
       - id: task
         uses: agent/run
         continue-on-error: true
-        with: {agent: reviewer.toml, prompt: work, turns: 8%s}
+        with: {agent: reviewer.yaml, prompt: work, turns: 8%s}
   disposition:
     needs: native
     steps:
@@ -161,7 +161,7 @@ func TestNativeContinuedFailureExplicitNextCoordinateKeepsSession(t *testing.T) 
       - id: original
         uses: agent/run
         continue-on-error: true
-        with: {agent: reviewer.toml, prompt: first, turns: 3}
+        with: {agent: reviewer.yaml, prompt: first, turns: 3}
       - id: retry
         uses: agent/run
         with: {agent: '${{ steps.original.outputs.agent }}', prompt: explicit-retry}
@@ -205,7 +205,7 @@ func TestNativeContinuedFailureLostAcknowledgementRetainsObservation(t *testing.
       - id: task
         uses: agent/run
         continue-on-error: true
-        with: {agent: reviewer.toml, prompt: work, turns: 8}
+        with: {agent: reviewer.yaml, prompt: work, turns: 8}
   disposition:
     needs: native
     steps:

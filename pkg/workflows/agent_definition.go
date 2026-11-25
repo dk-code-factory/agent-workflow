@@ -6,22 +6,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // AgentDefinition is immutable admitted data, not a provider/security policy.
 // Native custom agent files cannot replace authentication, tools or execution.
 type AgentDefinition struct {
-	Name                  string `toml:"name" json:"name"`
-	Description           string `toml:"description" json:"description"`
-	DeveloperInstructions string `toml:"developer_instructions" json:"developer_instructions"`
-	Model                 string `toml:"model" json:"model,omitempty"`
-	ReasoningEffort       string `toml:"model_reasoning_effort" json:"model_reasoning_effort,omitempty"`
-	Source                string `toml:"-" json:"source"`
-	Bytes                 string `toml:"-" json:"bytes"`
+	Name                  string `yaml:"name" json:"name"`
+	Description           string `yaml:"description" json:"description"`
+	DeveloperInstructions string `yaml:"instructions" json:"developer_instructions"`
+	Model                 string `yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort       string `yaml:"reasoning-effort,omitempty" json:"model_reasoning_effort,omitempty"`
+	Source                string `yaml:"-" json:"source"`
+	Bytes                 string `yaml:"-" json:"bytes"`
 }
 
 func LoadAgentDefinition(path string) (*AgentDefinition, error) {
@@ -36,12 +37,12 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 		}
 		var candidates []string
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".toml") {
+			if !entry.IsDir() && isYAMLDefinition(entry.Name()) {
 				candidates = append(candidates, filepath.Join(path, entry.Name()))
 			}
 		}
 		if len(candidates) != 1 {
-			return nil, fmt.Errorf("agent directory %s must contain exactly one TOML file (found %d)", path, len(candidates))
+			return nil, fmt.Errorf("agent directory %s must contain exactly one YAML definition (found %d); convert native files with agent convert", path, len(candidates))
 		}
 		path = candidates[0]
 		info, err = os.Stat(path)
@@ -49,27 +50,68 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 			return nil, err
 		}
 	}
-	if !info.Mode().IsRegular() || info.Size() > 1<<20 || !strings.EqualFold(filepath.Ext(path), ".toml") {
-		return nil, fmt.Errorf("agent definition requires a regular TOML file of at most 1 MiB")
+	if !isYAMLDefinition(path) {
+		return nil, fmt.Errorf("agent definition %s: new admissions require YAML; use agent-workflow agent convert --from codex|claude --input FILE --output FILE.yaml", path)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, fmt.Errorf("agent definition requires a regular YAML file of at most 1 MiB")
 	}
 	data, err := readAgentDefinition(path, info)
 	if err != nil {
 		return nil, err
 	}
+	definition, err := ParseAgentDefinition(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	definition.Source, definition.Bytes = path, string(data)
+	return definition, nil
+}
+
+func isYAMLDefinition(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".yaml" || ext == ".yml"
+}
+
+// ParseAgentDefinition admits the shared source format. Snapshot JSON deliberately
+// retains the historical field names and raw bytes; resume never reparses sources.
+func ParseAgentDefinition(data []byte) (*AgentDefinition, error) {
+	if len(data) > 1<<20 {
+		return nil, fmt.Errorf("agent definition exceeds 1 MiB")
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	var doc yaml.Node
+	if err := decoder.Decode(&doc); err != nil {
+		return nil, err
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("agent definition requires exactly one YAML document")
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("agent definition must be a YAML mapping")
+	}
+	if err := checkNode(doc.Content[0], reflect.TypeOf(AgentDefinition{}), 0); err != nil {
+		return nil, fmt.Errorf("unsupported or invalid YAML agent definition: %w", err)
+	}
+	for i := 1; i < len(doc.Content[0].Content); i += 2 {
+		value := doc.Content[0].Content[i]
+		if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+			return nil, fmt.Errorf("agent definition fields must be strings")
+		}
+	}
 	var definition AgentDefinition
-	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
-	if err = decoder.Decode(&definition); err != nil {
-		return nil, fmt.Errorf("unsupported or invalid Codex agent definition %s: %w", path, err)
+	if err := doc.Decode(&definition); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(definition.Name) == "" || strings.TrimSpace(definition.Description) == "" || strings.TrimSpace(definition.DeveloperInstructions) == "" {
-		return nil, fmt.Errorf("Codex agent definition requires name, description and developer_instructions")
+		return nil, fmt.Errorf("YAML agent definition requires name, description and instructions")
 	}
 	switch definition.ReasoningEffort {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh":
 	default:
-		return nil, fmt.Errorf("unsupported model_reasoning_effort %q", definition.ReasoningEffort)
+		return nil, fmt.Errorf("unsupported reasoning-effort %q", definition.ReasoningEffort)
 	}
-	definition.Source, definition.Bytes = path, string(data)
 	return &definition, nil
 }
 

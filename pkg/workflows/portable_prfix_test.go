@@ -177,7 +177,7 @@ func portableFixturePrepare(t *testing.T, root, instructions string, settings ..
 	request := map[string]any{
 		"pr": "https://github.com/fixture/repository/pull/1", "instructions": instructions,
 		"image": "fixture/python-tools@sha256:" + strings.Repeat("a", 64),
-		"roles": map[string]string{"leaf": "reviewer.toml", "reviewer": "reviewer.toml", "verifier": "reviewer.toml", "fixer": "reviewer.toml", "audience": "reviewer.toml"},
+		"roles": map[string]string{"leaf": "reviewer.yaml", "reviewer": "reviewer.yaml", "verifier": "reviewer.yaml", "fixer": "reviewer.yaml", "audience": "reviewer.yaml"},
 		"options": map[string]any{"tasks": []any{map[string]any{"skill": "local:review"}, "dk-workflows:dk-pr-publish"}, "finalizers": []any{}, "reviewers": []any{},
 			"permissions": map[string]any{"reply_to_feedback": true}},
 		"authorizations": map[string]any{"iterate": map[string]any{"request_id": "fixture", "instruction": "Review and reply to this fixture.", "source": "user:fixture"}},
@@ -323,7 +323,7 @@ func TestPortablePRFixStockEngineRetainsSessionsAndInputSensitiveCoverage(t *tes
 	}
 	for name, contents := range map[string]string{
 		"file.txt":      "base\n",
-		"reviewer.toml": "name='fixture'\ndescription='Deterministic report fixture'\ndeveloper_instructions='Inspect admitted inputs.'\n",
+		"reviewer.yaml": "name: 'fixture'\ndescription: 'Deterministic report fixture'\ninstructions: 'Inspect admitted inputs.'\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0600); err != nil {
 			t.Fatal(err)

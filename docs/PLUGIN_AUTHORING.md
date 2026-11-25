@@ -37,7 +37,7 @@ workflow may omit workflow_call; called reusable workflows must declare it.
 
 Import discovers the local reusable-workflow closure with the engine's existing
 parser and validator, including expanded reusable step definitions. It includes
-native agent TOML definitions (including literal selection choices and directory
+shared YAML agent definitions (including literal selection choices and directory
 references) and the helper files explicitly declared on job containers and Docker
 steps. It visits nested blocks and lifecycle handlers. It preserves relative
 agent/helper resolution, declared input contracts and executable modes. Reusable
@@ -61,3 +61,13 @@ Runtime configuration, credentials and authority belong to the target workspace'
 or changed. A host target does not select an execution provider. Claude SDK
 execution requires a separately installed locked bridge and an explicit token or
 API-key environment reference. No login or credential refresh occurs implicitly.
+
+Agent definitions use the shared engine YAML contract: required `name`,
+`description` and `instructions`, optional `model` and `reasoning-effort`. New
+source admissions reject Codex TOML and Claude Markdown with conversion guidance.
+Use `agent-workflow agent convert --from codex|claude --input FILE --output FILE.yaml`
+offline; review omitted options and required workspace runtime-policy changes.
+Repeat `--acknowledge-loss FIELD` for each explicitly accepted omission. Conversion
+preserves instruction text and compatible metadata, never runs imported hooks,
+and never overwrites source or existing output. Historical admitted snapshots
+retain their original bytes and runtime bindings without source migration.

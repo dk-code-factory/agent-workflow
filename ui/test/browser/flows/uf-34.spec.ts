@@ -87,7 +87,7 @@ jobs:
   build:
     outputs: { artifact: done }
     steps:
-      - { id: greet, uses: agent/run, with: { prompt: Hello, agent: claude.toml } }
+      - { id: greet, uses: agent/run, with: { prompt: Hello, agent: claude.yaml } }
       - { id: other, argv: [ echo, ok ] }
   test:
     steps: [ { argv: [ echo, ok ] } ]
@@ -167,7 +167,7 @@ for (const width of [1450, 600]) {
     expect(await page.evaluate(() => (window as any).saves)).toEqual([]);
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
-    expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Hello' });
+    expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.yaml', prompt: 'Hello' });
   });
 }
 
@@ -234,10 +234,10 @@ test('a valid sibling edit preserves a rejected structured draft until discarded
   await expect(parameters).toBeFocused();
   expect(await page.evaluate(() => (window as any).saves)).toEqual([]);
   await editor.getByRole('button', { name: 'Discard edit', exact: true }).click();
-  await expect.poll(async () => parse(await parameters.inputValue())).toEqual({ prompt: 'Valid sibling edit', agent: 'claude.toml' });
+  await expect.poll(async () => parse(await parameters.inputValue())).toEqual({ prompt: 'Valid sibling edit', agent: 'claude.yaml' });
   await expect(parameters).not.toHaveAttribute('aria-invalid', 'true');
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).saves.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.prompt)).toBe('Valid sibling edit');
-  expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.agent)).toBe('claude.toml');
+  expect(await page.evaluate(() => (window as any).saves[0].workflow.jobs.build.steps[0].with.agent)).toBe('claude.yaml');
 });
