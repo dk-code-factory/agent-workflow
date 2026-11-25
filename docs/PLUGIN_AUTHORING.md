@@ -101,6 +101,13 @@ context are preserved. Developer instructions describe the workflow; generated
 guidance delegates execution to `plugin run` rather than asking the host to
 interpret workflow YAML.
 
+A source inside `skills/` cannot also be a required workflow helper or explicit
+resource: generating its host entrypoint would replace required bytes. This
+includes helpers declared through a directory or `.`. Build validation rejects
+that overlap before creating output. Move the instruction source outside
+`skills/` and update its descriptor binding and any helper references; its exact
+bytes then remain available at the declared path.
+
 Only declared resources, discovered workflow/YAML-agent dependencies and named
 generated assets are shipped. Config examples and fixtures are omitted unless
 explicitly declared. Generated paths are reserved, and additional unbound

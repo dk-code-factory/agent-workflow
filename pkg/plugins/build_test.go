@@ -279,6 +279,59 @@ func TestBuildSkillRemappingDoesNotDependOnSourceOrder(t *testing.T) {
 	}
 }
 
+func TestBuildRejectsHostInstructionResourceOverlapBeforeOutput(t *testing.T) {
+	for _, canonical := range []bool{false, true} {
+		for _, declaration := range []string{"helper file", "helper directory", "resource file", "resource directory"} {
+			t.Run(fmt.Sprintf("canonical=%v/%s", canonical, declaration), func(t *testing.T) {
+				source, d, _ := capturedFixture(t)
+				name, directory := "demo", "skills/source/workflows"
+				if canonical {
+					name, directory = "workflows", "skills/workflows"
+				}
+				original := path.Join(directory, "SKILL.md")
+				text := string(skillText(name))
+				put(t, source, original, text)
+				workflow := path.Join(directory, "main.yml")
+				helper := ""
+				switch declaration {
+				case "helper file":
+					helper = "    container: {image: ubuntu:24.04, files: [SKILL.md]}\n"
+				case "helper directory":
+					helper = "    container: {image: ubuntu:24.04, files: [.]}\n"
+				case "resource file":
+					d.Resources = append(d.Resources, original)
+				case "resource directory":
+					d.Resources = append(d.Resources, directory)
+				}
+				put(t, source, workflow, "jobs:\n  task:\n"+helper+"    steps:\n      - run: echo run\n        shell: sh\n")
+				d.Skills = []Skill{{Name: name, Path: original, Workflow: workflow}}
+				writeBuildDescriptor(t, source, d)
+				captured, err := Capture(source)
+				if err != nil {
+					t.Fatal("valid runtime project was rejected", err)
+				}
+				output := filepath.Join(t.TempDir(), "must-not-exist")
+				_, buildErr := Build(source, output, []string{"codex", "claude"})
+				if buildErr == nil || !strings.Contains(buildErr.Error(), "move its source outside skills/") {
+					t.Fatal("missing actionable generated-layout collision", buildErr)
+				}
+				if _, err := os.Stat(output); !os.IsNotExist(err) {
+					t.Fatal("created incomplete distribution", err)
+				}
+				if data, err := os.ReadFile(filepath.Join(source, filepath.FromSlash(original))); err != nil || string(data) != text {
+					t.Fatal("changed source helper bytes", err)
+				}
+				if err := os.RemoveAll(source); err != nil {
+					t.Fatal(err)
+				}
+				if checkErr := ValidateBuild(captured, []string{"codex", "claude"}); checkErr == nil || checkErr.Error() != buildErr.Error() {
+					t.Fatal("captured provenance did not retain resource roles", checkErr)
+				}
+			})
+		}
+	}
+}
+
 func TestBuildImportedStandaloneRootHelpersRoundTrip(t *testing.T) {
 	source, _ := rootHelperCaptureFixture(t)
 	output := filepath.Join(t.TempDir(), "distribution")

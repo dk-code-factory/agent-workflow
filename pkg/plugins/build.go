@@ -84,6 +84,12 @@ func distribution(captured *CapturedPackage, targets []string) (map[string]file,
 			return nil, nil, fmt.Errorf("target %q is not supported by plugin.yaml", target)
 		}
 	}
+	for _, skill := range d.Skills {
+		binding, _ := captured.Binding(skill.Name)
+		if strings.HasPrefix(binding.Path, "skills/") && captured.resourceFiles[binding.Path] {
+			return nil, nil, fmt.Errorf("skill source %s is also a required helper/resource; move its source outside skills/ before building so generated guidance cannot replace required bytes", binding.Path)
+		}
+	}
 	payload := map[string]file{}
 	for _, entry := range captured.Manifest().Entries {
 		if strings.ContainsAny(entry.Path, "\r\n") {
