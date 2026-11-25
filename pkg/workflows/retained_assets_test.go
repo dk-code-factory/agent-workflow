@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
@@ -327,5 +328,20 @@ func TestAssetBundleRejectsStorageAncestorSymlink(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
 		t.Fatalf("wrote through storage link: %v, %v", entries, err)
+	}
+}
+
+func TestAssetBundleBoundsInferredDirectoriesBeforeStaging(t *testing.T) {
+	// Sixteen small manifests imply 4,112 paths. Exercise only preflight;
+	// no tree is materialized and no file payload allocation is needed.
+	entries := make([]AssetEntry, 16)
+	for i := range entries {
+		entries[i] = AssetEntry{Path: fmt.Sprintf("%02d/%sfile", i, strings.Repeat("p/", 255)), Kind: "file", Mode: 0644, SHA256: digestBytes(nil)}
+	}
+	if _, err := assetDirectories(entries); err == nil || !strings.Contains(err.Error(), "materialized path limit of 4096") {
+		t.Fatalf("accepted excessive inferred parents: %v", err)
+	}
+	if dirs, err := assetDirectories(entries[:15]); err != nil || len(dirs)-1+15 != 3855 {
+		t.Fatalf("rejected bounded inferred parents: %d, %v", len(dirs), err)
 	}
 }

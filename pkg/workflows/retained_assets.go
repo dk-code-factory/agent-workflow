@@ -18,6 +18,10 @@ import (
 
 const AssetBundleVersion = 1
 
+// MaxAssetPaths bounds explicit files and all distinct materialized directories,
+// including inferred parents. Only the materialization's outer root is excluded.
+const MaxAssetPaths = 4096
+
 // AssetInput is already captured source data. Mode contains the original
 // permission bits, plus fs.ModeDir for a directory. Directories have no Data.
 // CaptureAssetBundle never reopens an installation or another source path.
@@ -56,11 +60,21 @@ func assetBundleID(entries []AssetEntry) string {
 }
 
 func assetDirectories(entries []AssetEntry) (map[string]bool, error) {
-	if len(entries) > MaxHelperFiles {
-		return nil, fmt.Errorf("retained assets exceed 4096 entries")
+	if len(entries) > MaxAssetPaths {
+		return nil, fmt.Errorf("retained assets exceed materialized path limit of %d", MaxAssetPaths)
 	}
 	directories := map[string]bool{".": true}
 	byPath := make(map[string]AssetEntry, len(entries))
+	fileCount := 0
+	addDirectory := func(name string) error {
+		if !directories[name] {
+			if len(directories)-1+fileCount >= MaxAssetPaths {
+				return fmt.Errorf("retained assets exceed materialized path limit of %d", MaxAssetPaths)
+			}
+			directories[name] = true
+		}
+		return nil
+	}
 	var total int64
 	previous := ""
 	for _, entry := range entries {
@@ -74,18 +88,29 @@ func assetDirectories(entries []AssetEntry) (map[string]bool, error) {
 			if entry.Size != 0 || entry.SHA256 != "" {
 				return nil, fmt.Errorf("retained directory has file metadata: %s", name)
 			}
-			directories[name] = true
+			if err := addDirectory(name); err != nil {
+				return nil, err
+			}
 		case "file":
 			if entry.Size < 0 || entry.Size > MaxHelperBytes-total || len(entry.SHA256) != 64 || !hexID(entry.SHA256) {
 				return nil, fmt.Errorf("invalid retained asset file metadata or byte limit: %s", name)
 			}
 			total += entry.Size
+			if len(directories)-1+fileCount >= MaxAssetPaths {
+				return nil, fmt.Errorf("retained assets exceed materialized path limit of %d", MaxAssetPaths)
+			}
+			fileCount++
 		default:
 			return nil, fmt.Errorf("unsupported retained asset kind %q", entry.Kind)
 		}
 		byPath[name] = entry
 		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
-			directories[parent] = true
+			if directories[parent] {
+				break // Known parents already have their complete ancestry.
+			}
+			if err := addDirectory(parent); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for name := range directories {
