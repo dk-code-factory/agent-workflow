@@ -604,7 +604,11 @@ Legacy JSON stores cannot execute iteration workflows.
 ### Native agent tasks
 
 Use `agent/run` with a shared YAML agent definition. Paths resolve relative to
-this workflow; the configured `codex` runtime must use `codex-app-server`.
+this workflow. Workspace `agent-runtime` selects a configured role backed by
+`codex-app-server` or `claude-sdk`; omission retains the `codex` role. Admission
+pins this role and its settings for continuation and recovery. Claude-only
+workspaces need no Codex executable. Claude SDK rejects definition
+`reasoning-effort`; portable definitions omit it.
 Agent `with.turns` also accepts a whole expression resolving to a positive integer
 within the existing signed 32-bit limit. Resolved allowances are validated before
 dispatch and retained with the admitted task; recovery cannot replenish them.

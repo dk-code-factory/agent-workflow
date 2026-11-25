@@ -889,3 +889,18 @@ describe('guided writes and renderer ownership', () => {
     expect(doc.getInspectorGeneration()).toBeGreaterThan(generation);
   });
 });
+
+describe('native runtime catalog selection', () => {
+  it('refreshes the runtime warning through host metadata without editing source', async () => {
+    const document = new WorkflowDocument({ source, agents: [{ id: 'claude-task' }] });
+    await document.validate();
+    expect(document.getSnapshot().diagnostics.filter(d => d.code === 'agent-catalog')).toHaveLength(1);
+    document.update({ agentRuntime: 'claude-task' });
+    expect(document.getSnapshot().diagnostics.filter(d => d.code === 'agent-catalog')).toEqual([]);
+    document.update({ agentRuntime: 'missing' });
+    expect(document.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({ code: 'agent-catalog', message: 'Native runtime missing is unavailable in the host catalog' }));
+    document.update({ agentRuntime: undefined, agents: [{ id: 'codex' }] });
+    expect(document.getSnapshot().diagnostics.filter(d => d.code === 'agent-catalog')).toEqual([]);
+    expect(document.getSnapshot()).toMatchObject({ source, revision: 0 });
+  });
+});

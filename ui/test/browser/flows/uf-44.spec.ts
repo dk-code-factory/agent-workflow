@@ -15,10 +15,14 @@ test('restore the native runtime catalog and correct a workflow reference', asyn
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(edited.source);
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-catalog')).toHaveLength(1);
-  await page.evaluate(() => (window as any).first.update({ agents: [{ id: 'claude' }, { id: 'codex' }] }));
+  await page.evaluate(() => (window as any).first.update({ agentRuntime: 'claude' }));
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-catalog')).toEqual([]);
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.code === 'workflow-catalog')).toHaveLength(1);
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.prompt).toBe('Keep');
+  await page.evaluate(() => (window as any).first.update({ agentRuntime: 'missing-runtime' }));
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-catalog')).toHaveLength(1);
+  await page.evaluate(() => (window as any).first.update({ agentRuntime: undefined, agents: [{ id: 'codex' }] }));
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-catalog')).toEqual([]);
   await job(page, 'call'); await field(page, 'Reusable workflow', 'workflows/available.yml');
   expect((await snapshot(page)).diagnostics.filter((d: any) => /catalog|unavailable|unknown-agent|unknown-workflow/.test(d.code))).toEqual([]);
   await expect(ui.locator('.aw-diagnostics')).not.toContainText('unavailable');

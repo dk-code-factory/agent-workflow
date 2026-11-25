@@ -318,10 +318,20 @@ func (r *Runner) discoverMCP(ctx context.Context) ([]workflows.ToolDefinition, e
 
 func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err error) {
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
+	// Reject explicitly selected Codex policy before discovery can launch an
+	// MCP connector for grants this adapter cannot enforce. Legacy configs may
+	// retain an unused Codex role; native definition admission checks defaults.
+	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
+		return nil, fmt.Errorf("Codex managed tool subsets are not certified")
+	}
 	cfg, err := r.Config.PinRuntimes(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Only fresh admission materializes the default selector. Retained Roles
+	// are decoded by RunnerForRoles without rewriting historical bytes.
+	cfg.AgentRuntime = cfg.NativeRole()
+	cfg.NativeOutputAdmission = 1
 	pinned := &Runner{Config: cfg, Workspace: r.Workspace}
 	catalog, err := pinned.discoverMCP(ctx)
 	if err != nil {

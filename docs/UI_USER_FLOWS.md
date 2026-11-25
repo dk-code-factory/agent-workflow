@@ -719,16 +719,17 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-44.spec.ts)
 
-- **Coverage:** The shared workflow fixture uses canonical YAML agent-definition paths; this flow keeps its interaction and recovery assertions while exercising those revised source references. The native task starts without `codex` in the host catalog and asserts a distinct agent warning alongside the missing-workflow warning. Editing its definition preserves the canonical action, prompt, typed input and turn allowance through Undo/Redo and does not clear the runtime warning; adding `codex` to the host catalog clears only that warning. Correcting the reusable workflow then clears the remaining warning.
+- **Coverage:** The shared workflow fixture uses canonical YAML agent-definition paths; this flow keeps its interaction and recovery assertions while exercising those revised source references. The native task starts without `codex` in the host catalog and asserts a distinct agent warning alongside the missing-workflow warning. Editing its definition preserves the canonical action, prompt, typed input and turn allowance through Undo/Redo and does not clear the runtime warning; selecting the available Claude runtime through host metadata clears only that warning. Selecting a missing runtime restores it, and returning to the default with `codex` in the catalog clears it. Correcting the reusable workflow then clears the remaining warning.
 
 - **Starting point:** The host supplies catalogs, and diagnostics say a
   referenced agent or workflow is unavailable.
 - **My flow:** For a native task, I select the affected step, review its
-  **Agent definition or reference**, and ask the host to make the `codex`
+  **Agent definition or reference**, and ask the host to make the selected workspace
   runtime available. For a reusable workflow, I select the job and correct
   **Reusable workflow** to an available catalog entry.
 - **What I see:** The native runtime warning clears when the host catalog
-  includes `codex`; changing a definition alone leaves that warning visible.
+  includes the selected runtime role (`codex` by default); changing a definition
+  alone leaves that warning visible.
   The workflow warning clears when its reference matches the catalog.
   Editing **Agent definition or reference** keeps the task's other parameters.
   **Action target** and **Step type** change the step kind and review incompatible

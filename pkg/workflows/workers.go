@@ -311,9 +311,12 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 		return Worker{}, fmt.Errorf("role backend does not support durable sessions")
 	}
 	if spec.Definition != nil {
+		if selector, ok := runner.(interface{ NativeTaskRole() string }); ok && spec.Role != selector.NativeTaskRole() {
+			return Worker{}, fmt.Errorf("%w: native task runtime role binding changed", ErrActionIntegrity)
+		}
 		validator, ok := runner.(NativeTaskRunner)
 		if !ok {
-			return Worker{}, fmt.Errorf("native agent tasks require an admitted Codex runtime")
+			return Worker{}, fmt.Errorf("native agent tasks require an admitted native runtime")
 		}
 		admitted, err := validator.AdmitNativeTask(spec.Definition)
 		if err != nil {

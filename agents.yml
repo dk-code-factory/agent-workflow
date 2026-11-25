@@ -1,3 +1,6 @@
+# Native agent/run tasks use codex by default. Set agent-runtime to a configured
+# codex-app-server or claude-sdk role to select another workspace-wide runtime.
+# Claude CLI conversation roles below cannot be selected for native tasks.
 agents:
   claude:
     provider: claude-cli
