@@ -465,15 +465,21 @@ func (r *Runner) AdmitNativeTask(definition *workflows.AgentDefinition) (*workfl
 	return &result, nil
 }
 
-// AdmitNativeOutput checks new workflow contracts without changing capability
-// enforcement for already-admitted snapshots during recovery.
+// AdmitNativeOutput checks the selected runtime even when a new task has no
+// output contract. Recovery retains its original admission policy below.
 func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) error {
-	if contract == nil {
-		return nil
-	}
 	role, ok := r.Config.Agents[r.NativeTaskRole()]
 	if !ok {
 		return fmt.Errorf("agent/run references unconfigured runtime role %q", r.NativeTaskRole())
+	}
+	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
+		return fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
+	}
+	if role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
+		return fmt.Errorf("Codex managed tool subsets are not certified")
+	}
+	if contract == nil {
+		return nil
 	}
 	if role.Provider == "codex-app-server" && contract.RepairAttempts > 0 {
 		return fmt.Errorf("Codex tool-free output repair is not certified; set repair-attempts: 0")

@@ -334,7 +334,7 @@ func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
 	// Reject explicitly selected Codex policy before discovery can launch an
 	// MCP connector for grants this adapter cannot enforce. Legacy configs may
-	// retain an unused Codex role; native definition admission checks defaults.
+	// retain an unused Codex role; native task admission checks defaults.
 	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
 		return nil, fmt.Errorf("Codex managed tool subsets are not certified")
 	}

@@ -269,12 +269,14 @@ jobs: {review: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.yam
 func TestUnsupportedNativeOptionsDeniedBeforeConnectorDiscovery(t *testing.T) {
 	for _, admission := range []string{"prepare", "run"} {
 		for _, scenario := range []struct {
-			name, selector, role, provider, definition, output, denial string
+			name, selector, role, provider, definition, output, denial, agent string
 		}{
-			{"explicit-codex-grant", "native", "native", "codex-app-server", "", "", "managed tool subsets"},
-			{"default-codex-grant", "", "codex", "codex-app-server", "", "", "managed tool subsets"},
-			{"claude-reasoning", "native", "native", "claude-sdk", "reasoning-effort: high\n", "", "reasoning-effort"},
-			{"claude-schema", "native", "native", "claude-sdk", "", ", output: {format: json, repair-attempts: 0, schema: {type: object, required: [__proto__]}}", "__proto__"},
+			{"explicit-codex-grant", "native", "native", "codex-app-server", "", "", "managed tool subsets", ""},
+			{"default-codex-grant", "", "codex", "codex-app-server", "", "", "managed tool subsets", ""},
+			{"default-codex-session-reference-grant", "", "codex", "codex-app-server", "", "", "managed tool subsets", "'${{ \"agent_existing\" }}'"},
+			{"default-nonnative-session-reference-grant", "", "codex", "claude", "", "", "requires runtime provider", "'${{ \"agent_existing\" }}'"},
+			{"claude-reasoning", "native", "native", "claude-sdk", "reasoning-effort: high\n", "", "reasoning-effort", ""},
+			{"claude-schema", "native", "native", "claude-sdk", "", ", output: {format: json, repair-attempts: 0, schema: {type: object, required: [__proto__]}}", "__proto__", ""},
 		} {
 			t.Run(admission+"/"+scenario.name, func(t *testing.T) {
 				root := t.TempDir()
@@ -283,10 +285,14 @@ func TestUnsupportedNativeOptionsDeniedBeforeConnectorDiscovery(t *testing.T) {
 				}
 				marker := filepath.Join(root, "connector-started")
 				command := filepath.Join(root, "connector")
+				agent := scenario.agent
+				if agent == "" {
+					agent = "reviewer.yaml"
+				}
 				for path, text := range map[string]string{
 					command: "#!/bin/sh\nprintf started > '" + marker + "'\nexit 99\n",
 					filepath.Join(root, "workflows", "reviewer.yaml"): "name: reviewer\ndescription: Review\ninstructions: Review the task.\n" + scenario.definition,
-					filepath.Join(root, "workflows", "main.yml"):      "jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: Review" + scenario.output + "}}]}}\n",
+					filepath.Join(root, "workflows", "main.yml"):      "jobs: {review: {steps: [{uses: agent/run, with: {agent: " + agent + ", prompt: Review" + scenario.output + "}}]}}\n",
 				} {
 					if err := os.WriteFile(path, []byte(text), 0700); err != nil {
 						t.Fatal(err)
