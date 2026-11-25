@@ -103,9 +103,11 @@ Only declared resources, discovered workflow/YAML-agent dependencies and named
 generated assets are shipped. Config examples and fixtures are omitted unless
 explicitly declared. Generated paths are reserved, and additional unbound
 `skills/**/SKILL.md` files fail rather than silently extending host discovery.
-All output paths share runtime containment, Unicode/case collision and complete
-4096-path/32-MiB limits. Paths containing line breaks are rejected because the
-checksum file uses one entry per line. Accepted paths keep their spelling.
+All output paths share runtime containment, Unicode/case collision and the
+complete 4096-path limit. The 32-MiB content limit applies to the runtime payload;
+the distribution also contains its ZIP and reports. Paths containing line breaks
+are rejected because the checksum file uses one entry per line. Accepted paths
+keep their spelling.
 
 Directories and executable files use mode 0755; other files use 0644. ZIP members
 are sorted with fixed 1980-01-01 timestamps and explicit Unix modes. Identical

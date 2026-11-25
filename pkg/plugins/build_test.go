@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -332,6 +333,9 @@ func TestBuildDirectoryModesIgnoreUmask(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permissions")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("owner permission denial requires an unprivileged user")
+	}
 	if source := os.Getenv("WORKFLOW_BUILD_TEST_SOURCE"); source != "" {
 		if _, err := Build(source, os.Getenv("WORKFLOW_BUILD_TEST_OUTPUT"), []string{"codex"}); err != nil {
 			t.Fatal(err)
@@ -339,31 +343,76 @@ func TestBuildDirectoryModesIgnoreUmask(t *testing.T) {
 		return
 	}
 	source, _, _ := capturedFixture(t)
-	output := filepath.Join(t.TempDir(), "restricted")
-	// Change umask only in a disposable child, never in the test process.
-	cmd := exec.Command("/bin/sh", "-c", `umask 077; exec "$@"`, "sh", os.Args[0], "-test.run=^TestBuildDirectoryModesIgnoreUmask$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "WORKFLOW_BUILD_TEST_SOURCE="+source, "WORKFLOW_BUILD_TEST_OUTPUT="+output)
-	if data, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("restricted umask build: %s %v", data, err)
+	baseline := map[string]string{}
+	for _, mask := range []string{"077", "0100", "0200", "0400", "0700", "0777"} {
+		t.Run(mask, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "restricted")
+			// Change umask only in a bounded disposable child, never this process.
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `umask "$1"; shift; exec "$@"`, "sh", mask, os.Args[0], "-test.run=^TestBuildDirectoryModesIgnoreUmask$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "WORKFLOW_BUILD_TEST_SOURCE="+source, "WORKFLOW_BUILD_TEST_OUTPUT="+output)
+			if data, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("restricted umask build: %s %v", data, err)
+			}
+			if err := filepath.WalkDir(output, func(name string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				info, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				want := fs.FileMode(0644)
+				if entry.IsDir() || info.Mode()&0111 != 0 {
+					want = 0755
+				}
+				if info.Mode().Perm() != want || !info.ModTime().Equal(archiveEpoch) {
+					t.Fatalf("not normalized: %s %v %s", name, info.Mode(), info.ModTime())
+				}
+				if !entry.IsDir() {
+					data, err := os.ReadFile(name)
+					if err != nil {
+						return err
+					}
+					rel, _ := filepath.Rel(output, name)
+					if mask == "077" {
+						baseline[rel] = string(data)
+					} else if baseline[rel] != string(data) {
+						t.Fatalf("umask changed artifact bytes: %s", rel)
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
-	if err := filepath.WalkDir(output, func(name string, entry fs.DirEntry, err error) error {
+}
+
+func TestBuildRollbackPreservesConcurrentOutput(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "failed")
+	files := map[string]file{"nested": {mode: fs.ModeDir | 0755}, "nested/payload": {data: []byte("owned"), mode: 0644}}
+	disk := authoringIO()
+	create := disk.create
+	disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+		f, err := create(name, mode)
 		if err != nil {
-			return err
+			return f, err
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		want := fs.FileMode(0644)
-		if entry.IsDir() || info.Mode()&0111 != 0 {
-			want = 0755
-		}
-		if info.Mode().Perm() != want || !info.ModTime().Equal(archiveEpoch) {
-			t.Fatalf("not normalized: %s %v %s", name, info.Mode(), info.ModTime())
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+		return &failedAuthorFile{File: f.(*os.File), write: true, onWrite: func() {
+			put(t, output, "nested/keep", "concurrent unrelated file")
+		}}, nil
+	}
+	err := writeDistributionUsing(output, files, disk)
+	if err == nil || !strings.Contains(err.Error(), "rollback newly created paths") {
+		t.Fatalf("missing retained-path diagnostic: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, "nested/keep")); err != nil || string(data) != "concurrent unrelated file" {
+		t.Fatalf("removed unrelated output: %q %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(output, "nested/payload")); !os.IsNotExist(err) {
+		t.Fatalf("retained partially written owned file: %v", err)
 	}
 }
 

@@ -325,27 +325,47 @@ func buildZIP(files map[string]file) ([]byte, error) {
 }
 
 func writeDistribution(output string, files map[string]file) (returned error) {
+	return writeDistributionUsing(output, files, authoringIO())
+}
+
+func writeDistributionUsing(output string, files map[string]file, disk authorIO) (returned error) {
 	if output == "" {
 		return fmt.Errorf("plugin build requires an output directory")
 	}
-	if err := os.Mkdir(output, 0755); err != nil {
-		return err
-	}
-	info, err := os.Lstat(output)
-	if err != nil {
-		return err
-	}
-	undo, err := authoringIO().writeFiles(output, files)
-	if err != nil {
-		return errors.Join(err, rollbackPaths([]createdPath{{output, info}}))
-	}
+	var created []createdPath
+	undo := func() error { return nil }
 	defer func() {
 		if returned != nil {
-			returned = errors.Join(returned, undo(), rollbackPaths([]createdPath{{output, info}}))
+			returned = errors.Join(returned, undo(), rollbackPaths(created))
 		}
 	}()
-	// OpenFile/Mkdir respect umask. Normalize explicitly after all children exist.
+	if err := reserveBuildDirectory(output, &created); err != nil {
+		return err
+	}
 	paths := buildPaths(files)
+	regular := make(map[string]file)
+	// Precreate every owned directory with usable owner permissions, independent
+	// of umask, before opening children. The file writer retains exclusive-create
+	// and owned-inode rollback checks; it never needs to create masked parents.
+	for _, name := range paths {
+		if !files[name].mode.IsDir() {
+			regular[name] = files[name]
+			continue
+		}
+		if err := checkNewPath(output, name); err != nil {
+			return err
+		}
+		if err := reserveBuildDirectory(filepath.Join(output, filepath.FromSlash(name)), &created); err != nil {
+			return err
+		}
+	}
+	var err error
+	undo, err = disk.writeFiles(output, regular)
+	if err != nil {
+		return err
+	}
+	// File creation also respects umask. Normalize files and completed directories
+	// after populating the tree, without changing the process-global umask.
 	for i := len(paths) - 1; i >= 0; i-- {
 		target := filepath.Join(output, filepath.FromSlash(paths[i]))
 		if err := os.Chmod(target, files[paths[i]].mode.Perm()); err != nil {
@@ -359,6 +379,20 @@ func writeDistribution(output string, files map[string]file) (returned error) {
 		return err
 	}
 	return os.Chtimes(output, archiveEpoch, archiveEpoch)
+}
+
+func reserveBuildDirectory(name string, created *[]createdPath) error {
+	if err := os.Mkdir(name, 0700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(name)
+	if err != nil {
+		return err
+	}
+	*created = append(*created, createdPath{name, info})
+	// Chmod the newly reserved directory before traversal: even 0700 passed to
+	// Mkdir can lose owner read/write/search bits under an owner-restricting mask.
+	return os.Chmod(name, 0700)
 }
 
 const bootstrapEntrypoint = `#!/usr/bin/env python3

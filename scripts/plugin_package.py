@@ -93,7 +93,7 @@ def verify_archive(path, files):
 def validate_archive_files(files):
     for name, (_, mode) in files.items():
         path = PurePosixPath(name)
-        if (not name or path.is_absolute() or str(path) != name or ".." in path.parts
+        if (not name or name == "." or path.is_absolute() or str(path) != name or ".." in path.parts
                 or any(c in name for c in ("\\", "\0", "\r", "\n")) or mode not in (0o644, 0o755)):
             raise ValueError("unsafe plugin ZIP path/mode: " + name)
         if any(str(parent) in files for parent in path.parents if str(parent) != "."):

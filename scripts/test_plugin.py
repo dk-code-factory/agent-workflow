@@ -475,9 +475,12 @@ class PackageTests(unittest.TestCase):
             verify_archive(path, files)
             write_archive(path, dict(reversed(list(files.items()))))
             self.assertEqual(path.read_bytes(), original)
-            for invalid in ("../escape", "/absolute", "bad\\path", "line\nbreak"):
+            for invalid in (".", "../escape", "/absolute", "bad\\path", "line\nbreak"):
                 with self.assertRaisesRegex(ValueError, "unsafe"):
                     write_archive(path, {invalid: (b"bad", 0o644)})
+                with self.assertRaisesRegex(ValueError, "unsafe"):
+                    verify_archive(path, {invalid: (b"bad", 0o644)})
+                self.assertEqual(path.read_bytes(), original)
 
     def test_builtin_profile_keeps_release_policy_and_exact_inventory(self):
         for changed in ("identity", "license", "version", "inventory"):
