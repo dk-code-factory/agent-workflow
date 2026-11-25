@@ -12,7 +12,8 @@ Distribution contract for generated plugins:
 
 The built-in plugin calls main(..., builtin=True) to retain its manifest version
 coupling and Codex compatibility check. Neither mode accepts a different release
-repository/workflow, logs in, installs dependencies or falls back to a PATH engine.
+repository/workflow, logs in or falls back to a PATH engine. Locked bridge
+dependencies are installed only by explicit ensure --claude-bridge.
 """
 import argparse
 from contextlib import contextmanager
@@ -83,10 +84,10 @@ def host(system=None, machine=None):
     return goos, arch
 
 
-def command(arguments):
+def command(arguments, *, failure_message=None):
     result = subprocess.run(arguments, capture_output=True, text=True)
     # Do not echo gh stderr: it can contain credentials, private paths or HTTP headers.
-    require(result.returncode == 0, f"{arguments[0]} {arguments[1]} failed. Check installed tooling, release availability and existing authentication; no login was attempted.")
+    require(result.returncode == 0, failure_message or f"{arguments[0]} {arguments[1]} failed. Check installed tooling, release availability and existing authentication; no login was attempted.")
     return result.stdout
 
 
@@ -331,7 +332,8 @@ def setup_claude_bridge(distribution, cache):
             bridge.mkdir(mode=0o700)
             for name, data in captured.items():
                 (bridge / name).write_bytes(data)
-            command([str(distribution / "agent-workflow"), "bridge", "setup", "--directory", str(bridge)])
+            command([str(distribution / "agent-workflow"), "bridge", "setup", "--directory", str(bridge)],
+                    failure_message="Claude bridge setup failed. Node 22+ and npm are required; install them explicitly, check the locked dependency installation, then retry ensure --claude-bridge. No login was attempted.")
             # Existing bridge setup verifies the pinned SDK and uses locked npm ci
             # with lifecycle scripts disabled. It never changes credentials/config.
             require(all((bridge / name).read_bytes() == data for name, data in captured.items()),

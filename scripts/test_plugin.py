@@ -372,7 +372,7 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(version=version, system=system, arch=arch, digest=digest), self.assertRaises(launcher.InstallError):
                 launcher.installation_path(self.cache, version, system, arch, digest)
 
-    def fake_bridge_setup(self, arguments):
+    def fake_bridge_setup(self, arguments, *, failure_message=None):
         self.assertEqual(arguments[1:4], ["bridge", "setup", "--directory"])
         bridge = Path(arguments[4])
         package = bridge / "node_modules/@anthropic-ai/claude-agent-sdk"
@@ -384,6 +384,24 @@ class InstallerTests(unittest.TestCase):
         bins.mkdir()
         (bins / "sdk").symlink_to("../@anthropic-ai/claude-agent-sdk/cli.js")
         return ""
+
+    def test_explicit_bridge_setup_reports_safe_node_and_npm_prerequisites(self):
+        root, _, _ = self.generic_package()
+        for error in ("Node 22+ is required: node not found", "Node 22+ is required"):
+            with self.subTest(error=error):
+                archive = self.make_archive(engine_body="print(" + repr(error + "; private-token") + ", file=sys.stderr); sys.exit(1)")
+                distribution = self.candidate(archive)
+                before = launcher.tree_identity(distribution)
+                with patch.object(launcher, "prerequisites"), patch.object(launcher, "ensure", return_value=distribution), \
+                        patch.object(launcher.sys, "stderr", new_callable=io.StringIO) as diagnostics:
+                    self.assertEqual(launcher.main(root, ["ensure", "--claude-bridge"]), 1)
+                self.assertIn("Node 22+", diagnostics.getvalue())
+                self.assertIn("npm", diagnostics.getvalue())
+                self.assertIn("ensure --claude-bridge", diagnostics.getvalue())
+                self.assertNotIn("private-token", diagnostics.getvalue())
+                self.assertEqual(launcher.tree_identity(distribution), before)
+                self.assertFalse(list(self.cache.glob(".bridge-*")))
+                self.assertFalse((self.cache / "bridges").exists())
 
     def test_explicit_bridge_setup_preserves_verified_distribution_and_is_cached(self):
         distribution = self.candidate()
@@ -407,7 +425,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(list(self.cache.glob(".bridge-*")))
         outside = self.root / "outside"
         outside.write_text("untouched")
-        def setup_with_link(arguments):
+        def setup_with_link(arguments, *, failure_message=None):
             self.fake_bridge_setup(arguments)
             (Path(arguments[4]) / "outside").symlink_to(outside)
             return ""

@@ -41,6 +41,11 @@ func TestPluginRunAndLostAcknowledgementRecovery(t *testing.T) {
 
 func pluginRecoveryFixture(t *testing.T, configuration string) {
 	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "agents.yml")
+	const admittedConfig = "controller: {max-queued: 16}\nagents:\n  fixture:\n    provider: codex-app-server\n    authentication: {mode: native}\n"
+	if err := os.WriteFile(configPath, []byte(admittedConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(filepath.Join(workspace, ".agent-workflow/assets"), func(name string, entry fs.DirEntry, err error) error {
 			if err == nil && entry.IsDir() {
@@ -128,6 +133,13 @@ jobs:
 	if err := os.RemoveAll(root); err != nil {
 		t.Fatal(err)
 	}
+	// The original controller and admitted configuration are still current.
+	// Require capture's missing-installation path, before recovery-only mode or
+	// a configuration change could independently reject this fresh request.
+	out.Reset()
+	if err := command(ctx, args, &out, io.Discard); err == nil || !strings.Contains(err.Error(), root) {
+		t.Fatalf("fresh launch did not recapture missing installation: %v", err)
+	}
 	out.Reset()
 	if err := command(ctx, []string{"status", "--workspace", workspace, "--request-id", "lost-ack"}, &out, io.Discard); err != nil {
 		t.Fatal(err)
@@ -158,18 +170,17 @@ jobs:
 		t.Fatal(err)
 	}
 	stop()
-	configPath := filepath.Join(workspace, "agents.yml")
 	switch configuration {
 	case "invalid":
 		if err := os.WriteFile(configPath, []byte("invalid: ["), 0600); err != nil {
 			t.Fatal(err)
 		}
 	case "changed":
-		if err := os.WriteFile(configPath, []byte("controller: {max-queued: 17}\n"), 0600); err != nil {
+		if err := os.WriteFile(configPath, []byte(strings.Replace(admittedConfig, "max-queued: 16", "max-queued: 17", 1)), 0600); err != nil {
 			t.Fatal(err)
 		}
 	case "deleted":
-		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(configPath); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -193,10 +204,6 @@ jobs:
 		if err != nil || string(got) != want {
 			t.Fatalf("recovered %s: %q, %v", name, got, err)
 		}
-	}
-	out.Reset()
-	if err := command(ctx, args, &out, io.Discard); err == nil {
-		t.Fatal("fresh launch ignored missing installation")
 	}
 	out.Reset()
 	if err := command(ctx, []string{"status", "--workspace", workspace, "--request-id", "missing"}, &out, io.Discard); err == nil || !strings.Contains(err.Error(), "unavailable") {
