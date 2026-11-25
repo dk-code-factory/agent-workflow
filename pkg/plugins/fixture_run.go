@@ -45,7 +45,12 @@ func Test(ctx context.Context, root string) TestReport {
 	report.Passed = false
 	cases, err := readFixtures(root, captured)
 	if err != nil {
-		report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "fixture.invalid", File: "fixtures", Reason: err.Error()})
+		var invalid *fixtureValidationError
+		if errors.As(err, &invalid) {
+			report.Diagnostics = append(report.Diagnostics, invalid.Diagnostic)
+		} else {
+			report.Diagnostics = append(report.Diagnostics, Diagnostic{Code: "fixture.invalid", File: "fixtures", Reason: err.Error()})
+		}
 		return report
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -266,11 +271,11 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 	result.Invocations = append(result.Invocations, ports.invocations...)
 	ports.mu.Unlock()
 
+	sessions := map[string]bool{}
 	if run != nil {
 		result.State, result.Outputs = run.Status, run.Outputs
 		workers, workerErr := e.Workers.List(ctx, run.ID)
 		err = errors.Join(err, workerErr)
-		sessions := map[string]bool{}
 		for _, w := range workers {
 			result.WorkerRemaining = append(result.WorkerRemaining, w.Remaining)
 			if w.SessionID != "" {
@@ -278,15 +283,15 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 			}
 		}
 		slices.Sort(result.WorkerRemaining)
-		if test.Expect.Sessions != nil && len(sessions) != *test.Expect.Sessions {
-			err = errors.Join(err, fmt.Errorf("expected %d retained sessions; got %d", *test.Expect.Sessions, len(sessions)))
-		}
 		_, snap, loadErr := engine.store.Load(ctx, run.ID)
 		err = errors.Join(err, loadErr)
 		after, _ := json.Marshal(snap)
 		if !bytes.Equal(snapshot, after) {
 			err = errors.Join(err, fmt.Errorf("admitted definitions, package identity or runtime bindings changed during execution/recovery"))
 		}
+	}
+	if test.Expect.Sessions != nil && len(sessions) != *test.Expect.Sessions {
+		err = errors.Join(err, fmt.Errorf("expected %d retained sessions; got %d", *test.Expect.Sessions, len(sessions)))
 	}
 	if test.Expect.State != "" && result.State != test.Expect.State {
 		err = errors.Join(err, fmt.Errorf("expected state %s; got %q", test.Expect.State, result.State))

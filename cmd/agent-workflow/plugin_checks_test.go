@@ -65,3 +65,31 @@ func TestPluginCheckTestFlagsAndHelp(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginFixtureInvalidCLIReportsLocation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "plugin")
+	if err := plugins.Init(root, "sample", "1.2.3", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixtures/example.yaml"), []byte("schema-version: 1\ncases:\n  - name: wrong-state\n    skill: sample\n    expect: {state: completed, invocation-count: 0}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var textOut, jsonOut, stderr bytes.Buffer
+	if err := pluginCommand(t.Context(), []string{"test", root}, &textOut, &stderr); err == nil {
+		t.Fatal("invalid fixture passed")
+	}
+	if err := pluginCommand(t.Context(), []string{"test", "--json", root}, &jsonOut, &stderr); err == nil {
+		t.Fatal("invalid JSON fixture passed")
+	}
+	var report plugins.TestReport
+	if err := json.Unmarshal(jsonOut.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Diagnostics) != 1 {
+		t.Fatal(report)
+	}
+	d := report.Diagnostics[0]
+	if d.File != "fixtures/example.yaml" || d.Case != "wrong-state" || !strings.Contains(textOut.String(), d.File) || !strings.Contains(textOut.String(), d.Reason) {
+		t.Fatal(textOut.String(), jsonOut.String())
+	}
+}

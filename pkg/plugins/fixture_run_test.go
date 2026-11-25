@@ -163,6 +163,47 @@ cases:
 `)
 	fixtureReport(t, root)
 }
+func TestPluginFixtureRejectedAdmissionChecksSessions(t *testing.T) {
+	for _, sessions := range []int{0, 1} {
+		t.Run(fmt.Sprint(sessions), func(t *testing.T) {
+			root := fixtureProject(t, "", fmt.Sprintf(`schema-version: 1
+cases:
+  - name: rejected
+    skill: sample
+    expect: {error: required input, invocation-count: 0, sessions: %d}
+`, sessions))
+			report := Test(t.Context(), root)
+			if sessions == 0 {
+				if !report.Passed {
+					t.Fatal(report)
+				}
+			} else if report.Passed || len(report.Diagnostics) != 1 || !strings.Contains(report.Diagnostics[0].Reason, "expected 1 retained sessions; got 0") {
+				t.Fatalf("rejected admission ignored a retained-session mismatch: %+v", report)
+			}
+		})
+	}
+}
+func TestPluginFixtureInvalidDiagnosticLocation(t *testing.T) {
+	for _, test := range []struct {
+		name, source, caseName string
+	}{
+		{"syntax", "schema-version: [", ""},
+		{"schema", "schema-version: 2\ncases: []\n", ""},
+		{"case", "schema-version: 1\ncases:\n  - name: bad-state\n    skill: sample\n    expect: {state: completed, invocation-count: 0}\n", "bad-state"},
+		{"duplicate", "schema-version: 1\ncases:\n  - {name: repeated, skill: sample, expect: {state: succeeded, invocation-count: 0}}\n  - {name: repeated, skill: sample, expect: {state: succeeded, invocation-count: 0}}\n", "repeated"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := Test(t.Context(), fixtureProject(t, "", test.source))
+			if report.Passed || len(report.Diagnostics) != 1 {
+				t.Fatal(report)
+			}
+			d := report.Diagnostics[0]
+			if d.Code != "fixture.invalid" || d.File != "fixtures/example.yaml" || d.Case != test.caseName {
+				t.Fatalf("lost fixture location: %+v", d)
+			}
+		})
+	}
+}
 func TestPluginFixtureBoundedRepeatAndFailurePropagation(t *testing.T) {
 	root := fixtureProject(t, `jobs:
   retry:

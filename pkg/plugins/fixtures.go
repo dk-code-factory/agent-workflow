@@ -67,6 +67,14 @@ type fixtureSource struct {
 	test FixtureCase
 }
 
+type fixtureValidationError struct{ Diagnostic }
+
+func (e *fixtureValidationError) Error() string { return e.Reason }
+
+func invalidFixture(file, caseName string, err error) error {
+	return &fixtureValidationError{Diagnostic{Code: "fixture.invalid", File: file, Case: caseName, Reason: err.Error()}}
+}
+
 func fixtureState(value string) bool {
 	switch value {
 	case workflows.RunStatusSucceeded, workflows.RunStatusFailed, workflows.RunStatusSkipped, workflows.RunStatusCanceled, workflows.RunStatusNeedsAttention, workflows.RunStatusWaiting, workflows.RunStatusInterrupted:
@@ -81,7 +89,7 @@ func fixtureRuntime(value string) bool {
 func readFixtures(root string, captured *CapturedPackage) ([]fixtureSource, error) {
 	c := newCollector(root)
 	if err := c.resource("fixtures"); err != nil {
-		return nil, fmt.Errorf("fixtures: %w", err)
+		return nil, invalidFixture("fixtures", "", fmt.Errorf("fixtures: %w", err))
 	}
 	paths := make([]string, 0)
 	for name, f := range c.files {
@@ -91,39 +99,39 @@ func readFixtures(root string, captured *CapturedPackage) ([]fixtureSource, erro
 	}
 	sort.Strings(paths)
 	if len(paths) == 0 || len(paths) > 256 {
-		return nil, fmt.Errorf("fixtures: requires 1–256 YAML fixture files")
+		return nil, invalidFixture("fixtures", "", fmt.Errorf("fixtures: requires 1–256 YAML fixture files"))
 	}
 	var out []fixtureSource
 	names, coverage := map[string]bool{}, map[string]bool{}
 	for _, file := range paths {
 		data := c.files[file].data
 		if len(data) > 1<<20 {
-			return nil, fmt.Errorf("%s: fixture exceeds 1 MiB", file)
+			return nil, invalidFixture(file, "", fmt.Errorf("%s: fixture exceeds 1 MiB", file))
 		}
 		var suite FixtureSuite
 		if err := strictYAML(data, &suite); err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
+			return nil, invalidFixture(file, "", fmt.Errorf("%s: %w", file, err))
 		}
 		if suite.SchemaVersion != 1 || len(suite.Cases) == 0 {
-			return nil, fmt.Errorf("%s: schema-version 1 and nonempty cases are required; author behavior for imported workflows", file)
+			return nil, invalidFixture(file, "", fmt.Errorf("%s: schema-version 1 and nonempty cases are required; author behavior for imported workflows", file))
 		}
 		for _, test := range suite.Cases {
 			if err := validateFixture(test, captured); err != nil {
-				return nil, fmt.Errorf("%s case %q: %w", file, test.Name, err)
+				return nil, invalidFixture(file, test.Name, fmt.Errorf("%s case %q: %w", file, test.Name, err))
 			}
 			if names[test.Name] {
-				return nil, fmt.Errorf("%s: duplicate case name %q", file, test.Name)
+				return nil, invalidFixture(file, test.Name, fmt.Errorf("%s: duplicate case name %q", file, test.Name))
 			}
 			names[test.Name], coverage[test.Skill] = true, true
 			out = append(out, fixtureSource{file, test})
 			if len(out) > maxFixtureCases {
-				return nil, fmt.Errorf("fixtures: exceeds %d cases", maxFixtureCases)
+				return nil, invalidFixture(file, test.Name, fmt.Errorf("fixtures: exceeds %d cases", maxFixtureCases))
 			}
 		}
 	}
 	for _, skill := range captured.Descriptor().Skills {
 		if !coverage[skill.Name] {
-			return nil, fmt.Errorf("fixtures: skill %q has no behavioral cases", skill.Name)
+			return nil, invalidFixture("fixtures", "", fmt.Errorf("fixtures: skill %q has no behavioral cases", skill.Name))
 		}
 	}
 	return out, nil
