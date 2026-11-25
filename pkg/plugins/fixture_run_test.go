@@ -121,6 +121,9 @@ cases:
 			if len(calls) != 2 || calls[0].Session != calls[1].Session || calls[0].Worker != calls[1].Worker || calls[1].Runtime != provider {
 				t.Fatalf("identity/runtime changed: %+v", calls)
 			}
+			if calls[0].RequestedSession != "" || calls[1].RequestedSession != calls[0].Session {
+				t.Fatalf("session was recreated instead of resumed: %+v", calls)
+			}
 		})
 	}
 }
@@ -200,6 +203,90 @@ func TestPluginFixtureInvalidDiagnosticLocation(t *testing.T) {
 			d := report.Diagnostics[0]
 			if d.Code != "fixture.invalid" || d.File != "fixtures/example.yaml" || d.Case != test.caseName {
 				t.Fatalf("lost fixture location: %+v", d)
+			}
+		})
+	}
+}
+func TestPluginFixtureRejectsFractionalIntegers(t *testing.T) {
+	valid := `schema-version: 1
+cases:
+  - name: numeric
+    skill: sample
+    inputs: {task: work}
+    operations:
+      - {uses: agent/run, call: 1, result: {text: done}}
+    controls:
+      - {action: configure-runtime, runtime: claude-sdk, invocation-count: 1}
+    expect: {state: succeeded, invocation-count: 1, sessions: 1, worker-remaining: [31]}
+`
+	for _, replacement := range [][2]string{
+		{"schema-version: 1", "schema-version: 1.9"},
+		{"call: 1", "call: 1.9"},
+		{"invocation-count: 1}", "invocation-count: -0.5}"},
+		{"state: succeeded, invocation-count: 1", "state: succeeded, invocation-count: 1.9"},
+		{"sessions: 1", "sessions: 1.9"},
+		{"[31]", "[31.9]"},
+	} {
+		t.Run(replacement[1], func(t *testing.T) {
+			r := Test(t.Context(), fixtureProject(t, "", strings.Replace(valid, replacement[0], replacement[1], 1)))
+			if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+				t.Fatalf("noninteger fixture reached execution: %+v", r)
+			}
+		})
+	}
+}
+func TestPluginFixtureRejectsNonJSONValuesBeforeExecution(t *testing.T) {
+	valid := `schema-version: 1
+cases:
+  - name: json-values
+    skill: sample
+    inputs: {task: work}
+    actions: {publish: read_only}
+    operations:
+      - {uses: action/publish, phase: bindings, result: {}}
+      - {uses: action/publish, result: {}, evidence: {proof: value}, receipt: {id: value}}
+    controls:
+      - {action: answer, step: approval, value: {approved: true}}
+    expect: {state: succeeded, invocation-count: 1, outputs: {result: done}}
+`
+	for _, replacement := range [][2]string{
+		{"task: work", "task: {nested: .nan}"},
+		{"phase: bindings, result: {}", "phase: bindings, result: {nested: .nan}"},
+		{"proof: value", "proof: {nested: .nan}"},
+		{"id: value", "id: {nested: .inf}"},
+		{"approved: true", "approved: {nested: -.inf}"},
+		{"result: done", "result: {nested: .nan}"},
+	} {
+		t.Run(replacement[1], func(t *testing.T) {
+			r := Test(t.Context(), fixtureProject(t, "", strings.Replace(valid, replacement[0], replacement[1], 1)))
+			if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+				t.Fatalf("non-JSON fixture reached execution: %+v", r)
+			}
+		})
+	}
+}
+func TestPluginFixtureSessionPortDistinguishesResumeFromReplacement(t *testing.T) {
+	for _, runtime := range []string{"codex-app-server", "claude-sdk"} {
+		t.Run(runtime, func(t *testing.T) {
+			ports := newFixturePorts([]FixtureOperation{{Uses: "agent/run", Call: 1}, {Uses: "agent/run", Call: 2}, {Uses: "agent/run", Call: 3}})
+			runner := &fixtureNative{ports: ports, config: fixtureConfig(runtime)}
+			request := workflows.SessionRequest{AgentRequest: workflows.AgentRequest{ParentWorkerID: "worker"}}
+			emit := func(workflows.ProviderEvent) {}
+			first, err := runner.RunTurn(t.Context(), request, emit)
+			if err != nil || first.SessionID == "" {
+				t.Fatal(first, err)
+			}
+			request.SessionID = first.SessionID
+			resumed, err := runner.RunTurn(t.Context(), request, emit)
+			if err != nil || resumed.SessionID != first.SessionID {
+				t.Fatal(resumed, err)
+			}
+			request.SessionID = ""
+			if _, err := runner.RunTurn(t.Context(), request, emit); err == nil || !strings.Contains(err.Error(), "retained session") {
+				t.Fatalf("lost retained session was silently regenerated: %v", err)
+			}
+			if ports.count() != 2 {
+				t.Fatal("lost session consumed an operation", ports.count())
 			}
 		})
 	}

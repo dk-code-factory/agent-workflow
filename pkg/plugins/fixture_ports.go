@@ -23,19 +23,22 @@ type fixturePorts struct {
 	invocations []FixtureInvocation
 	failure     error
 	contracts   map[string]string
+	sessions    map[string]string
+	nextSession int
 }
 type FixtureInvocation struct {
-	Uses    string                    `json:"uses"`
-	Phase   string                    `json:"phase"`
-	Call    int                       `json:"call"`
-	Job     string                    `json:"job,omitempty"`
-	Step    string                    `json:"step,omitempty"`
-	Prompt  string                    `json:"prompt,omitempty"`
-	Role    string                    `json:"role,omitempty"`
-	Runtime string                    `json:"runtime,omitempty"`
-	Worker  string                    `json:"worker,omitempty"`
-	Session string                    `json:"session,omitempty"`
-	Command *workflows.CommandRequest `json:"command,omitempty"`
+	Uses             string                    `json:"uses"`
+	Phase            string                    `json:"phase"`
+	Call             int                       `json:"call"`
+	Job              string                    `json:"job,omitempty"`
+	Step             string                    `json:"step,omitempty"`
+	Prompt           string                    `json:"prompt,omitempty"`
+	Role             string                    `json:"role,omitempty"`
+	Runtime          string                    `json:"runtime,omitempty"`
+	Worker           string                    `json:"worker,omitempty"`
+	Session          string                    `json:"session,omitempty"`
+	RequestedSession string                    `json:"requested-session,omitempty"`
+	Command          *workflows.CommandRequest `json:"command,omitempty"`
 }
 
 func newFixturePorts(operations []FixtureOperation) *fixturePorts {
@@ -59,7 +62,7 @@ func (p *fixturePorts) take(q FixtureInvocation) (FixtureOperation, error) {
 		if phase == "" {
 			phase = "execute"
 		}
-		if !p.used[i] && op.Uses == q.Uses && phase == q.Phase && (op.Call == 0 || op.Call == q.Call) && (op.Job == "" || op.Job == q.Job) && (op.Step == "" || op.Step == q.Step) && (op.Prompt == "" || op.Prompt == q.Prompt) && (op.Role == "" || op.Role == q.Role) {
+		if !p.used[i] && op.Uses == q.Uses && phase == q.Phase && (op.Call == 0 || int(op.Call) == q.Call) && (op.Job == "" || op.Job == q.Job) && (op.Step == "" || op.Step == q.Step) && (op.Prompt == "" || op.Prompt == q.Prompt) && (op.Role == "" || op.Role == q.Role) {
 			matches = append(matches, i)
 		}
 	}
@@ -220,16 +223,39 @@ func (f *fixtureNative) Capabilities(role string) (workflows.ProviderCapabilitie
 func (f *fixtureNative) RunAgent(context.Context, workflows.AgentRequest) (map[string]any, error) {
 	return nil, f.ports.fail(fmt.Errorf("fixture native tasks must use durable workers"))
 }
+
+// Preserve the port's history across SQLite reopening and runner restoration so
+// a new session request cannot impersonate a resumed session for the same worker.
+func (p *fixturePorts) session(worker, requested string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sessions == nil {
+		p.sessions = map[string]string{}
+	}
+	retained := p.sessions[worker]
+	if worker == "" || (retained != "" && requested != retained) || (retained == "" && requested != "") {
+		err := fmt.Errorf("fixture worker %q did not supply its retained session", worker)
+		p.failure = errors.Join(p.failure, err)
+		return "", err
+	}
+	if retained == "" {
+		p.nextSession++
+		retained = fmt.Sprintf("fixture-session-%d", p.nextSession)
+		p.sessions[worker] = retained
+	}
+	return retained, nil
+}
+
 func (f *fixtureNative) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return workflows.SessionResult{}, err
 	}
-	session := q.SessionID
-	if session == "" {
-		session = "fixture-" + q.ParentWorkerID
+	session, sessionErr := f.ports.session(q.ParentWorkerID, q.SessionID)
+	if sessionErr != nil {
+		return workflows.SessionResult{}, sessionErr
 	}
 	role := f.NativeTaskRole()
-	op, err := f.ports.take(FixtureInvocation{Uses: "agent/run", Phase: "execute", Prompt: q.Prompt, Role: q.AgentID, Runtime: f.config.Agents[role].Provider, Worker: q.ParentWorkerID, Session: session})
+	op, err := f.ports.take(FixtureInvocation{Uses: "agent/run", Phase: "execute", Prompt: q.Prompt, Role: q.AgentID, Runtime: f.config.Agents[role].Provider, Worker: q.ParentWorkerID, Session: session, RequestedSession: q.SessionID})
 	emit(workflows.ProviderEvent{Type: "session", SessionID: session})
 	status := workflows.RunStatusSucceeded
 	if err != nil {
@@ -255,8 +281,11 @@ func (p *fixturePorts) registry(contracts map[string]string) (*workflows.ActionR
 			},
 			Handler: func(_ context.Context, ac workflows.ActionContext, _ map[string]any) (workflows.ActionResult[map[string]any], error) {
 				op, err := p.take(request(ac, "execute"))
-				evidence, _ := json.Marshal(op.Evidence)
-				receipt, _ := json.Marshal(op.Receipt)
+				evidence, evidenceErr := json.Marshal(op.Evidence)
+				receipt, receiptErr := json.Marshal(op.Receipt)
+				if evidenceErr != nil || receiptErr != nil {
+					return workflows.ActionResult[map[string]any]{}, p.fail(errors.Join(evidenceErr, receiptErr))
+				}
 				return workflows.ActionResult[map[string]any]{Output: op.Result, Evidence: evidence, Receipt: receipt}, err
 			},
 			ValidateCheckpoint: func(_ context.Context, ac workflows.ActionContext, _ workflows.ActionCheckpoint[map[string]any, map[string]any]) error {
@@ -265,8 +294,11 @@ func (p *fixturePorts) registry(contracts map[string]string) (*workflows.ActionR
 			},
 			Reconcile: func(_ context.Context, ac workflows.ActionContext, _ workflows.ActionCheckpoint[map[string]any, map[string]any]) (workflows.ActionReconciliation[map[string]any], error) {
 				op, err := p.take(request(ac, "reconcile"))
-				proof, _ := json.Marshal(op.Evidence)
-				receipt, _ := json.Marshal(op.Receipt)
+				proof, proofErr := json.Marshal(op.Evidence)
+				receipt, receiptErr := json.Marshal(op.Receipt)
+				if proofErr != nil || receiptErr != nil {
+					return workflows.ActionReconciliation[map[string]any]{}, p.fail(errors.Join(proofErr, receiptErr))
+				}
 				return workflows.ActionReconciliation[map[string]any]{Outcome: op.Outcome, Proof: proof, Result: workflows.ActionResult[map[string]any]{Output: op.Result, Evidence: proof, Receipt: receipt}}, err
 			},
 		})

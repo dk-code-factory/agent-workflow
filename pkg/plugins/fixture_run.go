@@ -233,7 +233,10 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 				if answerID == "" {
 					answerID = fmt.Sprintf("fixture-answer-%d", i+1)
 				}
-				value, _ := json.Marshal(control.Value)
+				value, valueErr := json.Marshal(control.Value)
+				if valueErr != nil {
+					return result, ports.fail(fmt.Errorf("fixture answer JSON: %w", valueErr))
+				}
 				_, controlErr = engine.store.AcceptInput(ctx, id, gate.ID, workflows.ExternalInputAnswer{AnswerID: answerID, EvidenceID: evidence, Value: value})
 			}
 		case "resume":
@@ -262,7 +265,7 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 		if control.ExpectState != "" && (run == nil || run.Status != control.ExpectState) {
 			return result, fmt.Errorf("control %d: expected state %s; got %+v", i+1, control.ExpectState, run)
 		}
-		if control.InvocationCount != nil && ports.count() != *control.InvocationCount {
+		if control.InvocationCount != nil && ports.count() != int(*control.InvocationCount) {
 			return result, fmt.Errorf("control %d: expected %d invocations, got %d (state %s: %v)", i+1, *control.InvocationCount, ports.count(), run.Status, runErr)
 		}
 	}
@@ -290,21 +293,24 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 			err = errors.Join(err, fmt.Errorf("admitted definitions, package identity or runtime bindings changed during execution/recovery"))
 		}
 	}
-	if test.Expect.Sessions != nil && len(sessions) != *test.Expect.Sessions {
+	if test.Expect.Sessions != nil && len(sessions) != int(*test.Expect.Sessions) {
 		err = errors.Join(err, fmt.Errorf("expected %d retained sessions; got %d", *test.Expect.Sessions, len(sessions)))
 	}
 	if test.Expect.State != "" && result.State != test.Expect.State {
 		err = errors.Join(err, fmt.Errorf("expected state %s; got %q", test.Expect.State, result.State))
 	}
 	err = errors.Join(err, matchFixtureError(runErr, test.Expect.Error))
-	if result.InvocationCount != *test.Expect.InvocationCount {
+	if result.InvocationCount != int(*test.Expect.InvocationCount) {
 		err = errors.Join(err, fmt.Errorf("expected %d invocations; got %d", *test.Expect.InvocationCount, result.InvocationCount))
 	}
 	if test.Expect.Outputs != nil && !sameFixtureJSON(test.Expect.Outputs, result.Outputs) {
 		err = errors.Join(err, fmt.Errorf("workflow outputs differ: expected %v; got %v", test.Expect.Outputs, result.Outputs))
 	}
 	if test.Expect.WorkerRemaining != nil {
-		want := slices.Clone(test.Expect.WorkerRemaining)
+		want := make([]int, len(test.Expect.WorkerRemaining))
+		for i, value := range test.Expect.WorkerRemaining {
+			want[i] = int(value)
+		}
 		slices.Sort(want)
 		if !slices.Equal(want, result.WorkerRemaining) {
 			err = errors.Join(err, fmt.Errorf("worker allowances differ: expected %v; got %v", want, result.WorkerRemaining))

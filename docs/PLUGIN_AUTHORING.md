@@ -63,8 +63,8 @@ Scaffolds include a portable native-agent example, provider configuration
 examples in `config/` and scripted fixture source data in `fixtures/`. Imports
 receive an empty fixture template that needs cases for the imported behavior.
 `add-skill` creates that template at `fixtures/NAME/example.yaml`.
-Fixture execution is a later delivery stage; these commands do not claim live
-host activation or provider acceptance.
+Use `plugin test` to execute the authored fixtures. These commands do not claim
+live host activation or provider acceptance.
 
 ## Build a portable marketplace
 
@@ -248,7 +248,14 @@ fail until their behavior is authored. Unknown keys, aliases, unsupported schema
 versions, ambiguous responses and unused responses fail. A file is limited to
 1 MiB, a suite to 100 cases and 256 YAML files, and a case to 1000 responses and
 128 controls. A case has ten seconds; the complete execution suite has two minutes.
-All waits and workers are canceled and joined before disposable state is removed.
+Cleanup cancels workers and waits up to two seconds for shutdown before removing
+case-owned disposable state. A shutdown timeout fails the fixture; it does not
+establish that every worker joined before removal.
+
+Versions, call selectors and count assertions require YAML integers; fractional
+or quoted numeric values fail. Inputs, results, evidence, receipts, answers and
+expected outputs must be JSON representable, including nested values. Nonfinite
+numbers fail fixture validation before any case executes.
 
 ```yaml
 schema-version: 1
@@ -337,9 +344,13 @@ state, recovers it and restarts fixture workers. `resume` uses the existing retr
 guards; `retry: true` is an explicit uncertain-effect acknowledgement.
 `configure-runtime` changes current configuration only: resume and worker dispatch
 must still use admitted Roles. Controls can assert `expect-error`, `expect-state`
-and `invocation-count`. Final `worker-remaining` and `sessions` assertions prove
-consumed allowances and identities survive recovery. Definitions, package assets
-and runtime snapshots must remain unchanged throughout execution and recovery.
+and `invocation-count`. Final `worker-remaining` checks consumed allowances;
+`sessions` counts distinct retained identities at the final state. The fixture
+port remembers each worker's created session and rejects a subsequent turn that
+omits or changes it, including after reopening state. Transcripts record both
+the requested and returned session; recovery tests compare these and worker IDs
+across turns. Definitions, package assets and runtime snapshots must remain
+unchanged throughout execution and recovery.
 
 Fixture success establishes deterministic workflow control flow. It does not test
 helper implementation correctness, model activation quality, native host

@@ -1,13 +1,31 @@
 package plugins
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
+	"gopkg.in/yaml.v3"
 )
+
+// Fixture integers must be authored as YAML integers. yaml.v3 otherwise truncates
+// floating-point scalars when decoding directly into Go integer fields.
+type fixtureInteger int
+
+func (value *fixtureInteger) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
+		return fmt.Errorf("fixture field requires a YAML integer; got %q", node.Value)
+	}
+	var integer int
+	if err := node.Decode(&integer); err != nil {
+		return err
+	}
+	*value = fixtureInteger(integer)
+	return nil
+}
 
 const maxFixtureCases = 100
 const maxFixtureOperations = 1000
@@ -15,8 +33,8 @@ const maxFixtureOperations = 1000
 // FixtureSuite is a strict versioned description of responses and assertions.
 // It describes boundary data; the existing engine interprets workflow YAML.
 type FixtureSuite struct {
-	SchemaVersion int           `yaml:"schema-version"`
-	Cases         []FixtureCase `yaml:"cases"`
+	SchemaVersion fixtureInteger `yaml:"schema-version"`
+	Cases         []FixtureCase  `yaml:"cases"`
 }
 type FixtureCase struct {
 	Name       string             `yaml:"name"`
@@ -31,7 +49,7 @@ type FixtureCase struct {
 type FixtureOperation struct {
 	Uses     string         `yaml:"uses"`
 	Phase    string         `yaml:"phase,omitempty"`
-	Call     int            `yaml:"call,omitempty"`
+	Call     fixtureInteger `yaml:"call,omitempty"`
 	Job      string         `yaml:"job,omitempty"`
 	Step     string         `yaml:"step,omitempty"`
 	Prompt   string         `yaml:"prompt,omitempty"`
@@ -43,24 +61,24 @@ type FixtureOperation struct {
 	Outcome  string         `yaml:"outcome,omitempty"`
 }
 type FixtureControl struct {
-	Action          string `yaml:"action"`
-	Step            string `yaml:"step,omitempty"`
-	Value           any    `yaml:"value,omitempty"`
-	Evidence        string `yaml:"evidence,omitempty"`
-	AnswerID        string `yaml:"answer-id,omitempty"`
-	Retry           bool   `yaml:"retry,omitempty"`
-	Runtime         string `yaml:"runtime,omitempty"`
-	ExpectError     string `yaml:"expect-error,omitempty"`
-	ExpectState     string `yaml:"expect-state,omitempty"`
-	InvocationCount *int   `yaml:"invocation-count,omitempty"`
+	Action          string          `yaml:"action"`
+	Step            string          `yaml:"step,omitempty"`
+	Value           any             `yaml:"value,omitempty"`
+	Evidence        string          `yaml:"evidence,omitempty"`
+	AnswerID        string          `yaml:"answer-id,omitempty"`
+	Retry           bool            `yaml:"retry,omitempty"`
+	Runtime         string          `yaml:"runtime,omitempty"`
+	ExpectError     string          `yaml:"expect-error,omitempty"`
+	ExpectState     string          `yaml:"expect-state,omitempty"`
+	InvocationCount *fixtureInteger `yaml:"invocation-count,omitempty"`
 }
 type FixtureExpect struct {
-	State           string         `yaml:"state,omitempty"`
-	Error           string         `yaml:"error,omitempty"`
-	InvocationCount *int           `yaml:"invocation-count"`
-	Outputs         map[string]any `yaml:"outputs,omitempty"`
-	WorkerRemaining []int          `yaml:"worker-remaining,omitempty"`
-	Sessions        *int           `yaml:"sessions,omitempty"`
+	State           string           `yaml:"state,omitempty"`
+	Error           string           `yaml:"error,omitempty"`
+	InvocationCount *fixtureInteger  `yaml:"invocation-count"`
+	Outputs         map[string]any   `yaml:"outputs,omitempty"`
+	WorkerRemaining []fixtureInteger `yaml:"worker-remaining,omitempty"`
+	Sessions        *fixtureInteger  `yaml:"sessions,omitempty"`
 }
 type fixtureSource struct {
 	file string
@@ -137,6 +155,27 @@ func readFixtures(root string, captured *CapturedPackage) ([]fixtureSource, erro
 	return out, nil
 }
 func validateFixture(c FixtureCase, captured *CapturedPackage) error {
+	// All authored boundary values must survive JSON transport unchanged. Check
+	// the whole suite before any case executes, including expected negative cases.
+	type jsonField struct {
+		name  string
+		value any
+	}
+	values := []jsonField{{"inputs", c.Inputs}, {"expect.outputs", c.Expect.Outputs}}
+	for i, operation := range c.Operations {
+		for _, field := range []jsonField{{"result", operation.Result}, {"evidence", operation.Evidence}, {"receipt", operation.Receipt}} {
+			values = append(values, jsonField{fmt.Sprintf("operations[%d].%s", i, field.name), field.value})
+		}
+	}
+	for i, control := range c.Controls {
+		values = append(values, jsonField{fmt.Sprintf("controls[%d].value", i), control.Value})
+	}
+	for _, field := range values {
+		if _, err := json.Marshal(field.value); err != nil {
+			return fmt.Errorf("%s must be JSON representable: %w", field.name, err)
+		}
+	}
+
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
