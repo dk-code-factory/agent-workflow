@@ -317,6 +317,20 @@ func (r *Runner) discoverMCP(ctx context.Context) ([]workflows.ToolDefinition, e
 }
 
 func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err error) {
+	raw, err := r.PinRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	return (&Runner{Config: cfg, Workspace: r.Workspace}).DiscoverRoles(ctx)
+}
+
+// PinRoles retains runtime authority without starting MCP connectors. Workflow
+// admission validates its captured native definitions before DiscoverRoles.
+func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error) {
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
 	// Reject explicitly selected Codex policy before discovery can launch an
 	// MCP connector for grants this adapter cannot enforce. Legacy configs may
@@ -332,11 +346,17 @@ func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err 
 	// are decoded by RunnerForRoles without rewriting historical bytes.
 	cfg.AgentRuntime = cfg.NativeRole()
 	cfg.NativeTaskAdmission = 1
-	pinned := &Runner{Config: cfg, Workspace: r.Workspace}
-	catalog, err := pinned.discoverMCP(ctx)
+	return json.Marshal(cfg)
+}
+
+// DiscoverRoles completes fresh admission using the already pinned runner.
+func (r *Runner) DiscoverRoles(ctx context.Context) (roles json.RawMessage, err error) {
+	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
+	catalog, err := r.discoverMCP(ctx)
 	if err != nil {
 		return nil, err
 	}
+	cfg := r.Config
 	cfg.ToolCatalog = catalog
 	encoded, _ := json.Marshal(catalog)
 	hash := sha256.Sum256(encoded)

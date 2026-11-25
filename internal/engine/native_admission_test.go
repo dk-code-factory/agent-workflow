@@ -3,14 +3,18 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestNativeDynamicOutputDeniedBeforeWorkerEffectsAfterRestart(t *testing.T) {
@@ -262,25 +266,99 @@ jobs: {review: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.yam
 	}
 }
 
-func TestUnsupportedCodexMCPPolicyDeniedBeforeConnectorDiscovery(t *testing.T) {
+func TestUnsupportedNativeOptionsDeniedBeforeConnectorDiscovery(t *testing.T) {
+	for _, admission := range []string{"prepare", "run"} {
+		for _, scenario := range []struct {
+			name, selector, role, provider, definition, output, denial string
+		}{
+			{"explicit-codex-grant", "native", "native", "codex-app-server", "", "", "managed tool subsets"},
+			{"default-codex-grant", "", "codex", "codex-app-server", "", "", "managed tool subsets"},
+			{"claude-reasoning", "native", "native", "claude-sdk", "reasoning-effort: high\n", "", "reasoning-effort"},
+			{"claude-schema", "native", "native", "claude-sdk", "", ", output: {format: json, repair-attempts: 0, schema: {type: object, required: [__proto__]}}", "__proto__"},
+		} {
+			t.Run(admission+"/"+scenario.name, func(t *testing.T) {
+				root := t.TempDir()
+				if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				marker := filepath.Join(root, "connector-started")
+				command := filepath.Join(root, "connector")
+				for path, text := range map[string]string{
+					command: "#!/bin/sh\nprintf started > '" + marker + "'\nexit 99\n",
+					filepath.Join(root, "workflows", "reviewer.yaml"): "name: reviewer\ndescription: Review\ninstructions: Review the task.\n" + scenario.definition,
+					filepath.Join(root, "workflows", "main.yml"):      "jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: Review" + scenario.output + "}}]}}\n",
+				} {
+					if err := os.WriteFile(path, []byte(text), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				cfg := clirunner.Config{AgentRuntime: scenario.selector, Agents: map[string]clirunner.Agent{scenario.role: {Provider: scenario.provider, MCPGrants: []workflows.ToolGrant{{Server: "external", Tool: "execute"}}}}, MCPServers: map[string]clirunner.MCPServer{"external": {Transport: "stdio", Command: command}}}
+				store, err := workflows.OpenSQLite(filepath.Join(root, "state"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				executor, _ := Executor(cfg, store, root, 1)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if admission == "prepare" {
+					_, err = executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
+				} else {
+					_, err = executor.Run(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
+				}
+				if err == nil || !strings.Contains(err.Error(), scenario.denial) {
+					t.Fatalf("expected capability denial %q, got %v", scenario.denial, err)
+				}
+				if _, err := os.Stat(marker); !os.IsNotExist(err) {
+					t.Fatal("unsupported native options started MCP discovery", err)
+				}
+			})
+		}
+	}
+}
+
+func TestNonNativeAdmissionKeepsUnusedDefaultCodexMCPGrant(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "connector-started")
-	command := filepath.Join(root, "connector")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\nprintf started > '"+marker+"'\nexit 99\n"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := clirunner.Config{AgentRuntime: "native", Agents: map[string]clirunner.Agent{"native": {Provider: "codex-app-server", MCPGrants: []workflows.ToolGrant{{Server: "external", Tool: "execute"}}}}, MCPServers: map[string]clirunner.MCPServer{"external": {Transport: "stdio", Command: command}}}
+	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte("jobs: {wait: {steps: [{uses: input/wait, with: {prompt: Continue, evidence-id: fixture}}]}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "unused-codex-policy", Version: "1"}, nil)
+	server.AddTool(&mcp.Tool{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		t.Error("catalog admission executed a tool")
+		return &mcp.CallToolResult{}, nil
+	})
+	var requests atomic.Int32
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		handler.ServeHTTP(w, r)
+	}))
+	defer endpoint.Close()
+	cfg := clirunner.Config{Agents: map[string]clirunner.Agent{"codex": {Provider: "codex-app-server", Command: "unavailable-codex", MCPGrants: []workflows.ToolGrant{{Server: "fixture", Tool: "lookup"}}}}, MCPServers: map[string]clirunner.MCPServer{"fixture": {Transport: "streamable-http", Endpoint: endpoint.URL}}}
 	store, err := workflows.OpenSQLite(filepath.Join(root, "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	executor, _ := Executor(cfg, store, root, 1)
-	_, err = executor.Prepare(context.Background(), workflows.RunRequest{Ref: "workflows/unused.yml"})
-	if err == nil || !strings.Contains(err.Error(), "managed tool subsets") {
-		t.Fatalf("expected early capability denial, got %v", err)
+	queued, err := executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatal("unsupported policy started MCP discovery", err)
+	_, snapshot, err := store.Load(ctx, queued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained clirunner.Config
+	if err := json.Unmarshal(snapshot.Roles, &retained); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() == 0 || len(retained.ToolCatalog) != 1 || retained.CatalogFingerprint == "" {
+		t.Fatal("fresh admission did not retain its discovered catalog", requests.Load(), retained)
 	}
 }
