@@ -439,24 +439,29 @@ func (r *Runner) WithWorkerWorkspace(role, workspace string) (workflows.SessionR
 // NativeTaskRole returns the selector from this runner's admitted configuration.
 func (r *Runner) NativeTaskRole() string { return r.Config.NativeRole() }
 
+func (r *Runner) nativeTaskRuntime() (Agent, error) {
+	role, ok := r.Config.Agents[r.NativeTaskRole()]
+	if !ok {
+		return Agent{}, fmt.Errorf("agent/run references unconfigured runtime role %q", r.NativeTaskRole())
+	}
+	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
+		return Agent{}, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
+	}
+	if role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
+		return Agent{}, fmt.Errorf("Codex managed tool subsets are not certified")
+	}
+	return role, nil
+}
+
 // AdmitNativeTask resolves behavior against the admitted runtime. It does
 // not add managed tools, repair support, authentication or execution authority.
 func (r *Runner) AdmitNativeTask(definition *workflows.AgentDefinition) (*workflows.AgentDefinition, error) {
-	role, ok := r.Config.Agents[r.NativeTaskRole()]
-	if !ok {
-		return nil, fmt.Errorf("agent/run references unconfigured runtime role %q", r.NativeTaskRole())
+	role, err := r.nativeTaskRuntime()
+	if err != nil {
+		return nil, err
 	}
-	switch role.Provider {
-	case "codex-app-server":
-		if role.Tools != nil || len(role.MCPGrants) > 0 {
-			return nil, fmt.Errorf("Codex managed tool subsets are not certified")
-		}
-	case "claude-sdk":
-		if definition.ReasoningEffort != "" {
-			return nil, fmt.Errorf("Claude SDK native tasks do not support definition reasoning-effort")
-		}
-	default:
-		return nil, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
+	if role.Provider == "claude-sdk" && definition.ReasoningEffort != "" {
+		return nil, fmt.Errorf("Claude SDK native tasks do not support definition reasoning-effort")
 	}
 	result := *definition
 	if result.Model == "" {
@@ -468,15 +473,9 @@ func (r *Runner) AdmitNativeTask(definition *workflows.AgentDefinition) (*workfl
 // AdmitNativeOutput checks the selected runtime even when a new task has no
 // output contract. Recovery retains its original admission policy below.
 func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) error {
-	role, ok := r.Config.Agents[r.NativeTaskRole()]
-	if !ok {
-		return fmt.Errorf("agent/run references unconfigured runtime role %q", r.NativeTaskRole())
-	}
-	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
-		return fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
-	}
-	if role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
-		return fmt.Errorf("Codex managed tool subsets are not certified")
+	role, err := r.nativeTaskRuntime()
+	if err != nil {
+		return err
 	}
 	if contract == nil {
 		return nil
