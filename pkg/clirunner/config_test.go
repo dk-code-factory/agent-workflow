@@ -69,7 +69,7 @@ func TestNativeRuntimeSelectorAdmissionAndLegacyRoles(t *testing.T) {
 		if err := json.Unmarshal(fresh, &admitted); err != nil {
 			t.Fatal(err)
 		}
-		if admitted.NativeOutputAdmission != 1 {
+		if admitted.NativeTaskAdmission != 1 {
 			t.Fatal("fresh output admission policy not pinned")
 		}
 		if admitted.AgentRuntime != cfg.NativeRole() {

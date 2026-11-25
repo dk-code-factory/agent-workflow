@@ -103,6 +103,11 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	}); ok {
 		_, lookupErr := e.Workers.taskMessage(ctx, reference, operation)
 		if errors.Is(lookupErr, sql.ErrNoRows) {
+			if modelValidator, ok := e.Agents.(interface{ ValidateNativeModel(any) error }); ok {
+				if err := modelValidator.ValidateNativeModel(args["model"]); err != nil {
+					return nil, err
+				}
+			}
 			if err := validator.ValidateNativeOutput(request.Output); err != nil {
 				return nil, err
 			}

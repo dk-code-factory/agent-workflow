@@ -86,7 +86,7 @@ jobs:
 		store.Close()
 		t.Fatal(err)
 	}
-	if saved.NativeOutputAdmission != 1 {
+	if saved.NativeTaskAdmission != 1 {
 		store.Close()
 		t.Fatal("new admission lost output policy marker")
 	}

@@ -331,7 +331,7 @@ func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err 
 	// Only fresh admission materializes the default selector. Retained Roles
 	// are decoded by RunnerForRoles without rewriting historical bytes.
 	cfg.AgentRuntime = cfg.NativeRole()
-	cfg.NativeOutputAdmission = 1
+	cfg.NativeTaskAdmission = 1
 	pinned := &Runner{Config: cfg, Workspace: r.Workspace}
 	catalog, err := pinned.discoverMCP(ctx)
 	if err != nil {

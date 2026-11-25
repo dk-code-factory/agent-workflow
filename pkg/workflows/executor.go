@@ -821,11 +821,6 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	if workspace != "" && !filepath.IsAbs(workspace) {
 		workspace = filepath.Join(e.WorkspaceDir, workspace)
 	}
-	if model, present := args["model"]; present && model != nil {
-		if _, ok := model.(string); !ok {
-			return nil, fmt.Errorf("agent model must be a string")
-		}
-	}
 	contract, err := ParseAgentOutputContract(args["output"])
 	if err != nil {
 		return nil, err

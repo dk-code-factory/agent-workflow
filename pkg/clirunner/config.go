@@ -75,17 +75,17 @@ type Agent struct {
 }
 
 type Config struct {
-	// NativeOutputAdmission versions fresh contract checks independently of
+	// NativeTaskAdmission versions fresh task checks independently of
 	// definition identity. Zero preserves historical admitted behavior.
-	NativeOutputAdmission int                           `yaml:"-" json:",omitempty"`
-	AgentRuntime          string                        `yaml:"agent-runtime,omitempty" json:",omitempty"`
-	Controller            operational.Config            `yaml:"controller"`
-	Execution             Execution                     `yaml:"execution"`
-	CatalogFingerprint    string                        `yaml:"-"`
-	MCPServers            map[string]MCPServer          `yaml:"mcp-servers"`
-	ToolCatalog           []workflows.ToolDefinition    `yaml:"-"`
-	Publication           development.PublicationPolicy `yaml:"publication"`
-	Agents                map[string]Agent              `yaml:"agents"`
+	NativeTaskAdmission int                           `yaml:"-" json:",omitempty"`
+	AgentRuntime        string                        `yaml:"agent-runtime,omitempty" json:",omitempty"`
+	Controller          operational.Config            `yaml:"controller"`
+	Execution           Execution                     `yaml:"execution"`
+	CatalogFingerprint  string                        `yaml:"-"`
+	MCPServers          map[string]MCPServer          `yaml:"mcp-servers"`
+	ToolCatalog         []workflows.ToolDefinition    `yaml:"-"`
+	Publication         development.PublicationPolicy `yaml:"publication"`
+	Agents              map[string]Agent              `yaml:"agents"`
 }
 
 func LoadConfig(path string) (Config, error) {

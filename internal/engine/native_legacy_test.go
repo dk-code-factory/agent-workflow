@@ -58,7 +58,8 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := `jobs: {review: {steps: [{id: work, uses: agent/run, with: {agent: removed.toml, prompt: Review, turns: 1, output: {format: json, repair-attempts: 1}}}]}}`
+	source := `on: {workflow_call: {inputs: {model: {type: number}}}}
+jobs: {review: {steps: [{id: work, uses: agent/run, with: {agent: removed.toml, prompt: Review, model: "${{ inputs.model }}", turns: 1, output: {format: json, repair-attempts: 1}}}]}}`
 	w, err := workflows.Parse([]byte(source))
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ developer_instructions = 'Original instructions.'
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256(encoded)
-	snapshot := workflows.Snapshot{Version: 1, Definitions: map[string]*workflows.Workflow{"workflows/main.yml": w}, Hashes: map[string]string{"workflows/main.yml": hex.EncodeToString(hash[:])}, Roles: roles, Parallel: 1}
+	snapshot := workflows.Snapshot{Version: 1, Inputs: map[string]any{"model": json.Number("17")}, Definitions: map[string]*workflows.Workflow{"workflows/main.yml": w}, Hashes: map[string]string{"workflows/main.yml": hex.EncodeToString(hash[:])}, Roles: roles, Parallel: 1}
 	run := &workflows.Run{ID: "legacy-native-runtime", Version: 1, WorkflowRef: "workflows/main.yml", Status: workflows.RunStatusQueued, StartedAt: time.Now().UTC(), Jobs: map[string]workflows.JobExecution{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
