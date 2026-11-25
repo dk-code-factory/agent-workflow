@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
 
@@ -105,6 +106,7 @@ func AddSkill(root, name, workflow string) error {
 		return err
 	}
 	files[skill.Path] = file{data: skillText(name), mode: 0644}
+	files[path.Join("fixtures", name, "example.yaml")] = file{data: []byte(fixtureText(name, true)), mode: 0644}
 	d.Skills = append(d.Skills, skill)
 	if err = d.Validate(); err != nil {
 		return err
@@ -155,36 +157,13 @@ func importWorkflow(name, source string) (Skill, map[string]file, error) {
 	if err != nil {
 		return Skill{}, nil, err
 	}
-	// The workspace's nearest workflows/ ancestor defines local reusable refs.
-	base := filepath.Dir(source)
-	root := base
-	prefix := path.Join("imports", name, "workflows")
-	for probe := base; ; probe = filepath.Dir(probe) {
-		if filepath.Base(probe) == "workflows" {
-			root = filepath.Dir(probe)
-			prefix = path.Join("imports", name)
-			break
-		}
-		if filepath.Dir(probe) == probe {
-			break
-		}
-	}
-	rel, err := filepath.Rel(root, source)
+	c, entry, namespaced, err := collectImport(source)
 	if err != nil {
 		return Skill{}, nil, err
 	}
-	entry := filepath.ToSlash(rel)
-	c := newCollector(root)
-	if strings.Contains(entry, "/workflows/") || strings.HasPrefix(entry, "workflows/") {
-		if err = c.workflow(entry, 0); err != nil {
-			return Skill{}, nil, err
-		}
-	} else {
-		// A standalone FILE has the same relative asset resolution as its containing
-		// directory. Alias its entry under workflows/ for the canonical CLI contract.
-		if err = c.visit(entry, 0); err != nil {
-			return Skill{}, nil, err
-		}
+	prefix := path.Join("imports", name)
+	if !namespaced {
+		prefix = path.Join(prefix, "workflows")
 	}
 	files := map[string]file{}
 	for p, f := range c.files {
@@ -197,6 +176,86 @@ func importWorkflow(name, source string) (Skill, map[string]file, error) {
 		files[path.Join(prefix, p)] = f
 	}
 	return Skill{Name: name, Path: path.Join("skills", name, "SKILL.md"), Workflow: path.Join(prefix, entry)}, files, nil
+}
+
+// A FILE alone does not identify its workspace. With reusable refs, check only
+// their exact declared paths at ancestor roots and require one consistent closure.
+// Without reusable refs, retain the containing workflows/ parent (or FILE's dir).
+func collectImport(source string) (*collector, string, bool, error) {
+	base := filepath.Dir(source)
+	root := base
+	namespaced := false
+	for probe := base; ; probe = filepath.Dir(probe) {
+		if filepath.Base(probe) == "workflows" {
+			root = filepath.Dir(probe)
+			namespaced = true
+			break
+		}
+		if filepath.Dir(probe) == probe {
+			break
+		}
+	}
+	entry, err := filepath.Rel(root, source)
+	if err != nil {
+		return nil, "", false, err
+	}
+	initial := newCollector(root)
+	data, err := initial.read(filepath.ToSlash(entry))
+	if err != nil {
+		return nil, "", false, err
+	}
+	w, err := workflows.Parse(data)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("%s: %w", source, err)
+	}
+	var refs []string
+	for _, job := range w.Jobs {
+		if job.Uses != "" {
+			ref, err := workflows.CanonicalLocalRef(job.Uses)
+			if err != nil {
+				return nil, "", false, fmt.Errorf("%s: %w", source, err)
+			}
+			refs = append(refs, ref)
+		}
+	}
+	var selected *collector
+	var selectedEntry string
+	var firstError error
+	for count, candidate := 0, root; ; count, candidate = count+1, filepath.Dir(candidate) {
+		if count >= 200 {
+			return nil, "", false, fmt.Errorf("%s: source root ancestry exceeds 200 directories", source)
+		}
+		entry, err := filepath.Rel(candidate, source)
+		if err != nil {
+			return nil, "", false, err
+		}
+		c := newCollector(candidate)
+		// Avoid reading any candidate's assets unless every direct reusable ref
+		// exists there. This is an exact-path check, never a repository search.
+		for _, ref := range refs {
+			if err = c.safe(ref); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = c.visit(filepath.ToSlash(entry), 0)
+		}
+		if err == nil {
+			if selected != nil {
+				return nil, "", false, fmt.Errorf("%s: ambiguous source root: both %s and %s contain its declared workflow closure", source, selected.root, candidate)
+			}
+			selected, selectedEntry = c, filepath.ToSlash(entry)
+		} else if firstError == nil {
+			firstError = err
+		}
+		if len(refs) == 0 || filepath.Dir(candidate) == candidate {
+			break
+		}
+	}
+	if selected == nil {
+		return nil, "", false, fmt.Errorf("%s: no consistent source root for declared workflow closure: %w", source, firstError)
+	}
+	return selected, selectedEntry, namespaced, nil
 }
 
 func checkNewPath(root, name string) error {
@@ -232,6 +291,12 @@ func writeFiles(root string, files map[string]file) error {
 		target := filepath.Join(root, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
+		}
+		if files[p].mode.IsDir() {
+			if err := os.Mkdir(target, files[p].mode.Perm()); err != nil {
+				return err
+			}
+			continue
 		}
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fs.FileMode(files[p].mode))
 		if err != nil {

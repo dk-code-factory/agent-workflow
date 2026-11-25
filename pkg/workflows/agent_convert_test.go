@@ -54,8 +54,8 @@ func TestAgentConvertRefusesUnacknowledgedPolicyAndHooks(t *testing.T) {
 			input := filepath.Join(dir, "native")
 			output := filepath.Join(dir, "agent.yaml")
 			marker := filepath.Join(dir, "hook-ran")
-			source := "name = 'reviewer'\ndescription = 'Review'\ndeveloper_instructions = 'Inspect changes.'\nsandbox_mode = 'read-only'\nhooks = ['touch " + marker + "']\n"
-			fields := []string{"sandbox_mode", "hooks"}
+			source := "name = 'reviewer'\ndescription = 'Review'\ndeveloper_instructions = 'Inspect changes.'\nsandbox_mode = 'read-only'\napproval_policy = 'on-request'\nhooks = ['touch " + marker + "']\n"
+			fields := []string{"sandbox_mode", "approval_policy", "hooks"}
 			if from == "claude" {
 				source = "---\nname: reviewer\ndescription: Review\ntools: [Read]\nhooks: {start: 'touch " + marker + "'}\n---\nInspect changes.\n"
 				fields = []string{"tools", "hooks"}
@@ -65,11 +65,14 @@ func TestAgentConvertRefusesUnacknowledgedPolicyAndHooks(t *testing.T) {
 			}
 			report, err := ConvertAgent(from, input, output, nil)
 			var loss *AgentConversionError
-			if !errors.As(err, &loss) || len(report.IncompatibleOptions) != 2 || len(report.RuntimePolicyChanges) != 2 {
+			if !errors.As(err, &loss) || len(report.IncompatibleOptions) != len(fields) || len(report.RuntimePolicyChanges) != len(fields) {
 				t.Fatalf("missing loss/policy diagnostic: %+v %v", report, err)
 			}
 			if _, err = os.Stat(output); !os.IsNotExist(err) {
 				t.Fatal("created unacknowledged output")
+			}
+			if from == "codex" && !strings.Contains(strings.Join(report.RuntimePolicyChanges, "\n"), "approval_policy: review and configure the corresponding target workspace agents.yml runtime policy") {
+				t.Fatalf("missing approval-policy migration guidance: %+v", report)
 			}
 			if _, err = ConvertAgent(from, input, output, fields[:1]); err == nil {
 				t.Fatal("partial loss acknowledgement accepted")

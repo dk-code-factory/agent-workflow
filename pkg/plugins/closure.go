@@ -140,6 +140,18 @@ func (c *collector) resource(name string) error {
 			return fmt.Errorf("%s: resource symlinks are unsupported", rel)
 		}
 		if e.IsDir() {
+			name := filepath.ToSlash(rel)
+			if _, exists := c.files[name]; exists {
+				return nil
+			}
+			if len(c.files) >= 4096 {
+				return fmt.Errorf("%s: dependency closure exceeds 4096 entries", name)
+			}
+			info, err := e.Info()
+			if err != nil {
+				return err
+			}
+			c.files[name] = file{mode: fs.ModeDir | info.Mode().Perm()}
 			return nil
 		}
 		_, err = c.read(filepath.ToSlash(rel))

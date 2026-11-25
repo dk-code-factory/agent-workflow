@@ -344,3 +344,99 @@ func TestPluginManualEntryAndFailedInitPreserve(t *testing.T) {
 		t.Fatal("damaged existing project")
 	}
 }
+
+func TestPluginImportWorkspaceRelativeNamespaces(t *testing.T) {
+	for _, tc := range []struct {
+		name, entry, callee string
+	}{
+		{"entry namespace", "examples/pr-fix/workflows/main.yml", "examples/pr-fix/workflows/child.yml"},
+		{"sibling namespace", "examples/entry/workflows/main.yml", "examples/shared/workflows/child.yml"},
+		{"repeated workflows segment", "workflows/team/workflows/main.yml", "workflows/team/workflows/child.yml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := t.TempDir()
+			put(t, source, tc.entry, "on: {workflow_call: {}}\njobs:\n  call:\n    uses: "+tc.callee+"\n")
+			put(t, source, tc.callee, "on: {workflow_call: {}}\njobs:\n  task:\n    steps:\n      - uses: agent/run\n        with: {agent: agents/task.yaml, prompt: Review}\n")
+			put(t, source, filepath.ToSlash(filepath.Join(filepath.Dir(tc.callee), "agents/task.yaml")), exampleAgent)
+			put(t, source, "unrelated.txt", "do not import")
+			root := filepath.Join(t.TempDir(), "demo")
+			if err := Init(root, "demo", "0.2.2", filepath.Join(source, tc.entry)); err != nil {
+				t.Fatal(err)
+			}
+			d, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all, err := (&workflows.Executor{WorkspaceDir: root}).Load(d.Skills[0].Workflow)
+			if err != nil || len(all) != 2 {
+				t.Fatalf("closure: %v %v", all, err)
+			}
+			for _, ref := range []string{tc.entry, tc.callee} {
+				if _, err := os.Stat(filepath.Join(root, "imports/demo", ref)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(root, "imports/demo/unrelated.txt")); !os.IsNotExist(err) {
+				t.Fatalf("copied undeclared file: %v", err)
+			}
+		})
+	}
+}
+
+func TestPluginRejectAmbiguousImportRoot(t *testing.T) {
+	source := t.TempDir()
+	entry := "nested/workflows/main.yml"
+	put(t, source, entry, "on: {workflow_call: {}}\njobs:\n  call:\n    uses: workflows/child.yml\n")
+	child := "on: {workflow_call: {}}\njobs:\n  task:\n    steps:\n      - uses: agent/run\n        with: {agent: agents/task.yaml, prompt: Review}\n"
+	for _, prefix := range []string{"", "nested/"} {
+		put(t, source, prefix+"workflows/child.yml", child)
+		put(t, source, prefix+"workflows/agents/task.yaml", exampleAgent)
+	}
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", filepath.Join(source, entry)); err == nil || !strings.Contains(err.Error(), "ambiguous source root") {
+		t.Fatalf("ambiguous closure accepted: %v", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("failed import created destination: %v", err)
+	}
+}
+
+func TestPluginImportPreservesEmptyDeclaredDirectoriesAndSkillFixtures(t *testing.T) {
+	source := t.TempDir()
+	put(t, source, "workflows/main.yml", "on: {workflow_call: {}}\njobs:\n  task:\n    container: {image: python:3, files: [empty]}\n    steps:\n      - uses: docker://python:3\n        files: [helpers]\n        with: {entrypoint: python, args: '-c pass'}\n")
+	for _, name := range []string{"empty", "helpers/nested"} {
+		if err := os.MkdirAll(filepath.Join(source, "workflows", name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", filepath.Join(source, "workflows/main.yml")); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures/example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AddSkill(root, "example", filepath.Join(source, "workflows/main.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range []string{"demo", "example"} {
+		for _, name := range []string{"empty", "helpers", "helpers/nested"} {
+			info, err := os.Stat(filepath.Join(root, "imports", skill, "workflows", name))
+			if err != nil || !info.IsDir() {
+				t.Fatalf("lost %s/%s: %v", skill, name, err)
+			}
+		}
+	}
+	additional, err := os.ReadFile(filepath.Join(root, "fixtures/example/example.yaml"))
+	if err != nil || !strings.Contains(string(additional), "cases: []") {
+		t.Fatalf("missing imported skill fixture: %q %v", additional, err)
+	}
+	original, err := os.ReadFile(filepath.Join(root, "fixtures/example.yaml"))
+	if err != nil || string(original) != string(fixture) {
+		t.Fatalf("original fixture changed: %v", err)
+	}
+}

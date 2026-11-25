@@ -132,7 +132,7 @@ func ConvertAgent(from, input, output string, acknowledged []string) (AgentConve
 }
 func nativePolicyField(key string) bool {
 	lower := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
-	for _, fragment := range []string{"auth", "credential", "tool", "sandbox", "permission", "mcp", "hook", "execution", "limit", "turn", "budget", "network", "isolation", "memory", "background", "skill"} {
+	for _, fragment := range []string{"auth", "approval", "credential", "tool", "sandbox", "permission", "mcp", "hook", "execution", "limit", "turn", "budget", "network", "isolation", "memory", "background", "skill"} {
 		if strings.Contains(lower, fragment) {
 			return true
 		}

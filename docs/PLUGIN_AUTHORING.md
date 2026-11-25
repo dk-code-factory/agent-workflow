@@ -42,9 +42,13 @@ references) and the helper files explicitly declared on job containers and Docke
 steps. It visits nested blocks and lifecycle handlers. It preserves relative
 agent/helper resolution, declared input contracts and executable modes. Reusable
 job references are rewritten into a skill-specific `imports/NAME/` namespace.
-The source root is the parent of the nearest `workflows/` ancestor of FILE, or
+For a workflow with reusable calls, import checks the exact declared references
+at ancestor roots and requires one root containing the complete closure. This
+preserves workspace-relative namespaces, including sibling namespaces. Ambiguous
+roots fail instead of choosing different dependencies. Without reusable calls,
+the source root is the parent of the nearest `workflows/` ancestor of FILE, or
 FILE's directory for a standalone file. Parent-relative agent references must
-stay inside that root. Missing dependencies, remote or dynamic workflow refs,
+stay inside the selected root. Missing dependencies, remote or dynamic workflow refs,
 symlinks, path escapes, unsupported definitions and output collisions fail.
 Import copies no undeclared repository files. The project-level `resources` list
 can explicitly declare additional contained files or directories for packaging.
@@ -53,6 +57,7 @@ Developer-owned sources are separate from future generated platform output.
 Scaffolds include a portable native-agent example, provider configuration
 examples in `config/` and scripted fixture source data in `fixtures/`. Imports
 receive an empty fixture template that needs cases for the imported behavior.
+`add-skill` creates that template at `fixtures/NAME/example.yaml`.
 Fixture execution and platform generation are later delivery stages; these
 commands do not claim live host activation or provider acceptance.
 
