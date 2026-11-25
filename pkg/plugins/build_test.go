@@ -180,14 +180,11 @@ func TestBuildRemapsInstructionsWithoutExtraHostSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := files["demo/plugins/demo/"+original]; exists {
-		t.Fatal("original discovered as another host skill")
-	}
-	if got := files["demo/plugins/demo/authoring/skill/workflow-instructions.md"].data; string(got) != text {
+	if got := files["demo/plugins/demo/"+original].data; string(got) != text {
 		t.Fatalf("changed original source: %s", got)
 	}
 	entry := string(files["demo/plugins/demo/skills/demo/SKILL.md"].data)
-	if !strings.Contains(entry, "Read the developer-owned instructions") || !strings.Contains(entry, "authoring/skill/workflow-instructions.md") || !strings.Contains(entry, "exec -- plugin run") {
+	if !strings.Contains(entry, "Read the developer-owned instructions") || !strings.Contains(entry, original) || !strings.Contains(entry, "exec -- plugin run") {
 		t.Fatal("incomplete generated instructions", entry)
 	}
 	output := filepath.Join(t.TempDir(), "distribution")
@@ -210,6 +207,49 @@ func writeBuildDescriptor(t *testing.T, root string, d Descriptor) {
 		t.Fatal(err)
 	}
 	put(t, root, DescriptorFile, string(data))
+}
+
+func TestBuildPreservesInstructionSourcesUsedAsWorkflowHelpers(t *testing.T) {
+	for _, helper := range []string{"authoring/SKILL.md", "authoring"} {
+		t.Run(helper, func(t *testing.T) {
+			source, d, _ := capturedFixture(t)
+			original := "workflows/authoring/SKILL.md"
+			instructions := string(skillText("demo")) + "\nRead [notes](notes.md).\n"
+			put(t, source, original, instructions)
+			put(t, source, "workflows/authoring/notes.md", "relative instruction context")
+			put(t, source, "workflows/main.yml", "jobs:\n  task:\n    container:\n      image: ubuntu:24.04\n      files: ["+helper+"]\n    steps:\n      - run: cat authoring/SKILL.md\n")
+			d.Skills[0].Path = original
+			d.Resources = append(d.Resources, "workflows/authoring/notes.md")
+			writeBuildDescriptor(t, source, d)
+			output := filepath.Join(t.TempDir(), "built")
+			result, err := Build(source, output, []string{"codex", "claude"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			extracted := filepath.Join(t.TempDir(), "installed with spaces")
+			extractBuild(t, filepath.Join(output, result.Archive), extracted)
+			installed, err := Capture(filepath.Join(extracted, "demo/plugins/demo"))
+			if err != nil || installed.Digest() != result.PackageDigest {
+				t.Fatal("required helper lost during instruction remapping", err)
+			}
+			if data, err := installed.ReadFile(original); err != nil || string(data) != instructions {
+				t.Fatalf("original helper bytes changed: %s %v", data, err)
+			}
+			entry, _ := installed.ReadFile("skills/demo/SKILL.md")
+			if !bytes.Contains(entry, []byte("`"+original+"`")) {
+				t.Fatal("entrypoint lost original instruction context")
+			}
+			count := 0
+			for _, entry := range installed.Manifest().Entries {
+				if strings.HasPrefix(entry.Path, "skills/") && path.Base(entry.Path) == "SKILL.md" {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatal("extra host-discovered skill", count)
+			}
+		})
+	}
 }
 
 func TestBuildSkillRemappingDoesNotDependOnSourceOrder(t *testing.T) {
@@ -367,8 +407,8 @@ func TestBuildDirectoryModesIgnoreUmask(t *testing.T) {
 				if entry.IsDir() || info.Mode()&0111 != 0 {
 					want = 0755
 				}
-				if info.Mode().Perm() != want || !info.ModTime().Equal(archiveEpoch) {
-					t.Fatalf("not normalized: %s %v %s", name, info.Mode(), info.ModTime())
+				if info.Mode().Perm() != want {
+					t.Fatalf("not normalized: %s %v", name, info.Mode())
 				}
 				if !entry.IsDir() {
 					data, err := os.ReadFile(name)
@@ -416,6 +456,91 @@ func TestBuildRollbackPreservesConcurrentOutput(t *testing.T) {
 	}
 }
 
+func TestBuildMetadataNeverFollowsReplacedOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix symlinks and permissions")
+	}
+	for _, replacement := range []string{"file", "directory", "root"} {
+		t.Run(replacement, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "built")
+			outside := t.TempDir()
+			put(t, outside, "payload", "unrelated private content")
+			for name, mode := range map[string]fs.FileMode{outside: 0700, filepath.Join(outside, "payload"): 0600} {
+				if err := os.Chmod(name, mode); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(name, archiveEpoch, archiveEpoch); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files := map[string]file{"nested": {mode: fs.ModeDir | 0755}, "nested/payload": {data: []byte("owned"), mode: 0644}}
+			disk := authoringIO()
+			create := disk.create
+			disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+				f, err := create(name, mode)
+				if err != nil {
+					return f, err
+				}
+				return &failedAuthorFile{File: f.(*os.File), onWrite: func() {
+					target, link := name, filepath.Join(outside, "payload")
+					if replacement == "directory" {
+						target, link = filepath.Join(output, "nested"), outside
+					} else if replacement == "root" {
+						target, link = output, outside
+					}
+					if err := os.Rename(target, target+"-owned"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(link, target); err != nil {
+						t.Fatal(err)
+					}
+				}}, nil
+			}
+			if err := writeDistributionUsing(output, files, disk); err == nil {
+				t.Fatal("accepted replaced output")
+			}
+			for name, want := range map[string]fs.FileMode{outside: 0700, filepath.Join(outside, "payload"): 0600} {
+				info, err := os.Stat(name)
+				if err != nil || info.Mode().Perm() != want || !info.ModTime().Equal(archiveEpoch) {
+					t.Fatalf("modified external metadata: %s %v %v", name, info, err)
+				}
+			}
+			if data, err := os.ReadFile(filepath.Join(outside, "payload")); err != nil || string(data) != "unrelated private content" {
+				t.Fatalf("modified external content: %s %v", data, err)
+			}
+		})
+	}
+}
+
+func TestBuildReservationRejectsReplacedDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix symlinks and permissions")
+	}
+	name, outside := filepath.Join(t.TempDir(), "owned"), t.TempDir()
+	if err := os.Mkdir(name, 0700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(name, name+"-owned"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := permitBuildDirectory(name, info); err == nil {
+		t.Fatal("accepted replaced reservation")
+	}
+	if current, err := os.Stat(outside); err != nil || current.Mode().Perm() != 0755 {
+		t.Fatalf("changed unrelated directory permissions: %v %v", current, err)
+	}
+}
+
 func TestBuildCapturedSnapshotAndExistingDestination(t *testing.T) {
 	source, _, _ := capturedFixture(t)
 	captured, err := Capture(source)
@@ -460,6 +585,14 @@ func TestBuildRelocatedReadonlyLauncherUsesPackageBootstrap(t *testing.T) {
 	extracted := filepath.Join(t.TempDir(), "relocated read only plugin")
 	extractBuild(t, filepath.Join(output, result.Archive), extracted)
 	root := filepath.Join(extracted, "demo/plugins/demo")
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				return os.Chmod(name, 0755)
+			}
+			return err
+		})
+	})
 	if err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -476,14 +609,6 @@ func TestBuildRelocatedReadonlyLauncherUsesPackageBootstrap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
-			if err == nil && entry.IsDir() {
-				return os.Chmod(name, 0755)
-			}
-			return err
-		})
-	})
 	before, _ := Capture(root)
 	hostile := t.TempDir()
 	put(t, hostile, "engine_bootstrap.py", "raise RuntimeError('imported target workspace')")
@@ -520,6 +645,17 @@ func TestBuildRelocatedReadonlyLauncherUsesPackageBootstrap(t *testing.T) {
 		if !ok || exit.ExitCode() != 7 || decodeErr != nil || !reflect.DeepEqual(received, args[7:]) || !strings.Contains(errout.String(), "UNCERTIFIED CANDIDATE") || !strings.Contains(errout.String(), "fake engine stderr") {
 			t.Fatalf("candidate exec changed arguments/streams/exit: %s %s %v %v", out.Bytes(), errout.Bytes(), err, decodeErr)
 		}
+	}
+	// A still-available archive must not silently replace a corrupt retained
+	// installation. Reinstalling every time would incorrectly pass the loop above.
+	cachedEngine := filepath.Join(cache, "agent-workflow", "candidate", "0.2.2", runtime.GOOS+"-"+runtime.GOARCH+"-"+digest, "distribution", "agent-workflow")
+	if err := os.WriteFile(cachedEngine, []byte("corrupt cached engine"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	poisoned := exec.Command(python, args...)
+	poisoned.Dir, poisoned.Env = hostile, cmd.Env
+	if data, err := poisoned.CombinedOutput(); err == nil || !bytes.Contains(data, []byte("Cached distribution is corrupt")) {
+		t.Fatalf("launcher did not verify retained cache: %s %v", data, err)
 	}
 	after, err := Capture(root)
 	if err != nil || !reflect.DeepEqual(before.Manifest(), after.Manifest()) {

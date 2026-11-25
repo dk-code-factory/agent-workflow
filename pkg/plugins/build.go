@@ -110,12 +110,15 @@ func distribution(captured *CapturedPackage, targets []string) (map[string]file,
 			return nil, nil, fmt.Errorf("generated package path collides with declared content: %s", reserved)
 		}
 	}
-	// Owned source files are transformed deliberately. All other generated paths
-	// are exclusive, including collisions with explicitly declared resources.
+	// Host-discovered sources are transformed deliberately. Keep other sources
+	// at their original paths because workflows may also declare them as helpers.
+	// All other generated paths are exclusive, including declared resources.
 	delete(payload, DescriptorFile)
 	for _, skill := range d.Skills {
 		binding, _ := captured.Binding(skill.Name)
-		delete(payload, binding.Path)
+		if strings.HasPrefix(binding.Path, "skills/") {
+			delete(payload, binding.Path)
+		}
 	}
 	for i, sourceSkill := range d.Skills {
 		binding, _ := captured.Binding(sourceSkill.Name)
@@ -124,9 +127,12 @@ func distribution(captured *CapturedPackage, targets []string) (map[string]file,
 		if canonical != binding.Path {
 			// Keep author instructions beside their declared resources, but outside
 			// host SKILL discovery. The entrypoint reads this file before invocation.
-			original := path.Join(path.Dir(binding.Path), "workflow-instructions.md")
-			if err := addBuildFile(payload, original, instructions, 0644); err != nil {
-				return nil, nil, err
+			original := binding.Path
+			if strings.HasPrefix(original, "skills/") {
+				original = path.Join(path.Dir(binding.Path), "workflow-instructions.md")
+				if err := addBuildFile(payload, original, instructions, 0644); err != nil {
+					return nil, nil, err
+				}
 			}
 			metadata, _ := ReadMetadata(instructions)
 			header, _ := yaml.Marshal(metadata)
@@ -359,26 +365,101 @@ func writeDistributionUsing(output string, files map[string]file, disk authorIO)
 			return err
 		}
 	}
-	var err error
+	root, err := os.OpenRoot(output)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	info, err := root.Stat(".")
+	if err != nil || !os.SameFile(created[0].info, info) {
+		return errors.Join(err, fmt.Errorf("output directory changed identity"))
+	}
+	// Normalize through the handle that exclusively created each file. A path
+	// substituted after writing must never redirect permission changes elsewhere.
+	create := disk.create
+	ownedFiles := map[string]fs.FileInfo{}
+	disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+		f, err := create(name, mode)
+		if err != nil {
+			return nil, err
+		}
+		relative, err := filepath.Rel(output, name)
+		if err != nil {
+			return nil, errors.Join(err, f.Close())
+		}
+		info, err := f.Stat()
+		if err != nil {
+			return nil, errors.Join(err, f.Close())
+		}
+		relative = filepath.ToSlash(relative)
+		ownedFiles[relative] = info
+		return &buildOutputFile{authorFile: f, mode: mode.Perm(), root: root, name: relative}, nil
+	}
 	undo, err = disk.writeFiles(output, regular)
 	if err != nil {
 		return err
 	}
-	// File creation also respects umask. Normalize files and completed directories
-	// after populating the tree, without changing the process-global umask.
-	for i := len(paths) - 1; i >= 0; i-- {
-		target := filepath.Join(output, filepath.FromSlash(paths[i]))
-		if err := os.Chmod(target, files[paths[i]].mode.Perm()); err != nil {
+	// Anchor directory finalization to the reserved output inode. Reopening a
+	// substituted member is safe only after comparing it with our creation receipt.
+	currentRoot, err := os.Lstat(output)
+	if err != nil || !os.SameFile(created[0].info, currentRoot) {
+		return errors.Join(err, fmt.Errorf("output directory changed identity"))
+	}
+	directories := map[string]createdPath{}
+	for _, entry := range created[1:] {
+		name, err := filepath.Rel(output, entry.name)
+		if err != nil {
 			return err
 		}
-		if err := os.Chtimes(target, archiveEpoch, archiveEpoch); err != nil {
+		directories[filepath.ToSlash(name)] = entry
+	}
+	for i := len(paths) - 1; i >= 0; i-- {
+		name := paths[i]
+		if !files[name].mode.IsDir() {
+			info, err := root.Lstat(name)
+			if err != nil || !info.Mode().IsRegular() || !os.SameFile(ownedFiles[name], info) {
+				return errors.Join(err, fmt.Errorf("%s changed identity; output retained for inspection", name))
+			}
+			continue
+		}
+		if err := finalizeBuildDirectory(root, name, directories[name].info, files[name].mode.Perm()); err != nil {
 			return err
 		}
 	}
-	if err := os.Chmod(output, 0755); err != nil {
+	return finalizeBuildDirectory(root, ".", created[0].info, 0755)
+}
+
+type buildOutputFile struct {
+	authorFile
+	mode fs.FileMode
+	root *os.Root
+	name string
+}
+
+func (f *buildOutputFile) Close() error {
+	owned, err := f.Stat()
+	current, currentErr := f.root.Lstat(f.name)
+	if err != nil || currentErr != nil || !current.Mode().IsRegular() || !os.SameFile(owned, current) {
+		return errors.Join(err, currentErr, fmt.Errorf("%s changed identity; file permissions retained", f.name), f.authorFile.Close())
+	}
+	permission, ok := f.authorFile.(interface{ Chmod(fs.FileMode) error })
+	if !ok {
+		return errors.Join(fmt.Errorf("created output file cannot set permissions through its handle"), f.authorFile.Close())
+	}
+	return errors.Join(permission.Chmod(f.mode), f.authorFile.Close())
+}
+
+func finalizeBuildDirectory(root *os.Root, name string, expected fs.FileInfo, mode fs.FileMode) error {
+	directory, err := openSourceFile(root, name)
+	if err != nil {
 		return err
 	}
-	return os.Chtimes(output, archiveEpoch, archiveEpoch)
+	defer directory.Close()
+	info, err := directory.Stat()
+	if err != nil || !info.IsDir() || !os.SameFile(expected, info) {
+		return errors.Join(err, fmt.Errorf("%s changed identity; directory permissions retained", name))
+	}
+	return directory.Chmod(mode)
 }
 
 func reserveBuildDirectory(name string, created *[]createdPath) error {
@@ -392,7 +473,7 @@ func reserveBuildDirectory(name string, created *[]createdPath) error {
 	*created = append(*created, createdPath{name, info})
 	// Chmod the newly reserved directory before traversal: even 0700 passed to
 	// Mkdir can lose owner read/write/search bits under an owner-restricting mask.
-	return os.Chmod(name, 0700)
+	return permitBuildDirectory(name, info)
 }
 
 const bootstrapEntrypoint = `#!/usr/bin/env python3

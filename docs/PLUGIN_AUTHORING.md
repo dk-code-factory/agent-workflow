@@ -92,12 +92,14 @@ runtime payload to avoid a self-referential digest.
 Generated skills combine developer instructions with shared engine invocation and
 durable recovery guidance. Canonical source skills receive the guidance directly.
 For a source at another path, the generated entrypoint explicitly requires reading
-`workflow-instructions.md` beside the original source's declared resources before
-invoking the engine. Original instruction bytes and their relative resource
-context are preserved; the original SKILL.md is replaced so it is not discovered
-as an additional host skill. A conflicting `workflow-instructions.md` fails the
-build. Developer instructions describe the workflow; generated guidance delegates
-execution to `plugin run` rather than asking the host to interpret workflow YAML.
+the original instruction file before invoking the engine. Original files outside
+`skills/` stay at their declared paths, including when workflows use them as
+helpers. Original files within `skills/` become `workflow-instructions.md` beside
+their declared resources so hosts do not discover additional skills. A conflicting
+`workflow-instructions.md` fails the build. Original bytes and relative resource
+context are preserved. Developer instructions describe the workflow; generated
+guidance delegates execution to `plugin run` rather than asking the host to
+interpret workflow YAML.
 
 Only declared resources, discovered workflow/YAML-agent dependencies and named
 generated assets are shipped. Config examples and fixtures are omitted unless
