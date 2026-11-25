@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -93,6 +94,91 @@ func invalidFixture(file, caseName string, err error) error {
 	return &fixtureValidationError{Diagnostic{Code: "fixture.invalid", File: file, Case: caseName, Reason: err.Error()}}
 }
 
+// yaml.v3 bypasses custom unmarshalling for null and can drop null sequence
+// elements. Inspect only numeric schema positions before typed decoding; JSON
+// boundary data retains its own null values and unknown fields stay strict.
+// Case, operation and control entries must also survive as authored mappings.
+func fixtureSchemaNodes(document *yaml.Node) (err error) {
+	caseName := ""
+	defer func() {
+		if err != nil && caseName != "" {
+			err = invalidFixture("", caseName, err)
+		}
+	}()
+	field := func(node *yaml.Node, key string) *yaml.Node {
+		if node == nil || node.Kind != yaml.MappingNode {
+			return nil
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == key {
+				return node.Content[i+1]
+			}
+		}
+		return nil
+	}
+	integer := func(node *yaml.Node, location string) error {
+		if node != nil && (node.Kind != yaml.ScalarNode || node.Tag != "!!int") {
+			return fmt.Errorf("%s requires a YAML integer", location)
+		}
+		return nil
+	}
+	if len(document.Content) != 1 {
+		return nil // The shared decoder reports an invalid document shape.
+	}
+	root := document.Content[0]
+	if err := integer(field(root, "schema-version"), "schema-version"); err != nil {
+		return err
+	}
+	cases := field(root, "cases")
+	if cases == nil || cases.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for i, test := range cases.Content {
+		caseName = ""
+		if name := field(test, "name"); name != nil && name.Tag == "!!str" {
+			caseName = name.Value
+		}
+		if test.Kind != yaml.MappingNode {
+			return fmt.Errorf("cases[%d] requires a fixture case mapping", i)
+		}
+		for _, group := range []struct{ name, number string }{{"operations", "call"}, {"controls", "invocation-count"}} {
+			entries := field(test, group.name)
+			if entries == nil {
+				continue
+			}
+			if entries.Kind != yaml.SequenceNode {
+				return fmt.Errorf("cases[%d].%s requires a sequence", i, group.name)
+			}
+			for j, entry := range entries.Content {
+				if entry.Kind != yaml.MappingNode {
+					return fmt.Errorf("cases[%d].%s[%d] requires a mapping", i, group.name, j)
+				}
+				if err := integer(field(entry, group.number), fmt.Sprintf("cases[%d].%s[%d].%s", i, group.name, j, group.number)); err != nil {
+					return err
+				}
+			}
+		}
+		expect := field(test, "expect")
+		for _, name := range []string{"invocation-count", "sessions"} {
+			if err := integer(field(expect, name), fmt.Sprintf("cases[%d].expect.%s", i, name)); err != nil {
+				return err
+			}
+		}
+		remaining := field(expect, "worker-remaining")
+		if remaining != nil {
+			if remaining.Kind != yaml.SequenceNode {
+				return fmt.Errorf("cases[%d].expect.worker-remaining requires a sequence of YAML integers", i)
+			}
+			for j, value := range remaining.Content {
+				if err := integer(value, fmt.Sprintf("cases[%d].expect.worker-remaining[%d]", i, j)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func fixtureState(value string) bool {
 	switch value {
 	case workflows.RunStatusSucceeded, workflows.RunStatusFailed, workflows.RunStatusSkipped, workflows.RunStatusCanceled, workflows.RunStatusNeedsAttention, workflows.RunStatusWaiting, workflows.RunStatusInterrupted:
@@ -127,8 +213,13 @@ func readFixtures(root string, captured *CapturedPackage) ([]fixtureSource, erro
 			return nil, invalidFixture(file, "", fmt.Errorf("%s: fixture exceeds 1 MiB", file))
 		}
 		var suite FixtureSuite
-		if err := strictYAML(data, &suite); err != nil {
-			return nil, invalidFixture(file, "", fmt.Errorf("%s: %w", file, err))
+		if err := strictYAML(data, &suite, fixtureSchemaNodes); err != nil {
+			var invalid *fixtureValidationError
+			caseName := ""
+			if errors.As(err, &invalid) {
+				caseName = invalid.Case
+			}
+			return nil, invalidFixture(file, caseName, fmt.Errorf("%s: %w", file, err))
 		}
 		if suite.SchemaVersion != 1 || len(suite.Cases) == 0 {
 			return nil, invalidFixture(file, "", fmt.Errorf("%s: schema-version 1 and nonempty cases are required; author behavior for imported workflows", file))

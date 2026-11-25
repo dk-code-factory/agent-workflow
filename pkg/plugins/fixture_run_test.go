@@ -235,6 +235,52 @@ cases:
 		})
 	}
 }
+func TestPluginFixtureRejectsNullSchemaValues(t *testing.T) {
+	valid := `schema-version: 1
+cases:
+  - name: numeric
+    skill: sample
+    inputs: {task: work}
+    operations:
+      - {uses: agent/run, call: 1, result: {text: done}}
+    controls:
+      - {action: configure-runtime, runtime: claude-sdk, invocation-count: 1}
+    expect: {state: succeeded, invocation-count: 1, sessions: 1, worker-remaining: [31]}
+`
+	for _, replacement := range [][2]string{
+		{"schema-version: 1", "schema-version: null"},
+		{"call: 1", "call: null"},
+		{"invocation-count: 1}", "invocation-count: null}"},
+		{"state: succeeded, invocation-count: 1", "state: succeeded, invocation-count: null"},
+		{"sessions: 1", "sessions: null"},
+		{"[31]", "[31, null]"},
+		{"[31]", "null"},
+		{"cases:\n", "cases:\n  - null\n"},
+		{"    operations:\n", "    operations:\n      - null\n"},
+		{"    controls:\n", "    controls:\n      - null\n"},
+	} {
+		t.Run(replacement[1], func(t *testing.T) {
+			r := Test(t.Context(), fixtureProject(t, "", strings.Replace(valid, replacement[0], replacement[1], 1)))
+			if r.Passed || len(r.Cases) != 0 || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "fixture.invalid" {
+				t.Fatalf("null schema value reached execution: %+v", r)
+			}
+		})
+	}
+}
+
+func TestPluginFixtureJSONNullValuesRemainValid(t *testing.T) {
+	root := fixtureProject(t, "jobs: {main: {steps: [{uses: action/probe}]}}\n", `schema-version: 1
+cases:
+  - name: json-null
+    skill: sample
+    actions: {probe: read_only}
+    operations:
+      - {uses: action/probe, phase: bindings, result: {nullable: null}}
+      - {uses: action/probe, result: {nullable: null}, evidence: {proof: null}, receipt: {id: null}}
+    expect: {state: succeeded, invocation-count: 1}
+`)
+	fixtureReport(t, root)
+}
 func TestPluginFixtureRejectsNonJSONValuesBeforeExecution(t *testing.T) {
 	valid := `schema-version: 1
 cases:

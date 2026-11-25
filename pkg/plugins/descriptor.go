@@ -63,7 +63,7 @@ func exactVersion(value string) bool {
 	return true
 }
 
-func strictYAML(data []byte, out any) error {
+func strictYAML(data []byte, out any, inspect ...func(*yaml.Node) error) error {
 	var node yaml.Node
 	d := yaml.NewDecoder(bytes.NewReader(data))
 	if err := d.Decode(&node); err != nil {
@@ -87,6 +87,11 @@ func strictYAML(data []byte, out any) error {
 	}
 	if err := walk(&node); err != nil {
 		return err
+	}
+	for _, check := range inspect {
+		if err := check(&node); err != nil {
+			return err
+		}
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)

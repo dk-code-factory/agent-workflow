@@ -259,14 +259,8 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 		case "configure-runtime":
 			e.Agents = &fixtureNative{ports: ports, config: fixtureConfig(control.Runtime)}
 		}
-		if err := matchFixtureError(controlErr, control.ExpectError); err != nil {
-			return result, fmt.Errorf("control %d %s: %w", i+1, control.Action, err)
-		}
-		if control.ExpectState != "" && (run == nil || run.Status != control.ExpectState) {
-			return result, fmt.Errorf("control %d: expected state %s; got %+v", i+1, control.ExpectState, run)
-		}
-		if control.InvocationCount != nil && ports.count() != int(*control.InvocationCount) {
-			return result, fmt.Errorf("control %d: expected %d invocations, got %d (state %s: %v)", i+1, *control.InvocationCount, ports.count(), run.Status, runErr)
+		if err := checkFixtureControl(i, control, run, runErr, controlErr, ports.count()); err != nil {
+			return result, err
 		}
 	}
 	result.InvocationCount = ports.count()
@@ -321,6 +315,22 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 	}
 	result.Passed = err == nil
 	return result, err
+}
+func checkFixtureControl(i int, control FixtureControl, run *workflows.Run, runErr, controlErr error, invocations int) error {
+	if err := matchFixtureError(controlErr, control.ExpectError); err != nil {
+		return fmt.Errorf("control %d %s: %w", i+1, control.Action, err)
+	}
+	if control.ExpectState != "" && (run == nil || run.Status != control.ExpectState) {
+		return fmt.Errorf("control %d: expected state %s; got %+v", i+1, control.ExpectState, run)
+	}
+	if control.InvocationCount != nil && invocations != int(*control.InvocationCount) {
+		state := "unavailable"
+		if run != nil {
+			state = run.Status
+		}
+		return fmt.Errorf("control %d: expected %d invocations, got %d (state %s: %v)", i+1, *control.InvocationCount, invocations, state, errors.Join(runErr, controlErr))
+	}
+	return nil
 }
 func matchFixtureError(err error, want string) error {
 	if want == "" {

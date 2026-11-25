@@ -131,6 +131,29 @@ func TestPluginFixtureBoundaryCancellationIsBounded(t *testing.T) {
 	}
 }
 
+func TestPluginFixtureCanceledControlCountMismatchIsDiagnostic(t *testing.T) {
+	e, store, ports := boundaryExecutor(t, "jobs: {main: {steps: [{id: approval, uses: input/wait, with: {prompt: Approve, evidence-id: current}}]}}\n")
+	run, err := e.Run(t.Context(), workflows.RunRequest{Ref: "workflows/main.yml"})
+	if err != nil || run == nil || run.Status != workflows.RunStatusWaiting {
+		t.Fatal(run, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	controlErr := store.InterruptInput(ctx, run.ID, run.Generation)
+	if !errors.Is(controlErr, context.Canceled) {
+		t.Fatal(controlErr)
+	}
+	reloaded, _, loadErr := store.Load(ctx, run.ID)
+	if reloaded != nil || !errors.Is(loadErr, context.Canceled) {
+		t.Fatal(reloaded, loadErr)
+	}
+	want := fixtureInteger(1)
+	control := FixtureControl{Action: "interrupt", ExpectError: "context canceled", InvocationCount: &want}
+	if err := checkFixtureControl(0, control, reloaded, nil, controlErr, ports.count()); err == nil || !strings.Contains(err.Error(), "expected 1 invocations, got 0") {
+		t.Fatal(err)
+	}
+}
+
 func TestPluginFixtureBoundaryChecksReusableChildBeforeAnyCommand(t *testing.T) {
 	e, _, ports := boundaryExecutor(t, `jobs:
   first: {steps: [{argv: [must-not-execute]}]}
