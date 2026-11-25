@@ -60,7 +60,7 @@ type FixtureExpect struct {
 	InvocationCount *int           `yaml:"invocation-count"`
 	Outputs         map[string]any `yaml:"outputs,omitempty"`
 	WorkerRemaining []int          `yaml:"worker-remaining,omitempty"`
-	Sessions        int            `yaml:"sessions,omitempty"`
+	Sessions        *int           `yaml:"sessions,omitempty"`
 }
 type fixtureSource struct {
 	file string
@@ -147,11 +147,19 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 	if c.Expect.InvocationCount == nil || *c.Expect.InvocationCount < 0 {
 		return fmt.Errorf("expect.invocation-count must be a nonnegative integer")
 	}
+	if c.Expect.Sessions != nil && *c.Expect.Sessions < 0 {
+		return fmt.Errorf("expect.sessions must be nonnegative")
+	}
+	for _, remaining := range c.Expect.WorkerRemaining {
+		if remaining < 0 {
+			return fmt.Errorf("worker-remaining values must be nonnegative")
+		}
+	}
 	if len(c.Operations) > maxFixtureOperations || len(c.Controls) > 128 {
 		return fmt.Errorf("case exceeds 1000 operations or 128 controls")
 	}
 	for name, effect := range c.Actions {
-		if !identity.MatchString(name) || (effect != string(workflows.ActionReadOnly) && effect != string(workflows.ActionExternalMutation)) {
+		if strings.TrimSpace(name) == "" || (effect != string(workflows.ActionReadOnly) && effect != string(workflows.ActionExternalMutation)) {
 			return fmt.Errorf("actions requires valid names and read_only or external_mutation effects")
 		}
 	}
@@ -168,6 +176,12 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 		}
 		if !application && (op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
 			return fmt.Errorf("evidence/receipt/outcome require registered fixture actions")
+		}
+		if op.Phase == "validate" && (op.Result != nil || op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
+			return fmt.Errorf("validate responses support selectors and error only")
+		}
+		if op.Phase == "bindings" && (op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
+			return fmt.Errorf("bindings responses support result/error only")
 		}
 		if op.Outcome != "" && op.Phase != "reconcile" {
 			return fmt.Errorf("outcome requires the reconcile phase")

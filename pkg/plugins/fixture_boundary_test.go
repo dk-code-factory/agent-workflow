@@ -130,3 +130,23 @@ func TestPluginFixtureBoundaryCancellationIsBounded(t *testing.T) {
 		t.Fatal("canceled workflow dispatched")
 	}
 }
+
+func TestPluginFixtureBoundaryChecksReusableChildBeforeAnyCommand(t *testing.T) {
+	e, _, ports := boundaryExecutor(t, `jobs:
+  first: {steps: [{argv: [must-not-execute]}]}
+  child: {uses: ./workflows/child.yml}
+`)
+	if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows/child.yml"), []byte(`on: {workflow_call: {}}
+jobs:
+  child:
+    steps: [{uses: 'docker://alpine:latest', with: {args: echo unsafe}}]
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Run(t.Context(), workflows.RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "fixtures do not support") {
+		t.Fatal(err)
+	}
+	if ports.count() != 0 {
+		t.Fatal("command ran before child rejection")
+	}
+}

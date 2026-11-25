@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,10 @@ jobs:
 `
 	for _, provider := range []string{"codex-app-server", "claude-sdk"} {
 		t.Run(provider, func(t *testing.T) {
+			other := "claude-sdk"
+			if provider == "claude-sdk" {
+				other = "codex-app-server"
+			}
 			root := fixtureProject(t, workflow, fmt.Sprintf(`schema-version: 1
 cases:
   - name: recovered
@@ -97,9 +102,9 @@ cases:
     controls:
       - {action: answer, step: approval, evidence: stale-evidence, value: {approved: true}, expect-error: stale, invocation-count: 1}
       - {action: answer, step: approval, value: null, expect-error: non-null, invocation-count: 1}
-      - {action: interrupt, invocation-count: 1}
+      - {action: interrupt, expect-state: interrupted, invocation-count: 1}
       - {action: reopen, invocation-count: 1}
-      - {action: configure-runtime, runtime: claude-sdk, invocation-count: 1}
+      - {action: configure-runtime, runtime: %s, invocation-count: 1}
       - {action: answer, step: approval, value: {approved: true}, invocation-count: 1}
       - {action: resume, invocation-count: 2, expect-state: succeeded}
       - {action: reopen, invocation-count: 2}
@@ -110,7 +115,7 @@ cases:
       invocation-count: 2
       worker-remaining: [1]
       sessions: 1
-`, provider))
+`, provider, other))
 			r := fixtureReport(t, root)
 			calls := r.Cases[0].Invocations
 			if len(calls) != 2 || calls[0].Session != calls[1].Session || calls[0].Worker != calls[1].Worker || calls[1].Runtime != provider {
@@ -274,7 +279,6 @@ cases:
 func TestPluginFixtureFailClosedContainersIncludingHandlersAndChildren(t *testing.T) {
 	for name, workflow := range map[string]string{
 		"container": "jobs: {main: {container: alpine:latest, steps: [{run: echo unsafe, shell: sh}]}}\n",
-		"handler":   "jobs: {main: {steps: [{uses: agent/run, with: {agent: agents/task.yaml, prompt: work}, finally: [{uses: 'docker://alpine:latest', with: {args: echo unsafe}}]}]}}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := fixtureProject(t, workflow, `schema-version: 1
@@ -283,6 +287,9 @@ cases:
     skill: sample
     expect: {error: fixture, invocation-count: 0}
 `)
+			if check := Check(root); !check.Passed {
+				t.Fatal("invalid negative fixture package", check)
+			}
 			r := Test(context.Background(), root)
 			if r.Passed {
 				t.Fatal("unsupported container accepted")
@@ -372,4 +379,102 @@ cases:
     expect: {state: succeeded, error: stale checkpoint evidence, invocation-count: 1}
 `)
 	fixtureReport(t, root)
+}
+
+func TestPluginCheckRejectsGeneratedPathCollisions(t *testing.T) {
+	root := fixtureProject(t, "", "")
+	descriptor := filepath.Join(root, "plugin.yaml")
+	data, err := os.ReadFile(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(descriptor, append(data, []byte("resources: [compatibility.json]\n")...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "compatibility.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report := Check(root)
+	if report.Passed || report.Diagnostics[0].File != "compatibility.json" || !strings.Contains(report.Diagnostics[0].Reason, "generated package path collides") {
+		t.Fatal(report)
+	}
+}
+func TestPluginFixtureNativeConvertersFeedCanonicalAdmission(t *testing.T) {
+	for _, from := range []string{"codex", "claude"} {
+		t.Run(from, func(t *testing.T) {
+			root := fixtureProject(t, "", "")
+			source := filepath.Join(t.TempDir(), "source")
+			text := "name = 'task'\ndescription = 'Complete task'\ndeveloper_instructions = 'Work offline.'\n"
+			if from == "claude" {
+				text = "---\nname: task\ndescription: Complete task\n---\nWork offline.\n"
+			}
+			if err := os.WriteFile(source, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(root, "workflows/agents/task.yaml")
+			if err := os.Remove(output); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := workflows.ConvertAgent(from, source, output, nil); err != nil {
+				t.Fatal(err)
+			}
+			fixtureReport(t, root)
+			original, err := os.ReadFile(source)
+			if err != nil || string(original) != text {
+				t.Fatal("converter changed source", err)
+			}
+		})
+	}
+}
+
+func TestPluginFixtureUnconfiguredFinallyCommandFailsClosed(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "unsafe")
+	root := fixtureProject(t, fmt.Sprintf(`jobs:
+  main:
+    steps:
+      - uses: agent/run
+        with: {agent: agents/task.yaml, prompt: work}
+        finally:
+          - argv: [touch, '%s']
+`, marker), `schema-version: 1
+cases:
+  - name: denied-handler
+    skill: sample
+    operations: [{uses: agent/run, result: {text: done}}]
+    expect: {state: failed, error: fixture response, invocation-count: 1}
+`)
+	report := Test(t.Context(), root)
+	if report.Passed || len(report.Cases) != 1 || report.Cases[0].InvocationCount != 1 || !strings.Contains(report.Diagnostics[0].Reason, "command/run") {
+		t.Fatal(report)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("finally handler executed", err)
+	}
+}
+
+func TestPluginFixtureClaudeOnlyEnvironmentDoesNotDiscoverExecutables(t *testing.T) {
+	tools := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "must-not-launch-claude")
+	if err := os.WriteFile(filepath.Join(tools, "claude"), []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 90\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools)
+	t.Setenv("ANTHROPIC_API_KEY", "must-not-read-fixture-credential")
+	root := fixtureProject(t, "", `schema-version: 1
+cases:
+  - name: claude-only
+    skill: sample
+    runtime: claude-sdk
+    inputs: {task: work}
+    operations: [{uses: agent/run, result: {text: Hello}}]
+    expect: {state: succeeded, outputs: {result: Hello}, invocation-count: 1}
+`)
+	report := fixtureReport(t, root)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("fixture launched host executable", err)
+	}
+	data, _ := json.Marshal(report)
+	if strings.Contains(string(data), "must-not-read-fixture-credential") {
+		t.Fatal("fixture read provider credentials")
+	}
 }

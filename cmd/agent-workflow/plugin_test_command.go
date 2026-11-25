@@ -25,7 +25,9 @@ func pluginTestCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 			if test.Passed {
 				state = "passed"
 			}
-			fmt.Fprintf(stdout, "%s case %s: %s (%d invocations, state %s)\n", test.File, test.Name, state, test.InvocationCount, test.State)
+			if _, err := fmt.Fprintf(stdout, "%s case %s: %s (%d invocations, state %s)\n", test.File, test.Name, state, test.InvocationCount, test.State); err != nil {
+				return err
+			}
 		}
 	}
 	return writePluginReport(report.CheckReport, report, asJSON, stdout)

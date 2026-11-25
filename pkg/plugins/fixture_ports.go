@@ -160,6 +160,13 @@ func (p *fixturePorts) RunCommand(ctx context.Context, q workflows.CommandReques
 	if out["exit_code"] == nil {
 		out["exit_code"] = 0
 	}
+	code, ok := out["exit_code"].(int)
+	if !ok {
+		return nil, p.fail(fmt.Errorf("command fixture exit_code must be an integer"))
+	}
+	if code != 0 && err == nil {
+		err = fmt.Errorf("command failed: fixture exit code %d", code)
+	}
 	out["queue_time_ms"] = 0
 	return out, err
 }

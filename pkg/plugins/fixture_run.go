@@ -278,8 +278,8 @@ func runFixtureCase(parent context.Context, captured *CapturedPackage, source fi
 			}
 		}
 		slices.Sort(result.WorkerRemaining)
-		if test.Expect.Sessions > 0 && len(sessions) != test.Expect.Sessions {
-			err = errors.Join(err, fmt.Errorf("expected %d retained sessions; got %d", test.Expect.Sessions, len(sessions)))
+		if test.Expect.Sessions != nil && len(sessions) != *test.Expect.Sessions {
+			err = errors.Join(err, fmt.Errorf("expected %d retained sessions; got %d", *test.Expect.Sessions, len(sessions)))
 		}
 		_, snap, loadErr := engine.store.Load(ctx, run.ID)
 		err = errors.Join(err, loadErr)

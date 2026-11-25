@@ -35,6 +35,10 @@ func checkCaptured(root string) (*CapturedPackage, CheckReport) {
 		report.Diagnostics = append(report.Diagnostics, packageDiagnostic(err))
 		return nil, report
 	}
+	if err := ValidateBuild(captured, captured.Descriptor().Hosts); err != nil {
+		report.Diagnostics = append(report.Diagnostics, packageDiagnostic(err))
+		return nil, report
+	}
 	report.Passed = true
 	return captured, report
 }
@@ -48,6 +52,9 @@ func packageDiagnostic(err error) Diagnostic {
 		if clean, e := localPath(prefix); e == nil && strings.Contains(clean, ".") {
 			file = clean
 		}
+	}
+	if _, target, ok := strings.Cut(err.Error(), "generated package path collides with declared content: "); ok {
+		file = target
 	}
 	return Diagnostic{Code: "package.invalid", File: file, Reason: err.Error()}
 }

@@ -218,3 +218,148 @@ disabled. The returned `claude_bridge` path can be used in reviewed target
 workspace configuration. Subsequent setup verifies the retained bridge receipt;
 it never mutates the verified engine distribution, selects a provider, writes
 workspace configuration, installs provider CLIs or refreshes login implicitly.
+
+## Structural checks and deterministic fixtures
+
+```sh
+agent-workflow plugin check --json ./example-plugin
+agent-workflow plugin test --json ./example-plugin
+```
+
+Flags precede DIR. `check` captures the same declared closure as `build`, then
+validates the generated distribution plan for the descriptor's supported hosts.
+It checks metadata, references, workflow contracts, YAML definitions, containment,
+portable resource names, generated-path collisions and package limits. It writes
+no output and executes no developer commands, helpers, setup or host discovery.
+`build` requires this same structural validation; it does not require behavioral
+fixtures to pass.
+
+Both commands return a nonzero exit status on failure. Text and schema-version 1
+JSON reports share diagnostics with `code`, affected `file`, optional fixture
+`case`, and actionable `reason`. `package.invalid` identifies structural failure;
+`fixture.invalid` identifies incomplete or invalid fixture data; `fixture.failed`
+identifies a failed behavioral assertion or an unsupported/unconfigured boundary.
+JSON fixture reports identify their evidence as `fixture-control-flow`, and include
+observed states, outputs, operation transcripts and remaining worker turns.
+
+Author YAML files anywhere below `fixtures/`; every bound skill requires at least
+one case. File/case names must be unique across the suite. Empty imported templates
+fail until their behavior is authored. Unknown keys, aliases, unsupported schema
+versions, ambiguous responses and unused responses fail. A file is limited to
+1 MiB, a suite to 100 cases and 256 YAML files, and a case to 1000 responses and
+128 controls. A case has ten seconds; the complete execution suite has two minutes.
+All waits and workers are canceled and joined before disposable state is removed.
+
+```yaml
+schema-version: 1
+cases:
+  - name: success
+    skill: example-plugin
+    runtime: claude-sdk
+    inputs: {task: Say hello}
+    operations:
+      - uses: agent/run
+        prompt: Say hello
+        result: {text: Hello}
+    expect:
+      state: succeeded
+      outputs: {result: Hello}
+      invocation-count: 1
+      worker-remaining: [31]
+      sessions: 1
+```
+
+The engine's existing YAML interpreter resolves inputs, expressions, branches,
+reusable children, lifecycle handlers, retries, output contracts, durable gates
+and recovery. Fixtures supply boundary data; they do not interpret workflow YAML.
+States use actual engine names: `succeeded`, `failed`, `skipped`, `canceled`,
+`needs_attention`, `waiting` or `interrupted`. The early scaffold spelling
+`completed` was provisional and is rejected. For an admission failure such as a
+missing required input, omit `state` and set `expect.error` to an expected error
+substring. `expect.invocation-count` is always required, including zero.
+
+Runtime selection accepts `codex-app-server` (the default) or `claude-sdk`. These
+are synthetic, credential-free configurations with real native definition and
+option validation. They never inspect `agents.yml`, provider executables, login,
+credentials, host settings or MCP connectors. New TOML/Markdown definitions still
+fail with conversion guidance. Existing offline converter and retained-snapshot
+engine tests remain distinct from fixture control-flow assertions. Runtime
+fixtures cannot establish SDK/host acceptance or full managed feature parity.
+
+Supported operation ports are `agent/run`, `command/run`, the controller effects
+(`workspace/create`, `workspace/snapshot`, `workspace/integrate`, `git/commit`,
+`github/pr`), and explicitly declared registered actions. Commands record rendered
+argv, working directory, environment and JSON stdin; they never spawn. Their
+scripted result uses `stdout`, `stderr` and integer `exit_code` (defaults are empty
+streams and zero). A nonzero exit code fails the command. Other results are maps
+of engine outputs; `error` supplies an operation failure, including partial output.
+Native responses can select the exact rendered `prompt` and configured `role`.
+Command/action responses can select `job` and `step`. `call` is a one-based count
+for that `uses` and `phase`; repeated otherwise-identical responses require it.
+Exactly one unused response must match each operation. An unexpected operation
+fails the fixture even if the case expects the resulting workflow failure.
+
+Container jobs, Docker steps, helper protocols, conversations and network/container
+execution policies are explicitly unsupported by this fixture runner. Admission
+checks the complete loaded closure, including children and handlers, before any
+container/image/guardian or command launch. Recovery applies the same boundary
+before completed-operation shortcuts. Test helper implementations separately.
+No unconfigured boundary falls back to a real provider, process or service.
+
+Registered actions require an explicit `actions` map from action name to
+`read_only` or `external_mutation`. Their implementation consists solely of
+scripted `bindings`, `execute`, `validate` and `reconcile` phases; no application
+handler is loaded. The real action journal retains contracts, operation keys,
+bindings, output, `evidence` and `receipt`. Recovery requires its own explicit
+binding/validation responses; a reconciliation response supplies `outcome` and
+proof in `evidence`. Only `execute` phases count as invocations. Checkpoints,
+validation and reconciliation remain visible separately in the transcript.
+
+Controls run after the initial engine result, in declaration order:
+
+```yaml
+controls:
+  - {action: answer, step: approval, evidence: stale, value: {approved: true}, expect-error: stale, invocation-count: 1}
+  - {action: interrupt, invocation-count: 1}
+  - {action: reopen, invocation-count: 1}
+  - {action: configure-runtime, runtime: claude-sdk}
+  - {action: answer, step: approval, value: {approved: true}}
+  - {action: resume, expect-state: succeeded, invocation-count: 2}
+  - {action: reopen, invocation-count: 2}
+  - {action: resume, expect-state: succeeded, invocation-count: 2}
+```
+
+`answer` targets one durable gate by step ID; `evidence: current` (the default)
+uses its retained evidence ID. Explicit evidence, `answer-id`, and JSON `value`
+can exercise stale, duplicate or invalid answers. `interrupt` uses the engine's
+durable input interruption. `reopen` stops workers, closes/reopens the same SQLite
+state, recovers it and restarts fixture workers. `resume` uses the existing retry
+guards; `retry: true` is an explicit uncertain-effect acknowledgement.
+`configure-runtime` changes current configuration only: resume and worker dispatch
+must still use admitted Roles. Controls can assert `expect-error`, `expect-state`
+and `invocation-count`. Final `worker-remaining` and `sessions` assertions prove
+consumed allowances and identities survive recovery. Definitions, package assets
+and runtime snapshots must remain unchanged throughout execution and recovery.
+
+Fixture success establishes deterministic workflow control flow. It does not test
+helper implementation correctness, model activation quality, native host
+activation, real provider behavior or publication access. Those require separate
+tests and separately authorized acceptance procedures.
+
+A credential-free CI recipe can exercise both developer commands against the
+starter project, alongside normal Go tests:
+
+```sh
+set -eu
+plugin_ci_tmp="$(mktemp -d)"
+trap 'rm -rf "$plugin_ci_tmp"' EXIT
+go build -o "$plugin_ci_tmp/agent-workflow" ./cmd/agent-workflow
+(cd "$plugin_ci_tmp" && ./agent-workflow plugin init example-plugin)
+"$plugin_ci_tmp/agent-workflow" plugin check --json "$plugin_ci_tmp/example-plugin"
+"$plugin_ci_tmp/agent-workflow" plugin test --json "$plugin_ci_tmp/example-plugin"
+```
+
+For your own project, run the same `check` and `test` commands on its source
+directory before `build`. Engine tests cover legacy snapshots without rewriting
+original definition bytes/hashes or runtime bindings; new source fixtures always
+use the canonical admission contract.
