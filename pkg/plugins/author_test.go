@@ -2,6 +2,8 @@ package plugins
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,32 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"gopkg.in/yaml.v3"
 )
+
+type failedAuthorFile struct {
+	*os.File
+	onWrite func()
+	write   bool
+	close   bool
+}
+
+func (f *failedAuthorFile) Write(data []byte) (int, error) {
+	if f.onWrite != nil {
+		f.onWrite()
+	}
+	if f.write {
+		n, _ := f.File.Write(data[:min(4, len(data))])
+		return n, errors.New("injected write failure")
+	}
+	return f.File.Write(data)
+}
+
+func (f *failedAuthorFile) Close() error {
+	err := f.File.Close()
+	if f.close {
+		return errors.New("injected close failure")
+	}
+	return err
+}
 
 func put(t *testing.T, root, name, text string) {
 	t.Helper()
@@ -438,5 +466,171 @@ func TestPluginImportPreservesEmptyDeclaredDirectoriesAndSkillFixtures(t *testin
 	original, err := os.ReadFile(filepath.Join(root, "fixtures/example.yaml"))
 	if err != nil || string(original) != string(fixture) {
 		t.Fatalf("original fixture changed: %v", err)
+	}
+}
+
+func TestPluginInitWriteAndCreateFailuresLeaveNoPartialProject(t *testing.T) {
+	for _, failure := range []string{"write", "close", "create"} {
+		t.Run(failure, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "demo")
+			disk := authoringIO()
+			create := disk.create
+			disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+				final := strings.HasPrefix(name, root+string(filepath.Separator)) && filepath.Base(name) == "SKILL.md"
+				if final && failure == "create" {
+					return nil, errors.New("injected create failure")
+				}
+				f, err := create(name, mode)
+				if err != nil || !final {
+					return f, err
+				}
+				return &failedAuthorFile{File: f.(*os.File), write: failure == "write", close: failure == "close"}, nil
+			}
+			if err := initProject(root, "demo", "0.2.2", "", disk); err == nil || !strings.Contains(err.Error(), "injected") {
+				t.Fatalf("missing injected failure: %v", err)
+			}
+			if _, err := os.Lstat(root); !os.IsNotExist(err) {
+				t.Fatalf("failed init retained destination: %v", err)
+			}
+			if err := Init(root, "demo", "0.2.2", ""); err != nil {
+				t.Fatalf("retry failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestPluginAddSkillWriteCloseAndDescriptorFailuresRollback(t *testing.T) {
+	for _, failure := range []string{"write", "close", "descriptor", "descriptor-change"} {
+		t.Run(failure, func(t *testing.T) {
+			source := t.TempDir()
+			put(t, source, "custom.yaml", exampleWorkflow)
+			put(t, source, "agents/task.yaml", exampleAgent)
+			root := filepath.Join(t.TempDir(), "demo")
+			if err := Init(root, "demo", "0.2.2", ""); err != nil {
+				t.Fatal(err)
+			}
+			put(t, root, "notes.txt", "keep")
+			before, _ := os.ReadFile(filepath.Join(root, DescriptorFile))
+			expected := before
+			wantError := "injected"
+			if failure == "descriptor-change" {
+				expected = append([]byte("# concurrent descriptor edit\n"), before...)
+				wantError = "changed during import"
+			}
+			disk := authoringIO()
+			create := disk.create
+			if failure == "descriptor" {
+				disk.rename = func(_, _ string) error { return errors.New("injected descriptor failure") }
+			} else {
+				disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+					f, err := create(name, mode)
+					if err != nil || filepath.Base(name) != "SKILL.md" {
+						return f, err
+					}
+					wrapped := &failedAuthorFile{File: f.(*os.File), write: failure == "write", close: failure == "close"}
+					if failure == "descriptor-change" {
+						wrapped.onWrite = func() { put(t, root, DescriptorFile, string(expected)) }
+					}
+					return wrapped, nil
+				}
+			}
+			if err := addSkill(root, "retry", filepath.Join(source, "custom.yaml"), disk); err == nil || !strings.Contains(err.Error(), wantError) {
+				t.Fatalf("missing injected failure: %v", err)
+			}
+			for _, name := range []string{"imports/retry", "skills/retry", "fixtures/retry", ".plugin-author.lock"} {
+				if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+					t.Fatalf("failed import retained %s: %v", name, err)
+				}
+			}
+			after, _ := os.ReadFile(filepath.Join(root, DescriptorFile))
+			if !bytes.Equal(expected, after) {
+				t.Fatal("failed import changed descriptor")
+			}
+			if note, err := os.ReadFile(filepath.Join(root, "notes.txt")); err != nil || string(note) != "keep" {
+				t.Fatalf("unrelated file changed: %q %v", note, err)
+			}
+			if _, err := Load(root); err != nil {
+				t.Fatal(err)
+			}
+			if err := AddSkill(root, "retry", filepath.Join(source, "custom.yaml")); err != nil {
+				t.Fatalf("retry failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestPluginRollbackPreservesConcurrentUnrelatedFiles(t *testing.T) {
+	source := t.TempDir()
+	put(t, source, "custom.yaml", exampleWorkflow)
+	put(t, source, "agents/task.yaml", exampleAgent)
+	root := filepath.Join(t.TempDir(), "demo")
+	if err := Init(root, "demo", "0.2.2", ""); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(root, DescriptorFile))
+	disk := authoringIO()
+	create := disk.create
+	disk.create = func(name string, mode fs.FileMode) (authorFile, error) {
+		f, err := create(name, mode)
+		if err != nil || filepath.Base(name) != "SKILL.md" {
+			return f, err
+		}
+		return &failedAuthorFile{File: f.(*os.File), write: true, onWrite: func() {
+			put(t, root, "imports/retry/workflows/keep.txt", "concurrent unrelated file")
+		}}, nil
+	}
+	err := addSkill(root, "retry", filepath.Join(source, "custom.yaml"), disk)
+	if err == nil || !strings.Contains(err.Error(), "rollback newly created paths") {
+		t.Fatalf("missing retained-path diagnostic: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "imports/retry/workflows/keep.txt")); err != nil || string(b) != "concurrent unrelated file" {
+		t.Fatalf("removed unrelated concurrent file: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "imports/retry/workflows/custom.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("retained own imported file: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(root, DescriptorFile))
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed import changed descriptor")
+	}
+}
+
+func TestPluginImportExplicitCurrentDirectoryHelpers(t *testing.T) {
+	for _, kind := range []string{"container", "step", "standalone"} {
+		t.Run(kind, func(t *testing.T) {
+			source := t.TempDir()
+			entry := "workflows/main.yml"
+			child := "workflows/nested/child.yml"
+			put(t, source, entry, "on: {workflow_call: {}}\njobs:\n  call:\n    uses: "+child+"\n")
+			declaration := "    container: {image: python:3, files: [.]}\n    steps:\n      - run: python helper.py\n"
+			if kind != "container" {
+				declaration = "    steps:\n      - uses: docker://python:3\n        files: [.]\n        with: {entrypoint: python, args: helper.py}\n"
+			}
+			if kind == "standalone" {
+				entry, child = "custom.yaml", "custom.yaml"
+			}
+			put(t, source, child, "on: {workflow_call: {}}\njobs:\n  task:\n"+declaration)
+			base := filepath.Dir(child)
+			put(t, source, filepath.Join(base, "agents/task.yaml"), exampleAgent)
+			put(t, source, filepath.Join(base, "helper.py"), "print('declared')\n")
+			root := filepath.Join(t.TempDir(), "demo")
+			if err := Init(root, "demo", "0.2.2", filepath.Join(source, entry)); err != nil {
+				t.Fatal(err)
+			}
+			d, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (&workflows.Executor{WorkspaceDir: root}).Load(d.Skills[0].Workflow); err != nil {
+				t.Fatal(err)
+			}
+			prefix := "imports/demo"
+			if kind == "standalone" {
+				prefix += "/workflows"
+			}
+			if _, err := os.Stat(filepath.Join(root, prefix, base, "helper.py")); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

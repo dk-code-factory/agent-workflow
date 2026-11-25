@@ -4,7 +4,10 @@
 NAME. `agent-workflow plugin add-skill --plugin DIR --workflow FILE NAME` imports
 another skill into an existing project. Flags precede positional arguments. These
 commands work offline without host CLIs, provider credentials or dependency
-installation. Existing files are never replaced by scaffolding or import.
+installation. Initialization refuses an existing destination. Import preserves
+existing skill, workflow and resource files and creates new paths exclusively.
+`add-skill` atomically rewrites `plugin.yaml` to append its binding; descriptor
+comments and formatting can change.
 
 The version 1 descriptor uses this format:
 

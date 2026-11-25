@@ -20,7 +20,7 @@ func TestAgentConvertOfflinePreservesCompatibleInstructions(t *testing.T) {
 			instructions := "First instruction.\nKeep both paragraphs.\n\nDo not publish.\n"
 			source := "name = 'reviewer'\ndescription = 'Review changes'\nmodel = 'configured-model'\nmodel_reasoning_effort = 'high'\ndeveloper_instructions = '''" + instructions + "'''\n"
 			if from == "claude" {
-				source = "---\nname: reviewer\ndescription: Review changes\nmodel: configured-model\neffort: high\n---\n" + instructions
+				source = "---\nname: reviewer\ndescription: Review changes\nmodel: configured-model\neffort: high\n...\n# End metadata.\n---\n" + instructions
 			}
 			if err := os.WriteFile(input, []byte(source), 0600); err != nil {
 				t.Fatal(err)
@@ -100,6 +100,8 @@ func TestAgentConvertInvalidSourcesAndOutputCollisions(t *testing.T) {
 		{"claude", "No frontmatter"}, {"claude", "---\nname: a\n---\n"},
 		{"claude", "---\nname: a\nname: b\ndescription: d\n---\nWork"},
 		{"claude", "---\nname: &name a\ndescription: *name\n---\nWork"},
+		{"claude", "---\nname: a\ndescription: d\n...\ntools: [Bash]\n---\nWork"},
+		{"claude", "---\nname: a\ndescription: d\n...\ninvalid trailing content\n---\nWork"},
 	} {
 		t.Run(tc.from+tc.source[:1], func(t *testing.T) {
 			dir := t.TempDir()

@@ -1,7 +1,9 @@
 package plugins
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -16,6 +18,29 @@ import (
 // Init creates a new authoring project. The caller supplies the exact engine
 // release used by the CLI; plugin versions are independent of engine versions.
 func Init(directory, name, engineVersion, workflow string) error {
+	return initProject(directory, name, engineVersion, workflow, authoringIO())
+}
+
+type authorFile interface {
+	io.WriteCloser
+	Stat() (fs.FileInfo, error)
+}
+
+type authorIO struct {
+	create func(string, fs.FileMode) (authorFile, error)
+	rename func(string, string) error
+}
+
+func authoringIO() authorIO {
+	return authorIO{
+		create: func(name string, mode fs.FileMode) (authorFile, error) {
+			return os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		},
+		rename: os.Rename,
+	}
+}
+
+func initProject(directory, name, engineVersion, workflow string, disk authorIO) error {
 	if !identity.MatchString(name) {
 		return fmt.Errorf("invalid plugin name %q", name)
 	}
@@ -56,14 +81,14 @@ func Init(directory, name, engineVersion, workflow string) error {
 		return err
 	}
 	files[DescriptorFile] = file{data: data, mode: 0644}
-	// Build and validate off to the side; a failed import never leaves a project.
+	// Validate a private copy before reserving the destination.
 	parent := filepath.Dir(directory)
 	stage, err := os.MkdirTemp(parent, ".plugin-init-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if err = writeFiles(stage, files); err != nil {
+	if _, err = disk.writeFiles(stage, files); err != nil {
 		return err
 	}
 	if _, err = Load(stage); err != nil {
@@ -73,19 +98,27 @@ func Init(directory, name, engineVersion, workflow string) error {
 	if err = os.Mkdir(directory, 0755); err != nil {
 		return err
 	}
-	if err = writeFiles(directory, files); err != nil {
+	reserved, err := os.Lstat(directory)
+	if err != nil {
 		return err
+	}
+	if _, err = disk.writeFiles(directory, files); err != nil {
+		return errors.Join(err, rollbackPaths([]createdPath{{directory, reserved}}))
 	}
 	return nil
 }
 
-// AddSkill imports only the workflow dependency closure, preserving every
-// existing source file. New skills get isolated namespaces; collisions fail.
+// AddSkill imports only the declared closure and adds a descriptor binding.
+// It preserves existing skill sources; plugin.yaml is reserialized atomically.
 func AddSkill(root, name, workflow string) error {
+	return addSkill(root, name, workflow, authoringIO())
+}
+
+func addSkill(root, name, workflow string, disk authorIO) (err error) {
 	if !identity.MatchString(name) {
 		return fmt.Errorf("invalid skill name %q", name)
 	}
-	// Reserve an exclusive project lock; no descriptor update races another writer.
+	// Serialize authoring commands with an exclusive project lock.
 	lock, err := os.OpenFile(filepath.Join(root, ".plugin-author.lock"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("plugin authoring lock: %w", err)
@@ -139,17 +172,23 @@ func AddSkill(root, name, workflow string) error {
 	if err = tmp.Close(); err != nil {
 		return err
 	}
-	if err = writeFiles(root, files); err != nil {
+	rollback, err := disk.writeFiles(root, files)
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, rollback())
+		}
+	}()
 	latest, err := os.ReadFile(filepath.Join(root, DescriptorFile))
 	if err != nil {
 		return err
 	}
 	if string(original) != string(latest) {
-		return fmt.Errorf("%s changed during import; imported sources retained without rebinding", DescriptorFile)
+		return fmt.Errorf("%s changed during import; descriptor update refused", DescriptorFile)
 	}
-	return os.Rename(tmpName, filepath.Join(root, DescriptorFile))
+	return disk.rename(tmpName, filepath.Join(root, DescriptorFile))
 }
 
 func importWorkflow(name, source string) (Skill, map[string]file, error) {
@@ -278,7 +317,73 @@ func checkNewPath(root, name string) error {
 	}
 	return nil
 }
-func writeFiles(root string, files map[string]file) error {
+
+type createdPath struct {
+	name string
+	info fs.FileInfo
+}
+
+// Rollback removes only entries created by this attempt, never existing paths
+// or a replacement inode. Remove leaves directories containing other files intact.
+func rollbackPaths(created []createdPath) error {
+	var failures []error
+	for i := len(created) - 1; i >= 0; i-- {
+		entry := created[i]
+		current, err := os.Lstat(entry.name)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !os.SameFile(entry.info, current) {
+			failures = append(failures, fmt.Errorf("%s changed identity; retained during rollback", entry.name))
+			continue
+		}
+		if err := os.Remove(entry.name); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("rollback newly created paths: %w", errors.Join(failures...))
+	}
+	return nil
+}
+
+func createParents(root, name string, created *[]createdPath) error {
+	parent := root
+	for _, part := range strings.Split(path.Dir(name), "/") {
+		if part == "." {
+			continue
+		}
+		parent = filepath.Join(parent, part)
+		err := os.Mkdir(parent, 0755)
+		if err != nil && !os.IsExist(err) {
+			return err
+		}
+		info, statErr := os.Lstat(parent)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s: requires a directory without symlinks", parent)
+		}
+		if err == nil {
+			*created = append(*created, createdPath{parent, info})
+		}
+	}
+	return nil
+}
+
+func (disk authorIO) writeFiles(root string, files map[string]file) (undo func() error, err error) {
+	var created []createdPath
+	undo = func() error { return rollbackPaths(created) }
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, undo())
+		}
+	}()
 	names := make([]string, 0, len(files))
 	for p := range files {
 		names = append(names, p)
@@ -286,32 +391,46 @@ func writeFiles(root string, files map[string]file) error {
 	sort.Strings(names)
 	for _, p := range names {
 		if err := checkNewPath(root, p); err != nil {
-			return err
+			return undo, err
 		}
 		target := filepath.Join(root, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
+		if err := createParents(root, p, &created); err != nil {
+			return undo, err
 		}
 		if files[p].mode.IsDir() {
 			if err := os.Mkdir(target, files[p].mode.Perm()); err != nil {
-				return err
+				return undo, err
 			}
+			info, err := os.Lstat(target)
+			if err != nil {
+				return undo, err
+			}
+			created = append(created, createdPath{target, info})
 			continue
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fs.FileMode(files[p].mode))
+		f, err := disk.create(target, files[p].mode)
 		if err != nil {
-			return err
+			return undo, err
 		}
-		_, err = f.Write(files[p].data)
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return undo, err
+		}
+		created = append(created, createdPath{target, info})
+		n, err := f.Write(files[p].data)
+		if err == nil && n != len(files[p].data) {
+			err = io.ErrShortWrite
+		}
 		closeErr := f.Close()
 		if err != nil {
-			return err
+			return undo, err
 		}
 		if closeErr != nil {
-			return closeErr
+			return undo, closeErr
 		}
 	}
-	return nil
+	return undo, nil
 }
 func skillText(name string) []byte {
 	return []byte("---\nname: " + name + "\ndescription: Run the " + name + " workflow against the target workspace.\n---\n\nRun the bound workflow with inputs declared in its workflow_call contract.\nKeep runtime permissions and credentials in the target workspace's agents.yml.\n")

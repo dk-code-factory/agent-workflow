@@ -120,7 +120,28 @@ func relativeAgent(base, reference string) (string, error) {
 	return localPath(path.Join(base, reference))
 }
 func (c *collector) resource(name string) error {
-	name, err := localPath(name)
+	return c.resourcePath(name, false)
+}
+
+func (c *collector) helper(base, reference string) error {
+	if reference == "" || path.IsAbs(reference) || strings.ContainsAny(reference, "\\\x00") || strings.Contains(reference, "${{") {
+		return fmt.Errorf("helper requires a literal relative path")
+	}
+	for _, part := range strings.Split(reference, "/") {
+		if part == ".." {
+			return fmt.Errorf("helper path traversal is unsupported")
+		}
+	}
+	// An explicit '.' declares the owning workflow directory, including when
+	// that directory is the selected source root. No dependency is inferred.
+	return c.resourcePath(path.Join(base, reference), true)
+}
+
+func (c *collector) resourcePath(name string, allowRoot bool) error {
+	var err error
+	if name != "." || !allowRoot {
+		name, err = localPath(name)
+	}
 	if err != nil {
 		return err
 	}
@@ -198,10 +219,7 @@ func (c *collector) agent(name string) error {
 func (c *collector) steps(base string, steps []workflows.Step) error {
 	for _, s := range steps {
 		for _, r := range s.Files {
-			if _, err := localPath(r); err != nil {
-				return err
-			}
-			if err := c.resource(path.Join(base, r)); err != nil {
+			if err := c.helper(base, r); err != nil {
 				return err
 			}
 		}
@@ -293,10 +311,7 @@ func (c *collector) visit(ref string, depth int) error {
 		}
 		if j.Container != nil {
 			for _, r := range j.Container.Files {
-				if _, err = localPath(r); err != nil {
-					return err
-				}
-				if err = c.resource(path.Join(path.Dir(ref), r)); err != nil {
+				if err = c.helper(path.Dir(ref), r); err != nil {
 					return err
 				}
 			}

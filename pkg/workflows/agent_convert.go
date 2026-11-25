@@ -3,6 +3,7 @@ package workflows
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"sort"
@@ -163,6 +164,13 @@ func readClaudeAgent(data []byte) (map[string]any, string, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data[len(lines[0]):end]))
 	if err := decoder.Decode(&node); err != nil {
 		return nil, "", err
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return nil, "", err
+		}
+		return nil, "", fmt.Errorf("Claude agent frontmatter must contain exactly one YAML document")
 	}
 	if len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode {
 		return nil, "", fmt.Errorf("Claude agent frontmatter must be a mapping")
