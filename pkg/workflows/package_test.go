@@ -246,3 +246,85 @@ func TestPackageAdmissionRejectsForgedDigestAndEscapingAgent(t *testing.T) {
 		t.Fatal("package identity contains installation/storage path")
 	}
 }
+
+func TestPackageImportedRootHelpersSurviveRetainedRecovery(t *testing.T) {
+	e, store, _ := containerExecutor(t)
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(filepath.Join(store.Dir, "assets"), func(name string, entry fs.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				return os.Chmod(name, 0700)
+			}
+			return err
+		})
+	})
+	const prefix = "imports/demo/workflows/"
+	const source = `jobs:
+  approval:
+    steps:
+      - {shell: sh, run: 'echo once >> effects'}
+      - {id: gate, uses: input/wait, with: {prompt: '${{ package.name }} approve', evidence-id: original}}
+  task:
+    needs: approval
+    container: {image: ubuntu:24.04, files: [.]}
+    steps:
+      - {id: read, argv: [/actions/run.sh]}
+`
+	value := []byte("admitted resource\n")
+	packageSource := packageSourceFixture([]AssetInput{
+		{Path: "plugin.yaml", Mode: 0644, Data: []byte("schema-version: 1\nname: fixture\nversion: 1.0.0\nengine-version: 0.2.2\nhosts: [codex]\nskills: [{name: task, path: skills/task/SKILL.md, workflow: imports/demo/workflows/main.yml}]\nresources: []\n")},
+		{Path: "skills/task/SKILL.md", Mode: 0644, Data: []byte("---\nname: task\ndescription: Retained root helpers\n---\nRun the workflow.\n")},
+		{Path: prefix[:len(prefix)-1], Mode: fs.ModeDir | 0750},
+		{Path: prefix + "main.yml", Mode: 0644, Data: []byte(source)},
+		{Path: prefix + "empty", Mode: fs.ModeDir | 0710},
+		{Path: prefix + "run.sh", Mode: 0750, Data: []byte("#!/bin/sh\ncat \"$(dirname \"$0\")/value\"\n")},
+		{Path: prefix + "value", Mode: 0640, Data: value},
+	})
+	packageSource.Binding.Workflow = prefix + "main.yml"
+	run, err := e.Run(t.Context(), RunRequest{Ref: packageSource.Binding.Workflow, Package: packageSource})
+	if err != nil || run.Status != RunStatusWaiting {
+		t.Fatal("imported root package did not suspend", run, err)
+	}
+	_, snap, err := store.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := snap.Definitions[run.WorkflowRef].Jobs["task"].Container.Implementation.Bundle
+	if bundle == nil || len(bundle.Files) != 3 || bundle.Files[0].Path != "main.yml" || bundle.Files[1].Path != "run.sh" || bundle.Files[1].Mode != 0555 || bundle.Files[2].Path != "value" || bundle.Files[2].Mode != 0444 {
+		t.Fatal("root helpers include synthetic metadata or lost permissions", bundle)
+	}
+	before, err := os.ReadDir(filepath.Join(store.Dir, "assets", run.ID))
+	if err != nil || len(before) != 2 {
+		t.Fatal("expected exactly package and helper assets", before, err)
+	}
+	// The installation is not consulted: caller-owned capture bytes and target
+	// workspace definitions can disappear/change while admitted assets remain.
+	value[0] = '!'
+	if err := os.RemoveAll(filepath.Join(e.WorkspaceDir, "workflows")); err != nil {
+		t.Fatal(err)
+	}
+	answerGate(t, store, inputGate(t, store, run.ID))
+	resumed, err := e.Resume(t.Context(), run.ID, nil, false)
+	if err != nil || resumed.Status != RunStatusSucceeded || resumed.Jobs["task"].Steps["read"].Outputs["stdout"] != "admitted resource\n" {
+		t.Fatal("retained root helpers did not execute", resumed, err)
+	}
+	data, err := os.ReadFile(filepath.Join(e.WorkspaceDir, "effects"))
+	if err != nil || string(data) != "once\n" {
+		t.Fatal("recovery replayed completed command", string(data), err)
+	}
+	_, retained, err := store.Load(t.Context(), run.ID)
+	if err != nil || retained.Package.Digest != packageSource.Binding.Digest || retained.Definitions[run.WorkflowRef].Jobs["task"].Container.Implementation.Bundle.ID != bundle.ID {
+		t.Fatal("recovery changed package/helper identity", err)
+	}
+	after, err := os.ReadDir(filepath.Join(store.Dir, "assets", run.ID))
+	if err != nil || len(after) != len(before) {
+		t.Fatal("recovery recaptured helper/staging metadata", after, err)
+	}
+	_, root, err := store.PackageAssets(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(root, prefix, "empty"))
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0555 {
+		t.Fatal("retained empty directory lost", info, err)
+	}
+}
