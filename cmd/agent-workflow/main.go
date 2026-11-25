@@ -53,12 +53,18 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
 		return json.NewEncoder(stdout).Encode(buildinfo.Metadata())
 	}
+	if len(args) > 0 && args[0] == "agent" {
+		return agentCommand(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "plugin" {
+		return pluginCommand(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "bridge" {
 		return bridgeSetup(ctx, args[1:], stdout, stderr)
 	}
 
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "Usage: agent-workflow <run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|task-state|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
+		fmt.Fprintln(stdout, "Usage: agent-workflow <agent|plugin|run|validate|status|list|logs|attempts|cancel|resume|inputs|answer|interrupt|task-state|controller|mcp|doctor|init|export|cleanup> [flags] [workflow|run-id]\n\nFlags precede positional arguments. Use <command> --help for details.")
 		return nil
 	}
 	verb := args[0]

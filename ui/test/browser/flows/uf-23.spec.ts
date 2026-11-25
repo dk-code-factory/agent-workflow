@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 test('expression insertion replaces selection and keeps typing at the insertion point', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: `on: { workflow_call: { inputs: { task: { type: string } } } }
-jobs: { build: { steps: [ { id: greet, uses: agent/run, with: { prompt: "Before replace after", agent: claude.toml } } ] } }
+jobs: { build: { steps: [ { id: greet, uses: agent/run, with: { prompt: "Before replace after", agent: claude.yaml } } ] } }
 ` }));
   await editor.getByRole('button', { name: 'greet', exact: false }).first().click();
   const prompt = editor.getByLabel('Prompt', { exact: true });
@@ -37,7 +37,7 @@ test('YAML expression completion follows the cursor and only offers preceding st
       - id: current
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: |
             \${{ steps.`);
   await yaml.press('Control+Space');
@@ -69,8 +69,8 @@ test('failure classifications do not offer a conflicting business-field alias', 
   await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: {
     Review: { type: 'object', properties: { approved: { type: 'boolean' }, failure_class: { type: 'string' }, unsafe_failure_class: { type: 'string' } } },
   }, jobs: { review: { steps: [
-    { id: 'analyze', uses: 'agent/run', with: { agent: 'claude.toml', prompt: 'Review', output: { format: 'json', schema: 'Review' } } },
-    { id: 'finish', uses: 'agent/run', with: { agent: 'claude.toml', prompt: 'Next' } },
+    { id: 'analyze', uses: 'agent/run', with: { agent: 'claude.yaml', prompt: 'Review', output: { format: 'json', schema: 'Review' } } },
+    { id: 'finish', uses: 'agent/run', with: { agent: 'claude.yaml', prompt: 'Next' } },
   ] } } }) }));
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await editor.getByRole('button', { name: '2. finish', exact: true }).click();
@@ -88,8 +88,8 @@ test('failure classifications do not offer a conflicting business-field alias', 
 test('concise result suggestions and operand diagnostics follow runner scopes', async ({ page }) => {
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   await page.evaluate(() => (window as any).first.update({ source: JSON.stringify({ schemas: { Review: { type: 'object', properties: { approved: { type: 'boolean' } } } }, jobs: {
-    review: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { format: 'json', schema: 'Review' }, prompt: 'Review'}}, {id: 'finish', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Next'}}] },
-    summarize: { needs: ['review'], steps: [{id: 'summary', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+    review: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.yaml", output: { format: 'json', schema: 'Review' }, prompt: 'Review'}}, {id: 'finish', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Next'}}] },
+    summarize: { needs: ['review'], steps: [{id: 'summary', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
   } }) }));
   await editor.getByRole('button', { name: 'Inspect job review', exact: true }).click();
   await editor.getByRole('button', { name: '2. finish', exact: true }).click();
@@ -123,9 +123,9 @@ test('shared-schema suggestions stay bounded and YAML prefixes reach later depen
   await page.goto('/test/browser.html'); const editor = page.locator('#a');
   const source = await page.evaluate(() => {
     const schemas = { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`field${index}`, { type: 'string' }])) } };
-    const jobs = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`producer${index}`, { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}}] }]));
+    const jobs = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`producer${index}`, { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Review'}}] }]));
     const needs = Object.keys(jobs);
-    (window as any).first.update({ source: JSON.stringify({ schemas, jobs: { ...jobs, consumer: { needs, steps: [{id: 'read', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] } } }) });
+    (window as any).first.update({ source: JSON.stringify({ schemas, jobs: { ...jobs, consumer: { needs, steps: [{id: 'read', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] } } }) });
     return `schemas: ${JSON.stringify(schemas)}\njobs:\n${Object.entries(jobs).map(([id, job]) => `  ${id}: ${JSON.stringify(job)}`).join('\n')}\n  consumer:\n    needs: ${JSON.stringify(needs)}\n    steps:\n      - id: read\n        agent: claude\n        prompt: |\n          ${'${{'} needs.producer24.steps.analyze.field49`;
   });
   await expect(editor.locator('.aw-inspector-content > datalist option')).toHaveCount(200);

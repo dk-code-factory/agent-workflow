@@ -81,7 +81,7 @@ bindings use YAML or **Advanced parameters**. Basic names and bindings are check
 in the browser; the host admits expansion, types, placement, assets and expanded
 result scopes. See [reusable step definitions](../docs/REUSABLE_STEPS.md).
 
-Agent tasks use `uses: agent/run` with `with.agent` naming a native Codex TOML definition or an expression returning an opaque agent reference. The inspector edits the definition reference, prompt, typed input, output contract, and all six ordered hook lists. Conversion review, Undo/Redo, and export preserve these declarations. Removed shorthand and role targets produce diagnostics. See [native agent tasks](../docs/AGENT_TASKS.md).
+Agent tasks use `uses: agent/run` with `with.agent` naming a canonical YAML agent definition or an expression returning an opaque agent reference. The inspector edits the definition reference, prompt, typed input, output contract, and all six ordered hook lists. Conversion review, Undo/Redo, and export preserve these declarations. Removed shorthand and role targets produce diagnostics. See [native agent tasks](../docs/AGENT_TASKS.md).
 
 Choose **Conversation** to author a bounded conversation among 2–16 declared
 roles. **Participants (YAML)** lists role IDs; **Starter** defaults to the first,

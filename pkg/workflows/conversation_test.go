@@ -617,7 +617,7 @@ func TestYAMLConversationOrderedItemRetryRetainsReceiptsAndBounds(t *testing.T) 
 			e, store := iterationExecutor(t, runner)
 			child := "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n      ordinal: {type: number}\n      identity: {type: string}\n" + conversationYAML
 			if mode == "completed" {
-				child += "      - id: after\n        uses: agent/run\n        with: {prompt: after, agent: reviewer.toml}\n"
+				child += "      - id: after\n        uses: agent/run\n        with: {prompt: after, agent: reviewer.yaml}\n"
 			}
 			if mode == "budget" {
 				child = strings.Replace(child, "finishBy: reviewer", "finishBy: reviewer\n        maxTurns: 1", 1)

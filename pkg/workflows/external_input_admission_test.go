@@ -25,7 +25,7 @@ func TestInputContinuationBlockedOldestMakesBoundedProgress(t *testing.T) {
     steps:
       - uses: agent/run
         continue-on-error: true
-        with: {prompt: preparation, agent: a.toml}
+        with: {prompt: preparation, agent: a.yaml}
       - uses: input/wait
         with: {prompt: q, evidence-id: e}
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {

@@ -75,13 +75,13 @@ for (const initialMessage of ['Keep', '']) {
 }
 
 test('concise agent conversions retain prompts until an incompatible conversion is confirmed', async ({ page }) => {
-  const source = `jobs: { build: { steps: [ { id: review, with: { model: sonnet, agent: claude.toml, prompt: Keep this prompt }, uses: agent/run } ] } }
+  const source = `jobs: { build: { steps: [ { id: review, with: { model: sonnet, agent: claude.yaml, prompt: Keep this prompt }, uses: agent/run } ] } }
 `;
   const ui = await open(page, source);
   await step(page, 'review agent/run');
   await ui.getByLabel('Step type', { exact: true }).selectOption('agent/run');
-  await field(page,'Agent definition or reference','codex.toml');
-  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({id: 'review', uses: 'agent/run', with: {agent: "codex.toml", model: 'sonnet', prompt: 'Keep this prompt'}});
+  await field(page,'Agent definition or reference','codex.yaml');
+  expect((await snapshot(page)).workflow.jobs.build.steps[0]).toEqual({id: 'review', uses: 'agent/run', with: {agent: "codex.yaml", model: 'sonnet', prompt: 'Keep this prompt'}});
   const before = (await snapshot(page)).source;
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('with'); await dialog.dismiss(); });
   await ui.getByLabel('Step type', { exact: true }).selectOption('argv');

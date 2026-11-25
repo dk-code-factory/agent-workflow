@@ -42,10 +42,10 @@ func (s *faultJournal) Save(ctx context.Context, r *Run) error {
 
 const dependentFaultWorkflow = `jobs:
   edit:
-    steps: [{id: edit, uses: agent/run, with: {prompt: edit, agent: a.toml}}]
+    steps: [{id: edit, uses: agent/run, with: {prompt: edit, agent: a.yaml}}]
   dependent:
     needs: edit
-    steps: [{id: dependent, uses: agent/run, with: {prompt: dependent, agent: a.toml}}]
+    steps: [{id: dependent, uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]
 `
 
 func TestStorageFailureBeforeAdmissionOrAttemptLaunchesNoEffect(t *testing.T) {
@@ -145,7 +145,7 @@ const repairFaultWorkflow = `jobs:
               type: object
               required: [ok]
               properties: {ok: {type: boolean}}
-          agent: a.toml
+          agent: a.yaml
 `
 
 func TestResumeAfterSchemaRepairFailureNeverRepeatsImplementation(t *testing.T) {

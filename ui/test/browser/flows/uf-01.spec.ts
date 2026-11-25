@@ -7,7 +7,7 @@ for (const viewer of [false, true]) test(`${viewer ? 'viewer' : 'editor'} select
   const initial = await page.evaluate(() => (window as any).first.getSnapshot());
   const native = editor.getByRole('button', { name: 'greet', exact: false }).first();
   await native.click();
-  await expect(editor.getByLabel('Agent definition or reference', { exact: true })).toHaveValue('claude.toml');
+  await expect(editor.getByLabel('Agent definition or reference', { exact: true })).toHaveValue('claude.yaml');
   await expect(editor.locator('.cm-line').filter({ hasText: /uses: agent\/run/ })).toBeInViewport();
   await expect(native).toBeFocused();
   const inspected = await page.evaluate(() => (window as any).first.getSnapshot());

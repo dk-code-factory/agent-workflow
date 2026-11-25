@@ -45,7 +45,7 @@ jobs:
     steps:
       - id: run
         uses: agent/run
-        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}
+        with: {prompt: '${{ inputs.task }}', agent: reviewer.yaml}
 `
 
 func iterationExecutor(t *testing.T, runner AgentRunner) (*Executor, *SQLiteStore) {
@@ -503,7 +503,7 @@ func TestOrderedIterationDownstreamInputInvalidation(t *testing.T) {
     steps:
       - id: aggregate
         uses: agent/run
-        with: {prompt: 'aggregate ${{ needs.review.outputs.complete }}', agent: reviewer.toml}
+        with: {prompt: 'aggregate ${{ needs.review.outputs.complete }}', agent: reviewer.yaml}
 `
 			if mutation {
 				source = iterationSource + `  aggregate:
@@ -543,7 +543,7 @@ func TestOrderedIterationMutationRetryReconciliation(t *testing.T) {
 			var mutations atomic.Int32
 			var reconciles atomic.Int32
 			e, _ := iterationExecutor(t, nil)
-			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.toml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1))
+			writeWorkflow(t, e.WorkspaceDir, "child.yml", strings.Replace(iterationChild, "uses: agent/run\n        with: {prompt: '${{ inputs.task }}', agent: reviewer.yaml}", "uses: action/capture\n        with: {value: '${{ inputs.task }}'}", 1))
 			spec := readSpec(&mutations)
 			spec.Effect = ActionExternalMutation
 			spec.Handler = func(_ context.Context, _ ActionContext, i actionInput) (ActionResult[actionOutput], error) {
@@ -913,9 +913,9 @@ func TestOrderedIterationMixedChildFailuresKeepProviderBlocker(t *testing.T) {
     inputs: {task: {type: string}, ordinal: {type: number}, identity: {type: string}}
 jobs:
   exhausted:
-    steps: [{uses: agent/run, with: {prompt: exhaust, agent: reviewer.toml}}]
+    steps: [{uses: agent/run, with: {prompt: exhaust, agent: reviewer.yaml}}]
   failed:
-    steps: [{uses: agent/run, with: {prompt: fail, agent: reviewer.toml}}]
+    steps: [{uses: agent/run, with: {prompt: fail, agent: reviewer.yaml}}]
 `)
 	run, err := nativeTestExecutor(t, e).Run(context.Background(), iterationRequest("a"))
 	if !errors.Is(err, ErrProviderFailure) || run.Jobs["review"].Items[0].Status != "provider_failure" || run.Jobs["review"].Complete {

@@ -21,7 +21,7 @@ head with the target commit available locally. Container workspace mounts reject
 linked worktrees whose `.git` is a file. Commit the copied example definitions
 before preparation, and start with a clean worktree. Preserve the exact original
 request in private JSON. Put orchestration settings in YAML inputs, deployment
-settings in `agents.yml`, and native agent definitions in TOML.
+settings in `agents.yml`, and agent definitions in canonical YAML.
 
 Use a self-contained clone: Git object alternates outside the workspace are not
 mounted into helper containers. If cloning with `--reference`, add `--dissociate`.
@@ -130,11 +130,11 @@ GitHub and retains its plan and result through interruption or response loss.
 Preparation cannot dispatch agents or publish. Bindings, checkpoint validation
 and reconciliation phases are read-only.
 
-Evidence binds the authored workflow closure, retained helpers, five TOML
-roles and the opaque admitted execution/configuration fingerprint exposed by the
-engine. Subsequent helpers reject plans from another admitted configuration.
-Recovery uses engine snapshots and retained bundles without reloading changed
-workspace copies.
+Evidence binds the authored workflow closure, retained helpers, five YAML
+agent definitions and the opaque admitted execution/configuration fingerprint
+exposed by the engine. Subsequent helpers reject plans from another admitted
+configuration. Recovery uses engine snapshots and retained bundles without
+reloading changed workspace copies.
 
 `main.yml` declares defaults for `tasks`, `finalizers`, `reviewers`, `adapters`,
 `limits`, `permissions`, `ci`, `merge_method`, `accounts`, `settings`, `resources`
@@ -156,10 +156,11 @@ groups through `group.yml`, then optionally performs independent verification
 and fixes. Ordinary task groups and explicit review stages share this sequence
 while retaining their original order, parallel read barriers and occurrences.
 `native.yml` owns one report schema and report-acceptance boundary for initial,
-retry and checklist turns. Initial turns select from five literal TOML roles
-admitted together in a fixed catalog; retry/checklist expressions
-carry original session references. Eligible retries retain their original failure
-classification, while failed checklist turns stop without entering another retry.
+retry and checklist turns. Initial turns select from five literal YAML
+agent definitions admitted together in a fixed catalog; retry/checklist
+expressions carry original session references. Eligible retries retain their
+original failure classification, while failed checklist turns stop without
+entering another retry.
 
 Task names select assignments from `adapters`; they do not load installed skills.
 The defaults use `read-feedback`, `reconcile-decisions`, `address-feedback`,
@@ -387,9 +388,9 @@ Migration from generated workflows:
 - Move JSON `options` fields to the corresponding declared `main.yml` inputs.
   Move `settings`, `resources` and `adapters` there too. Use `--input NAME=JSON`
   or a checked-in reusable wrapper to retain custom policy.
-- Move `image` and `runtime` settings to `agents.yml`; edit the five TOML files
-  instead of selecting role paths in the request. `turns` is a workflow input;
-  the admitted runtime's worker/turn ceilings still apply.
+- Move `image` and `runtime` settings to `agents.yml`; edit the five YAML
+  agent definitions instead of selecting role paths in the request. `turns` is
+  a workflow input; the admitted runtime's worker/turn ceilings still apply.
 - Keep only PR identity, exact instructions, logical-run identity and explicit
   authorizations in the request JSON. Remove the separate `action.py prepare`
   command and generated `--input plan=...` execution path.

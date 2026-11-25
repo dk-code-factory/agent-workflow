@@ -45,17 +45,17 @@ func TestNativeOrderedVerificationReplayPreservesCandidateEvent(t *testing.T) {
         uses: agent/run
         handlerTimeout: 1m
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: work
           output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}
         onResult:
           - id: verify
             uses: agent/run
-            with: {agent: reviewer.toml, prompt: verify}
+            with: {agent: reviewer.yaml, prompt: verify}
         onIncomplete:
           - id: followup
             uses: agent/run
-            with: {agent: reviewer.toml, prompt: followup}
+            with: {agent: reviewer.yaml, prompt: followup}
   iteration:
     needs: task
     uses: workflows/child.yml
@@ -167,18 +167,18 @@ func TestNativeOrderedRecoveryReplayPreservesOriginalErrorContext(t *testing.T) 
         uses: agent/run
         handlerTimeout: 1m
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: work
           output: {format: json, repair-attempts: 0, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}
         onResult:
           - id: verify
             uses: agent/run
-            with: {agent: reviewer.toml, prompt: verify}
+            with: {agent: reviewer.yaml, prompt: verify}
         onError:
           - id: recover
             uses: agent/run
             with:
-              agent: reviewer.toml
+              agent: reviewer.yaml
               prompt: 'recover|${{ error.class }}|${{ error.message }}'
   iteration:
     needs: task

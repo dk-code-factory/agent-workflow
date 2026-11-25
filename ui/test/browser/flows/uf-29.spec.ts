@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { open, snapshot } from './harness';
+import { downloadText, open, snapshot } from './harness';
 
 test('paste source and retain unfamiliar fields while updating the graph', async ({ page }) => {
   const ui = await open(page);
@@ -50,7 +50,7 @@ test('author a durable input request, correct validation errors and edit advance
         with: { prompt: Choose a policy, evidence-id: pinned-v1, payload: { choices: [ a, b ] } }
       - id: apply
         uses: agent/run
-        with: { prompt: '\${{ steps.question.outputs.answer }}', agent: claude.toml }
+        with: { prompt: '\${{ steps.question.outputs.answer }}', agent: claude.yaml }
 `;
   await yaml.fill(source);
   await expect(ui.getByRole('button', { name: 'Inspect job decide', exact: true })).toBeVisible();
@@ -73,11 +73,11 @@ test('author a durable input request, correct validation errors and edit advance
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
 
-test('paste native task YAML, reject removed shorthand and recover canonical form', async ({ page }) => {
+test('paste YAML agent tasks and preserve definition paths through recovery and history', async ({ page }) => {
   const ui = await open(page);
   await ui.getByRole('button', { name: 'Split', exact: true }).click();
   const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
-  const source = `jobs: { review: { steps: [ { id: ask, with: { model: sonnet, agent: claude.toml, prompt: Review }, uses: agent/run } ] } }
+  const source = `jobs: { review: { steps: [ { id: ask, with: { model: sonnet, agent: agents/review.yaml, prompt: Review }, uses: agent/run } ] } }
 `;
   await yaml.fill(source);
   await expect(ui.getByRole('button', { name: 'ask agent/run', exact: true })).toBeVisible();
@@ -96,6 +96,17 @@ test('paste native task YAML, reject removed shorthand and recover canonical for
   await yaml.fill(source);
   await ui.getByRole('button', { name: 'ask agent/run', exact: true }).click();
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review');
-  expect((await snapshot(page)).workflow.jobs.review.steps[0]).toEqual({id: 'ask', uses: 'agent/run', with: {agent: "claude.toml", model: 'sonnet', prompt: 'Review'}});
+  expect((await snapshot(page)).workflow.jobs.review.steps[0]).toEqual({id: 'ask', uses: 'agent/run', with: {agent: 'agents/review.yaml', model: 'sonnet', prompt: 'Review'}});
+  const prompt = ui.getByLabel('Prompt', { exact: true });
+  await prompt.fill('Review the patch');
+  await prompt.blur();
+  await expect.poll(async () => (await snapshot(page)).workflow.jobs.review.steps[0].with.prompt).toBe('Review the patch');
+  expect(await downloadText(page)).toContain('agent: agents/review.yaml');
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(prompt).toHaveValue('Review');
+  expect(await downloadText(page)).toContain('agent: agents/review.yaml');
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(prompt).toHaveValue('Review the patch');
+  expect((await snapshot(page)).workflow.jobs.review.steps[0].with.agent).toBe('agents/review.yaml');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });

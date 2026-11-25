@@ -27,7 +27,7 @@ jobs:
         # Durable lifecycle checkpoints need a bounded budget on slow race hosts.
         handlerTimeout: 5m
         with:
-          agent: prfix.toml
+          agent: prfix.yaml
           turns: 5
           prompt: ${{ steps.prepare.outputs.prompt }}
           input: ${{ steps.prepare.outputs.task_input }}

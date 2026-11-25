@@ -31,9 +31,9 @@ func TestRunAndStatusWithNativeCodexTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"review_correctness", "review_security", "task"} {
-		path := filepath.Join(root, "workflows", "agents", name+".toml")
+		path := filepath.Join(root, "workflows", "agents", name+".yaml")
 		os.MkdirAll(filepath.Dir(path), 0700)
-		if err := os.WriteFile(path, []byte("name='"+name+"'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+		if err := os.WriteFile(path, []byte("name: '"+name+"'\ndescription: 'Fixture'\ninstructions: 'Execute fixture.'\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

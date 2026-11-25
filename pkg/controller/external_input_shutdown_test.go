@@ -20,9 +20,9 @@ import (
 const shutdownInputSource = `jobs:
   ask:
     steps:
-      - {id: before, uses: agent/run, with: {prompt: preparation, agent: a.toml}}
+      - {id: before, uses: agent/run, with: {prompt: preparation, agent: a.yaml}}
       - {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}
-  after: {needs: ask, steps: [{id: effect, uses: agent/run, with: {prompt: dependent, agent: a.toml}}]}
+  after: {needs: ask, steps: [{id: effect, uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]}
 `
 
 type shutdownInputAgent struct {
@@ -225,7 +225,7 @@ func TestInputControllerGracefulShutdownRestartsDurableWait(t *testing.T) {
 			} else {
 				// Occupy the one controller owner with an actual cancelable execution so
 				// the public target admission stays durably queued, never claimed.
-				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "block.yml"), []byte(`jobs: {hold: {steps: [{uses: agent/run, with: {prompt: hold, agent: a.toml}}]}}
+				if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "block.yml"), []byte(`jobs: {hold: {steps: [{uses: agent/run, with: {prompt: hold, agent: a.yaml}}]}}
 `), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -412,7 +412,7 @@ func TestInputControllerShutdownCannotBypassUncertaintyOrCleanup(t *testing.T) {
 			ctx := context.Background()
 			source := shutdownInputSource
 			if hazard == "uncertain" {
-				source += "  failure: {continue-on-error: true, steps: [{id: lost, uses: agent/run, with: {prompt: failure, agent: a.toml}}]}\n"
+				source += "  failure: {continue-on-error: true, steps: [{id: lost, uses: agent/run, with: {prompt: failure, agent: a.yaml}}]}\n"
 			}
 			s, c, stop := inputLifecycleFixture(t, source, hazard == "cleanup")
 			agent := &shutdownInputAgent{}
@@ -544,7 +544,7 @@ func TestInputControllerNestedCancelBeforeOwnerContextCancellation(t *testing.T)
 	ctx := context.Background()
 	source := `jobs:
   review: {uses: workflows/child.yml, for-each: {items: [{id: a}, {id: b}], key: item.id}}
-  dependent: {needs: review, steps: [{uses: agent/run, with: {prompt: dependent, agent: a.toml}}]}
+  dependent: {needs: review, steps: [{uses: agent/run, with: {prompt: dependent, agent: a.yaml}}]}
 `
 	s, c, stop := inputLifecycleFixture(t, source, false)
 	if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", "child.yml"), []byte("on: {workflow_call: {}}\n"+shutdownInputSource), 0600); err != nil {

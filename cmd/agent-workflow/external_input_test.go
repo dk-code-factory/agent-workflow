@@ -50,7 +50,7 @@ func TestForegroundInputWaitReturnsHandleAndDistinctStatus(t *testing.T) {
 	if !errors.Is(err, errInputWaiting) || !strings.Contains(out.String(), `"status": "waiting"`) || !strings.Contains(out.String(), `"gate_id"`) {
 		t.Fatal(out.String(), stderr.String(), err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.toml"), []byte("name='fixture'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.yaml"), []byte("name: 'fixture'\ndescription: 'Fixture'\ninstructions: 'Execute fixture.'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))
@@ -107,12 +107,12 @@ func TestInputCLICompletionPreservesLargeNumbers(t *testing.T) {
 	}
 	source := `jobs:
   ask: {steps: [{id: q, uses: input/wait, with: {prompt: q, evidence-id: evidence}}]}
-  after: {needs: ask, steps: [{uses: agent/run, with: {prompt: after, agent: fixture.toml}}]}
+  after: {needs: ask, steps: [{uses: agent/run, with: {prompt: after, agent: fixture.yaml}}]}
 `
 	if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.toml"), []byte("name='fixture'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "workflows", "fixture.yaml"), []byte("name: 'fixture'\ndescription: 'Fixture'\ninstructions: 'Execute fixture.'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := workflows.OpenSQLite(filepath.Join(root, ".agent-workflow"))

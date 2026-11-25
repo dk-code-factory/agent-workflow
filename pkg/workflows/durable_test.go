@@ -30,10 +30,10 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
     steps:
       - id: edit
         uses: agent/run
-        with: {prompt: edit, agent: builder.toml}
+        with: {prompt: edit, agent: builder.yaml}
       - id: check
         uses: agent/run
-        with: {prompt: check, agent: builder.toml}
+        with: {prompt: check, agent: builder.yaml}
 `, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		if req.Prompt == "check" && calls.Load() == 2 {
@@ -85,7 +85,7 @@ func TestJournalAdmissionCompletionAndGuardedResume(t *testing.T) {
 
 func TestRecoveryDoesNotReplayRunningAttempt(t *testing.T) {
 	ctx := context.Background()
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{id: edit, uses: agent/run, with: {prompt: hi, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{id: edit, uses: agent/run, with: {prompt: hi, agent: a.yaml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		t.Fatal("uncertain effect repeated")
 		return nil, nil
 	}))
@@ -142,7 +142,7 @@ func TestSQLiteDuplicateAdmissionAndTransition(t *testing.T) {
 func TestSecretRedactionAndResumeReferences(t *testing.T) {
 	ctx := context.Background()
 	secret := "private\"token\n"
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: a.yaml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": secret, "response": secret}, nil
 	}))
 	run, err := nativeTestExecutor(t, e).Run(ctx, RunRequest{Ref: "workflows/main.yml", Secrets: map[string]string{"token": secret}, SecretRefs: map[string]string{"token": "TEST_TOKEN"}})
@@ -231,7 +231,7 @@ func TestStructuredRepairDoesNotRepeatTaskPrompt(t *testing.T) {
         with:
           prompt: 'IMPLEMENT A SECRET FEATURE'
           output: {format: json, schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}
-          agent: a.toml
+          agent: a.yaml
 `, agentFunc(func(_ context.Context, r AgentRequest) (map[string]any, error) {
 		calls++
 		if calls == 1 {
@@ -284,7 +284,7 @@ func TestRedactionPreservesControlFields(t *testing.T) {
 }
 
 func TestCredentialLiteralsRejectAdmissionWithoutChangingMeaning(t *testing.T) {
-	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: super-secret-value, agent: a.toml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
+	e, s := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: super-secret-value, agent: a.yaml}}]}}\n", agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		t.Fatal("secret literal admitted")
 		return nil, nil
 	}))
@@ -307,7 +307,7 @@ func TestNativeStructuredOutputRetainsTextMeaning(t *testing.T) {
         with:
           prompt: reply
           output: {format: json, repair-attempts: 0, schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}
-          agent: a.toml
+          agent: a.yaml
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		return map[string]any{"text": "Native structured output is attached", "response": "Native structured output is attached", "structured": map[string]any{"ok": true}}, nil
 	}))

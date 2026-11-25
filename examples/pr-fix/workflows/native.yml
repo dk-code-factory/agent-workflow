@@ -284,11 +284,11 @@ jobs:
         agent:
           select: ${{ inputs.definition }}
           definitions:
-            leaf: agents/leaf.toml
-            reviewer: agents/reviewer.toml
-            verifier: agents/verifier.toml
-            fixer: agents/fixer.toml
-            audience: agents/audience.toml
+            leaf: agents/leaf.yaml
+            reviewer: agents/reviewer.yaml
+            verifier: agents/verifier.yaml
+            fixer: agents/fixer.yaml
+            audience: agents/audience.yaml
         turns: ${{ inputs.turns }}
         prompt: ${{ inputs.prompt }}
         input: ${{ inputs.task_input }}

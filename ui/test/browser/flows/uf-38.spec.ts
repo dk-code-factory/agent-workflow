@@ -27,7 +27,7 @@ test('edit a local parallel block and consume joined nested results', async ({ p
           - id: first
             uses: agent/run
             with:
-              agent: claude.toml
+              agent: claude.yaml
               prompt: First review
           - sequence:
               - id: collect
@@ -35,12 +35,12 @@ test('edit a local parallel block and consume joined nested results', async ({ p
               - id: second
                 uses: agent/run
                 with:
-                  agent: claude.toml
+                  agent: claude.yaml
                   prompt: \${{ steps.collect.outputs.stdout }}
       - id: combine
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Combine reviews
 `);
   const before = (await snapshot(page)).source;
@@ -53,7 +53,7 @@ test('edit a local parallel block and consume joined nested results', async ({ p
   await field(page, 'Parallel branches (YAML)', `- id: first
   uses: agent/run
   with:
-    agent: claude.toml
+    agent: claude.yaml
     prompt: Revised first review
 - sequence:
     - id: collect
@@ -61,7 +61,7 @@ test('edit a local parallel block and consume joined nested results', async ({ p
     - id: second
       uses: agent/run
       with:
-        agent: claude.toml
+        agent: claude.yaml
         prompt: \${{ steps.collect.outputs.stdout }}
 `);
   expect((await snapshot(page)).workflow.jobs.review.steps[0].parallel[0].with.prompt).toBe('Revised first review');
@@ -109,9 +109,9 @@ jobs:
         parallel:
           - sequence:
               - { id: collect, argv: [ echo, collect ] }
-              - { id: consume, with: { output: { schema: Shared }, agent: claude.toml, prompt: Review }, uses: agent/run }
+              - { id: consume, with: { output: { schema: Shared }, agent: claude.yaml, prompt: Review }, uses: agent/run }
           - { id: other, argv: [ echo, other ] }
-      - { id: after, with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
+      - { id: after, with: { output: { schema: Shared }, agent: claude.yaml, prompt: Original }, uses: agent/run }
 `);
   const before = (await snapshot(page)).source;
   await step(page, 'reviews parallel block');

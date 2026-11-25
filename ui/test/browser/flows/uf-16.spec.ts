@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { downloadText, field, open, snapshot } from './harness';
 
 test('edit checklist budgets and script stages, repair errors and preserve history', async ({ page }) => {
-  const ui = await open(page, 'jobs: {build: {steps: [{id: implement, uses: agent/run, with: {agent: developer.toml, prompt: Implement}}]}}');
+  const ui = await open(page, 'jobs: {build: {steps: [{id: implement, uses: agent/run, with: {agent: developer.yaml, prompt: Implement}}]}}');
   await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
   await ui.getByRole('button', { name: '1. implement', exact: true }).click();
   const checklist = '{max-retries: 4, stages: [{prompt: Verify requirements, max-retries: 1}, {argv: [go, test, ./...], timeout: 5m}, {shell: sh, run: git diff --check, max-retries: 2}]}';
@@ -23,7 +23,7 @@ test('edit checklist budgets and script stages, repair errors and preserve histo
 });
 
 test('repair imported unquoted checklist date arguments in YAML', async ({ page }) => {
-  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 0, stages: [{argv: [echo, 2026-01-01]}]}}}]}}';
+  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.yaml, prompt: Work, checklist: {max-retries: 0, stages: [{argv: [echo, 2026-01-01]}]}}}]}}';
   const ui = await open(page, source);
   await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'checklist')).toBe(true);
   await ui.getByRole('button', { name: 'YAML', exact: true }).click();
@@ -34,7 +34,7 @@ test('repair imported unquoted checklist date arguments in YAML', async ({ page 
 });
 
 test('import and export decoded checklist binary strings', async ({ page }) => {
-  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.toml, prompt: Work, checklist: {max-retries: 0, stages: [!!binary VmVyaWZ5, !!binary 77u/, {argv: [echo, !!binary b2s=]}]}}}]}}';
+  const source = 'jobs: {build: {steps: [{uses: agent/run, with: {agent: developer.yaml, prompt: Work, checklist: {max-retries: 0, stages: [!!binary VmVyaWZ5, !!binary 77u/, {argv: [echo, !!binary b2s=]}]}}}]}}';
   const ui = await open(page, source);
   await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
@@ -51,20 +51,20 @@ test('import and export decoded checklist binary strings', async ({ page }) => {
 });
 
 test('edit pinned agent definition selections and repair invalid catalogs', async ({ page }) => {
-  const source = "on: {workflow_call: {inputs: {role: {type: string}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.toml, fix: fixer.toml}}, prompt: Review}}]}}";
+  const source = "on: {workflow_call: {inputs: {role: {type: string}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.yaml, fix: fixer.yaml}}, prompt: Review}}]}}";
   const ui = await open(page, source);
   await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
   await ui.getByRole('button', { name: '1. review', exact: true }).click();
   await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
-  const catalog = '{select: fix, definitions: {review: reviewer.toml, fix: fixer.toml}}';
+  const catalog = '{select: fix, definitions: {review: reviewer.yaml, fix: fixer.yaml}}';
   await field(page, 'Agent definition selection (YAML)', catalog);
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.select).toBe('fix');
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.select).toBe('${{ inputs.role }}');
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
-  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.definitions).toEqual({ review: 'reviewer.toml', fix: 'fixer.toml' });
-  expect(await downloadText(page)).toContain('fixer.toml');
-  for (const invalid of [catalog.replace('select: fix', 'select: unknown'), catalog.replace('fixer.toml', "'${{ inputs.role }}'")]) {
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.agent.definitions).toEqual({ review: 'reviewer.yaml', fix: 'fixer.yaml' });
+  expect(await downloadText(page)).toContain('fixer.yaml');
+  for (const invalid of [catalog.replace('select: fix', 'select: unknown'), catalog.replace('fixer.yaml', "'${{ inputs.role }}'")]) {
     await field(page, 'Agent definition selection (YAML)', invalid);
     await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.code === 'agent-definition').length).toBe(1);
     await field(page, 'Agent definition selection (YAML)', catalog);
@@ -142,7 +142,7 @@ jobs:
         with:
           prompt: Review
           output: { format: json, schema: Review, repair-attempts: 0 }
-          agent: claude.toml
+          agent: claude.yaml
 `;
   const ui = await open(page, source);
   await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
@@ -169,7 +169,7 @@ jobs:
   expect(exported).toContain('prompt: Review carefully');
 });
 
-for (const declaration of ['uses: agent/run, with: {agent: claude.toml, prompt: Review}', 'uses: agent/run, with: {agent: codex.toml, prompt: Review}']) {
+for (const declaration of ['uses: agent/run, with: {agent: claude.yaml, prompt: Review}', 'uses: agent/run, with: {agent: codex.yaml, prompt: Review}']) {
 test(`empty command fields do not disguise an imported agent step: ${declaration}`, async ({ page }) => {
   await page.goto('/test/browser.html'); const first = page.locator('#a');
   await page.evaluate(declaration => (window as any).first.update({ source: `jobs: {build: {steps: [{id: review, argv: [], run: null, shell: null, timeout: null, working-directory: '', ${declaration}}]}}` }), declaration);
@@ -193,9 +193,9 @@ test('configure agent prompt optional settings and output contract', async ({ pa
   await ui.getByText('Structured output', { exact: true }).click();
   await ui.getByLabel('Structured output contract (YAML)', { exact: true }).fill('type: object');
   await ui.getByLabel('Structured output contract (YAML)', { exact: true }).press('Tab');
-  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context', output: { type: 'object' } });
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.yaml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context', output: { type: 'object' } });
   await ui.getByRole('button', { name: 'Undo', exact: true }).click();
-  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.toml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context' });
+  expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with)).toEqual({ agent:'claude.yaml', prompt: 'Review changes', model: 'review-model', workspace: '/work', message: 'Context' });
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
   expect(await page.evaluate(() => (window as any).first.getSnapshot().workflow.jobs.build.steps[0].with.output)).toEqual({ type: 'object' });
 });
@@ -209,7 +209,7 @@ jobs:
         with:
           model: sonnet # retain option
           workspace: /work
-          agent: claude.toml
+          agent: claude.yaml
           prompt: |
             Review the change.
             Keep both lines.
@@ -222,7 +222,7 @@ jobs:
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('Review the change.\nKeep both lines.\n');
   await ui.getByLabel('Prompt', { exact: true }).fill('Revised review.\nKeep multiline text.');
   await ui.getByLabel('Prompt', { exact: true }).press('Tab');
-  await ui.getByLabel('Agent definition or reference', { exact: true }).fill('codex.toml');
+  await ui.getByLabel('Agent definition or reference', { exact: true }).fill('codex.yaml');
   await ui.getByLabel('Agent definition or reference', { exact: true }).press('Tab');
   await ui.getByLabel('Action target', { exact: true }).fill('agent/run');
   await ui.getByLabel('Action target', { exact: true }).press('Tab');
@@ -230,14 +230,14 @@ jobs:
   await ui.getByLabel('Model', { exact: true }).fill('review-model');
   await ui.getByLabel('Model', { exact: true }).press('Tab');
   const state = await page.evaluate(() => (window as any).first.getSnapshot());
-  expect(state.workflow.jobs.build.steps[0]).toEqual({id: 'review', uses: 'agent/run', with: {agent: "codex.toml", model: 'review-model', workspace: '/work', prompt: 'Revised review.\nKeep multiline text.'}});
+  expect(state.workflow.jobs.build.steps[0]).toEqual({id: 'review', uses: 'agent/run', with: {agent: "codex.yaml", model: 'review-model', workspace: '/work', prompt: 'Revised review.\nKeep multiline text.'}});
   expect(state.source).toContain('# concise task'); expect(state.source).toContain('# retain option');
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
 });
 
 test('quote a date entered in a concise prompt for runner admission', async ({ page }) => {
   await page.goto('/test/browser.html'); const ui = page.locator('#a');
-  await page.evaluate(() => (window as any).first.update({ source: `jobs: { build: { steps: [ { id: review, uses: agent/run, with: { agent: claude.toml, prompt: Review } } ] } }
+  await page.evaluate(() => (window as any).first.update({ source: `jobs: { build: { steps: [ { id: review, uses: agent/run, with: { agent: claude.yaml, prompt: Review } } ] } }
 ` }));
   await ui.getByRole('button', { name: 'review agent/run', exact: true }).click();
   await ui.getByLabel('Prompt', { exact: true }).fill('2026-11-06');

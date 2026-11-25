@@ -211,8 +211,8 @@ with concurrent.futures.ThreadPoolExecutor() as pool:list(pool.map(check,[0o077,
   const shellFixture = "'" + fixture.replaceAll("'", "'\\''") + "'";
   writeFileSync(codexWrapper, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.167.1'; exit 0; fi\nexec ${shellFixture} app-server\n`, { mode: 0o700 });
   appendFileSync(join(dir, 'agents.yml'), `  codex:\n    provider: codex-app-server\n    command: ${codexWrapper}\n    authentication: {mode: api-key, credential-env: AW21_FIXTURE_KEY}\n`);
-  writeFileSync(join(dir, 'workflows/fixture.toml'), "name='fixture'\ndescription='Disposable network fixture'\ndeveloper_instructions='Execute the disposable fixture.'\n");
-  writeFileSync(join(dir, 'workflows/local.yml'), `on: {workflow_call: {}}\njobs:\n  test:\n    steps:\n      - id: command\n        argv: [${JSON.stringify(fixture)}, network, ${name}-command]\n      - id: agent\n        uses: agent/run\n        with:\n          agent: fixture.toml\n          prompt: ${name}-agent\n`);
+  writeFileSync(join(dir, 'workflows/fixture.yaml'), "name: 'fixture'\ndescription: 'Disposable network fixture'\ninstructions: 'Execute the disposable fixture.'\n");
+  writeFileSync(join(dir, 'workflows/local.yml'), `on: {workflow_call: {}}\njobs:\n  test:\n    steps:\n      - id: command\n        argv: [${JSON.stringify(fixture)}, network, ${name}-command]\n      - id: agent\n        uses: agent/run\n        with:\n          agent: fixture.yaml\n          prompt: ${name}-agent\n`);
   run(workflow, ['run', '--foreground', '--workspace', dir, 'workflows/local.yml'], { env: { ...process.env, AW21_FIXTURE_KEY: 'model-free-fixture' } });
   // Doctor's configured executable probes must cross the actual root member path.
   run('git', ['-C', dir, 'rev-parse', '--verify', 'HEAD']);

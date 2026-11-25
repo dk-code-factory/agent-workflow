@@ -97,7 +97,7 @@ func testExternalInputPublicDenialContract(t *testing.T, canceled bool) {
 			if err := os.Mkdir(filepath.Join(root, "workflows"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			source := `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}, {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}]}}
+			source := `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.yaml}}, {id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.yaml}}]}}
 `
 			if err := os.WriteFile(filepath.Join(root, "workflows", "main.yml"), []byte(source), 0600); err != nil {
 				t.Fatal(err)
@@ -133,7 +133,7 @@ func testExternalInputPublicDenialContract(t *testing.T, canceled bool) {
 			if !errors.Is(marker, workflows.ErrExternalInput) {
 				t.Fatal("public control marker lost conflict compatibility")
 			}
-			if err := os.WriteFile(filepath.Join(root, "workflows", "a.toml"), []byte("name='a'\ndescription='Fixture'\ndeveloper_instructions='Execute fixture.'\n"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "workflows", "a.yaml"), []byte("name: 'a'\ndescription: 'Fixture'\ninstructions: 'Execute fixture.'\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			journal := &publicPauseJournal{ExternalInputJournal: sqlite, sqlite: sqlite, denial: denial, canceled: canceled}

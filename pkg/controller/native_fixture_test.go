@@ -39,7 +39,7 @@ func (r nativeAgentFixture) Preflight(ctx context.Context, roles []string) error
 func nativeControllerFixture(t *testing.T, s *Server) {
 	t.Helper()
 	for _, name := range []string{"a", "fixture"} {
-		if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", name+".toml"), []byte("name = '"+name+"'\ndescription = 'Fixture'\ndeveloper_instructions = 'Execute the deterministic fixture.'\n"), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(s.Executor.WorkspaceDir, "workflows", name+".yaml"), []byte("name: '"+name+"'\ndescription: 'Fixture'\ninstructions: 'Execute the deterministic fixture.'\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

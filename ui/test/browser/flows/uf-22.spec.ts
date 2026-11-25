@@ -19,11 +19,11 @@ test('YAML completion offers redacted context inside a nested handler', async ({
   build:
     steps:
       - uses: agent/run
-        with: {agent: claude.toml, prompt: Work}
+        with: {agent: claude.yaml, prompt: Work}
         onError:
           - uses: agent/run
             with:
-              agent: codex.toml
+              agent: codex.yaml
               prompt: |
                 \${{ failed.`);
   await yaml.press('Control+Space');
@@ -38,7 +38,7 @@ test('handler context diagnoses scalar output traversal and clears after correct
   await ui.getByText('Failure handlers and finalization', { exact: true }).click();
   await field(page, 'Fallback steps (YAML)', `- uses: agent/run
   with:
-    agent: codex.toml
+    agent: codex.yaml
     prompt: "\${{ error.message.outputs.foo }}"
 `);
   await expect(ui.locator('.aw-diagnostics')).toContainText('Unknown error context field "message.outputs.foo"');
@@ -47,7 +47,7 @@ test('handler context diagnoses scalar output traversal and clears after correct
   }));
   await field(page, 'Fallback steps (YAML)', `- uses: agent/run
   with:
-    agent: codex.toml
+    agent: codex.yaml
     prompt: "\${{ error.message }}"
 `);
   await expect(ui.locator('.aw-diagnostics')).not.toContainText('Unknown error context field');
@@ -63,13 +63,13 @@ test('author bounded fallback, reporting and finalization without losing nested 
     - argv: [ echo, cleanup-backup ]
   uses: agent/run
   with:
-    agent: codex.toml
+    agent: codex.yaml
     prompt: "\${{ failed.prompt }}"
 `);
   await field(page, 'Failure reporting steps (YAML)', '- argv: [echo, "${{ error.class }}"]');
   await field(page, 'Finalization steps (YAML)', '- argv: [echo, cleanup]');
   const configured = (await snapshot(page)).workflow.jobs.build.steps[0];
-  expect(configured).toMatchObject({ handlerTimeout: '45s', onError: [{id: 'backup', finally: [{ argv: ['echo', 'cleanup-backup'] }], uses: 'agent/run', with: {agent: "codex.toml", prompt: '${{ failed.prompt }}'}}], onFailure: [{ argv: ['echo', '${{ error.class }}'] }], finally: [{ argv: ['echo', 'cleanup'] }] });
+  expect(configured).toMatchObject({ handlerTimeout: '45s', onError: [{id: 'backup', finally: [{ argv: ['echo', 'cleanup-backup'] }], uses: 'agent/run', with: {agent: "codex.yaml", prompt: '${{ failed.prompt }}'}}], onFailure: [{ argv: ['echo', '${{ error.class }}'] }], finally: [{ argv: ['echo', 'cleanup'] }] });
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await field(page, 'Prompt', 'Revised original task');
   const exported = await downloadText(page);
@@ -86,16 +86,16 @@ test('renaming an outer step preserves named handler schemas and sibling shadowi
 jobs:
   build:
     steps:
-      - { id: earlier, uses: agent/run, with: { agent: claude.toml, prompt: Prepare } }
+      - { id: earlier, uses: agent/run, with: { agent: claude.yaml, prompt: Prepare } }
       - onError:
-          - { with: { output: { schema: Shared }, agent: codex.toml, prompt: Inherited }, uses: agent/run }
-          - { id: earlier, uses: agent/run, with: { agent: codex.toml, prompt: Local } }
-          - { with: { output: { schema: Shared }, agent: claude.toml, prompt: Shadowed }, uses: agent/run }
+          - { with: { output: { schema: Shared }, agent: codex.yaml, prompt: Inherited }, uses: agent/run }
+          - { id: earlier, uses: agent/run, with: { agent: codex.yaml, prompt: Local } }
+          - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: Shadowed }, uses: agent/run }
         finally:
-          - { with: { output: { schema: Shared }, agent: claude.toml, prompt: Finalize }, uses: agent/run }
+          - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: Finalize }, uses: agent/run }
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Work
 `);
   await job(page); await step(page, '1. earlier');
@@ -123,13 +123,13 @@ test('renaming an outer step rejects capture by the new ID in a handler scope', 
 jobs:
   build:
     steps:
-      - { id: earlier, uses: agent/run, with: { agent: claude.toml, prompt: Prepare } }
+      - { id: earlier, uses: agent/run, with: { agent: claude.yaml, prompt: Prepare } }
       - finally:
-          - { id: prepared, uses: agent/run, with: { agent: codex.toml, prompt: Local } }
-          - { with: { output: { schema: Shared }, agent: claude.toml, prompt: '\${{ steps.earlier.text }}' }, uses: agent/run }
+          - { id: prepared, uses: agent/run, with: { agent: codex.yaml, prompt: Local } }
+          - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: '\${{ steps.earlier.text }}' }, uses: agent/run }
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Work
 `);
   const original = await snapshot(page);
@@ -159,22 +159,22 @@ jobs:
       - id: group
         parallel:
           - sequence:
-              - { id: seed, uses: agent/run, with: { agent: claude.toml, prompt: Seed } }
+              - { id: seed, uses: agent/run, with: { agent: claude.yaml, prompt: Seed } }
               - id: work
                 onError:
-                  - { id: seed_copy, uses: agent/run, with: { agent: codex.toml, prompt: Local copy name } }
-                  - with: { output: { schema: Shared }, agent: codex.toml, prompt: '\${{ failed.prompt }} \${{ steps.seed.text }}' }
+                  - { id: seed_copy, uses: agent/run, with: { agent: codex.yaml, prompt: Local copy name } }
+                  - with: { output: { schema: Shared }, agent: codex.yaml, prompt: '\${{ failed.prompt }} \${{ steps.seed.text }}' }
                     finally:
-                      - { id: seed_copy_2, uses: agent/run, with: { agent: codex.toml, prompt: Nested copy name } }
-                      - { with: { output: { schema: Shared }, agent: claude.toml, prompt: '\${{ steps.seed.text }} \${{ steps.seed_copy.text }} \${{ steps.seed_copy_2.text }}' }, uses: agent/run }
+                      - { id: seed_copy_2, uses: agent/run, with: { agent: codex.yaml, prompt: Nested copy name } }
+                      - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: '\${{ steps.seed.text }} \${{ steps.seed_copy.text }} \${{ steps.seed_copy_2.text }}' }, uses: agent/run }
                     uses: agent/run
-                  - { id: seed, uses: agent/run, with: { agent: codex.toml, prompt: Local } }
-                  - { with: { output: { schema: Shared }, agent: claude.toml, prompt: '\${{ steps.seed.text }}' }, uses: agent/run }
+                  - { id: seed, uses: agent/run, with: { agent: codex.yaml, prompt: Local } }
+                  - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: '\${{ steps.seed.text }}' }, uses: agent/run }
                 uses: agent/run
                 with:
-                  agent: claude.toml
+                  agent: claude.yaml
                   prompt: Work
-          - { id: sibling, uses: agent/run, with: { agent: claude.toml, prompt: Sibling } }
+          - { id: sibling, uses: agent/run, with: { agent: claude.yaml, prompt: Sibling } }
 `);
   const original = await snapshot(page);
   await job(page); await step(page, '1. group');

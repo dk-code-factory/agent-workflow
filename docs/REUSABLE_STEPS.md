@@ -14,7 +14,7 @@ step-definitions:
     step:
       uses: agent/run
       with:
-        agent: agents/reviewer.toml
+        agent: agents/reviewer.yaml
         prompt: ${{ parameters.prompt }}
         turns: ${{ parameters.turns }}
         output: {format: text}

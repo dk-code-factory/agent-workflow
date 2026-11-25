@@ -11,10 +11,10 @@ func TestCanonicalAgentSyntaxRejectsRemovedForms(t *testing.T) {
 	for _, step := range []string{
 		`agent: reviewer, prompt: hi`,
 		`uses: agent/reviewer, with: {prompt: hi}`,
-		`uses: agent/run, prompt: hi, with: {agent: reviewer.toml}`,
+		`uses: agent/run, prompt: hi, with: {agent: reviewer.yaml}`,
 		`uses: agent/run, with: {prompt: hi}`,
-		`uses: agent/run, with: {agent: reviewer.toml, prompt: hi, session: public}`,
-		`uses: agent/run, with: {agent: reviewer.toml, prompt: hi, provider-session-id: public}`,
+		`uses: agent/run, with: {agent: reviewer.yaml, prompt: hi, session: public}`,
+		`uses: agent/run, with: {agent: reviewer.yaml, prompt: hi, provider-session-id: public}`,
 	} {
 		w, err := Parse([]byte("jobs: {review: {steps: [{" + step + "}]}}"))
 		if err == nil {
@@ -25,7 +25,7 @@ func TestCanonicalAgentSyntaxRejectsRemovedForms(t *testing.T) {
 		}
 	}
 	for _, step := range []string{
-		`uses: agent/run, with: {agent: reviewer.toml, prompt: hi}`,
+		`uses: agent/run, with: {agent: reviewer.yaml, prompt: hi}`,
 		`uses: agent/run, with: {agent: '${{ steps.first.outputs.agent }}', prompt: hi}`,
 	} {
 		w, err := Parse([]byte("jobs: {review: {steps: [{" + step + "}]}}"))
@@ -52,7 +52,7 @@ func TestCanonicalPromptRetainsQuotedTimestamp(t *testing.T) {
 	}
 	for _, tc := range cases {
 		quoted, _ := json.Marshal(tc.Value)
-		w, err := Parse([]byte("jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: " + string(quoted) + "}}]}}"))
+		w, err := Parse([]byte("jobs: {review: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: " + string(quoted) + "}}]}}"))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -17,21 +17,21 @@ jobs:
       - id: first
         uses: agent/run
         with:
-          agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.toml, alternate: alternate.toml}}
+          agent: {select: '${{ inputs.role }}', definitions: {review: reviewer.yaml, alternate: alternate.yaml}}
           prompt: first
       - id: followup
         uses: agent/run
         with: {agent: '${{ steps.first.outputs.agent }}', prompt: next}
 `, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "done"}, nil })
-	other := filepath.Join(e.WorkspaceDir, "workflows", "alternate.toml")
-	if err := os.WriteFile(other, []byte("name = 'alternate'\ndescription = 'Alternate'\ndeveloper_instructions = 'Pinned alternate instructions.'\nmodel = 'selected-model'\nmodel_reasoning_effort = 'high'\n"), 0600); err != nil {
+	other := filepath.Join(e.WorkspaceDir, "workflows", "alternate.yaml")
+	if err := os.WriteFile(other, []byte("name: 'alternate'\ndescription: 'Alternate'\ninstructions: 'Pinned alternate instructions.'\nmodel: 'selected-model'\nreasoning-effort: 'high'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"role": "alternate"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{other, filepath.Join(e.WorkspaceDir, "workflows", "reviewer.toml")} {
+	for _, path := range []string{other, filepath.Join(e.WorkspaceDir, "workflows", "reviewer.yaml")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -57,10 +57,10 @@ jobs:
 }
 
 func TestNativeAgentSelectionRejectsUnknownNameBeforeDispatch(t *testing.T) {
-	for _, selection := range []any{"unknown", "reviewer.toml", "agent_00000000000000000000000000000000", true, 1, nil} {
+	for _, selection := range []any{"unknown", "reviewer.yaml", "agent_00000000000000000000000000000000", true, 1, nil} {
 		t.Run(fmt.Sprint(selection), func(t *testing.T) {
 			e, _, fake := agentTaskFixture(t, `on: {workflow_call: {inputs: {role: {type: object}}}}
-jobs: {review: {steps: [{uses: agent/run, with: {agent: {select: '${{ inputs.role.name }}', definitions: {review: reviewer.toml}}, prompt: work}}]}}
+jobs: {review: {steps: [{uses: agent/run, with: {agent: {select: '${{ inputs.role.name }}', definitions: {review: reviewer.yaml}}, prompt: work}}]}}
 `, nil)
 			_, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"role": map[string]any{"name": selection}}})
 			if err == nil || !strings.Contains(err.Error(), "unknown admitted agent definition") {
@@ -74,11 +74,11 @@ jobs: {review: {steps: [{uses: agent/run, with: {agent: {select: '${{ inputs.rol
 }
 
 func TestNativeAgentSelectionAdmitsUnselectedDefinitions(t *testing.T) {
-	e, _, fake := agentTaskFixture(t, `jobs: {review: {steps: [{uses: agent/run, with: {agent: {select: review, definitions: {review: reviewer.toml, missing: missing.toml}}, prompt: work}}]}}`, nil)
-	if err := os.Remove(filepath.Join(e.WorkspaceDir, "workflows", "missing.toml")); err != nil {
+	e, _, fake := agentTaskFixture(t, `jobs: {review: {steps: [{uses: agent/run, with: {agent: {select: review, definitions: {review: reviewer.yaml, missing: missing.yaml}}, prompt: work}}]}}`, nil)
+	if err := os.Remove(filepath.Join(e.WorkspaceDir, "workflows", "missing.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "missing.toml") {
+	if _, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "missing.yaml") {
 		t.Fatal("unavailable unselected definition admitted", err)
 	}
 	if len(fake.requests) != 0 {
@@ -89,7 +89,7 @@ func TestNativeAgentSelectionAdmitsUnselectedDefinitions(t *testing.T) {
 func TestNativeAgentSelectionRejectsDynamicAndMalformedCatalogs(t *testing.T) {
 	oversized := make(map[string]any, 33)
 	for i := range 33 {
-		oversized[strings.Repeat("r", i+1)] = "reviewer.toml"
+		oversized[strings.Repeat("r", i+1)] = "reviewer.yaml"
 	}
 	if _, err := agentDefinitionChoices(map[string]any{"select": "r", "definitions": oversized}); err == nil {
 		t.Fatal("oversized definition catalog accepted")
@@ -98,9 +98,9 @@ func TestNativeAgentSelectionRejectsDynamicAndMalformedCatalogs(t *testing.T) {
 		`{select: review, definitions: {}}`,
 		`{select: review, definitions: {review: '${{ inputs.path }}'}}`,
 		`{select: review, definitions: '${{ inputs.definitions }}'}`,
-		`{select: 1, definitions: {review: reviewer.toml}}`,
-		`{select: missing, definitions: {review: reviewer.toml}}`,
-		`{select: review, definitions: {review: reviewer.toml}, extra: true}`,
+		`{select: 1, definitions: {review: reviewer.yaml}}`,
+		`{select: missing, definitions: {review: reviewer.yaml}}`,
+		`{select: review, definitions: {review: reviewer.yaml}, extra: true}`,
 	} {
 		t.Run(value, func(t *testing.T) {
 			workflow, err := Parse([]byte(`jobs: {review: {steps: [{uses: agent/run, with: {agent: ` + value + `, prompt: work}}]}}`))

@@ -25,13 +25,13 @@ jobs:
         with:
           prompt: Review
           output: {format: json, schema: Review, repair-attempts: 0}
-          agent: reviewer.toml
+          agent: reviewer.yaml
       - id: second
         uses: agent/run
         with:
           prompt: Review again
           output: {schema: Review}
-          agent: reviewer.toml
+          agent: reviewer.yaml
 `
 
 func TestNamedSchemasAcceptEquivalentIntegerBounds(t *testing.T) {

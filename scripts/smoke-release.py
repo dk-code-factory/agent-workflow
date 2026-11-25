@@ -62,7 +62,7 @@ for line in sys.stdin:
     run("git", "commit", "-m", "Disposable archive fixture")
     run(str(binary), "validate", "--workspace", str(workspace), "workflows/parallel-review.yml")
     doctor = json.loads(run(str(binary), "doctor", "--workspace", str(workspace)))
-    (workspace / "workflows" / "smoke.yml").write_text("jobs: {x: {steps: [{uses: agent/run, with: {agent: agents/task.toml, prompt: fixture}}]}}\n")
+    (workspace / "workflows" / "smoke.yml").write_text("jobs: {x: {steps: [{uses: agent/run, with: {agent: agents/task.yaml, prompt: fixture}}]}}\n")
     result = json.loads(run(str(binary), "run", "--foreground", "--workspace", str(workspace), "workflows/smoke.yml"))
     assert result["status"] == "succeeded", result
     assert result["normalized_usage"]["input_tokens"] == 1, result

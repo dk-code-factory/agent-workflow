@@ -90,7 +90,7 @@ test('edit native definitions and typed input while retaining six visible hook l
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
           input: {count: 7, enabled: true}
           output: {format: json, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}
@@ -103,7 +103,7 @@ test('edit native definitions and typed input while retaining six visible hook l
 `;
   const ui=await open(page,source);await step(page,'review agent/run');
   await expect(ui.getByLabel('Task input (YAML)',{exact:true})).toHaveValue(/count: 7/);
-  await field(page,'Agent definition or reference','../.codex/agents/reviewer.toml');
+  await field(page,'Agent definition or reference','../.codex/agents/reviewer.yaml');
   await field(page,'Agent turn allowance','0');
   expect((await snapshot(page)).diagnostics.some((d:any)=>d.path.at(-1)==='turns' && d.severity==='error')).toBe(true);
   await field(page,'Agent turn allowance','5');
@@ -138,7 +138,7 @@ test('edit native definitions and typed input while retaining six visible hook l
 });
 
 for (const [token, allowance] of [['010', 8], ['1_0', 10]] as const) test(`native turn allowance ${token} matches the runner through edits and history`, async ({ page }) => {
-  const source = `jobs: {review: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: ${token}}}]}}`;
+  const source = `jobs: {review: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.yaml, prompt: Review, turns: ${token}}}]}}`;
   const ui = await open(page, source);
   await step(page, 'review agent/run');
   expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
@@ -162,13 +162,13 @@ test('hook YAML edits preserve exact nested numeric input through prompt changes
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
           input: {octal: 010, positive: +010, negative: -010, text: "010", enabled: false, empty: null, fraction: 0.10000000000000001, exponent: 1.234567890123456789e-20}
           output: {format: json, schema: {type: object, required: [complete], properties: {complete: {type: boolean}}}}
 ${hooks.map(hook => `        ${hook}:
           - uses: agent/run
-            with: {agent: reviewer.toml, prompt: Verify, input: {octal: -010, exact: 9007199254740993, fraction: 1.0000000000000001}}
+            with: {agent: reviewer.yaml, prompt: Verify, input: {octal: -010, exact: 9007199254740993, fraction: 1.0000000000000001}}
 `).join('')}`;
   const ui = await open(page, source); await step(page, 'review agent/run');
   await expect(ui.getByLabel('Task input (YAML)', {exact:true})).toHaveValue(/0\.10000000000000001/);
@@ -204,12 +204,12 @@ for (const editor of ['parameters', 'parallel', 'sequence']) {
     const task = `- id: native
   uses: agent/run
   with:
-    agent: reviewer.toml
+    agent: reviewer.yaml
     prompt: Work
     input: {exact: 9007199254740993, fraction: 0.10000000000000001, exponent: 1.234567890123456789e-20}
   onError:
     - uses: agent/run
-      with: {agent: reviewer.toml, prompt: Recover, input: {nested: 9007199254740995}}
+      with: {agent: reviewer.yaml, prompt: Recover, input: {nested: 9007199254740995}}
 `;
     const source = `jobs:\n  review:\n    steps:\n` + (editor === 'parameters'
       ? task.split('\n').filter(Boolean).map(line => `      ${line}\n`).join('')
@@ -236,7 +236,7 @@ for (const editor of ['parameters', 'parallel', 'sequence']) {
 }
 
 test('inherit configured image without dropping helper files and retain expression turns', async ({ page }) => {
-  const source = 'on: {workflow_call: {inputs: {turns: {type: number}}}}\njobs:\n  build:\n    container: {image: tools:latest, files: [helpers/]}\n    steps: [{argv: [true]}]\n  review:\n    steps: [{id: native, uses: agent/run, with: {agent: reviewer.toml, prompt: Review, turns: 8}}]\n';
+  const source = 'on: {workflow_call: {inputs: {turns: {type: number}}}}\njobs:\n  build:\n    container: {image: tools:latest, files: [helpers/]}\n    steps: [{argv: [true]}]\n  review:\n    steps: [{id: native, uses: agent/run, with: {agent: reviewer.yaml, prompt: Review, turns: 8}}]\n';
   const ui = await open(page, source);
   await job(page);
   await field(page, 'Job container image', '');

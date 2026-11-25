@@ -24,19 +24,19 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review the change.
         handlerTimeout: 30s
         onError:
           - id: backup
             uses: agent/run
             with:
-              agent: backup-reviewer.toml
+              agent: backup-reviewer.yaml
               prompt: '${{ failed.prompt }} Failure: ${{ error.message }}'
         onFailure:
           - uses: agent/run
             with:
-              agent: reporter.toml
+              agent: reporter.yaml
               prompt: 'Review failed: ${{ error.class }}'
         finally:
           - argv: [echo, review finished]

@@ -8,10 +8,10 @@ const workflow = {
   on: { workflow_call: { outputs: { answer: { value: '${{ jobs.review.steps.analyze.approved }}' } } } },
   jobs: {
     review: { steps: [
-      {id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } } }, prompt: 'Review'}},
-      {id: 'finish', uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ steps.analyze.approved }}'}},
+      {id: 'analyze', uses: 'agent/run', with: {agent: "claude.yaml", output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' }, details: { type: 'object', properties: { reason: { type: 'string' } } }, status: { type: 'string' } } } }, prompt: 'Review'}},
+      {id: 'finish', uses: 'agent/run', with: {agent: "claude.yaml", prompt: '${{ steps.analyze.approved }}'}},
     ] },
-    summarize: { needs: ['review'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ needs.review.steps.analyze.details.reason }}'}}] },
+    summarize: { needs: ['review'], steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: '${{ needs.review.steps.analyze.details.reason }}'}}] },
   },
 };
 
@@ -36,7 +36,7 @@ describe('named step result references', () => {
     expect(doc.getSnapshot().workflow!.jobs.summarize.steps![0].with!.prompt).toBe('${{ needs.review.outputs.report }} ${{ needs.review.steps.inspect.outputs.text }}');
   });
   it('preserves implicit step identity through reorder and includes dependent references in deletion review', () => {
-    const doc = new WorkflowDocument({ source: `jobs: { review: { steps: [ { argv: [ echo ] }, { argv: [ echo ] } ] }, summarize: { needs: review, steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: "\${{ needs.review.steps.step_1.text }}" } } ] } }
+    const doc = new WorkflowDocument({ source: `jobs: { review: { steps: [ { argv: [ echo ] }, { argv: [ echo ] } ] }, summarize: { needs: review, steps: [ { uses: agent/run, with: { agent: claude.yaml, prompt: "\${{ needs.review.steps.step_1.text }}" } } ] } }
 ` });
     doc.moveStep('review', 0, 1);
     expect(doc.getSnapshot().workflow!.jobs.review.steps!.map(step => step.id)).toEqual(['step_2', 'step_1']);
@@ -62,7 +62,7 @@ describe('named step result references', () => {
     ['unknown dependency step', 'needs.review.steps.absent.text', 'summarize', 0],
   ])('diagnoses %s at its consuming field', (_label, expression, job, index) => {
     const value = structuredClone(workflow);
-    Object.assign(value.jobs, { isolated: { steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] } });
+    Object.assign(value.jobs, { isolated: { steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] } });
     const doc = new WorkflowDocument({ source: JSON.stringify(value) });
     const path = ['jobs', job, 'steps', index, 'with', 'prompt'];
     doc.setField(path, '${{ ' + expression + ' }}');
@@ -92,11 +92,11 @@ describe('named step result references', () => {
         { id: 'command', argv: ['echo', 'ready'] },
         { id: 'shell', run: 'echo ready', shell: 'sh' },
         { id: 'controller', uses: 'workspace/create' },
-        {id: 'legacy', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Review', output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } }}},
-        {id: 'concise', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Summarize'}},
-        {id: 'consume', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}},
+        {id: 'legacy', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Review', output: { format: 'json', schema: { type: 'object', properties: { approved: { type: 'boolean' } } } }}},
+        {id: 'concise', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Summarize'}},
+        {id: 'consume', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}},
       ] },
-      consumer: { needs: ['build'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+      consumer: { needs: ['build'], steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
     } }));
     expect(parsed.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
     for (const [suggestions, prefix] of [
@@ -294,15 +294,15 @@ describe('named step result references', () => {
     expect(expressionSuggestions(parsed.workflow)).toContain('jobs.review.steps.analyze.details.reason');
   });
   it('bounds shared-schema suggestions before expansion in root and dependency inspectors while keeping typed paths reachable', () => {
-    const producer = (id: string) => ({id, uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}});
+    const producer = (id: string) => ({id, uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Review'}});
     const dependencies = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`producer${index}`, { steps: [producer(`result${index}`)] }]));
     const parsed = parseWorkflow(JSON.stringify({
       schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`field${index}`, { type: 'string' }])) } },
       jobs: {
         producer: { steps: Array.from({ length: 100 }, (_, index) => producer(`result${index}`)) },
         ...dependencies,
-        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
-        wide: { needs: Object.keys(dependencies), steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
+        wide: { needs: Object.keys(dependencies), steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
       },
     }));
     expect(parsed.usable).toBe(true);
@@ -330,7 +330,7 @@ describe('named step result references', () => {
       return Reflect.get(target, key);
     } });
     const schemas = { Shared: { type: 'object', properties } };
-    const producer = {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }}};
+    const producer = {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }}};
     expect(stepResultPaths(producer, schemas)).toHaveLength(200);
     expect(reads).toBeLessThan(250);
     reads = 0;
@@ -341,8 +341,8 @@ describe('named step result references', () => {
     const parsed = parseWorkflow(JSON.stringify({
       schemas: { Shared: { type: 'object', properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`$field${index}`, {}])) } },
       jobs: {
-        producer: { steps: Array.from({ length: 200 }, (_, index) => ({id: `result${index}`, uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Review'}})) },
-        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Read'}}] },
+        producer: { steps: Array.from({ length: 200 }, (_, index) => ({id: `result${index}`, uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Review'}})) },
+        consumer: { needs: ['producer'], steps: [{uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Read'}}] },
       },
     }));
     expect(parsed.usable).toBe(true);
@@ -377,18 +377,18 @@ describe('named step result references', () => {
     ['wrong root', 'jobs.producer.steps.analyze.text', true],
   ])('checks %s references inside named schemas in the consuming step context', (_name, expression, invalid) => {
     const parsed = parseWorkflow(JSON.stringify({ schemas: { Result: { type: 'string', enum: ['${{ ' + expression + ' }}'] } }, jobs: {
-      producer: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Produce'}}] },
+      producer: { steps: [{id: 'analyze', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Produce'}}] },
       consumer: { needs: ['producer'], steps: [
-        {id: 'first', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'First'}},
-        {id: 'consume', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Result' }, prompt: 'Consume'}},
-        {id: 'last', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Last'}},
+        {id: 'first', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'First'}},
+        {id: 'consume', uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Result' }, prompt: 'Consume'}},
+        {id: 'last', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Last'}},
       ] },
     } }));
     expect(parsed.diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(invalid);
   });
   it('rewrites concise references in shared named contracts and dependent declarations together', () => {
     const doc = new WorkflowDocument({ source: `schemas: { Shared: { type: string, enum: [ "\${{ steps.local.text }}" ] }, Dependent: { type: string, enum: [ "\${{ needs.review.steps.local.text }}" ] } }
-jobs: { review: { steps: [ { id: local, uses: agent/run, with: { agent: claude.toml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.toml, prompt: Consume }, uses: agent/run } ] }, second: { steps: [ { id: local, uses: agent/run, with: { agent: claude.toml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.toml, prompt: Consume }, uses: agent/run } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Dependent }, agent: claude.toml, prompt: Summarize }, uses: agent/run } ] } }
+jobs: { review: { steps: [ { id: local, uses: agent/run, with: { agent: claude.yaml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.yaml, prompt: Consume }, uses: agent/run } ] }, second: { steps: [ { id: local, uses: agent/run, with: { agent: claude.yaml, prompt: Produce } }, { with: { output: { schema: Shared }, agent: claude.yaml, prompt: Consume }, uses: agent/run } ] }, summarize: { needs: review, steps: [ { with: { output: { schema: Dependent }, agent: claude.yaml, prompt: Summarize }, uses: agent/run } ] } }
 ` });
     const original = doc.getSnapshot().source;
     doc.renameStep('review', 0, 'renamed');

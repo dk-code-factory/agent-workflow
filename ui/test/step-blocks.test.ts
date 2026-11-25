@@ -15,7 +15,7 @@ const source = `jobs:
           - id: first
             uses: agent/run
             with:
-              agent: claude.toml
+              agent: claude.yaml
               prompt: \${{ steps.prepare.outputs.stdout }}
           - sequence:
               - id: collect
@@ -23,16 +23,16 @@ const source = `jobs:
               - id: second
                 uses: agent/run
                 with:
-                  agent: claude.toml
+                  agent: claude.yaml
                   prompt: \${{ steps.collect.outputs.stdout }}
       - id: combine
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: \${{ steps.first.text }} \${{ steps.second.text }}
   summarize:
     needs: [ review ]
-    steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: Summary } } ]
+    steps: [ { uses: agent/run, with: { agent: claude.yaml, prompt: Summary } } ]
 `;
 
 describe('nested step blocks', () => {
@@ -107,15 +107,15 @@ jobs:
         parallel:
           - sequence:
               - { id: collect, argv: [ echo, collect ] }
-              - { id: first, with: { output: { schema: Shared }, agent: claude.toml, prompt: Review }, uses: agent/run }
-              - { id: second, uses: agent/run, with: { prompt: Again, output: { schema: Shared, repair: false }, agent: claude.toml } }
-              - { id: fixed, with: { output: { schema: Static }, agent: claude.toml, prompt: Static }, uses: agent/run }
+              - { id: first, with: { output: { schema: Shared }, agent: claude.yaml, prompt: Review }, uses: agent/run }
+              - { id: second, uses: agent/run, with: { prompt: Again, output: { schema: Shared, repair: false }, agent: claude.yaml } }
+              - { id: fixed, with: { output: { schema: Static }, agent: claude.yaml, prompt: Static }, uses: agent/run }
           - { id: other, argv: [ echo, other ] }
-      - { id: after, with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
+      - { id: after, with: { output: { schema: Shared }, agent: claude.yaml, prompt: Original }, uses: agent/run }
   other:
     steps:
       - { id: collect, argv: [ echo, other ] }
-      - { with: { output: { schema: Shared }, agent: claude.toml, prompt: Original }, uses: agent/run }
+      - { with: { output: { schema: Shared }, agent: claude.yaml, prompt: Original }, uses: agent/run }
 `;
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);

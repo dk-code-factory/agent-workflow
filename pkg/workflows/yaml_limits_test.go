@@ -51,7 +51,7 @@ func TestNumericWholeExpressionsRoundTripAndStrictResolution(t *testing.T) {
     uses: workflows/child.yml
     for-each: {items: [], key: item.id, concurrency: '${{ inputs.bound }}'}
   native:
-    steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work, turns: '${{ inputs.bound }}'}}]
+    steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work, turns: '${{ inputs.bound }}'}}]
 `
 	w, err := Parse([]byte(source))
 	if err == nil {
@@ -353,7 +353,7 @@ func TestExpressionAgentTurnsResolveBeforeDispatchAndRemainRetained(t *testing.T
 	for _, bound := range []any{5, json.Number("5"), nil, true, "", "5", 0, 1.5, 2147483648} {
 		t.Run(fmt.Sprint(bound), func(t *testing.T) {
 			// Input type is deliberately unrestricted here, to test the dispatch boundary.
-			e, store, fake := agentTaskFixture(t, `jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work, turns: '${{ inputs.bound }}'}}]}}
+			e, store, fake := agentTaskFixture(t, `jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work, turns: '${{ inputs.bound }}'}}]}}
 `, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "done"}, nil })
 			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"bound": bound}})
 			if bound != 5 && bound != json.Number("5") {
@@ -394,7 +394,7 @@ func TestExpressionAgentTurnsRejectMissingBoundsAndPreserveLiteralDefaults(t *te
 			if tc.needs != "" {
 				needs = "needs: [prepare], "
 			}
-			e, store, fake := agentTaskFixture(t, tc.input+"jobs:\n"+tc.needs+"  native: {"+needs+"steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work"+tc.turns+"}}]}\n", func(SessionRequest) (map[string]any, error) {
+			e, store, fake := agentTaskFixture(t, tc.input+"jobs:\n"+tc.needs+"  native: {"+needs+"steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work"+tc.turns+"}}]}\n", func(SessionRequest) (map[string]any, error) {
 				return map[string]any{"text": "done"}, nil
 			})
 			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml"})
@@ -626,12 +626,12 @@ func TestIntegerControlFractionalAtomsRejectBeforeDispatch(t *testing.T) {
 	for name, source := range map[string]string{
 		"repeat":      `jobs: {call: {uses: workflows/child.yml, repeat: {max-attempts: '${{ 100.000000000000001 }}', until: true}}}`,
 		"concurrency": `jobs: {call: {uses: workflows/child.yml, for-each: {items: [{id: a}], key: item.id, concurrency: '${{ 1.0000000000000001 }}'}}}`,
-		"turns":       `jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work, turns: '${{ 1.0000000000000001 }}'}}]}}`,
+		"turns":       `jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work, turns: '${{ 1.0000000000000001 }}'}}]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, _, fake := agentTaskFixture(t, source, func(SessionRequest) (map[string]any, error) { return map[string]any{"text": "done"}, nil })
 			writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
-jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work}}]}}
+jobs: {native: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work}}]}}
 `)
 			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml"})
 			if err == nil || run == nil || len(fake.requests) != 0 {

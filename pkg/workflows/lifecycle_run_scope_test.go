@@ -34,12 +34,12 @@ func TestLifecycleRestartIgnoresReusableChildReceipts(t *testing.T) {
     steps:
       - id: work
         onError:
-          - {id: backup, uses: agent/run, with: {agent: a.toml, prompt: root fallback}}
+          - {id: backup, uses: agent/run, with: {agent: a.yaml, prompt: root fallback}}
         finally:
-          - {uses: agent/run, with: {agent: a.toml, prompt: root cleanup}}
+          - {uses: agent/run, with: {agent: a.yaml, prompt: root cleanup}}
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: root task
 `
 	var calls []string
@@ -62,10 +62,10 @@ jobs:
     steps:
       - id: work
         onError:
-          - {id: backup, uses: agent/run, with: {agent: a.toml, prompt: child fallback}}
+          - {id: backup, uses: agent/run, with: {agent: a.yaml, prompt: child fallback}}
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: child task
 `)
 	e.Store = interruptRootLifecycleJournal{Journal: store}

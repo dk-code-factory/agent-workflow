@@ -161,7 +161,7 @@ func TestExternalInputContractControlRejectionsPreserveState(t *testing.T) {
 func TestExternalInputContractLegacyJournalOrdinaryResume(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
-	e, sqlite := durableExecutor(t, `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.toml}}, {id: retry, uses: agent/run, with: {prompt: retry, agent: a.toml}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.toml}}]}}
+	e, sqlite := durableExecutor(t, `jobs: {x: {steps: [{id: before, uses: agent/run, with: {prompt: before, agent: a.yaml}}, {id: retry, uses: agent/run, with: {prompt: retry, agent: a.yaml}}, {id: after, uses: agent/run, with: {prompt: after, agent: a.yaml}}]}}
 `, agentFunc(func(_ context.Context, req AgentRequest) (map[string]any, error) {
 		n := calls.Add(1)
 		if req.Prompt == "retry" && n == 2 {
@@ -211,7 +211,7 @@ func TestExternalInputContractIncompleteExtensionRejectsFreshRun(t *testing.T) {
 				var calls atomic.Int32
 				source := waitSource
 				if nested {
-					source = `jobs: {review: {uses: workflows/child.yml}, independent: {steps: [{uses: agent/run, with: {prompt: before-admission, agent: a.toml}}]}}
+					source = `jobs: {review: {uses: workflows/child.yml}, independent: {steps: [{uses: agent/run, with: {prompt: before-admission, agent: a.yaml}}]}}
 `
 				}
 				e, sqlite := durableExecutor(t, source, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
@@ -275,7 +275,7 @@ func TestExternalInputContractIncompleteExtensionRejectsRetainedSnapshot(t *test
 					}
 					// Capability validation must use retained definitions even when
 					// current files no longer contain any wait.
-					writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs: {x: {steps: [{uses: agent/run, with: {prompt: changed, agent: a.toml}}]}}
+					writeWorkflow(t, e.WorkspaceDir, "main.yml", `jobs: {x: {steps: [{uses: agent/run, with: {prompt: changed, agent: a.yaml}}]}}
 `)
 					if nested {
 						writeWorkflow(t, e.WorkspaceDir, "child.yml", "on: {workflow_call: {}}\njobs: {}")

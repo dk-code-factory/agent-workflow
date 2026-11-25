@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { open, snapshot, step } from './harness';
 
 test('insert preceding command output and review a reordered reference', async ({ page }) => {
-  const ui = await open(page, `jobs: { build: { steps: [ { id: collect, argv: [ echo ] }, { id: analyze, uses: agent/run, with: { prompt: Summarize, agent: claude.toml } } ] } }
+  const ui = await open(page, `jobs: { build: { steps: [ { id: collect, argv: [ echo ] }, { id: analyze, uses: agent/run, with: { prompt: Summarize, agent: claude.yaml } } ] } }
 `);
   await step(page, 'analyze agent/run');
   await ui.getByLabel('Insert expression into Prompt', { exact: true }).selectOption('steps.collect.outputs.stdout');

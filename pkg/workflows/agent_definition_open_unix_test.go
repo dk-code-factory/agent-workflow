@@ -16,7 +16,7 @@ import (
 
 func TestNativeAgentDefinitionRejectsSubstitution(t *testing.T) {
 	if replacement := os.Getenv("AGENT_DEFINITION_REPLACEMENT"); replacement != "" {
-		path := filepath.Join(t.TempDir(), "review.toml")
+		path := filepath.Join(t.TempDir(), "review.yaml")
 		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
 			t.Fatal(err)
 		}

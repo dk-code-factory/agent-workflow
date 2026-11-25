@@ -21,7 +21,7 @@ jobs:
                     Review the task below for correctness risks. Inspect relevant files
                     if useful. Return findings only. Do not edit files.
                     Task: ${{ inputs.task }}
-                agent: agents/review_correctness.toml
+                agent: agents/review_correctness.yaml
     security_review:
         outputs:
             findings: ${{ steps.review.outputs.text }}
@@ -33,7 +33,7 @@ jobs:
                     Review the task below for security and test gaps. Inspect relevant
                     files if useful. Return findings only. Do not edit files.
                     Task: ${{ inputs.task }}
-                agent: agents/review_security.toml
+                agent: agents/review_security.yaml
     combine:
         needs: [correctness_review, security_review]
         outputs:
@@ -51,4 +51,4 @@ jobs:
 
                     Security findings:
                     ${{ needs.security_review.outputs.findings }}
-                agent: agents/task.toml
+                agent: agents/task.yaml

@@ -94,12 +94,12 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
       - id: use
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: '${{ steps.review.text }}'
   consumer:
     needs: [producer]
@@ -107,7 +107,7 @@ jobs:
       - id: use
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: '${{ needs.producer.steps.review.approved }}'
 `
 	for _, test := range []struct{ name, old, replacement, diagnostic string }{
@@ -154,7 +154,7 @@ jobs:
 		})
 	}
 	for _, producer := range []string{"uses: workflows/child.yml", "uses: workflows/child.yml\n    for-each: {items: ['${{ steps.missing.text }}'], key: item}"} {
-		w, err := Parse([]byte("jobs:\n  producer:\n    " + producer + "\n  consumer:\n    needs: [producer]\n    steps:\n      - uses: agent/run\n        with:\n          agent: consumer.toml\n          prompt: '${{ needs.producer.steps.private.text }}'\n"))
+		w, err := Parse([]byte("jobs:\n  producer:\n    " + producer + "\n  consumer:\n    needs: [producer]\n    steps:\n      - uses: agent/run\n        with:\n          agent: consumer.yaml\n          prompt: '${{ needs.producer.steps.private.text }}'\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,12 +216,12 @@ func TestConciseReferencesInNamedSchemas(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			w := &Workflow{Schemas: map[string]map[string]any{"Result": {"type": "string", "enum": []any{"${{ " + test.expression + " }}"}}}, Jobs: map[string]Job{
-				"producer": {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}}}},
-				"other":    {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}}}},
+				"producer": {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "Produce"}}}},
+				"other":    {Steps: []Step{{ID: "result", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "Produce"}}}},
 				"main": {Needs: []string{"producer"}, Steps: []Step{
-					{ID: "first", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Produce"}},
-					{ID: "consumer", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Consume", "output": map[string]any{"schema": "Result"}}},
-					{ID: "last", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "Later"}},
+					{ID: "first", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "Produce"}},
+					{ID: "consumer", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "Consume", "output": map[string]any{"schema": "Result"}}},
+					{ID: "last", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "Later"}},
 				}},
 			}}
 			err := Validate(w)
@@ -251,13 +251,13 @@ jobs:
               type: object
               required: [approved]
               properties: {approved: {type: boolean}}
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: Review
         uses: agent/run
       - id: local
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: 'local=${{ steps.review.approved }}'
   consumer:
     needs: [producer]
@@ -265,7 +265,7 @@ jobs:
       - id: combine
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: 'decision=${{ needs.producer.steps.review.approved }}, local=${{ needs.producer.steps.local.text }}'
 `
 	ctx := context.Background()
@@ -310,9 +310,9 @@ func TestInvalidConciseReferenceHasNoProviderEffects(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			definition := Workflow{Jobs: map[string]Job{"x": {Steps: []Step{
-				{Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "before"}},
-				{Uses: "agent/run", If: expression, With: map[string]any{"agent": "reviewer.toml", "prompt": "consume"}},
-				{ID: "later", Uses: "agent/run", With: map[string]any{"agent": "reviewer.toml", "prompt": "later"}},
+				{Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "before"}},
+				{Uses: "agent/run", If: expression, With: map[string]any{"agent": "reviewer.yaml", "prompt": "consume"}},
+				{ID: "later", Uses: "agent/run", With: map[string]any{"agent": "reviewer.yaml", "prompt": "later"}},
 			}}}}
 			source, err := json.Marshal(definition)
 			if err != nil {
@@ -413,7 +413,7 @@ jobs:
       - id: review
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: 'attempt=${{ iteration.number }}'
   consumer:
     needs: [producer]
@@ -421,7 +421,7 @@ jobs:
       - id: use
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: '${{ needs.producer.steps.review.text }}'
 `
 	var prompts []string
@@ -445,12 +445,12 @@ func TestUnavailableConciseResultsStopConsumer(t *testing.T) {
         continue-on-error: true
         uses: agent/run
         with:
-          agent: reviewer.toml
+          agent: reviewer.yaml
           prompt: review
       - id: consumer
         uses: agent/run
         with:
-          agent: consumer.toml
+          agent: consumer.yaml
           prompt: 'decision=${{ steps.review.approved }}'
 `
 			definition := source

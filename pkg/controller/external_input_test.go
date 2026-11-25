@@ -46,7 +46,7 @@ func TestInputControllerCapacityAndAutomaticContinuation(t *testing.T) {
 	close(a.release)
 	s, c := inputFixture(t, `jobs:
   ask: {steps: [{id: q, uses: input/wait, with: {prompt: q, evidence-id: e}}]}
-  after: {needs: ask, steps: [{uses: agent/run, with: {prompt: after, agent: a.toml}}]}
+  after: {needs: ask, steps: [{uses: agent/run, with: {prompt: after, agent: a.yaml}}]}
 `, a)
 	// Configure before the first admission; the scheduler reads MaxRuns only when
 	// scheduling candidates and fixture has not admitted any yet.

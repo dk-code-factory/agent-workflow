@@ -79,7 +79,7 @@ func TestResumeRestoresAutomaticallyAdmittedRoles(t *testing.T) {
 			shared := &automaticRolesRunner{roles: raw, factory: factory, AgentRunner: agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 				return nil, errors.New("shared unpinned runner used")
 			})}
-			e, journal := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: builder.toml}}]}}\n", shared)
+			e, journal := durableExecutor(t, "jobs: {x: {steps: [{uses: agent/run, with: {prompt: hi, agent: builder.yaml}}]}}\n", shared)
 			run, err := nativeTestExecutor(t, e).Prepare(ctx, RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
 				t.Fatal(err)

@@ -13,7 +13,7 @@ jobs:
       - id: earlier
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Prepare
       - id: task
         handlerTimeout: 45s
@@ -21,11 +21,11 @@ jobs:
           - id: earlier
             uses: agent/run
             with:
-              agent: codex.toml
+              agent: codex.yaml
               prompt: \${{ failed.prompt }} \${{ steps.earlier.text }}
           - uses: agent/run
             with:
-              agent: claude.toml
+              agent: claude.yaml
               prompt: \${{ steps.earlier.text }} \${{ error.message }}
         onFailure:
           - argv: [ echo, '\${{ error.class }}' ]
@@ -33,7 +33,7 @@ jobs:
           - argv: [ echo, done ]
         uses: agent/run
         with:
-          agent: claude.toml
+          agent: claude.yaml
           prompt: Work
 `;
 
@@ -43,8 +43,8 @@ describe('step lifecycle handler authoring', () => {
     expect(doc.getSnapshot().diagnostics).toEqual([]);
     const original = doc.getSnapshot().workflow!.jobs.build.steps![1];
     doc.setField(['name'], 'Handlers');
-    doc.setField(['jobs','build','steps',1,'with','agent'],'codex.toml');
-    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({ ...original, with: {...original.with, agent: 'codex.toml'} });
+    doc.setField(['jobs','build','steps',1,'with','agent'],'codex.yaml');
+    expect(doc.getSnapshot().workflow!.jobs.build.steps![1]).toEqual({ ...original, with: {...original.with, agent: 'codex.yaml'} });
     expect(doc.getSnapshot().source).toContain('# preserve handlers');
     doc.undo(); doc.undo();
     expect(doc.getSnapshot().source).toBe(source);
@@ -61,12 +61,12 @@ describe('step lifecycle handler authoring', () => {
 
   it('tracks named schemas consumed by nested handlers without rewriting shadowed consumers', () => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
-      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Prepare'}},
       {onError: [
-        {uses: 'agent/run', with: {agent: "codex.toml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
-        {id: 'earlier', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
-        {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Shadowed'}},
-      ], finally: [{uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Finalize'}}], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
+        {uses: 'agent/run', with: {agent: "codex.yaml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
+        {id: 'earlier', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Local'}},
+        {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Shadowed'}},
+      ], finally: [{uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Finalize'}}], uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Work'}},
     ] } } });
     const doc = new WorkflowDocument({ source: original });
     expect(doc.deletionImpact('build', 0)).toContainEqual(['schemas', 'Shared', 'enum', 0]);
@@ -88,11 +88,11 @@ describe('step lifecycle handler authoring', () => {
 
   it.each(['prompt', 'schema'])('rejects rename capture by a sibling matching the new ID in %s', kind => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.earlier.text }}'] } }, jobs: { build: { steps: [
-      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Prepare'}},
       {finally: [
-        {id: 'prepared', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
-        kind === 'prompt' ? {uses: 'agent/run', with: {agent: "claude.toml", prompt: '${{ steps.earlier.text }}'}} : {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
-      ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
+        {id: 'prepared', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Local'}},
+        kind === 'prompt' ? {uses: 'agent/run', with: {agent: "claude.yaml", prompt: '${{ steps.earlier.text }}'}} : {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: 'Inherited'}},
+      ], uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Work'}},
     ] } } });
     const doc = new WorkflowDocument({ source: original });
     expect(doc.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
@@ -107,11 +107,11 @@ describe('step lifecycle handler authoring', () => {
 
   it.each(['earlier', 'task', 'fallback', 'later', 'missing'])('validates named handler schemas against the local scope: %s', reference => {
     const yaml = stringify({ schemas: { Result: { type: 'string', enum: [`\${{ steps.${reference}.text }}`] } }, jobs: { build: { steps: [
-      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Prepare'}},
+      {id: 'earlier', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Prepare'}},
       {id: 'task', onError: [
-        {id: 'fallback', uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Result' }, prompt: 'Fallback'}},
-        {id: 'later', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Later'}},
-      ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
+        {id: 'fallback', uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Result' }, prompt: 'Fallback'}},
+        {id: 'later', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Later'}},
+      ], uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Work'}},
     ] } } });
     expect(parseWorkflow(yaml).diagnostics.some(d => d.code === 'expression-reference' && d.path.join('.') === 'schemas.Result.enum.0')).toBe(reference !== 'earlier');
   });
@@ -142,7 +142,7 @@ describe('step lifecycle handler authoring', () => {
     ['invalid duration', 'jobs: {build: {steps: [{argv: [echo], handlerTimeout: 6m}]}}', 'handler-timeout'],
     ['orphan timeout', 'jobs: {build: {steps: [{argv: [echo], handlerTimeout: 45s}]}}', 'handler-timeout'],
     ['wrong hook shape', 'jobs: {build: {steps: [{argv: [echo], finally: nope}]}}', 'shape'],
-    ['context outside hook', `jobs: { build: { steps: [ { uses: agent/run, with: { agent: claude.toml, prompt: "\${{ failed.prompt }}" } } ] } }
+    ['context outside hook', `jobs: { build: { steps: [ { uses: agent/run, with: { agent: claude.yaml, prompt: "\${{ failed.prompt }}" } } ] } }
 `, 'handler-context'],
     ['invalid context field', source.replace('failed.prompt', 'failed.credentials'), 'handler-context'],
     ['sibling hook invisibility', source.replace('argv: [ echo, done ]', 'argv: [echo, "${{ steps.step_2.text }}"]'), 'expression-reference'],
@@ -165,14 +165,14 @@ describe('step lifecycle handler authoring', () => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
       { id: 'group', parallel: [
         { sequence: [
-          {id: 'seed', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Seed'}},
+          {id: 'seed', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Seed'}},
           {id: 'work', onError: [
-            {uses: 'agent/run', with: {agent: "codex.toml", output: { schema: 'Shared' }, prompt: '${{ failed.prompt }} ${{ steps.seed.text }}'}},
-            {id: 'seed', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local'}},
-            {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
-          ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
+            {uses: 'agent/run', with: {agent: "codex.yaml", output: { schema: 'Shared' }, prompt: '${{ failed.prompt }} ${{ steps.seed.text }}'}},
+            {id: 'seed', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Local'}},
+            {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+          ], uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Work'}},
         ] },
-        {id: 'sibling', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Sibling'}},
+        {id: 'sibling', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Sibling'}},
       ] },
     ] } } });
     const doc = new WorkflowDocument({ source: original });
@@ -200,16 +200,16 @@ describe('step lifecycle handler authoring', () => {
   it.each(['onError', 'onFailure', 'finally'] as const)('avoids generated IDs captured by direct and nested %s siblings', kind => {
     const original = stringify({ schemas: { Shared: { type: 'string', enum: ['${{ steps.seed.text }}'] } }, jobs: { build: { steps: [
       { id: 'group', sequence: [
-        {id: 'seed', uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Seed'}},
+        {id: 'seed', uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Seed'}},
         {id: 'work', [kind]: [
-          {id: 'seed_copy', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local copy name'}},
+          {id: 'seed_copy', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Local copy name'}},
           {finally: [
-            {id: 'seed_copy_2', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Nested copy name'}},
-            {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}'}},
-          ], uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
-          {id: 'seed', uses: 'agent/run', with: {agent: "codex.toml", prompt: 'Local source name'}},
-          {uses: 'agent/run', with: {agent: "claude.toml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
-        ], uses: 'agent/run', with: {agent: "claude.toml", prompt: 'Work'}},
+            {id: 'seed_copy_2', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Nested copy name'}},
+            {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }} ${{ steps.seed_copy.text }} ${{ steps.seed_copy_2.text }}'}},
+          ], uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+          {id: 'seed', uses: 'agent/run', with: {agent: "codex.yaml", prompt: 'Local source name'}},
+          {uses: 'agent/run', with: {agent: "claude.yaml", output: { schema: 'Shared' }, prompt: '${{ steps.seed.text }}'}},
+        ], uses: 'agent/run', with: {agent: "claude.yaml", prompt: 'Work'}},
       ] },
     ] } } });
     const doc = new WorkflowDocument({ source: original });

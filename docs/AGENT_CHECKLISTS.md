@@ -18,7 +18,7 @@ jobs:
       - id: developer
         uses: agent/run
         with:
-          agent: agents/developer.toml
+          agent: agents/developer.yaml
           prompt: 'Implement this task: ${{ inputs.task }}'
           checklist:
             max-retries: 6
@@ -41,12 +41,12 @@ jobs:
 ```
 
 The definition path resolves relative to the owning workflow. For this example,
-`workflows/agents/developer.toml` can contain:
+`workflows/agents/developer.yaml` can contain:
 
-```toml
-name = "developer"
-description = "Implement tasks and complete their verification stages."
-developer_instructions = "Follow repository instructions, preserve unrelated changes, run relevant deterministic checks, and report unfinished work accurately. Do not commit, push, or publish."
+```yaml
+name: "developer"
+description: "Implement tasks and complete their verification stages."
+instructions: "Follow repository instructions, preserve unrelated changes, run relevant deterministic checks, and report unfinished work accurately. Do not commit, push, or publish."
 ```
 
 Use the normal configured `codex-app-server` runtime. Checklist turns share the

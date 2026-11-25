@@ -220,12 +220,12 @@ func nativeTestExecutor(t *testing.T, e *Executor) *Executor {
 }
 func writeNativeFixtureDefinitions(t *testing.T, root, name, source string) {
 	t.Helper()
-	// Fixture YAML files refer only to local TOML definitions. Missing production
+	// Fixture YAML files refer only to local YAML definitions. Missing production
 	// definitions are tested separately through LoadAgentDefinition.
 	for _, field := range strings.FieldsFunc(source, func(r rune) bool {
 		return r == ' ' || r == '\n' || r == '\t' || r == ',' || r == '}' || r == '{' || r == '\'' || r == '"'
 	}) {
-		if !strings.HasSuffix(field, ".toml") || strings.Contains(field, "${") {
+		if !strings.HasSuffix(field, ".yaml") || strings.Contains(field, "${") {
 			continue
 		}
 		path := field
@@ -240,8 +240,8 @@ func writeNativeFixtureDefinitions(t *testing.T, root, name, source string) {
 			continue
 		}
 		os.MkdirAll(filepath.Dir(path), 0700)
-		role := strings.TrimSuffix(filepath.Base(path), ".toml")
-		if err = os.WriteFile(path, []byte(fmt.Sprintf("name = %q\ndescription = 'Deterministic fixture'\ndeveloper_instructions = 'Follow the fixture task.'\n", role)), 0600); err != nil {
+		role := strings.TrimSuffix(filepath.Base(path), ".yaml")
+		if err = os.WriteFile(path, []byte(fmt.Sprintf("name: %q\ndescription: 'Deterministic fixture'\ninstructions: 'Follow the fixture task.'\n", role)), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -296,7 +296,7 @@ func (r nativeFixtureRunner) ToolPolicy(role string) ([]ToolGrant, []ToolDefinit
 }
 
 func fixtureAgent(role, prompt string) Step {
-	return Step{Uses: "agent/run", With: map[string]any{"agent": role + ".toml", "prompt": prompt}}
+	return Step{Uses: "agent/run", With: map[string]any{"agent": role + ".yaml", "prompt": prompt}}
 }
 func nativeWorkflowSource(t *testing.T, w *Workflow) string {
 	t.Helper()
@@ -319,7 +319,7 @@ func editNativeWorkflow(t *testing.T, source string, edit func(*Workflow)) strin
 func TestNativeFixtureReleasesFinalizerRegistry(t *testing.T) {
 	var manager *WorkerManager
 	t.Run("fixture", func(t *testing.T) {
-		executor, _ := durableExecutor(t, "jobs: {task: {steps: [{uses: agent/run, with: {agent: reviewer.toml, prompt: work}}]}}", nil)
+		executor, _ := durableExecutor(t, "jobs: {task: {steps: [{uses: agent/run, with: {agent: reviewer.yaml, prompt: work}}]}}", nil)
 		manager = executor.Workers
 		if _, ok := nativeFixtureFinalizers.Load(manager); !ok {
 			t.Fatal("fixture finalizer was not registered")

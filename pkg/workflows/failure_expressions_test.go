@@ -44,7 +44,7 @@ func TestObservedNativeFailureClassificationReachesFollowingStep(t *testing.T) {
       - id: task
         uses: agent/run
         continue-on-error: true
-        with: {agent: reviewer.toml, prompt: Work}
+        with: {agent: reviewer.yaml, prompt: Work}
       - id: observe
         argv: [echo, '${{ steps.task.failure_class }}', '${{ steps.task.unsafe_failure_class }}']
 `, func(SessionRequest) (map[string]any, error) {

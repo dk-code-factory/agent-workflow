@@ -22,21 +22,21 @@ const lifecycleWorkflow = `jobs:
           - id: backup
             uses: agent/run
             with:
-              agent: backup.toml
+              agent: backup.yaml
               prompt: '${{ failed.prompt }}|${{ error.class }}'
         onFailure:
           - uses: agent/run
             with:
-              agent: observer.toml
+              agent: observer.yaml
               prompt: report
         finally:
           - uses: agent/run
             with:
-              agent: cleanup.toml
+              agent: cleanup.yaml
               prompt: cleanup
         uses: agent/run
         with:
-          agent: primary.toml
+          agent: primary.yaml
           prompt: original
 `
 
@@ -647,23 +647,23 @@ func TestLifecycleReferenceScopes(t *testing.T) {
       - id: before
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: before
       - id: owner
         finally:
           - id: first
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: '${{ steps.before.text }}'
           - id: second
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: '${{ steps.first.text }}'
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: owner
 `
 	w, err := Parse([]byte(source))
@@ -696,16 +696,16 @@ func TestLifecycleNamedSchemaReferenceAdmission(t *testing.T) {
 jobs:
   task:
     steps:
-      - {id: before, uses: agent/run, with: {agent: a.toml, prompt: before}}
+      - {id: before, uses: agent/run, with: {agent: a.yaml, prompt: before}}
       - id: owner
         onError:
           - id: fallback
-            with: {output: {schema: Result}, agent: a.toml, prompt: fallback}
+            with: {output: {schema: Result}, agent: a.yaml, prompt: fallback}
             uses: agent/run
-          - {id: later, uses: agent/run, with: {agent: a.toml, prompt: later}}
+          - {id: later, uses: agent/run, with: {agent: a.yaml, prompt: later}}
         uses: agent/run
         with:
-          agent: a.toml
+          agent: a.yaml
           prompt: owner
 `
 	for _, reference := range []string{"before", "owner", "fallback", "later", "missing"} {
@@ -729,7 +729,7 @@ jobs:
 }
 
 func TestLifecycleNestingAndCountBounds(t *testing.T) {
-	leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.toml", "prompt": "leaf"}}
+	leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.yaml", "prompt": "leaf"}}
 	tree := leaf
 	for depth := 0; depth < 8; depth++ {
 		parent := leaf

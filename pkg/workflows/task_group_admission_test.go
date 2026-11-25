@@ -10,7 +10,7 @@ const dropTaskStateFixtureSchema = `DROP TABLE task_state_requests; DROP TABLE t
 
 func TestTaskGroupAdmissionPreservesReplacementIdentity(t *testing.T) {
 	root := t.TempDir()
-	writeWorkflow(t, root, "main.yml", "jobs: {one: {steps: [{uses: agent/run, with: {prompt: test, agent: fake.toml}}]}}")
+	writeWorkflow(t, root, "main.yml", "jobs: {one: {steps: [{uses: agent/run, with: {prompt: test, agent: fake.yaml}}]}}")
 	store, err := OpenSQLite(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

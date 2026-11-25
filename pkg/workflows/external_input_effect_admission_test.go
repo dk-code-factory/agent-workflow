@@ -278,7 +278,7 @@ func TestInputCancelLateAdmissionBoundaries(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			ctx := context.Background()
 			var effects atomic.Int32
-			source := `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+			source := `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.yaml}}]}}
 `
 			if boundary == "action binding" {
 				source = `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: action/capture, with: {value: forbidden}}]}}`
@@ -295,7 +295,7 @@ func TestInputCancelLateAdmissionBoundaries(t *testing.T) {
 			}))
 			if boundary == "new child" {
 				writeWorkflow(t, e.WorkspaceDir, "child.yml", `on: {workflow_call: {}}
-jobs: {effect: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+jobs: {effect: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.yaml}}]}}
 `)
 			}
 			spec := readSpec(&effects)
@@ -359,7 +359,7 @@ func (j *declaredCancelJournal) ConsumeInput(ctx context.Context, id string) (Ex
 func TestInputCancelDeclaredJournalPreDispatch(t *testing.T) {
 	ctx := context.Background()
 	var calls atomic.Int32
-	e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+	e, s := durableExecutor(t, `jobs: {ask: {steps: [{uses: input/wait, with: {prompt: q, evidence-id: e}}, {uses: agent/run, with: {prompt: forbidden, agent: a.yaml}}]}}
 `, agentFunc(func(context.Context, AgentRequest) (map[string]any, error) {
 		calls.Add(1)
 		return map[string]any{}, nil
@@ -438,7 +438,7 @@ func TestInputCancelLateTransactionalActionAndStepPublication(t *testing.T) {
 	for _, kind := range []string{"action admission", "admitted step"} {
 		t.Run(kind, func(t *testing.T) {
 			var calls atomic.Int32
-			source := `jobs: {work: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.toml}}]}}
+			source := `jobs: {work: {steps: [{uses: agent/run, with: {prompt: forbidden, agent: a.yaml}}]}}
 `
 			if kind == "action admission" {
 				source = actionSource

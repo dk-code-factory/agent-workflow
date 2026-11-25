@@ -24,9 +24,9 @@ class PrepareTests(unittest.TestCase):
         (self.root / "roles").mkdir()
         roles = {}
         for name in ("leaf", "reviewer", "verifier", "fixer", "audience"):
-            path = self.root / "roles" / (name + ".toml")
-            path.write_text('name = "' + name + '"\ndescription = "Fixture task"\n'
-                            'developer_instructions = "Retain evidence and follow assigned scope."\n')
+            path = self.root / "roles" / (name + ".yaml")
+            path.write_text('name: "' + name + '"\ndescription: "Fixture task"\n'
+                            'instructions: "Retain evidence and follow assigned scope."\n')
             roles[name] = path.relative_to(self.root).as_posix()
         git(self.root, "add", "roles")
         git(self.root, "commit", "-m", "Declare native roles")
@@ -158,11 +158,11 @@ class PrepareTests(unittest.TestCase):
     def test_managed_stages_preserve_outer_settings_and_resources(self):
         controls = {"tasks": ["dk-workflows:dk-pr-publish", "dk-workflows:dk-ci"],
                     "finalizers": [], "settings": {"scope": "retained configuration"},
-                    "resources": ["roles/leaf.toml"]}
+                    "resources": ["roles/leaf.yaml"]}
         _, plan = self.prepare(controls=controls)
         self.assertEqual(plan["settings"], controls["settings"])
-        self.assertEqual(plan["resources"], {"roles/leaf.toml":
-                         hashlib.sha256((self.root / "roles/leaf.toml").read_bytes()).hexdigest()})
+        self.assertEqual(plan["resources"], {"roles/leaf.yaml":
+                         hashlib.sha256((self.root / "roles/leaf.yaml").read_bytes()).hexdigest()})
 
     def test_parallel_writers_and_invalid_managed_controls_are_rejected(self):
         controls = {"tasks": [["dk-workflows:dk-pr-feedback-address", "dk-workflows:dk-pr-description"]]}

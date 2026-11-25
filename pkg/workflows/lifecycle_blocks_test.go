@@ -23,18 +23,18 @@ jobs:
       - id: joined
         parallel:
           - sequence:
-              - {id: seed, uses: agent/run, with: {agent: a.toml, prompt: seed}}
+              - {id: seed, uses: agent/run, with: {agent: a.yaml, prompt: seed}}
               - id: work
-                with: {output: {schema: Result}, agent: primary.toml, prompt: '${{ steps.seed.text }}'}
+                with: {output: {schema: Result}, agent: primary.yaml, prompt: '${{ steps.seed.text }}'}
                 onError:
                   - id: backup
-                    with: {output: {schema: Result}, agent: backup.toml, prompt: 'fallback ${{ failed.prompt }}'}
+                    with: {output: {schema: Result}, agent: backup.yaml, prompt: 'fallback ${{ failed.prompt }}'}
                     uses: agent/run
                 finally:
-                  - {uses: agent/run, with: {agent: a.toml, prompt: cleanup}}
+                  - {uses: agent/run, with: {agent: a.yaml, prompt: cleanup}}
                 uses: agent/run
-          - {id: sibling, uses: agent/run, with: {agent: a.toml, prompt: sibling}}
-      - {id: after, uses: agent/run, with: {agent: a.toml, prompt: '${{ steps.work.text }}'}}
+          - {id: sibling, uses: agent/run, with: {agent: a.yaml, prompt: sibling}}
+      - {id: after, uses: agent/run, with: {agent: a.yaml, prompt: '${{ steps.work.text }}'}}
 `
 
 func TestLifecycleBlocksRecoveryCapacityAndReplay(t *testing.T) {
@@ -100,14 +100,14 @@ func TestLifecycleBlocksCancellationSkipsHandlerEffects(t *testing.T) {
     steps:
       - parallel:
           - id: work
-            onError: [{uses: agent/run, with: {agent: a.toml, prompt: forbidden}}]
-            finally: [{uses: agent/run, with: {agent: a.toml, prompt: forbidden}}]
+            onError: [{uses: agent/run, with: {agent: a.yaml, prompt: forbidden}}]
+            finally: [{uses: agent/run, with: {agent: a.yaml, prompt: forbidden}}]
             uses: agent/run
             with:
-              agent: a.toml
+              agent: a.yaml
               prompt: wait
-          - {uses: agent/run, with: {agent: a.toml, prompt: fail}}
-      - {uses: agent/run, with: {agent: a.toml, prompt: forbidden}}
+          - {uses: agent/run, with: {agent: a.yaml, prompt: fail}}
+      - {uses: agent/run, with: {agent: a.yaml, prompt: forbidden}}
 `
 	e, _ := durableExecutor(t, source, agentFunc(func(ctx context.Context, r AgentRequest) (map[string]any, error) {
 		switch r.Prompt {
@@ -141,7 +141,7 @@ func TestLifecycleBlocksCancellationSkipsHandlerEffects(t *testing.T) {
 func TestLifecycleBlocksAdmissionAndReferenceScope(t *testing.T) {
 	for _, hook := range []string{"onError", "onFailure", "finally"} {
 		t.Run(hook, func(t *testing.T) {
-			leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.toml", "prompt": "work"}}
+			leaf := Step{Uses: "agent/run", With: map[string]any{"agent": "a.yaml", "prompt": "work"}}
 			block := Step{Parallel: []Step{leaf}}
 			switch hook {
 			case "onError":
