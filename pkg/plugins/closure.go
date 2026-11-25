@@ -21,12 +21,13 @@ type collector struct {
 	root   string
 	files  map[string]file
 	active map[string]bool
-	loaded map[string]bool
+	loaded map[string]*workflows.Workflow
+	open   func(*os.Root, string) (*os.File, error)
 	total  int
 }
 
 func newCollector(root string) *collector {
-	return &collector{root: root, files: map[string]file{}, active: map[string]bool{}, loaded: map[string]bool{}}
+	return &collector{root: root, files: map[string]file{}, active: map[string]bool{}, loaded: map[string]*workflows.Workflow{}, open: openSourceFile}
 }
 func localPath(name string) (string, error) {
 	if name == "" || strings.ContainsAny(name, "\\\x00") || strings.Contains(name, "${{") || path.IsAbs(name) {
@@ -66,7 +67,7 @@ func (c *collector) read(name string) ([]byte, error) {
 	if !before.Mode().IsRegular() || before.Size() > 32<<20 {
 		return nil, fmt.Errorf("%s: requires a regular file of at most 32 MiB", name)
 	}
-	f, err := root.Open(name)
+	f, err := c.open(root, name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
@@ -75,11 +76,25 @@ func (c *collector) read(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > 32<<20 {
-		return nil, fmt.Errorf("%s: requires a regular file of at most 32 MiB", name)
+	if !sameSourceFile(before, info) {
+		return nil, fmt.Errorf("%s: source changed before reading", name)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, (32<<20)+1))
 	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	latest, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !sameSourceFile(before, opened) || !sameSourceFile(before, latest) {
+		return nil, fmt.Errorf("%s: source changed during reading", name)
+	}
+	if err := checkSourcePath(root, name); err != nil {
 		return nil, err
 	}
 	c.total += len(data)
@@ -88,6 +103,10 @@ func (c *collector) read(name string) ([]byte, error) {
 	}
 	c.files[name] = file{data: data, mode: info.Mode().Perm()}
 	return data, nil
+}
+
+func sameSourceFile(before, after fs.FileInfo) bool {
+	return after.Mode().IsRegular() && os.SameFile(before, after) && before.Mode() == after.Mode() && before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
 }
 
 // checkSourcePath rejects symlinks before reading or enumerating dependencies.
@@ -207,10 +226,14 @@ func (c *collector) agent(name string) error {
 		}
 		name = candidates[0]
 	}
-	if _, err = c.read(name); err != nil {
+	if ext := strings.ToLower(path.Ext(name)); ext != ".yaml" && ext != ".yml" {
+		return fmt.Errorf("%s: new agent admissions require YAML; use agent-workflow agent convert", name)
+	}
+	data, err := c.read(name)
+	if err != nil {
 		return err
 	}
-	_, err = workflows.LoadAgentDefinition(filepath.Join(c.root, filepath.FromSlash(name)))
+	_, err = workflows.ParseAgentDefinition(data)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -281,7 +304,10 @@ func (c *collector) visit(ref string, depth int) error {
 	if c.active[ref] {
 		return fmt.Errorf("%s: workflow dependency cycle", ref)
 	}
-	if c.loaded[ref] {
+	if cached := c.loaded[ref]; cached != nil {
+		if depth > 0 && cached.On.WorkflowCall == nil {
+			return fmt.Errorf("%s: plugin workflow requires on.workflow_call", ref)
+		}
 		return nil
 	}
 	if len(c.loaded) >= 201 {
@@ -302,7 +328,7 @@ func (c *collector) visit(ref string, depth int) error {
 		return fmt.Errorf("%s: plugin workflow requires on.workflow_call", ref)
 	}
 	c.active[ref] = true
-	c.loaded[ref] = true
+	c.loaded[ref] = w
 	for _, j := range w.Jobs {
 		if j.Uses != "" {
 			if err = c.workflow(j.Uses, depth+1); err != nil {
@@ -342,14 +368,20 @@ func rewriteWorkflow(data []byte, prefix string) ([]byte, error) {
 			for k := 0; k < len(job.Content); k += 2 {
 				if job.Content[k].Value == "uses" {
 					value := job.Content[k+1]
-					if value.Tag == "!!null" || value.Value == "" {
+					var decoded string
+					if err := value.Decode(&decoded); err != nil {
+						return nil, err
+					}
+					if decoded == "" {
 						continue
 					}
-					ref, err := workflows.CanonicalLocalRef(value.Value)
+					ref, err := workflows.CanonicalLocalRef(decoded)
 					if err != nil {
 						return nil, err
 					}
-					job.Content[k+1].Value = path.Join(prefix, ref)
+					if err := value.Encode(path.Join(prefix, ref)); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}

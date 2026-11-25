@@ -208,7 +208,7 @@ func importWorkflow(name, source string) (Skill, map[string]file, error) {
 	}
 	files := map[string]file{}
 	for p, f := range c.files {
-		if c.loaded[p] {
+		if c.loaded[p] != nil {
 			f.data, err = rewriteWorkflow(f.data, prefix)
 			if err != nil {
 				return Skill{}, nil, err

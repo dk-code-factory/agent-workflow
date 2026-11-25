@@ -718,6 +718,8 @@ func TestPluginImportReadOnlyHelperDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(source, "helpers"), 0755) })
 	root := filepath.Join(t.TempDir(), "demo")
+	helper := filepath.Join(root, "imports/demo/workflows/helpers")
+	t.Cleanup(func() { _ = os.Chmod(helper, 0755) })
 	disk := authoringIO()
 	create := disk.create
 	writes := 0
@@ -738,7 +740,6 @@ func TestPluginImportReadOnlyHelperDirectory(t *testing.T) {
 	if err := initProject(root, "demo", "0.2.2", filepath.Join(source, "custom.yaml"), disk); err != nil {
 		t.Fatal(err)
 	}
-	helper := filepath.Join(root, "imports/demo/workflows/helpers")
 	info, err := os.Stat(helper)
 	if err != nil || info.Mode().Perm() != 0555 || writes != 2 {
 		t.Fatalf("helper modes/writes: %v, %d (%v)", info, writes, err)
@@ -747,7 +748,6 @@ func TestPluginImportReadOnlyHelperDirectory(t *testing.T) {
 	if err != nil || string(contents) != "print('declared')\n" {
 		t.Fatalf("helper contents: %q (%v)", contents, err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(helper, 0755) })
 	// A later descriptor failure must still roll back files inside finalized
 	// read-only directories, preserving the existing project and source tree.
 	disk.rename = func(_, _ string) error { return errors.New("injected descriptor failure") }
