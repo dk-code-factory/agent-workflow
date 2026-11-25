@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,18 +70,16 @@ func TestNativeRuntimeContinuationUsesAdmittedSettingsAfterRestart(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
+			initialStore := store
+			t.Cleanup(func() { _ = initialStore.Close() })
 			executor, workers := Executor(cfg, store, root, 1)
 			stop := serveNativeWorkers(t, ctx, workers)
 			queued, err := executor.Prepare(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
 			if err != nil {
-				stop()
-				store.Close()
 				t.Fatal(err)
 			}
 			waiting, err := executor.Resume(ctx, queued.ID, nil, false)
 			if err != nil || waiting.Status != workflows.RunStatusWaiting {
-				stop()
-				store.Close()
 				t.Fatalf("first task: %+v %v", waiting, err)
 			}
 			_, saved, err := store.Load(ctx, queued.ID)
@@ -109,13 +108,12 @@ func TestNativeRuntimeContinuationUsesAdmittedSettingsAfterRestart(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			t.Cleanup(func() { _ = store.Close() })
 			// Current settings intentionally select another backend, model and policy.
 			// Recovery must use only the immutable original role snapshot.
 			changed := clirunner.Config{AgentRuntime: "replacement", Agents: map[string]clirunner.Agent{"replacement": {Provider: "claude-sdk", Command: "must-not-execute", Model: "changed-model", Limits: clirunner.Limits{MaxTurns: 99}}}}
 			executor, workers = Executor(changed, store, root, 1)
 			stop = serveNativeWorkers(t, ctx, workers)
-			defer stop()
 			gates, err := store.Inputs(ctx, queued.ID)
 			if err != nil || len(gates) != 1 {
 				t.Fatalf("gate: %+v %v", gates, err)
@@ -184,7 +182,21 @@ func serveNativeWorkers(t *testing.T, ctx context.Context, workers *workflows.Wo
 	serviceCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { defer close(done); workers.Serve(serviceCtx) }()
-	return func() { cancel(); <-done }
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-done:
+			case <-timer.C:
+				t.Error("worker service did not stop within 5 seconds")
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
 }
 
 func nativeRuntimeFixture(t *testing.T, root, provider string) (clirunner.Config, string) {

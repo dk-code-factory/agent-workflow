@@ -84,26 +84,20 @@ developer_instructions = 'Original instructions.'
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialStore := store
+	t.Cleanup(func() { _ = initialStore.Close() })
 	if err := store.Admit(ctx, run, snapshot); err != nil {
-		store.Close()
 		t.Fatal(err)
 	}
 	executor, workers := Executor(clirunner.Config{AgentRuntime: "changed"}, store, root, 1)
 	workers.Limits = workflows.WorkerLimits{MaxWorkers: 4, MaxDepth: 2, MaxQueued: 4, MaxTurns: 3, TurnDuration: time.Second * 5, MaxOutput: 65536}
-	if err := workers.Init(ctx); err != nil {
-		t.Fatal(err)
-	}
-	serviceCtx, stop := context.WithCancel(ctx)
-	serviceDone := make(chan struct{})
-	go func() { workers.Serve(serviceCtx); close(serviceDone) }()
-	defer stop()
+	stop := serveNativeWorkers(t, ctx, workers)
 	fault := &nativeStepAckFault{SQLiteStore: store}
 	if lostAck {
 		executor.Store = fault
 	}
 	result, err := executor.Resume(ctx, run.ID, nil, false)
 	if !lostAck && (err != nil || result.Status != workflows.RunStatusSucceeded) {
-		store.Close()
 		t.Fatalf("legacy resume: %+v %v", result, err)
 	}
 	if lostAck {
@@ -117,11 +111,9 @@ developer_instructions = 'Original instructions.'
 	}
 	before, err := workers.List(ctx, run.ID)
 	if err != nil || len(before) != 1 {
-		store.Close()
 		t.Fatalf("legacy workers: %+v %v", before, err)
 	}
 	if before[0].Role != "codex" || before[0].SessionID != "legacy-thread" || before[0].Remaining != 0 || before[0].Definition.Bytes != raw {
-		store.Close()
 		t.Fatalf("legacy bindings: %+v", before[0])
 	}
 	originalMessages, err := workers.Messages(ctx, run.ID, before[0].ID)
@@ -129,7 +121,6 @@ developer_instructions = 'Original instructions.'
 		t.Fatal(originalMessages, err)
 	}
 	stop()
-	<-serviceDone
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
