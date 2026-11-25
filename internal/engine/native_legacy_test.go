@@ -34,6 +34,7 @@ func testLegacyNativeRestart(t *testing.T, lostAck bool) {
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
 	calls := filepath.Join(root, "turns")
+	models := filepath.Join(root, "models")
 	command := filepath.Join(root, "fake-codex")
 	fixture := `import sys,json
 for line in sys.stdin:
@@ -41,7 +42,9 @@ for line in sys.stdin:
  def out(v): print(json.dumps(v),flush=True)
  if m=='initialize': out({'id':i,'result':{'userAgent':'codex_cli_rs/` + clirunner.CodexProtocolVersion + ` (fixture)'}})
  elif m=='account/login/start': out({'id':i,'result':{}})
- elif m in ('thread/start','thread/resume'): out({'id':i,'result':{'thread':{'id':'legacy-thread'}}})
+ elif m in ('thread/start','thread/resume'):
+  with open(` + strconv.Quote(models) + `,'a') as model: model.write(json.dumps(f['params'].get('model'))+'\n')
+  out({'id':i,'result':{'thread':{'id':'legacy-thread'}}})
  elif m=='turn/start':
   with open(` + strconv.Quote(calls) + `,'a') as count: count.write('turn\n')
   out({'id':i,'result':{'turn':{'id':'legacy-turn'}}})
@@ -53,7 +56,7 @@ for line in sys.stdin:
 		t.Fatal(err)
 	}
 	t.Setenv("LEGACY_NATIVE_TEST_KEY", "local-fixture-key")
-	cfg := clirunner.Config{Agents: map[string]clirunner.Agent{"codex": {Provider: "codex-app-server", Command: command, Limits: clirunner.Limits{MaxTurns: 3}, Authentication: clirunner.Authentication{Mode: "api-key", CredentialEnv: "LEGACY_NATIVE_TEST_KEY"}}}}
+	cfg := clirunner.Config{Agents: map[string]clirunner.Agent{"codex": {Provider: "codex-app-server", Command: command, Model: "retained-legacy-model", Limits: clirunner.Limits{MaxTurns: 3}, Authentication: clirunner.Authentication{Mode: "api-key", CredentialEnv: "LEGACY_NATIVE_TEST_KEY"}}}}
 	roles, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +70,7 @@ jobs: {review: {steps: [{id: work, uses: agent/run, with: {agent: removed.toml, 
 	raw := `name = 'reviewer'
 developer_instructions = 'Original instructions.'
 `
-	definition := &workflows.AgentDefinition{Name: "reviewer", Description: "Legacy fixture", DeveloperInstructions: "Original instructions.", Source: "/removed/reviewer.toml", Bytes: raw}
+	definition := &workflows.AgentDefinition{Name: "reviewer", Description: "Legacy fixture", DeveloperInstructions: "Original instructions.", Model: cfg.Agents["codex"].Model, Source: "/removed/reviewer.toml", Bytes: raw}
 	job := w.Jobs["review"]
 	job.Steps[0].Definition = definition
 	w.Jobs["review"] = job
@@ -160,6 +163,10 @@ developer_instructions = 'Original instructions.'
 	turns, err := os.ReadFile(calls)
 	if err != nil || string(turns) != "turn\n" {
 		t.Fatalf("completed work replayed: %q %v", turns, err)
+	}
+	selectedModels, err := os.ReadFile(models)
+	if err != nil || string(selectedModels) != "\"retained-legacy-model\"\n" {
+		t.Fatalf("legacy numeric override changed configured provider model: %q %v", selectedModels, err)
 	}
 	_, retained, err := store.Load(ctx, run.ID)
 	if err != nil {
