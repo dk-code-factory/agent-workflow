@@ -8,11 +8,12 @@ import (
 )
 
 type Workflow struct {
-	Schemas map[string]map[string]any `json:"schemas,omitempty" yaml:"schemas,omitempty"`
-	Name    string                    `json:"name,omitempty"  yaml:"name,omitempty"`
-	On      WorkflowTriggers          `json:"on,omitempty"    yaml:"on,omitempty"`
-	Gates   map[string]any            `json:"gates,omitempty" yaml:"gates,omitempty"`
-	Jobs    map[string]Job            `json:"jobs"            yaml:"jobs"`
+	StepDefinitions map[string]StepDefinition `json:"step-definitions,omitempty" yaml:"step-definitions,omitempty"`
+	Schemas         map[string]map[string]any `json:"schemas,omitempty" yaml:"schemas,omitempty"`
+	Name            string                    `json:"name,omitempty"  yaml:"name,omitempty"`
+	On              WorkflowTriggers          `json:"on,omitempty"    yaml:"on,omitempty"`
+	Gates           map[string]any            `json:"gates,omitempty" yaml:"gates,omitempty"`
+	Jobs            map[string]Job            `json:"jobs"            yaml:"jobs"`
 }
 
 type WorkflowTriggers struct {
@@ -132,6 +133,8 @@ type Job struct {
 }
 
 type Step struct {
+	UseDefinition           string                   `json:"use-definition,omitempty" yaml:"use-definition,omitempty"`
+	Reuse                   *StepReuse               `json:"reuse,omitempty" yaml:"-"`
 	Files                   []string                 `json:"files,omitempty" yaml:"files,omitempty"`
 	Protocol                string                   `json:"protocol,omitempty" yaml:"protocol,omitempty"`
 	Effect                  ActionEffect             `json:"effect,omitempty" yaml:"effect,omitempty"`
@@ -206,6 +209,10 @@ func (w *Workflow) UnmarshalYAML(value *yaml.Node) error {
 		case "schemas":
 			if err := val.Decode(&w.Schemas); err != nil {
 				return fmt.Errorf("schemas: %w", err)
+			}
+		case "step-definitions":
+			if err := val.Decode(&w.StepDefinitions); err != nil {
+				return fmt.Errorf("step-definitions: %w", err)
 			}
 		case "gates":
 			if err := val.Decode(&w.Gates); err != nil {

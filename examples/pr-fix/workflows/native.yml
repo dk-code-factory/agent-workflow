@@ -239,6 +239,21 @@ schemas:
         - 'null'
         description: A JSON-encoded object for task-specific deliverables, or null when absent.
     additionalProperties: false
+step-definitions:
+  retained-helper:
+    parameters:
+      operation: {type: string, required: true}
+      payload: {type: object, required: true}
+    step:
+      argv: [python3, -B, /actions/helpers/action.py, '${{ parameters.operation }}']
+      protocol: action-v1
+      effect: external_mutation
+      input-schema: {type: object}
+      output-schema: {type: object}
+      input: ${{ parameters.payload }}
+      env:
+        GH_TOKEN: ${{ secrets.github_token }}
+        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
 jobs:
   prepare:
     if: ${{ inputs.mode == 'checklist' }}
@@ -247,27 +262,16 @@ jobs:
       - helpers/
       - agents/
     steps:
-    - argv:
-      - python3
-      - -B
-      - /actions/helpers/action.py
-      - check_prepare
-      protocol: action-v1
-      effect: external_mutation
-      input-schema:
-        type: object
-      output-schema:
-        type: object
-      input:
-        plan: ${{ inputs.plan }}
-        claim: ${{ inputs.claim }}
-        agent: ${{ inputs.agent }}
-        round: ${{ inputs.round }}
-        publication: ${{ inputs.publication }}
-      env:
-        GH_TOKEN: ${{ secrets.github_token }}
-        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
-      id: check
+    - id: check
+      use-definition: retained-helper
+      with:
+        operation: check_prepare
+        payload:
+          plan: ${{ inputs.plan }}
+          claim: ${{ inputs.claim }}
+          agent: ${{ inputs.agent }}
+          round: ${{ inputs.round }}
+          publication: ${{ inputs.publication }}
     outputs:
       input: ${{ steps.check.outputs.task_input }}
       prompt: ${{ steps.check.outputs.prompt }}
@@ -355,35 +359,24 @@ jobs:
       - agents/
     steps:
     - id: accepted
-      argv:
-      - python3
-      - -B
-      - /actions/helpers/action.py
-      - native_accept
-      protocol: action-v1
-      effect: external_mutation
-      input-schema:
-        type: object
-      output-schema:
-        type: object
-      input:
-        plan: ${{ inputs.plan }}
-        claim: ${{ inputs.claim }}
-        mode: ${{ inputs.mode }}
-        round: ${{ inputs.round }}
-        publication: ${{ inputs.publication }}
-        results:
-          initial:
-            status: ${{ needs.initial.status }}
-            output: ${{ needs.initial.outputs }}
-          retry:
-            status: ${{ needs.retry.status }}
-            output: ${{ needs.retry.outputs }}
-          checklist:
-            status: ${{ needs.checklist.status }}
-            output: ${{ needs.checklist.outputs }}
-      env:
-        GH_TOKEN: ${{ secrets.github_token }}
-        GH_ENTERPRISE_TOKEN: ${{ secrets.github_token }}
+      use-definition: retained-helper
+      with:
+        operation: native_accept
+        payload:
+          plan: ${{ inputs.plan }}
+          claim: ${{ inputs.claim }}
+          mode: ${{ inputs.mode }}
+          round: ${{ inputs.round }}
+          publication: ${{ inputs.publication }}
+          results:
+            initial:
+              status: ${{ needs.initial.status }}
+              output: ${{ needs.initial.outputs }}
+            retry:
+              status: ${{ needs.retry.status }}
+              output: ${{ needs.retry.outputs }}
+            checklist:
+              status: ${{ needs.checklist.status }}
+              output: ${{ needs.checklist.outputs }}
     outputs:
       result: ${{ steps.accepted.outputs }}
