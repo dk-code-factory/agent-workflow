@@ -234,16 +234,24 @@ empty and denied tool ceilings, partial results, invalid/repeated permits,
 cancellation, startup exclusions and retained policy mismatches. Earlier complete
 builds and failed stages remain separate historical evidence.
 
-The revised candidate changes only three source-test waits to use local
-one-second failure deadlines. It has patch digest
+A historical intermediate candidate changed three source-test waits to use local
+one-second failure deadlines. It used patch digest
 `e199ca21257398300424f8cccee368fb74cf1ba97c4c3ea9e630739aa0c204fc`,
 source digest
 `a2ae12dd20ee47bab14e3545ca36159988b6acab7857d6bb54e62550c25884a5`,
 and build identity
 `4953fb670677ee6e0ae39d05ec88612c175a31a1370890366c289312ccc609fa`.
-Its recipe and offline-wrapper pins remain unchanged. This candidate is disabled
-until its counted source tests, standalone build and actual binary conformance
-complete; the preceding binary does not prove the new build identity.
+Its recipe and offline-wrapper pins matched the preceding recipe. Its counted
+source tests and standalone build passed; actual binary conformance was not run
+for that intermediate build.
+
+The current candidate pins are declared in
+[profile.json](../patches/codex/profile.json); its prepared source receipt derives
+the build identity from those exact inputs. Subsequent revisions correct the
+journal ownership comment and bound cache preparation, including repeated crate
+names. Runtime admission remains disabled until the current counted source tests,
+standalone build and actual binary conformance complete. A preceding binary does
+not prove a changed build identity.
 
 The production Go transport now verifies the held executable and actual guardian
 child before initialize, checks the source build handshake, uses the maintained

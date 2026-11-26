@@ -299,7 +299,7 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool, 
 			}
 		}
 	}
-	t.Logf("%s original public conversation: 3 turns/6 APIs/3 durable receipts/2 retained participant sessions/task accounting atomically finished", provider)
+	t.Logf("%s original public conversation: 3 turns/%d APIs/3 durable receipts/2 retained participant sessions/task accounting atomically finished", provider, requests.Load())
 }
 
 func TestManagedPublicAgentTaskNativeContinuation(t *testing.T) {

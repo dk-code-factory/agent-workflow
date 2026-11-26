@@ -126,6 +126,8 @@ type WorkerManager struct {
 	wg             sync.WaitGroup
 	waitMu         sync.Mutex
 	waitChanged    chan struct{}
+	recoveryMu     sync.Mutex
+	recoveryAfter  int64
 }
 
 func (m *WorkerManager) Init(ctx context.Context) error {

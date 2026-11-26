@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,35 @@ SPEC.loader.exec_module(BUILD)
 
 
 class ManagedSourceBuildTests(unittest.TestCase):
+    def test_cache_preparation_copies_one_index_for_multiple_locked_versions(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(BUILD, "MIN_FREE", 0):
+            root = Path(directory)
+            prepared, origin = root / "prepared", root / "original"
+            (prepared / "cargo-home").mkdir(parents=True)
+            (prepared / "source/codex-rs").mkdir(parents=True)
+            (prepared / BUILD.RECEIPT).write_text(json.dumps({"inputs": {"patch_sha256": "fixture"}, "build_id": "fixture"}))
+            registry = "index.crates.io-1949cf8c6b5b557f"
+            index = origin / "registry/index" / registry
+            (index / ".cache/3/a").mkdir(parents=True)
+            (index / "config.json").write_text("{}")
+            (index / ".cache/3/a/aes").write_bytes(b"index covers both locked versions")
+            packages = []
+            for version in ("0.8.4", "0.9.3"):
+                archive = origin / "registry/cache" / registry / ("aes-" + version + ".crate")
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                archive.write_bytes(version.encode())
+                packages.append('\n[[package]]\nname = "aes"\nversion = "' + version + '"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "' + BUILD.digest(archive) + '"\n')
+            (prepared / "source/codex-rs/Cargo.lock").write_text("".join(packages))
+            original = {path: BUILD.digest(path) for path in origin.rglob("*") if path.is_file()}
+            with patch.object(BUILD, "manifest", return_value=({"patch_sha256": "fixture"}, None)), patch("sys.stdout", new=io.StringIO()):
+                BUILD.prepare_cache(argparse.Namespace(output=prepared, from_cache=origin))
+            report = json.loads((prepared / "cache.json").read_text())
+            self.assertEqual(report["missing"], [])
+            self.assertEqual(report["copied"].count("registry/index/" + registry + "/.cache/3/a/aes"), 1)
+            for path, checksum in original.items():
+                self.assertEqual(BUILD.digest(path), checksum)
+                self.assertEqual(BUILD.digest(prepared / "cargo-home" / path.relative_to(origin)), checksum)
+
     def test_cache_copy_reserves_tree_before_any_write(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(BUILD, "MIN_FREE", 0):
             root = Path(directory)

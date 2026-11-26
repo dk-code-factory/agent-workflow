@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -222,4 +223,112 @@ func TestManagedRecoveryHeldCandidateDoesNotStarveUnrelatedWorker(t *testing.T) 
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("held recovery candidate starved independent worker")
+}
+
+func TestManagedRecoveryDiscoveryAdvancesPastHeldPage(t *testing.T) {
+	store, original, identity := managedUsageFixture(t)
+	witness := managedUsageWitness("sealed", 10)
+	var originalBatch managedCodexBatchIdentity
+	if err := json.Unmarshal(witness.Batch, &originalBatch); err != nil {
+		t.Fatal(err)
+	}
+	originalBatch.CallIDs = []string{"original-call"}
+	witness.Batch = mustManagedRecoveryJSON(originalBatch)
+	if err := RecordManagedCodexUsage(original, identity.RunID, identity.ID, witness); err != nil {
+		t.Fatal(err)
+	}
+	if err := SealManagedCodexBatch(original, identity.RunID, identity.ID, witness.Digest, witness.Batch); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	manager := &WorkerManager{Store: store}
+	worker, err := manager.Get(ctx, identity.RunID, identity.WorkerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := manager.Messages(ctx, identity.RunID, identity.WorkerID)
+	if err != nil || len(messages) != 1 {
+		t.Fatal(messages, err)
+	}
+	worker.Status = RunStatusNeedsAttention
+	workerRaw, _ := json.Marshal(worker)
+	if _, err = store.db.Exec(`UPDATE workers SET status=?,record=? WHERE id=?`, worker.Status, workerRaw, worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.QueueResume(ctx, identity.RunID, "new-owner", true, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Status = RunStatusRunning
+	if err = store.Claim(ctx, current, RunStatusQueued); err != nil {
+		t.Fatal(err)
+	}
+	// Fifty held originals in each of two other origins respect the ordinary
+	// per-run worker bound while filling the complete discovery page.
+	for origin := range 2 {
+		run := &Run{ID: fmt.Sprintf("held-origin-%d", origin), Status: RunStatusQueued, Jobs: map[string]JobExecution{}}
+		if err = store.Admit(ctx, run, Snapshot{Version: 1}); err != nil {
+			t.Fatal(err)
+		}
+		run.Status = RunStatusRunning
+		if err = store.Claim(ctx, run, RunStatusQueued); err != nil {
+			t.Fatal(err)
+		}
+		for index := range 50 {
+			id := fmt.Sprintf("held-%d-%d", origin, index)
+			held := Worker{ID: id, RunID: run.ID, Role: "held", Status: RunStatusNeedsAttention}
+			heldRaw, _ := json.Marshal(held)
+			if _, err = store.db.Exec(`INSERT INTO workers VALUES(?,?,?,?,?,?)`, id, run.ID, "", held.Role, held.Status, heldRaw); err != nil {
+				t.Fatal(err)
+			}
+			msg := WorkerMessage{ID: id + "-message", WorkerID: id, Sequence: 1, Status: RunStatusRunning}
+			msgRaw, _ := json.Marshal(msg)
+			if _, err = store.db.Exec(`INSERT INTO messages VALUES(?,?,?,?,?,?)`, msg.ID, id, "held", 1, msg.Status, msgRaw); err != nil {
+				t.Fatal(err)
+			}
+			usage := UsageIdentity{ID: msg.ID, RunID: run.ID, WorkerID: id, Kind: "worker", Provider: "claude-sdk", Model: "fixture"}
+			if err = store.BeginUsage(ctx, usage); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.db.Exec(`INSERT INTO usage_observations VALUES(?,?,?)`, msg.ID, managedSDKAttemptKey, `{"scope":"invocation","managed_sdk_attempt":{"state":"terminal","profile":"corrupt"}}`); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Physical ordering is a fixture detail, not recovery authority.
+	if _, err = store.db.Exec(`UPDATE workers SET rowid=10000 WHERE id=?`, worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := manager.managedCodexCandidates(ctx)
+	if err != nil || len(first) != 0 || manager.recoveryAfter == 0 {
+		t.Fatal("held first page did not advance discovery", first, err, manager.recoveryAfter)
+	}
+	cursor := manager.recoveryAfter
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err = manager.managedCodexCandidates(canceled); err == nil || manager.recoveryAfter != cursor {
+		t.Fatal("failed query changed discovery or gained authority", err, manager.recoveryAfter)
+	}
+	next, err := manager.managedCodexCandidates(ctx)
+	if err != nil || len(next) != 1 || next[0].worker.ID != worker.ID || next[0].worker.Remaining != 0 || next[0].message.ID != messages[0].ID || !next[0].message.StartedAt.Equal(messages[0].StartedAt) || next[0].run.Generation != current.Generation || manager.recoveryAfter != 0 {
+		t.Fatal("later original recovery hidden or changed", next, err, manager.recoveryAfter)
+	}
+	var heldCount int
+	if err = store.db.QueryRow(`SELECT count(*) FROM workers WHERE role='held' AND status=?`, RunStatusNeedsAttention).Scan(&heldCount); err != nil || heldCount != 100 {
+		t.Fatal("discovery regranted held originals", heldCount, err)
+	}
+	// Removing the only eligible recovery from discovery leaves an exactly full
+	// held page followed by an empty page, which must wrap without new grants.
+	if _, err = store.db.Exec(`UPDATE workers SET status=? WHERE id=?`, RunStatusSucceeded, worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := manager.managedCodexCandidates(ctx); err != nil || len(rows) != 0 || manager.recoveryAfter == 0 {
+		t.Fatal("full held page did not advance after wrap", rows, err)
+	}
+	if rows, err := manager.managedCodexCandidates(ctx); err != nil || len(rows) != 0 || manager.recoveryAfter != 0 {
+		t.Fatal("empty page did not wrap discovery", rows, err)
+	}
 }

@@ -755,17 +755,24 @@ func managedReadCandidate(ctx context.Context, tx *sql.Tx, w Worker) (*managedCo
 	return &managedCodexCandidate{worker: w, message: msg, recovery: r, run: run}, nil
 }
 func (m *WorkerManager) managedCodexCandidates(ctx context.Context) ([]managedCodexCandidate, error) {
-	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.id,w.run_id,w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND (json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object' OR (u.observation_key='managed-sdk-attempt' AND json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state')='terminal'))) ORDER BY w.rowid LIMIT 100`, RunStatusNeedsAttention)
+	// The cursor only schedules discovery. Every original is independently
+	// validated again before admission; held rows must not pin the first page.
+	m.recoveryMu.Lock()
+	defer m.recoveryMu.Unlock()
+	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.rowid,w.id,w.run_id,w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.rowid>? AND w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND (json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object' OR (u.observation_key='managed-sdk-attempt' AND json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state')='terminal'))) ORDER BY w.rowid LIMIT 100`, m.recoveryAfter, RunStatusNeedsAttention)
 	if err != nil {
 		return nil, err
 	}
 	var workers []Worker
+	var lastRow int64
+	var scanned int
 	for rows.Next() {
 		var raw []byte
 		var id, run string
-		if err = rows.Scan(&id, &run, &raw); err != nil {
+		if err = rows.Scan(&lastRow, &id, &run, &raw); err != nil {
 			break
 		}
+		scanned++
 		var w Worker
 		if decodeJSONWithNumbers(raw, &w) != nil || w.ID != id || w.RunID != run {
 			slog.Error("managed original worker record remains held", "worker_id", id)
@@ -799,6 +806,11 @@ func (m *WorkerManager) managedCodexCandidates(ctx context.Context) ([]managedCo
 		if candidate != nil {
 			result = append(result, *candidate)
 		}
+	}
+	if scanned == 100 {
+		m.recoveryAfter = lastRow
+	} else {
+		m.recoveryAfter = 0
 	}
 	return result, nil
 }

@@ -316,6 +316,7 @@ def prepare_cache(args):
 
     source_index = origin / "registry/index" / registry
     copy(source_index / "config.json", cache / "registry/index" / registry / "config.json")
+    copied_indexes = set()
     for package in lock["package"]:
         if not package.get("source", "").startswith("registry+"):
             continue
@@ -328,10 +329,12 @@ def prepare_cache(args):
         else:
             index = f"{index_name[:2]}/{index_name[2:4]}/{index_name}"
         index = ".cache/" + index
-        if (source_index / index).is_file():
-            copy(source_index / index, cache / "registry/index" / registry / index)
-        else:
-            missing.append("index:" + name)
+        if index not in copied_indexes:
+            copied_indexes.add(index)
+            if (source_index / index).is_file():
+                copy(source_index / index, cache / "registry/index" / registry / index)
+            else:
+                missing.append("index:" + name)
         archive = origin / "registry/cache" / registry / (name + "-" + package["version"] + ".crate")
         if archive.is_file():
             if digest(archive) != package["checksum"]:
