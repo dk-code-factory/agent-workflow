@@ -792,8 +792,10 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 				}
 				w = candidate.worker
 				turnCtx, cancel = context.WithDeadline(ctx, managedOriginalDeadline(w, candidate.message))
-				turnCtx = context.WithValue(turnCtx, managedCodexResumeKey{}, managedCodexResumeContext{message: candidate.message, recovery: candidate.recovery})
-				turnCtx = context.WithValue(turnCtx, managedCodexRecoveryKey{}, managedCodexRecoveryContext{value: *candidate.recovery})
+				turnCtx = context.WithValue(turnCtx, managedCodexResumeKey{}, managedCodexResumeContext{message: candidate.message, recovery: candidate.recovery, sdk: candidate.sdk})
+				if candidate.recovery != nil {
+					turnCtx = context.WithValue(turnCtx, managedCodexRecoveryKey{}, managedCodexRecoveryContext{value: *candidate.recovery})
+				}
 			} else {
 				turnCtx, cancel = context.WithTimeout(ctx, duration)
 			}
@@ -941,7 +943,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		}
 	} else {
 		current, loadErr := m.Get(ctx, w.RunID, w.ID)
-		if loadErr != nil || current.Status != RunStatusRunning || !managedAdmissionMatches(resume.recovery, current, msg) {
+		if loadErr != nil || current.Status != RunStatusRunning || !(resume.recovery != nil && managedAdmissionMatches(resume.recovery, current, msg) || resume.sdk != nil && resume.sdk.Admission != nil && resume.sdk.Admission.BoundarySHA256 == managedBoundaryDigest(current, msg) && resume.sdk.Admission.StartedAt.Equal(msg.StartedAt) && current.Remaining <= resume.sdk.Admission.RemainingCeiling) {
 			return
 		}
 		w = current
@@ -1150,7 +1152,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	var result SessionResult
 	var turnErr error
-	if recovering && resume.recovery.State == "terminal" && resume.recovery.Terminal != nil {
+	if recovering && resume.sdk != nil && resume.sdk.State == "terminal" && resume.sdk.Terminal != nil {
+		result = *resume.sdk.Terminal
+	} else if recovering && resume.recovery != nil && resume.recovery.State == "terminal" && resume.recovery.Terminal != nil {
 		result = *resume.recovery.Terminal
 	} else {
 		result, turnErr = runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: expectedSession}, onProviderEvent)
@@ -1195,7 +1199,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			turnErr = errors.Join(turnErr, workerPersistenceError(e))
 		}
 	}
-	if usageErr == nil && !managedTerminal {
+	if usageErr == nil && !managedTerminal && !(sdkAttempt != 0 && turnErr == nil && ctx.Err() == nil && result.Status == RunStatusSucceeded) {
 		update := usageUpdate(result.Outputs, true)
 		if (w.Skill != nil || sdkAttempt != 0) && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
 			update.Incomplete = true

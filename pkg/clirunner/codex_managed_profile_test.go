@@ -3,6 +3,7 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,9 +58,9 @@ func TestManagedCodexRetainedManifestCannotRecaptureAuthority(t *testing.T) {
 	}
 }
 
-func TestManagedCodexCanonicalProfileIsClosedAndNilRoleCompatible(t *testing.T) {
-	if _, err := managedSourceDescriptor(); err == nil {
-		t.Fatal("unproven canonical source profile admitted")
+func TestManagedCodexCanonicalTupleAndNilRoleCompatible(t *testing.T) {
+	if source, err := managedSourceDescriptor(); err != nil || source.SourceSHA256 == "" || source.Protocol != "agent-workflow-codex-managed/1" {
+		t.Fatal("canonical managed source tuple unavailable", err)
 	}
 	raw, err := json.Marshal(Agent{})
 	if err != nil {
@@ -69,11 +70,11 @@ func TestManagedCodexCanonicalProfileIsClosedAndNilRoleCompatible(t *testing.T) 
 		t.Fatal("nil optional profile changes historical role serialization", string(raw))
 	}
 	if err := validateManagedBuildRole(Agent{ManagedBuild: &ManagedBuild{}, Provider: "codex-app-server"}); err == nil {
-		t.Fatal("workspace can bypass disabled profile")
+		t.Fatal("workspace can bypass missing retained identity")
 	}
 	runner := &Runner{Config: Config{Agents: map[string]Agent{"worker": {Provider: "codex-app-server", ManagedBuild: &ManagedBuild{Manifest: "must-not-open"}}}}}
 	if roles, err := runner.PinRoles(context.Background()); err == nil || len(roles) != 0 {
-		t.Fatal("programmatic admission bypassed disabled profile")
+		t.Fatal("programmatic admission bypassed missing retained identity")
 	}
 }
 
@@ -90,5 +91,29 @@ func TestManagedAdmissionCannotReplaceHistoricalOrSelectedAuthority(t *testing.T
 	r := &Runner{Config: Config{AgentRuntime: "worker", NativeTaskAdmission: 2, Agents: map[string]Agent{"worker": {Provider: "codex-app-server"}}}}
 	if err := r.ValidateNativeOutput(nil); err == nil {
 		t.Fatal("managed admission accepted a stock retained role")
+	}
+}
+
+func TestSDKMixedNativeBrokerAuthorityIsClosedBeforeAdmission(t *testing.T) {
+	role := Agent{Provider: "claude-sdk", Tools: []string{"Read"}, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}}}
+	runner := &Runner{Config: Config{AgentRuntime: "worker", Agents: map[string]Agent{"worker": role}}}
+	if _, err := runner.PinRoles(context.Background()); err == nil {
+		t.Fatal("mixed native/broker profile pinned")
+	}
+	if _, err := runner.nativeTaskRuntime(); err == nil {
+		t.Fatal("mixed native/broker task admitted")
+	}
+	if err := runner.ValidateConversationRole("worker"); err == nil {
+		t.Fatal("native conversation admitted broker release")
+	}
+	role.MCPGrants = nil
+	runner.Config.Agents["worker"] = role
+	if _, err := runner.nativeTaskRuntime(); err != nil {
+		t.Fatal("native-only route changed", err)
+	}
+	role.Tools = nil
+	runner.Config.Agents["worker"] = role
+	if err := runner.ValidateConversationRole("worker"); err != nil {
+		t.Fatal("broker-only conversation rejected", err)
 	}
 }

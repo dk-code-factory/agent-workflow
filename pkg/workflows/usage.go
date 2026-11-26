@@ -202,6 +202,13 @@ func (s *SQLiteStore) ObserveUsage(ctx context.Context, identity UsageIdentity, 
 		return err
 	}
 	defer tx.Rollback()
+	// Managed broker observations inherit their original execution fence. The
+	// conflict path still commits already known charges before returning an error.
+	if strings.HasPrefix(update.Key, "sdk-response:") {
+		if err = checkFence(ctx, tx); err != nil {
+			return err
+		}
+	}
 	if err = observeUsageTx(ctx, tx, identity, update); err != nil {
 		if errors.Is(err, ErrUsageCounterConflict) {
 			return errors.Join(err, tx.Commit())

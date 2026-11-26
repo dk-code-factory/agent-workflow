@@ -31,6 +31,12 @@ func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error)
 		}
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true, ManagedPolicy: true}, nil
 	case "codex-app-server":
+		if a.ManagedBuild != nil {
+			if err := validateManagedBuildRole(a); err != nil {
+				return workflows.ProviderCapabilities{}, err
+			}
+			return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true, ManagedPolicy: true}, nil
+		}
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true}, nil
 	case "claude", "claude-cli", "codex", "codex-cli":
 		return workflows.ProviderCapabilities{Interrupt: true, StructuredOutput: true}, nil
@@ -128,6 +134,10 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
 	}
 	agent, req = isolateRepairTurn(agent, req)
+	if req.Skill == nil && agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0 {
+		return workflows.SessionResult{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
+	}
+
 	if req.Definition != nil {
 		if req.AgentID != r.NativeTaskRole() {
 			return workflows.SessionResult{}, fmt.Errorf("native task runtime role binding changed")
@@ -555,6 +565,9 @@ func (r *Runner) nativeTaskRuntime() (Agent, error) {
 	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
 		return Agent{}, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
 	}
+	if role.Provider == "claude-sdk" && len(role.Tools) > 0 && len(role.MCPGrants) > 0 {
+		return Agent{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
+	}
 	if role.Provider == "codex-app-server" {
 		if role.ManagedBuild != nil {
 			if err := validateManagedBuildRole(role); err != nil {
@@ -645,6 +658,19 @@ func (r *Runner) validateNativeAdmissionProfile() error {
 	}
 	if role.ManagedBuild != nil {
 		return fmt.Errorf("historical native admission cannot acquire managed build authority")
+	}
+	return nil
+}
+
+// Conversation tools always use the engine broker. Selected native skills
+// have their separate retained surface and do not enter this contract.
+func (r *Runner) ValidateConversationRole(id string) error {
+	a, ok := r.Config.Agents[id]
+	if !ok {
+		return fmt.Errorf("unknown conversation agent %s", id)
+	}
+	if a.Provider == "claude-sdk" && len(a.Tools) > 0 {
+		return fmt.Errorf("conversation role %s: direct native tools with broker lease release are not certified", id)
 	}
 	return nil
 }

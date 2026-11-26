@@ -42,7 +42,7 @@ jobs:
       - run: npm ci --prefix images/codex --ignore-scripts
       - run: node --check bridge/claude/bridge.mjs
       - run: node --test bridge/claude/isolation.test.mjs bridge/claude/broker-stream.test.mjs
-      - run: go test ./pkg/clirunner ./internal/engine -run 'TestSDK(Bridge|Broker|Conversation|Native)AgainstFakeGateway|TestSDKBrokerNativeStreamBoundaries|TestSDKManagedProductionEngineCapacityOne|TestCodexAgainstFakeGateway' -count=1
+      - run: go test ./pkg/clirunner ./internal/engine -run 'TestSDK(Bridge|Broker|Conversation|Native)AgainstFakeGateway|TestSDKBrokerNativeStreamBoundaries|TestSDKManaged|TestManagedConversationNative|TestManagedPublicAgentTaskNativeContinuation|TestCodexAgainstFakeGateway' -count=1
         env:
           AGENT_WORKFLOW_SDK_TEST: '1'
           AGENT_WORKFLOW_CODEX_TEST: '1'

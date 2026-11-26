@@ -99,10 +99,14 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := SessionResult{Status: RunStatusSucceeded, ProviderStatus: "success", ProviderVersion: "claude-agent-sdk@0.3.322", SessionID: "session", Outputs: map[string]any{"text": "original", "usage": map[string]any{"input_tokens": 16, "output_tokens": 5}}}
+	result := SessionResult{Status: RunStatusSucceeded, ProviderStatus: "success", ProviderVersion: "claude-agent-sdk@0.3.322", SessionID: "session", Outputs: map[string]any{"text": "original", "cost_usd": float64(0), "usage": map[string]any{"input_tokens": 16, "output_tokens": 5}}}
 	if err = CheckpointManagedSDKTerminal(ctx, result); err == nil {
 		t.Fatal("provider result installed its own checkpoint authority")
 	}
+	if err = store.ObserveUsage(ctx, id, UsageUpdate{Key: "sdk-response:known-terminal", Provider: "claude-sdk", Model: "fixture", SessionID: "session", Usage: map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, Incomplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	result.Outputs["usage"] = map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
 	ctx = context.WithValue(ctx, managedSDKTerminalKey{}, manager.sdkTerminalRecorder(w, messages[0], nil))
 	if err = CheckpointManagedSDKTerminal(ctx, result); err != nil {
 		t.Fatal(err)
@@ -114,7 +118,7 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 	msg := messages[0]
 	msg.Status = RunStatusSucceeded
 	changed := result
-	changed.Outputs = map[string]any{"text": "changed", "usage": map[string]any{"input_tokens": 16, "output_tokens": 5}}
+	changed.Outputs = map[string]any{"text": "changed", "usage": result.Outputs["usage"]}
 	if err = settleManagedSDKAttempt(ctx, tx, w, msg, changed); err == nil {
 		t.Fatal("terminal result replacement accepted")
 	}

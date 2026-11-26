@@ -32,7 +32,7 @@ func (f *sdkManagedEngineFixture) UsageProvider(role, model string) (string, str
 	return "claude-sdk", "claude-sonnet-4-6"
 }
 func (f *sdkManagedEngineFixture) ToolPolicy(role string) ([]workflows.ToolGrant, []workflows.ToolDefinition) {
-	if role == "child" {
+	if role == "child" || role == "empty" {
 		return []workflows.ToolGrant{}, nil
 	}
 	return []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}, {Server: "engine", Tool: "worker_wait"}}, workflows.EngineTools()
@@ -51,7 +51,13 @@ func (f *sdkManagedEngineFixture) RunTurn(ctx context.Context, req workflows.Ses
 	}
 	return f.runner.RunTurn(ctx, req, emit)
 }
-func TestSDKManagedProductionEngineCapacityOne(t *testing.T) {
+func TestSDKManagedProductionEngineCapacityOne(t *testing.T) { testSDKManagedEngine(t, "capacity") }
+func TestSDKManagedProductionEngineControls(t *testing.T) {
+	for _, mode := range []string{"known-denial-continuation", "known-denial-wrong-type", "known-denial-unknown-argument", "unknown-after-batch"} {
+		t.Run(mode, func(t *testing.T) { testSDKManagedEngine(t, mode) })
+	}
+}
+func testSDKManagedEngine(t *testing.T, mode string) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("locked SDK/local fake gateway only")
 	}
@@ -89,6 +95,26 @@ func TestSDKManagedProductionEngineCapacityOne(t *testing.T) {
 		w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("sdk-engine-response-", stage)}
 		call := func(id, name string, args map[string]any) map[string]any {
 			return map[string]any{"type": "tool_use", "id": id, "name": name, "input": args}
+		}
+		if strings.HasPrefix(mode, "known-denial") {
+			if stage == 1 {
+				arguments := map[string]any{"turns": 1}
+				if mode == "known-denial-wrong-type" {
+					arguments = map[string]any{"role": "child", "turns": "one"}
+				}
+				if mode == "known-denial-unknown-argument" {
+					arguments = map[string]any{"role": "child", "turns": 1, "surprise": true}
+				}
+				writeSDKMessage(w, model, []map[string]any{call("known-schema-denied", spawn, arguments)}, "tool_use")
+			} else {
+				writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": "SDK_KNOWN_DENIAL_SETTLED"}}, "end_turn")
+			}
+			return
+		}
+		if mode == "unknown-after-batch" && stage == 2 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"unknown-original-response\",\"type\":\"message\",\"role\":\"assistant\",\"model\":%q,\"content\":[],\"usage\":{\"input_tokens\":16,\"output_tokens\":0}}}\n\n", model)
+			return
 		}
 		switch stage {
 		case 1:
@@ -158,7 +184,11 @@ func TestSDKManagedProductionEngineCapacityOne(t *testing.T) {
 	if err = manager.Init(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	parent, err := manager.Spawn(t.Context(), workflows.WorkerSpec{RunID: run.ID, Role: "parent", Turns: 3})
+	turns := 3
+	if strings.HasPrefix(mode, "known-denial") {
+		turns = 2
+	}
+	parent, err := manager.Spawn(t.Context(), workflows.WorkerSpec{RunID: run.ID, Role: "parent", Turns: turns})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +219,113 @@ func TestSDKManagedProductionEngineCapacityOne(t *testing.T) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.HasPrefix(mode, "known-denial") {
+		if completed.Status != workflows.RunStatusSucceeded || requests.Load() != 2 || fixture.children.Load() != 0 {
+			t.Fatalf("known schema denial failed to settle: %+v API%d", completed, requests.Load())
+		}
+		firstSession := completed.Result.SessionID
+		next, err := manager.Send(ctx, run.ID, parent.ID, "continued-original", "Continue the same retained session")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var continued workflows.WorkerMessage
+		for ctx.Err() == nil {
+			messages, e := manager.Messages(ctx, run.ID, parent.ID)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, msg := range messages {
+				if msg.ID == next.ID && msg.Status != workflows.RunStatusQueued && msg.Status != workflows.RunStatusRunning {
+					continued = msg
+				}
+			}
+			if continued.ID != "" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		receipts, err := store.ToolCalls(ctx, run.ID, false)
+		if err != nil || len(receipts) != 1 || receipts[0].Status != "denied" {
+			t.Fatal("known denial receipt lost", receipts, err)
+		}
+		worker, err := manager.Get(ctx, run.ID, parent.ID)
+		if err != nil || continued.Status != workflows.RunStatusSucceeded || continued.Result.SessionID != firstSession || worker.Remaining != 0 || requests.Load() != 3 {
+			t.Fatalf("normal retained continuation failed: %+v %+v %v API%d", continued, worker, err, requests.Load())
+		}
+		report, err := store.Usage(ctx, run.ID)
+		if err != nil || !report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 48 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 15 {
+			t.Fatal("known-denial continuation accounting", report, err)
+		}
+		t.Logf("known committed denied receipt + normal same-session continuation;0child/API3/Remaining0/48-15")
+		return
+	}
+	if mode == "unknown-after-batch" {
+		if completed.Status == workflows.RunStatusSucceeded || requests.Load() != 2 || completed.UnsafeFailureClass != "integrity" {
+			t.Fatalf("unknown original response escaped hold: %+v API%d", completed, requests.Load())
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Fatal("old SDK engine did not join")
+		}
+		receipts, err := store.ToolCalls(t.Context(), run.ID, false)
+		if err != nil || len(receipts) != 2 {
+			t.Fatal(receipts, err)
+		}
+		for _, r := range receipts {
+			if r.Status != "completed" || r.InvocationID != original.ID {
+				t.Fatal(r)
+			}
+		}
+		oldOwner, oldGen := run.Owner, run.Generation
+		if err = store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err = workflows.OpenSQLite(filepath.Join(root, "state"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if err = store.Recover(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		resumed, e := store.QueueResume(t.Context(), run.ID, "same-original-sdk-unknown", true, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		resumed.Status = workflows.RunStatusRunning
+		if err = store.Claim(t.Context(), resumed, workflows.RunStatusQueued); err != nil {
+			t.Fatal(err)
+		}
+		if resumed.Owner == oldOwner || resumed.Generation != oldGen+1 {
+			t.Fatal("SDK owner fence did not advance", resumed)
+		}
+		recovered := &workflows.WorkerManager{Store: store, Capacity: &workflows.Capacity{Slots: make(chan struct{}, 1)}, Factory: manager.Factory}
+		if err = recovered.Init(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err = recovered.Resume(t.Context(), run.ID, parent.ID); err == nil {
+			t.Fatal("new owner public Resume discarded unknown original SDK attempt")
+		}
+		if _, err = recovered.Send(t.Context(), run.ID, parent.ID, "new-after-loss", "must not run"); err == nil {
+			t.Fatal("new owner granted replacement SDK work")
+		}
+		messages, err := recovered.Messages(t.Context(), run.ID, parent.ID)
+		if err != nil || len(messages) != 1 || messages[0].ID != original.ID || !messages[0].StartedAt.Equal(completed.StartedAt) {
+			t.Fatal(messages, err)
+		}
+		current, err := recovered.Get(t.Context(), run.ID, parent.ID)
+		if err != nil || current.Remaining != 0 {
+			t.Fatal(current, err)
+		}
+		report, err := store.Usage(t.Context(), run.ID)
+		if err != nil || report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens < 16 {
+			t.Fatal("known original charge lost on unknown response restart", report, err)
+		}
+		t.Logf("native unknown response after2 completed original effects;API2/no newAPI;SQLite reopen/newobjects/owner gen%d->%d/sameStartedAt/Remaining0", oldGen, resumed.Generation)
+		return
 	}
 	if completed.Status != workflows.RunStatusSucceeded || completed.Result.Outputs["text"] != "SDK_PARENT_AND_CHILDREN_JOINED" || requests.Load() != 3 || fixture.children.Load() != 2 {
 		t.Fatalf("SDK capacity1 original=%+v APIs=%d children=%d", completed, requests.Load(), fixture.children.Load())

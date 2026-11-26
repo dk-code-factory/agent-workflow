@@ -25,6 +25,34 @@ func engineToolBinding(binding ToolBinding) (*toolBinding, bool) {
 }
 
 func CheckToolBindingAuthority(ctx context.Context, binding ToolBinding, runID, invocationID string) error {
+	if conversation, ok := binding.(*conversationTools); ok {
+		store, owner, err := managedCodexUsageOwner(ctx, runID, invocationID)
+		if err != nil {
+			return err
+		}
+		tx, err := store.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = managedCodexUsageFence(ctx, tx, owner); err != nil {
+			return err
+		}
+		a, err := managedCaptureTaskAdmission(ctx, tx, owner, invocationID)
+		if err != nil {
+			return err
+		}
+		if a.Task.ParentID != conversation.execution.attempt.ID || conversation.turn != a.Task.Attempt.StepID || conversation.execution.state.Active == nil || conversation.execution.state.Active.To != conversation.role {
+			return fmt.Errorf("conversation binding differs from original active turn")
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		if conversation.base != nil {
+			return CheckToolBindingAuthority(ctx, conversation.base, runID, invocationID)
+		}
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

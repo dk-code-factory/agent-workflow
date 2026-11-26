@@ -324,9 +324,9 @@ func (e *Executor) execute(ctx context.Context, ref string, req RunRequest, all 
 			req.Metadata["origin_run_id"] = run.ID
 		}
 		run.OriginID = nativeString(req.Metadata, "origin_run_id")
-		if depth == 0 && nativeString(req.Metadata, "task_group") != "" {
-			// Foreground/library runs need the same concrete task-state owner
-			// identity that queued controller runs acquire through Claim.
+		if depth == 0 && (nativeString(req.Metadata, "task_group") != "" || hasDurableAgentTurns(all)) {
+			// Foreground durable agent turns and task groups need the same
+			// concrete owner that queued controller runs acquire through Claim.
 			run.Owner = randomID()
 		}
 		if journal, ok := e.Store.(Journal); ok {

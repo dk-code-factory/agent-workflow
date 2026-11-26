@@ -1,8 +1,10 @@
 # Managed Codex build design for issue 134
 
-This design is under implementation. No managed Codex profile is enabled. The
-stock `codex-app-server` adapter continues to reject managed tool subsets and
-repair. Passing an engine fake-process test cannot certify an upstream binary.
+The repository enables one source-pinned local Linux amd64 broker-only Codex
+profile. Stock `codex-app-server` continues to reject managed tool subsets and
+repair. The managed profile requires its captured build manifest, held executable
+identity and native protocol handshake; a version string or engine fake process
+is insufficient. Whole-PR validation remains a separate readiness requirement.
 
 ## Build identity and admission
 
@@ -135,7 +137,7 @@ without modifying upstream checkout refs. Its tracked files total 98,336,010
 bytes. Rust 1.95.0 is already installed. Existing Cargo registry/git caches total
 about 9.8 GB and remain shared read-only inputs; they are not cleanup targets.
 
-The [disabled profile manifest](../patches/codex/profile.json) binds the exact
+The [source profile manifest](../patches/codex/profile.json) binds the exact
 source patch, [recipe](../scripts/codex_managed_build.py) and
 [offline helper](../scripts/codex_offline_exec.py). The recipe creates fresh owned
 source storage, verifies patch application, freezes the complete source tree and
@@ -190,7 +192,7 @@ subcommand.
 Do not build release images, all targets, or distribution artifacts at this
 stage. Source checking and helper unit tests alone do not enable the profile.
 
-The repository-owned source patch is a prototype. Retained preparation evidence
+Historical prototype preparation evidence
 records the initial missing Git submodule, the release workspace-version lock
 mismatch, and the separate checksum-verified preparation of 53 absent archives.
 The corrected source passed locked offline app-server metadata resolution: its
@@ -203,14 +205,12 @@ subsequent turn, unknown-attempt hold across restart, and actual directory write
 denial before callbacks. These are bounded diagnostics: v12 retained one stale
 unit-test expectation failure and did not implement pending-effect recovery.
 
-The current disabled prototype adds separate fresh permit epochs, original-seal
-replay, and usage-before-effects control. Its new source tuple must independently
-pass compilation, selected tests, actual binary crash-cut/gateway cases and the
-connected production Go engine harness. Existing private controller/descriptor
-tests do not establish that final native contract. No managed profile is admitted
-by the historical binary or diagnostics.
+The current source tuple adds separate fresh permit epochs, original-seal replay
+and usage-before-effects control. It passed compilation, counted source tests,
+actual binary crash-cut/gateway cases and the connected production Go engine
+harness. Historical binaries and private controller tests alone do not admit it.
 
-## Local checkpoint and remaining gates
+## Source and native conformance
 
 The current source build uses patch digest
 `bd1e1ebd4608c30eaef97a7009b383c417060a83764a8513058b958d800930d6`,
@@ -266,7 +266,7 @@ completion acknowledgement without launching a provider.
 
 | Evidence at this checkpoint | Scope and remaining work |
 | --- | --- |
-| Actual binary with capacity 1, two engine child workers, parallel spawn/wait batches, three original responses and four durable broker receipts | Original parent allowance ends at zero after one parent admission and two child reservations. Parent usage is 33 input/9 output tokens; two child fixtures add 2/2. Children use deterministic fake SessionRunners. Shared SDK execution remains separate. |
+| Actual binary with capacity 1, two engine child workers, parallel spawn/wait batches, three original responses and four durable broker receipts | Original parent allowance ends at zero after one parent admission and two child reservations. Parent usage is 33 input/9 output tokens; two child fixtures add 2/2. Children use deterministic fake SessionRunners. The SDK independently exercises the same capacity-one engine contract below. |
 | Verified native SIGKILL after two effects commit and before permits; SQLite reopen and new engine objects/current owner | Same original message/start time/zero allowance; each physical effect occurs once; original broker receipts retain their old generation; exactly two native API requests and 22/6 total usage. This is native process restart within one Go test OS process, not a whole engine OS process crash claim. |
 | Owned disposable SQLite trigger aborts final mailbox commit after native terminal checkpoint | New owner commits the same saved terminal result, with no second provider process or request, unchanged zero allowance, and 11/3 usage counted once. This tests a failed completion transaction, not arbitrary hardware failure. |
 | First native stream ends before Completed, despite forced retry/websocket configuration | One API request, no Completed observation, no broker callback, unknown usage retained; later queued work and public mailbox acknowledgement stay blocked across SQLite reopen/current-owner replacement. |
@@ -277,12 +277,12 @@ completion acknowledgement without launching a provider.
 | Explicit cancellation while parent reacquisition is blocked | Two completed physical effects remain recorded, one request has 11/3 known usage, and two unused turns stay unchanged across owner replacement. Runtime cleanup joins before recovery checks; cancellation cannot become original-message process-loss recovery. |
 | Extra original call inserted only into owned native raw history | The independent sealed journal and engine witness remain unchanged. Cold resume rejects the full-call mismatch before another request or effect and retains the original message and known charge. Explicit managed peer rejection and failed native terminal status carry an integrity hold, while transport EOF remains distinct for verified process-loss recovery. |
 | Ordinary worker emits progress or returns a result after its execution owner changes | Both publication paths retain the original worker/message bytes and publish no progress or completion event. The original execution fence now covers workers without native definitions as well as managed workers. |
-| Locked SDK repair and forced automatic/reactive compaction controls | Actual fake-gateway repair and native summarization controls exist. Separate idle/precompute positive-path activation, shared broker durability/recovery, ordinary SDK retry/usage integration and final cross-adapter conformance still need proof. |
+| Locked SDK repair and forced automatic/reactive compaction controls | Actual fake-gateway repair and native summarization controls exist. The native automatic/reactive threshold negative is exercised. Separate idle/precompute positive-path activation was not triggered; their disable controls are verified against the pinned source. Shared broker recovery and accounting evidence is described below. |
 
-The public managed profile remains disabled. Before enabling it, complete the
-remaining malformed-protocol controls, shared SDK conformance, final artifact
-conformance and retained admission policy integration. Preserve incoming native-skill policy and
-usage changes; this Codex build declares selected native skills unsupported.
+The enabled profile requires the verified source tuple and retained admission
+policy 2. Historical policy 0/1 snapshots retain their original route and cannot
+acquire a managed build. The supplied-skill implementation and usage guards stay
+separate; this Codex build declares selected native skills unsupported.
 Unproven direct native execution/background work, native delegation, container and
 other platform profiles remain closed. The SQLite/native-process recovery scope
 does not establish a whole engine OS process crash claim.
@@ -301,7 +301,7 @@ The branch now includes the merged supplied-skill implementation. Selected
 skills remain outside the managed Codex build profile and selected-skill output
 repair remains rejected before provider setup. Fresh managed Codex admission
 uses policy 2; historical policy 0/1 roles cannot acquire a managed build.
-The source profile is still disabled while the remaining acceptance work runs.
+The enabled source profile is restricted to its verified tuple and local runtime.
 
 The locked SDK broker-only controller captures the original model response ID,
 all original tool IDs/arguments, final usage delta and completed block set.
@@ -333,7 +333,72 @@ The private attempt marker is installed before task data can reach the SDK.
 Only the private original-message terminal checkpoint and existing completion
 transaction can settle it. An unknown SDK callback is held rather than replayed.
 
-These worker proofs do not establish task/conversation coverage. Original
-nonworker attempt admission/settlement, native unknown-response restart,
-known-denial continuation, final cross-adapter conformance and current whole-PR
-validation remain required before enabling the profile or claiming issue 134.
+The public YAML `agent/run` test exercises both adapters through the ordinary
+`Runner.RunTurn` entry, including continuation by the original agent reference.
+It retains one worker and native session, two original messages and complete
+accounting. Ordinary tasks keep the existing WorkerManager path.
+
+Conversation participant turns use a private tagged original Attempt, not a
+worker surrogate. The tag binds the actual physical attempt coordinates and
+input/start time to its persisted origin owner and parent conversation Active,
+Calls, maximum allowance and deadline. Public tests exercise three turns,
+original send/send/finish receipts, two retained participant sessions and complete
+accounting on both adapters. Final accounting and marker settlement commit in
+the existing `Journal.Complete` transaction. Completed journals are reused without
+another provider request. Unknown or unsettled conversation attempts require
+explicit reconciliation: they do not automatically replay native callbacks or
+saved terminals. Before Begin can reuse or create any matching attempt, an indexed
+origin/logical-coordinate guard checks every earlier matching original, including
+parent turns, older unresolved rows and ordered physical siblings. Public retry
+after an actual first-request loss preserves Calls/Active/deadline and launches
+no replacement request.
+
+SDK native terminal cost is cumulative across fresh-process resume, while the
+response token counters used here are per invocation. The managed SDK completion
+transaction retains the raw native cost and applies a durable origin/session/
+profile/model cost highwater. Only cost uses `DeltaCostUSD`; original response
+token totals stay flat. Two actual public messages reporting $0.000123 and
+$0.000246 charge $0.000246 altogether. Original receipt replay, lost completion
+acknowledgement and transaction rollback cannot double-advance the baseline.
+Malformed, negative, nonfinite, regressing or changed original costs hold without
+changing earlier charges. A retained SDK session must have this exact profile's
+original settled terminal and cost baseline before task data. Older unmanaged
+history cannot silently adopt the profile; it requires explicit reconciliation
+or a fresh admitted session. No new USD or token limit is introduced.
+
+A private SDK original-message checkpoint saves the validated, redacted and
+limited native terminal result. After a failed completion transaction, verified
+owner-loss recovery can commit that original result and accounting without a
+new native process or API request. Unknown active SDK callbacks remain held;
+completed engine receipts are retained, but native callback replay is unsupported.
+Direct native tools combined with broker lease release are rejected at fresh
+configuration/task/conversation admission and again at runtime. Native-only and
+selected-skill routes keep their separate policies.
+
+The manifest remains trusted workspace authority; these controls do not provide
+filesystem isolation or authenticate a hostile workspace owner. Native restart
+proofs use SIGKILL, SQLite reopen and new engine objects inside the same Go test
+OS process. They do not establish whole-engine OS crash or hardware durability
+claims. Current whole-PR checks, UI verification, independent review and CI remain
+separate from this deterministic provider conformance evidence.
+
+## Reproducing bounded shared conformance
+
+Install the locked Node dependencies with `npm ci --prefix bridge/claude` and
+build the exact source tuple with the recipe above. Then run:
+
+```sh
+AGENT_WORKFLOW_TEST_MANAGED_CODEX_MANIFEST=/absolute/path/managed-binary.json \
+  make managed-conformance
+```
+
+This entry enables only local fake gateways and disposable state, runs counted
+race tests for both adapters, and requires the manifest rather than treating a
+skipped Codex arm as proof. It does not build Rust, call a real provider, refresh
+credentials or run publication/release scenarios. Native CI runs the SDK arms;
+the custom Codex source build remains an explicit separately prepared artifact.
+The tests live in [managed_conversation_test.go](../pkg/clirunner/managed_conversation_test.go),
+[sdk_managed_engine_test.go](../pkg/clirunner/sdk_managed_engine_test.go),
+[sdk_managed_terminal_test.go](../pkg/clirunner/sdk_managed_terminal_test.go),
+[sdk_broker_boundary_test.go](../pkg/clirunner/sdk_broker_boundary_test.go) and
+[managed_task_attempt_test.go](../pkg/workflows/managed_task_attempt_test.go).

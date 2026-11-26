@@ -569,11 +569,12 @@ func finishManagedCodexCheckpoint(ctx context.Context, tx *sql.Tx, id UsageIdent
 }
 
 type managedCodexAdmission struct {
-	WorkerID         string    `json:"worker_id"`
-	MessageID        string    `json:"message_id"`
-	StartedAt        time.Time `json:"started_at"`
-	BoundarySHA256   string    `json:"boundary_sha256"`
-	RemainingCeiling int       `json:"remaining_ceiling"`
+	Task             *managedTaskAdmission `json:"task,omitempty"`
+	WorkerID         string                `json:"worker_id"`
+	MessageID        string                `json:"message_id"`
+	StartedAt        time.Time             `json:"started_at"`
+	BoundarySHA256   string                `json:"boundary_sha256"`
+	RemainingCeiling int                   `json:"remaining_ceiling"`
 }
 
 func managedBoundaryDigest(w Worker, msg WorkerMessage) string {
@@ -585,7 +586,7 @@ func managedBoundaryDigest(w Worker, msg WorkerMessage) string {
 }
 func managedCaptureAdmission(ctx context.Context, tx *sql.Tx, binding runtimeexec.Binding, inv string) (*managedCodexAdmission, error) {
 	if binding.Kind != "worker" {
-		return nil, fmt.Errorf("managed original recovery requires an engine worker admission")
+		return managedCaptureTaskAdmission(ctx, tx, binding, inv)
 	}
 	var workerRaw, messageRaw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT w.record,m.record FROM workers w JOIN messages m ON m.worker_id=w.id WHERE w.run_id=? AND m.id=? AND w.status='running' AND m.status='running'`, binding.RunID, inv).Scan(&workerRaw, &messageRaw); err != nil {
@@ -617,11 +618,13 @@ type managedCodexCandidate struct {
 	worker   Worker
 	message  WorkerMessage
 	recovery *managedCodexRecovery
+	sdk      *managedSDKAttempt
 	run      Run
 }
 type managedCodexResumeContext struct {
 	message  WorkerMessage
 	recovery *managedCodexRecovery
+	sdk      *managedSDKAttempt
 }
 type managedCodexResumeKey struct{}
 
@@ -668,10 +671,33 @@ func managedReadCandidate(ctx context.Context, tx *sql.Tx, w Worker) (*managedCo
 		return nil, nil
 	}
 	msg := messages[0]
-	identity, err := managedCodexUsageIdentity(ctx, tx, w.RunID, msg.ID)
-	if err != nil {
+	var identity UsageIdentity
+	if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=? AND origin_id=?`, msg.ID, w.RunID).Scan(&raw); err != nil {
 		return nil, err
 	}
+	if err = decodeJSONWithNumbers(raw, &identity); err != nil {
+		return nil, err
+	}
+	if identity.ID != msg.ID || identity.RunID != w.RunID {
+		return nil, fmt.Errorf("managed original usage scope changed")
+	}
+	if identity.Provider != "codex-app-server" {
+		var codexProof int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND (observation_key=? OR json_type(CAST(record AS TEXT),'$.managed_codex_witness')='object')`, msg.ID, managedCodexAdmissionKey).Scan(&codexProof); err != nil {
+			return nil, err
+		}
+		if codexProof > 0 {
+			return nil, fmt.Errorf("managed Codex original provider identity changed")
+		}
+		if identity.Provider == "claude-sdk" {
+			return managedSDKReadTerminalCandidate(ctx, tx, w, msg, run, identity)
+		}
+		if identity.Provider == "" || identity.Provider == "unknown" {
+			return nil, fmt.Errorf("managed original provider identity is unknown")
+		}
+		return nil, nil
+	}
+
 	if identity.Finished || identity.WorkerID != w.ID {
 		return nil, nil
 	}
@@ -728,7 +754,7 @@ func managedReadCandidate(ctx context.Context, tx *sql.Tx, w Worker) (*managedCo
 	return &managedCodexCandidate{worker: w, message: msg, recovery: r, run: run}, nil
 }
 func (m *WorkerManager) managedCodexCandidates(ctx context.Context) ([]managedCodexCandidate, error) {
-	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object') ORDER BY w.rowid LIMIT 100`, RunStatusNeedsAttention)
+	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND (json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object' OR (u.observation_key='managed-sdk-attempt' AND json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state')='terminal'))) ORDER BY w.rowid LIMIT 100`, RunStatusNeedsAttention)
 	if err != nil {
 		return nil, err
 	}
@@ -789,23 +815,36 @@ func (m *WorkerManager) admitManagedCodexRecovery(ctx context.Context, w Worker)
 	if candidate == nil {
 		return nil, fmt.Errorf("managed original recovery admission changed")
 	}
-	r := candidate.recovery
-	r.LastGeneration = candidate.run.Generation
-	r.LastOwner = candidate.run.Owner
-	b, err := decodeManagedCodexBatch(r.Batch)
-	if err != nil {
-		return nil, err
-	}
-	key := "codex-response:" + b.ResponseID
-	if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, candidate.message.ID, key).Scan(&raw); err != nil {
-		return nil, err
-	}
-	fields, _, err := managedCodexRecoveryRow(raw)
-	if err != nil {
-		return nil, err
-	}
-	if err = putManagedCodexRecovery(ctx, tx, candidate.message.ID, key, fields, r); err != nil {
-		return nil, err
+	if candidate.sdk != nil {
+		fields, a, err := readManagedSDKAttempt(ctx, tx, candidate.message.ID)
+		if err != nil {
+			return nil, err
+		}
+		a.LastGeneration = candidate.run.Generation
+		a.LastOwner = candidate.run.Owner
+		if err = putManagedSDKAttempt(ctx, tx, candidate.message.ID, fields, a); err != nil {
+			return nil, err
+		}
+		candidate.sdk = a
+	} else {
+		r := candidate.recovery
+		r.LastGeneration = candidate.run.Generation
+		r.LastOwner = candidate.run.Owner
+		b, err := decodeManagedCodexBatch(r.Batch)
+		if err != nil {
+			return nil, err
+		}
+		key := "codex-response:" + b.ResponseID
+		if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, candidate.message.ID, key).Scan(&raw); err != nil {
+			return nil, err
+		}
+		fields, _, err := managedCodexRecoveryRow(raw)
+		if err != nil {
+			return nil, err
+		}
+		if err = putManagedCodexRecovery(ctx, tx, candidate.message.ID, key, fields, r); err != nil {
+			return nil, err
+		}
 	}
 	candidate.message.Generation = candidate.run.Generation
 	candidate.message.Error = ""

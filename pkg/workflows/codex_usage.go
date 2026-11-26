@@ -345,6 +345,10 @@ func checkManagedProviderAuthority(ctx context.Context, run, invocation, provide
 		if worker.TurnDuration > 0 && !time.Now().Before(message.StartedAt.Add(worker.TurnDuration)) {
 			return fmt.Errorf("managed original worker deadline expired")
 		}
+	} else {
+		if _, err = managedCaptureTaskAdmission(ctx, tx, binding, invocation); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

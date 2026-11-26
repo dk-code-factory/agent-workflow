@@ -95,7 +95,7 @@ Supported providers:
 | `claude-cli` / `claude` | Installed Claude's native login | No; fresh process per call |
 | `codex-cli` / `codex` | Installed Codex's native login | No; fresh process per call |
 | `claude-sdk` | Native subscription-token reference, or gateway URL/API-key reference | Yes |
-| `codex-app-server` | Explicit `native` or `api-key` credential reference | Session transport implemented; managed worker policy is not yet certified |
+| `codex-app-server` | Explicit `native` or `api-key` credential reference | Managed workers/conversations require the verified source-built broker profile; stock transport stays closed |
 
 The native CLI adapters are trusted-host compatibility adapters. They retain
 provider-owned authentication and native configuration. They are **not** a
@@ -156,8 +156,15 @@ an engine-owned file-store link; set `authentication.credential-file` explicitly
 or use the native `CODEX_HOME/auth.json` default. Writable provider state and
 `HOME` remain private to the run/session owner. Keychain-only app-server login
 is not supported by this route; the native CLI compatibility adapter retains its
-provider-owned login behavior. Raw app-server arguments and managed tool subsets
-are rejected until their policy is certified for the pinned upstream version.
+provider-owned login behavior. Raw app-server arguments remain rejected. Stock
+app-server builds reject managed tool subsets and tool-free repair. The verified
+local Linux amd64 source build opts in through workspace-owned
+`managed-build: {manifest: /absolute/path/managed-binary.json}` on the existing
+`codex-app-server` role. The manifest captures the immutable source/build/binary
+identity; actual executable verification and the native handshake precede task
+data. See [the managed build recipe and conformance contract](docs/MANAGED_CODEX_BUILD.md).
+Selected native skills, direct native tool grants, containers and unverified
+platforms remain closed for this profile.
 API keys, gateway credentials, and workflow secrets are never written to the
 SQLite snapshot. Native provider authentication stores remain provider-owned.
 
@@ -839,14 +846,17 @@ Inspect them with `agent-workflow tool-calls RUN_ID` or
 An uncertain call prevents terminal success. Explicit uncertain retry admits a
 new attempt without erasing the earlier call or claiming its effect succeeded.
 
-Capacity handoff is invocation-wide: the SDK must report the model stream stopped
-and every active native tool stopped or waiting for controller permission before
-its lease can suspend. Results reacquire capacity before provider work resumes.
-Native tool hooks also obtain capacity before effects. Suspended invocations are
-bounded at 128 per controller. Deterministic tests cover workflow → child →
-grandchild execution at capacity one and actual pinned-SDK multi-tool callbacks.
-Codex's managed-policy and quiescence capabilities remain an explicit release
-gate; another backend is never substituted automatically.
+Capacity handoff requires the complete original response/call plan and durable
+usage before engine effects. The locked SDK broker-only route parks each observed
+serial callback and reacquires the parent before returning its semantic result.
+The verified Codex source profile attests its sealed parallel batch, buffers every
+original callback result, then reacquires once before issuing the correlated
+permits. Their event readers stay live during waits. Direct native tools combined
+with broker lease release remain unsupported; a permission mode or callback
+count does not establish quiescence. Suspended invocations are bounded at 128 per
+controller. Shared deterministic tests cover capacity-one nested worker/wait,
+denied tools, false barriers, uncertain effects, cancellation and original
+terminal recovery. Another backend is never substituted automatically.
 
 ## Usage accounting
 

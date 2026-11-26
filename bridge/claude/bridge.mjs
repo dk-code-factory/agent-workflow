@@ -172,10 +172,11 @@ try {
     brokerNames.add(qualified);
     // Keep the SDK-exposed object fields for controller validation. The SDK
     // normalizes model input before this boundary; this is not wire fidelity.
-    const schema = definition.controller_validation ? z.looseObject({}) : z.fromJSONSchema(definition.input_schema);
+    const controllerValidation = request.managed_broker || definition.controller_validation;
+    const schema = controllerValidation ? z.looseObject({}) : z.fromJSONSchema(definition.input_schema);
     if (!(schema instanceof z.ZodObject)) throw new Error('broker input schema must be an object');
-    const description = definition.controller_validation ? definition.description + '\nController argument contract: ' + JSON.stringify(definition.input_schema) : definition.description;
-    return tool(name, description, definition.controller_validation ? schema : schema.shape, async args => {
+    const description = controllerValidation ? definition.description + '\nController argument contract: ' + JSON.stringify(definition.input_schema) : definition.description;
+    return tool(name, description, controllerValidation ? schema : schema.shape, async args => {
       // The upstream model tool-use ID is recorded by PreToolUse. A callback
       // never manufactures a new identity when the provider repeats a call.
       const identities = toolIDs.get(qualified + '\0' + canonical(args));
@@ -280,15 +281,17 @@ try {
   let finishInput;
   const inputDone = new Promise(resolve => { finishInput = resolve; });
   async function* prompt() {
-    if (skill && !await promptReady) return;
+    if ((skill || brokerStream) && !await promptReady) return;
     yield { type: 'user', session_id: sessionID, message: { role: 'user', content: request.prompt }, parent_tool_use_id: null };
     await inputDone;
   }
   running = query({ prompt: prompt(), options });
-  if (skill) {
+  if (skill || brokerStream) {
     const initialization = await running.initializationResult();
-    assertSkillAcknowledgement(initialization, skill.qualified);
-    emit({ type: 'progress', data: { type: 'skill_acknowledged', qualified: skill.qualified } });
+    if (skill) {
+      assertSkillAcknowledgement(initialization, skill.qualified);
+      emit({ type: 'progress', data: { type: 'skill_acknowledged', qualified: skill.qualified } });
+    } else if (initialization.claude_code_version !== '2.1.322') throw new Error('Managed broker native CLI version differs before prompt release');
     releasePrompt(true);
   }
   if (interrupted) await running.interrupt();

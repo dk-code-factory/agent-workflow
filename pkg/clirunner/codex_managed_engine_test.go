@@ -66,14 +66,6 @@ func (f *managedEngineFixture) RunTurn(ctx context.Context, req workflows.Sessio
 	}
 	// Exactly the production transport, including owner/admission checks, held
 	// executable verification, native protocol, batch controller and accounting.
-	agent, req := isolateRepairTurn(f.runner.Config.Agents[req.AgentID], req)
-	if req.Input != nil {
-		var err error
-		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)
-		if err != nil {
-			return workflows.SessionResult{}, err
-		}
-	}
 	if f.gatewayURL != "" {
 		state, err := providerStateDir(f.runner.Workspace, "codex", req)
 		if err != nil {
@@ -84,7 +76,16 @@ func (f *managedEngineFixture) RunTurn(ctx context.Context, req workflows.Sessio
 			return workflows.SessionResult{}, err
 		}
 	}
-	return f.runner.codexManagedTransport(ctx, agent, req, emit, f.identity)
+	cfg := f.runner.Config
+	cfg.Agents = make(map[string]Agent, len(f.runner.Config.Agents))
+	for key, value := range f.runner.Config.Agents {
+		cfg.Agents[key] = value
+	}
+	agent := cfg.Agents[req.AgentID]
+	agent.ManagedBuild = &ManagedBuild{Manifest: os.Getenv("AGENT_WORKFLOW_TEST_MANAGED_CODEX_MANIFEST"), Identity: f.identity}
+	cfg.Agents[req.AgentID] = agent
+	cfg.NativeTaskAdmission = 2
+	return (&Runner{Workspace: f.runner.Workspace, Config: cfg}).RunTurn(ctx, req, emit)
 }
 func managedNativeFixtureIdentity(t *testing.T) *ManagedCodexBuildIdentity {
 	t.Helper()

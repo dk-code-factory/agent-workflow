@@ -145,7 +145,7 @@ func BindManagedCodexInvocation(ctx context.Context, run, inv, session, turn str
 	return tx.Commit()
 }
 func validateManagedCodexBookkeeping(value *managedCodexAttemptAdmission, run, inv string, proof *managedCodexUsageProof) error {
-	if value == nil || value.State != "active" || value.RunID != run || value.InvocationID != inv || value.OriginalGeneration <= 0 || value.OriginalOwner == "" || value.Admission == nil || value.Admission.MessageID != inv || value.Admission.WorkerID == "" || value.Admission.StartedAt.IsZero() || value.SessionID == "" || value.TurnID == "" {
+	if value == nil || value.State != "active" || value.RunID != run || value.InvocationID != inv || value.OriginalGeneration <= 0 || value.OriginalOwner == "" || value.Admission == nil || value.Admission.MessageID != inv || (value.Admission.WorkerID == "" && value.Admission.Task == nil) || value.Admission.StartedAt.IsZero() || value.SessionID == "" || value.TurnID == "" {
 		return fmt.Errorf("managed original admission is missing, held or unbound")
 	}
 	if proof != nil && (value.BuildID != proof.BuildID || value.PolicyID != proof.PolicyID || value.Model != proof.Model || value.SessionID != proof.SessionID || value.TurnID != proof.TurnID) {

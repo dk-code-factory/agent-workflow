@@ -215,6 +215,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("at least one agent must be configured")
 	}
 	for id, agent := range c.Agents {
+		if agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && len(agent.MCPGrants) > 0 {
+			return fmt.Errorf("agent %s: SDK direct native tools with managed broker lease release are not certified", id)
+		}
 		if err := validateManagedBuildRole(agent); err != nil {
 			return fmt.Errorf("agent %s: %w", id, err)
 		}

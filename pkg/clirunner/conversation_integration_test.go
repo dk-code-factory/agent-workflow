@@ -165,6 +165,7 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 				}
 				model, _ := payload["model"].(string)
 				number := requests.Add(1)
+				w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("conversation-response-", number)}
 				if tc.invalid && number > 1 {
 					history, _ := json.Marshal(payload["messages"])
 					if !strings.Contains(string(history), "invalid structured output") {

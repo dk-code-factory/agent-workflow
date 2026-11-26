@@ -331,6 +331,9 @@ func (s *SQLiteStore) beginInput(ctx context.Context, run, job, step string, ite
 	if err = checkFence(ctx, tx); err != nil {
 		return Attempt{}, false, err
 	}
+	if err = managedTaskCoordinateHold(ctx, tx, run, job, step, iteration, logical); err != nil {
+		return Attempt{}, false, err
+	}
 	var b []byte
 	var last Attempt
 	if logical == "" {
@@ -417,6 +420,9 @@ func (s *SQLiteStore) Complete(ctx context.Context, a Attempt, result StepExecut
 	}
 	defer tx.Rollback()
 	if err = checkFence(ctx, tx); err != nil {
+		return err
+	}
+	if err = settleManagedTaskAttempt(ctx, tx, a, result); err != nil {
 		return err
 	}
 	for _, name := range []string{"stdout", "stderr"} {

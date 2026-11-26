@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "enabled": false,
-  "status": "disabled-original-batch-recovery-prototype",
+  "enabled": true,
+  "status": "verified-broker-only-local-linux-amd64",
   "protocol": "agent-workflow-codex-managed/1",
   "upstream_tag": "rust-v0.167.1",
   "upstream_sha": "0a94398fa60c4fac0e7659e4213a0a36e613dd46",
