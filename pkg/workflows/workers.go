@@ -586,6 +586,9 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 	if err != nil {
 		return WorkerMessage{}, err
 	}
+	if err = w.validateSkillContinuation(); err != nil {
+		return WorkerMessage{}, err
+	}
 	_, _, secrets, err := m.Factory(ctx, run, w.Role, w.Tools)
 	if err != nil {
 		return WorkerMessage{}, err
@@ -819,6 +822,13 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		_ = tx.Rollback()
 		return
 	}
+	if err = w.validateSkillContinuation(); err != nil {
+		_ = tx.Rollback()
+		w.Status = RunStatusNeedsAttention
+		w.Error = err.Error()
+		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
+		return
+	}
 	if w.Remaining <= 0 {
 		_ = tx.Rollback()
 		w.Status = RunStatusNeedsAttention
@@ -870,7 +880,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		journalErr = errors.Join(journalErr, err)
 	}
 	expectedSession := w.SessionID
-	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Skill: w.Skill, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
+	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Skill: w.Skill, SkillEvidence: w.SkillEvidence, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
 	if w.Skill != nil {
 		root, skillErr := m.Store.SkillAssets(ctx, w.RunID, w.Skill)
 		if skillErr != nil {
@@ -1166,6 +1176,9 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 	}
 	if w.Status != RunStatusNeedsAttention {
 		return fmt.Errorf("worker does not need recovery")
+	}
+	if err = w.validateSkillContinuation(); err != nil {
+		return err
 	}
 	messages, err := m.Messages(ctx, run, id)
 	if err != nil {

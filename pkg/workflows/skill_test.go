@@ -39,8 +39,9 @@ func suppliedSkillFixture(t *testing.T) (string, map[string]any) {
 
 type suppliedSession struct {
 	*nativeTaskFixture
-	reportOnly bool
-	reject     bool
+	reportOnly   bool
+	reject       bool
+	continuation bool
 }
 
 func (f *suppliedSession) AdmitSkillTask(plan *SkillInvocation) (*SkillInvocation, error) {
@@ -50,6 +51,7 @@ func (f *suppliedSession) AdmitSkillTask(plan *SkillInvocation) (*SkillInvocatio
 	copy := *plan
 	copy.Profile = "fixture/skill-v1"
 	copy.Model = "fixture-model"
+	copy.ContinuationRequiresEvidence = f.continuation
 	return &copy, nil
 }
 func (f *suppliedSession) RunTurn(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
@@ -284,5 +286,83 @@ func TestSkillEvidenceRejectsConflictsAndUnmatchedResults(t *testing.T) {
 	changed.SessionID = "foreign"
 	if ledger.Observe(plan, changed) == nil {
 		t.Fatal("foreign session evidence accepted")
+	}
+}
+
+func TestSkillCapturedBytesCannotKeepStaleInputIdentity(t *testing.T) {
+	root, _ := suppliedSkillFixture(t)
+	source, err := CaptureSkillDirectory(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]*SkillSource{"selected": source}
+	original := SkillInputIdentities(sources)["selected"]
+	for i := range source.Entries {
+		if source.Entries[i].Path == source.Entry {
+			source.Entries[i].Data = append(source.Entries[i].Data, []byte("changed resolver bytes")...)
+		}
+	}
+	if original == SkillInputIdentities(sources)["selected"] {
+		t.Fatal("mutated captured bytes retained idempotency identity")
+	}
+	if validateSkillSource(source) == nil {
+		t.Fatal("stale captured content identity accepted")
+	}
+}
+
+func TestSkillMissingOriginalReceiptRejectsRecoveryBeforeClaim(t *testing.T) {
+	_, inputs := suppliedSkillFixture(t)
+	e, store, f := skillExecutorFixture(t, skillWorkflow, true)
+	f.continuation = true
+	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+	if err == nil || run == nil {
+		t.Fatal("missing receipt did not leave incomplete effect", run, err)
+	}
+	before, _, err := store.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers, err := e.Workers.List(t.Context(), run.ID)
+	if err != nil || len(workers) != 1 || workers[0].SessionID == "" {
+		t.Fatal(workers, err)
+	}
+	remaining := workers[0].Remaining
+	f.reportOnly = false
+	if _, err = e.Resume(t.Context(), run.ID, nil, true); err == nil || !strings.Contains(err.Error(), "original observed invocation") {
+		t.Fatal("missing original receipt recovered", err)
+	}
+	after, _, err := store.Load(t.Context(), run.ID)
+	if err != nil || after.Generation != before.Generation || after.Status != before.Status || len(f.requests) != 1 {
+		t.Fatal("uncertain original invocation was reclaimed/replayed", after, len(f.requests), err)
+	}
+	workers, err = e.Workers.List(t.Context(), run.ID)
+	if err != nil || workers[0].Remaining != remaining {
+		t.Fatal("continuation reset original budget", workers, err)
+	}
+}
+
+func TestSkillContinuationDoesNotBorrowAnotherInvocationReceipt(t *testing.T) {
+	plan := &SkillInvocation{ID: "original", Binding: SkillBinding{Name: "probe"}, ContinuationRequiresEvidence: true}
+	ledger := &SkillEvidence{}
+	for _, kind := range []string{"invocation", "result"} {
+		if err := ledger.Observe(plan, SkillObservation{Key: kind + ":call", Kind: kind, SessionID: "session", CallID: "call", Name: "probe", Raw: json.RawMessage(`{"original":true}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ledger.Continuation(plan, "session"); err != nil {
+		t.Fatal(err)
+	}
+	copy := *plan
+	copy.ID = "new-occurrence"
+	if ledger.Continuation(&copy, "session") == nil || ledger.Continuation(plan, "foreign-session") == nil {
+		t.Fatal("foreign invocation borrowed original receipt")
+	}
+	ledger.Observations[1].Arguments = "changed"
+	if ledger.Continuation(plan, "session") == nil {
+		t.Fatal("tampered original receipt accepted")
+	}
+	worker := Worker{Skill: plan, TaskTurns: 32, Remaining: 31}
+	if worker.validateSkillContinuation() == nil {
+		t.Fatal("lost session acknowledgement permitted replacement invocation")
 	}
 }

@@ -103,3 +103,17 @@ func (s *SQLiteStore) SkillAssets(ctx context.Context, run string, plan *SkillIn
 	}
 	return s.AssetBundlePath(plan.Binding.Assets)
 }
+
+// Verify original native-consumption receipts before a recovered run is claimed.
+func (s *SQLiteStore) verifySkillContinuations(ctx context.Context, run string) error {
+	workers, err := (&WorkerManager{Store: s}).List(ctx, run)
+	if err != nil {
+		return err
+	}
+	for _, worker := range workers {
+		if err := worker.validateSkillContinuation(); err != nil {
+			return fmt.Errorf("worker %s: %w", worker.ID, err)
+		}
+	}
+	return nil
+}

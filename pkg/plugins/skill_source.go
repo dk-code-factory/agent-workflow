@@ -30,17 +30,26 @@ func ResolveSkillPackage(ctx context.Context, ref workflows.SkillPackageReferenc
 	if err != nil {
 		return nil, err
 	}
-	source := &workflows.SkillSource{Name: selected.Name, Entry: selected.Path, SourceDigest: captured.Digest()}
+	var entries []workflows.AssetInput
 	prefix := path.Dir(selected.Path) + "/"
+	for _, resource := range captured.Descriptor().Resources {
+		resource = path.Clean(strings.TrimPrefix(resource, "./"))
+		if resource != path.Dir(selected.Path) && !strings.HasPrefix(resource, prefix) {
+			return nil, fmt.Errorf("skill package resources outside the selected skill directory are not supported")
+		}
+	}
 	for _, entry := range captured.manifest.Entries {
-		if !strings.HasPrefix(entry.Path, prefix) && !captured.resourceFiles[entry.Path] {
+		if captured.resourceFiles[entry.Path] && !strings.HasPrefix(entry.Path, prefix) {
+			return nil, fmt.Errorf("skill package resources outside the selected skill directory are not supported")
+		}
+		if !strings.HasPrefix(entry.Path, prefix) {
 			continue
 		}
 		if path.Base(entry.Path) == "SKILL.md" && entry.Path != selected.Path {
 			continue
 		}
 		file := captured.files[entry.Path]
-		source.Entries = append(source.Entries, workflows.AssetInput{Path: entry.Path, Mode: file.mode, Data: append([]byte(nil), file.data...)})
+		entries = append(entries, workflows.AssetInput{Path: entry.Path, Mode: file.mode, Data: append([]byte(nil), file.data...)})
 	}
-	return source, nil
+	return workflows.NewSkillSource(selected.Name, selected.Path, captured.Digest(), entries)
 }

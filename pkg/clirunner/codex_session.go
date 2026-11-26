@@ -43,6 +43,9 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		command = "codex"
 	}
 	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`, "--config", "skills.bundled.enabled=false", "--config", "skills.include_instructions=false", "--config", "features.plugins=false"}
+	if req.Skill != nil {
+		args = append(args, "--config", "agents.enabled=false", "--config", "features.multi_agent=false", "--config", "features.multi_agent_v2=false")
+	}
 	args = append(args, agent.Args...)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
@@ -96,7 +99,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 			returnErr = errors.Join(returnErr, ctx.Err())
 		}
 	}()
-	initializeResult, initErr := rpc.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "agent-workflow", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": hasBrokerTools}})
+	initializeResult, initErr := rpc.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "agent-workflow", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": hasBrokerTools || req.Skill != nil}})
 	if initErr != nil {
 		return result, initErr
 	}
@@ -141,12 +144,25 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		}
 		params["dynamicTools"] = dynamic
 	}
+	selectedEntry := ""
+	if req.Skill != nil {
+		if req.SkillRoot == "" || !filepath.IsAbs(req.SkillRoot) {
+			return result, fmt.Errorf("skill requires verified retained root")
+		}
+		selectedEntry = filepath.Join(req.SkillRoot, filepath.FromSlash(req.Skill.Binding.Entry))
+		if _, err = rpc.call("skills/extraRoots/set", map[string]any{"extraRoots": []string{req.SkillRoot}}); err != nil {
+			return result, fmt.Errorf("register retained skill: %w", err)
+		}
+		if req.SessionID == "" {
+			params["experimentalRawEvents"] = true
+		}
+	}
 	method := "thread/start"
 	if req.SessionID != "" {
 		method = "thread/resume"
 		params["threadId"] = req.SessionID
 	}
-	if err = isolateCodexSkills(rpc, workspace); err != nil {
+	if err = isolateCodexSelectedSkill(rpc, workspace, selectedEntry); err != nil {
 		return result, err
 	}
 	raw, err := rpc.call(method, params)
@@ -169,7 +185,11 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if emit != nil {
 		emit(workflows.ProviderEvent{Type: "session", SessionID: result.SessionID})
 	}
-	turn := map[string]any{"threadId": result.SessionID, "input": []any{map[string]any{"type": "text", "text": req.Prompt}}}
+	inputs := []any{map[string]any{"type": "text", "text": req.Prompt}}
+	if req.Skill != nil {
+		inputs = append(inputs, map[string]any{"type": "skill", "name": req.Skill.Binding.Name, "path": selectedEntry})
+	}
+	turn := map[string]any{"threadId": result.SessionID, "input": inputs}
 	if req.Definition != nil && req.Definition.ReasoningEffort != "" {
 		turn["effort"] = req.Definition.ReasoningEffort
 	}
@@ -211,6 +231,18 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		}
 		if identity, ok := payload["turnId"].(string); ok && identity != started.Turn.ID {
 			continue
+		}
+		if frame.Method == "rawResponseItem/completed" && req.Skill != nil {
+			observation, skillErr := codexSkillObservation(req, result.SessionID, started.Turn.ID, frame.Params)
+			if skillErr != nil {
+				return result, skillErr
+			}
+			if observation != nil && emit != nil {
+				data, _ := json.Marshal(observation)
+				var value map[string]any
+				_ = json.Unmarshal(data, &value)
+				emit(workflows.ProviderEvent{Type: "skill_evidence", SessionID: result.SessionID, Data: value})
+			}
 		}
 		if frame.Method == "item/completed" || frame.Method == "turn/completed" {
 			if identity, ok := payload["threadId"].(string); !ok || identity == "" {

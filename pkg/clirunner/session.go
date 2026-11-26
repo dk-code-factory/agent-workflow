@@ -115,13 +115,23 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 	}
 	if req.Skill != nil {
-		if _, err := r.AdmitSkillTask(req.Skill); err != nil {
+		admitted, err := r.AdmitSkillTask(req.Skill)
+		if err != nil {
 			return workflows.SessionResult{}, err
+		}
+		if req.Skill.Profile != admitted.Profile || req.Skill.ContinuationRequiresEvidence != admitted.ContinuationRequiresEvidence {
+			return workflows.SessionResult{}, fmt.Errorf("skill capability profile changed")
+		}
+		if req.Definition != nil && req.Definition.ReasoningEffort != req.Skill.Effort {
+			return workflows.SessionResult{}, fmt.Errorf("skill reasoning-effort changed")
 		}
 		if req.Model != "" && req.Model != req.Skill.Model {
 			return workflows.SessionResult{}, fmt.Errorf("skill model changed")
 		}
 		req.Model = req.Skill.Model
+		if err := req.SkillEvidence.Continuation(req.Skill, req.SessionID); err != nil {
+			return workflows.SessionResult{}, err
+		}
 	}
 	if req.Input != nil {
 		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)

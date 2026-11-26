@@ -8,6 +8,7 @@ import (
 )
 
 const claudeSkillProfile = "claude-sdk@0.3.322/local-skill-v1"
+const codexSkillProfile = "codex-app-server@0.167.1/local-skill-no-delegation-v1"
 
 // AdmitSkillTask advertises only capabilities established for the pinned
 // adapter. This runs before provider discovery, run claims and worker enqueue.
@@ -22,23 +23,35 @@ func (r *Runner) AdmitSkillTask(plan *workflows.SkillInvocation) (*workflows.Ski
 	if role.Execution.Mode == "container" {
 		return nil, fmt.Errorf("supplied skill container projection is not certified")
 	}
-	if role.Provider != "claude-sdk" {
-		return nil, fmt.Errorf("Codex supplied-skill delegation restriction and resumed observation profile are not certified")
-	}
-	if plan.Effort != "" {
-		return nil, fmt.Errorf("Claude skill reasoning-effort honoring is not certified")
-	}
+
 	if plan.Model == "" {
 		return nil, fmt.Errorf("skill tasks require a pinned model")
 	}
-	if err := verifySDKBridge(role); err != nil {
-		return nil, err
+	if plan.Effort != "" {
+		return nil, fmt.Errorf("skill reasoning-effort honoring is not certified")
 	}
 	copy := *plan
-	if copy.Profile != "" && copy.Profile != claudeSkillProfile {
-		return nil, fmt.Errorf("unsupported retained skill capability profile")
+	switch role.Provider {
+	case "claude-sdk":
+		if err := verifySDKBridge(role); err != nil {
+			return nil, err
+		}
+		if copy.Profile != "" && copy.Profile != claudeSkillProfile || copy.ContinuationRequiresEvidence {
+			return nil, fmt.Errorf("unsupported retained skill capability profile")
+		}
+		copy.Profile = claudeSkillProfile
+	case "codex-app-server":
+		if plan.Arguments != "" {
+			return nil, fmt.Errorf("Codex typed skill arguments are not certified")
+		}
+		if copy.Profile != "" && (copy.Profile != codexSkillProfile || !copy.ContinuationRequiresEvidence) {
+			return nil, fmt.Errorf("unsupported retained skill capability profile")
+		}
+		copy.Profile = codexSkillProfile
+		copy.ContinuationRequiresEvidence = true
+	default:
+		return nil, fmt.Errorf("unsupported supplied-skill provider")
 	}
-	copy.Profile = claudeSkillProfile
 	return &copy, nil
 }
 

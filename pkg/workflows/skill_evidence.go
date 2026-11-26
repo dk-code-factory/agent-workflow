@@ -35,7 +35,22 @@ func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservat
 		return fmt.Errorf("skill evidence identity is incomplete or mismatched")
 	}
 	switch observation.Kind {
-	case "invocation", "result", "consumption":
+	case "invocation", "result":
+		if observation.CallID == "" {
+			return fmt.Errorf("skill invocation/result omitted original call identity")
+		}
+	case "consumption":
+		matched := false
+		if plan.Binding.Assets != nil {
+			for _, entry := range plan.Binding.Assets.Entries {
+				if entry.Path == plan.Binding.Entry && entry.SHA256 != "" && entry.SHA256 == observation.BodySHA256 {
+					matched = true
+				}
+			}
+		}
+		if observation.TurnID == "" || !matched {
+			return fmt.Errorf("skill consumption omitted original turn or differs from admitted bytes")
+		}
 	default:
 		return fmt.Errorf("unsupported skill evidence kind %q", observation.Kind)
 	}
@@ -95,4 +110,32 @@ func (e *SkillEvidence) Complete(plan *SkillInvocation) error {
 		}
 	}
 	return fmt.Errorf("skill invocation evidence remains incomplete")
+}
+
+// Continuation validates the original session's durable receipt. It never
+// fabricates a new invocation event for a resumed provider process.
+func (e *SkillEvidence) Continuation(plan *SkillInvocation, session string) error {
+	if plan == nil || !plan.ContinuationRequiresEvidence || session == "" {
+		return nil
+	}
+	if e == nil || e.PlanID != plan.ID || len(e.Observations) == 0 {
+		return fmt.Errorf("skill continuation requires original observed invocation")
+	}
+	verified := &SkillEvidence{}
+	for _, observation := range e.Observations {
+		if observation.SessionID != session {
+			return fmt.Errorf("skill continuation changed original session")
+		}
+		if err := verified.Observe(plan, observation); err != nil {
+			return err
+		}
+	}
+	return verified.Complete(plan)
+}
+
+func (w *Worker) validateSkillContinuation() error {
+	if w.Skill != nil && w.Skill.ContinuationRequiresEvidence && w.TaskTurns > 0 && w.Remaining < w.TaskTurns && w.SessionID == "" {
+		return fmt.Errorf("original skill session is uncertain after an admitted turn")
+	}
+	return w.SkillEvidence.Continuation(w.Skill, w.SessionID)
 }

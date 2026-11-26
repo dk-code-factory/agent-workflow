@@ -1038,6 +1038,9 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		if err = store.verifyRunHelperAssets(ctx, run.ID, snap); err != nil {
 			return nil, err
 		}
+		if err = store.verifySkillContinuations(ctx, run.ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := e.restorePackage(ctx, run.ID, snap); err != nil {
 		return nil, err

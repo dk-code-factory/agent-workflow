@@ -147,7 +147,10 @@ The application resolves the local package through its captured manifest; no
 registry or installed-skill lookup occurs. The skill directory contains a
 `SKILL.md` with only `name` and `description` frontmatter. Authority-changing
 metadata, symlinks and additional skill entries are rejected. Resource paths
-are literal paths inside that skill directory. Admission captures exact bytes,
+are literal paths inside that skill directory. Package resource declarations
+outside the selected skill directory reject admission in this profile. The
+application capture binds both complete package provenance and selected entry
+content; changed captured bytes cannot retain an idempotency identity. Admission captures exact bytes,
 source modes and empty directories. Each selected occurrence receives only its
 entry and explicitly selected resources in an engine-owned plugin; independent
 siblings retain the empty skill configuration.
@@ -157,7 +160,7 @@ Admission pins these values, resources, model and capability profile before run
 claims. Resume uses the retained assets, original session and original turn
 allowance even after source removal; it does not recapture or replenish them.
 
-The initial supported profile is the locked Claude SDK 0.3.322 local runtime,
+The Claude profile uses the locked SDK 0.3.322 local runtime,
 with a pinned model and no reasoning-effort override. Before releasing the
 prompt, the adapter requires the initialize acknowledgement and the selected
 qualified command. The acknowledgement alone does not establish successful
@@ -169,8 +172,22 @@ events, linked by call and session identity, are retained separately from
 redacted progress. A terminal report without those events remains incomplete;
 observed invocation does not establish model adherence or task correctness.
 
-Required native children, Codex supplied-skill sessions, containers, reusable
-workflow selections and unsupported effort controls reject admission. They do
+The stock Codex 0.167.1 local profile requires a pinned model, empty skill
+arguments and no reasoning-effort override. Each process registers the retained
+root and confirms that only the admitted entry remains enabled before a turn.
+Native delegation is disabled in both tool specifications and dispatch. The
+initial public native-consumption fragment must carry the selected name, path,
+exact retained bytes, current turn and session, and native skill provenance.
+This records native instruction consumption, not model adherence or task success.
+The pin exposes that fragment on a new thread, but not from a fresh process
+resuming a thread. Continuation therefore requires the original invocation's
+retained receipt and session; it re-registers the original retained root without
+inventing another observed invocation. A new occurrence cannot borrow that
+receipt. Missing original evidence after a possible effect blocks recovery before
+claiming another turn, preserving the original uncertainty and allowance.
+
+Required native children, containers, reusable workflow selections and
+unsupported effort or argument controls reject admission. They do
 not fall back to prompt imports or host skills. Native child evidence and the
 remaining provider profiles require separate protocol support before activation.
 The editor exposes skill input mappings and **Skill invocation (YAML)**;

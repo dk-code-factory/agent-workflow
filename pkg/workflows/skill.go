@@ -22,10 +22,11 @@ const SkillAdmissionVersion = 1
 // SkillSource owns captured bytes. Only fresh admission consumes source paths;
 // provider sessions and recovery receive retained, verified assets instead.
 type SkillSource struct {
-	Name         string
-	Entry        string
-	SourceDigest string
-	Entries      []AssetInput
+	Name          string
+	Entry         string
+	SourceDigest  string
+	ContentDigest string
+	Entries       []AssetInput
 }
 
 type SkillPackageReference struct {
@@ -50,14 +51,17 @@ type SkillBinding struct {
 // SkillInvocation is pinned before run admission. It never grants tools,
 // credentials, publication authority or a different provider runtime.
 type SkillInvocation struct {
-	Version   int          `json:"version"`
-	ID        string       `json:"id"`
-	Binding   SkillBinding `json:"binding"`
-	Arguments string       `json:"arguments"`
-	Resources []string     `json:"resources"`
-	Model     string       `json:"model"`
-	Effort    string       `json:"effort,omitempty"`
-	Profile   string       `json:"profile"`
+	// ContinuationRequiresEvidence pins profiles whose resumed process cannot
+	// publish a fresh native-consumption event. Recovery must retain the original.
+	ContinuationRequiresEvidence bool         `json:"continuation_requires_evidence,omitempty"`
+	Version                      int          `json:"version"`
+	ID                           string       `json:"id"`
+	Binding                      SkillBinding `json:"binding"`
+	Arguments                    string       `json:"arguments"`
+	Resources                    []string     `json:"resources"`
+	Model                        string       `json:"model"`
+	Effort                       string       `json:"effort,omitempty"`
+	Profile                      string       `json:"profile"`
 }
 
 type SkillSelection struct {
@@ -257,7 +261,28 @@ func CaptureSkillDirectory(ctx context.Context, directory string) (*SkillSource,
 	}
 	source.Entry = prefix + "SKILL.md"
 	source.SourceDigest, err = skillSourceDigest(source.Entries)
+	source.ContentDigest = source.SourceDigest
 	return source, err
+}
+
+// NewSkillSource binds an application's explicit package capture to its exact
+// selected entry bytes. ProvenanceDigest remains the complete package identity.
+// The returned source owns its slices; resolution never borrows mutable files.
+func NewSkillSource(name, entry, provenanceDigest string, inputs []AssetInput) (*SkillSource, error) {
+	source := &SkillSource{Name: name, Entry: entry, SourceDigest: provenanceDigest}
+	for _, input := range inputs {
+		input.Data = append([]byte(nil), input.Data...)
+		source.Entries = append(source.Entries, input)
+	}
+	var err error
+	source.ContentDigest, err = skillSourceDigest(source.Entries)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSkillSource(source); err != nil {
+		return nil, err
+	}
+	return source, nil
 }
 
 func skillSourceDigest(inputs []AssetInput) (string, error) {
@@ -372,7 +397,12 @@ func SkillInputIdentities(sources map[string]*SkillSource) map[string]string {
 			out[name] = "invalid"
 			continue
 		}
-		out[name] = actionHash([]any{source.Name, source.Entry, source.SourceDigest})
+		content, err := skillSourceDigest(source.Entries)
+		if err != nil {
+			out[name] = "invalid"
+			continue
+		}
+		out[name] = actionHash([]any{source.Name, source.Entry, source.SourceDigest, content})
 	}
 	return out
 }
@@ -586,8 +616,10 @@ func validateSkillSource(source *SkillSource) error {
 	if source == nil || !skillNamePattern.MatchString(source.Name) || source.Entry != "skills/"+source.Name+"/SKILL.md" || len(source.SourceDigest) != 64 || !hexID(source.SourceDigest) {
 		return fmt.Errorf("invalid captured skill source identity")
 	}
-	if _, err := skillSourceDigest(source.Entries); err != nil {
+	if content, err := skillSourceDigest(source.Entries); err != nil {
 		return err
+	} else if content != source.ContentDigest {
+		return fmt.Errorf("captured skill content identity changed")
 	}
 	found := false
 	for _, entry := range source.Entries {

@@ -76,11 +76,12 @@ type JobExecution struct {
 }
 
 type AgentRequest struct {
-	Skill      *SkillInvocation
-	SkillRoot  string
-	Definition *AgentDefinition
-	Input      any
-	Turns      int
+	Skill         *SkillInvocation
+	SkillRoot     string
+	SkillEvidence *SkillEvidence
+	Definition    *AgentDefinition
+	Input         any
+	Turns         int
 
 	// SessionOwnerID retains controller-owned provider state across conversation turns.
 	SessionOwnerID string
