@@ -120,6 +120,9 @@ func isolateRepairTurn(agent Agent, req workflows.SessionRequest) (Agent, workfl
 }
 
 func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
+	if req.RepairOnly && req.Skill != nil {
+		return workflows.SessionResult{}, fmt.Errorf("selected skill formatting repair is not certified")
+	}
 	agent, ok := r.Config.Agents[req.AgentID]
 	if !ok {
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
@@ -232,7 +235,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Output != nil {
 		schema = req.Output.Schema
 	}
-	input := map[string]any{"session_id": req.SessionID, "prompt": req.Prompt, "workspace": workspace, "model": model, "instructions": agent.InstructionText, "tools": agent.Tools, "repair_only": req.RepairOnly, "schema": schema}
+	input := map[string]any{"managed_broker": req.Skill == nil && len(agent.Tools) == 0 && (req.ObserveUsage != nil || req.Tools != nil && req.Tools.Binding != nil), "session_id": req.SessionID, "prompt": req.Prompt, "workspace": workspace, "model": model, "instructions": agent.InstructionText, "tools": agent.Tools, "repair_only": req.RepairOnly, "schema": schema}
 	if agent.Execution.Mode == "container" {
 		input["workspace"] = "/workspace"
 	}
@@ -304,6 +307,11 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 		interruptMu.Unlock()
 	}()
+	if input["managed_broker"] == true && req.ObserveUsage != nil {
+		if err = workflows.BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, model); err != nil {
+			return workflows.SessionResult{}, err
+		}
+	}
 	if err = cmd.Start(); err != nil {
 		return workflows.SessionResult{}, err
 	}
@@ -312,7 +320,22 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.RepairOnly {
 		invocationTools = nil
 	}
-	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild)
+	result, parseErr := bridgeTurnControlled(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild, func(proof sdkBrokerProof) error {
+		if req.ObserveUsage != nil {
+			if err := req.ObserveUsage(workflows.UsageUpdate{Key: "sdk-response:" + proof.ResponseID, Provider: "claude-sdk", Model: proof.Model, SessionID: proof.SessionID, Usage: proof.Usage, Incomplete: true}); err != nil {
+				return err
+			}
+		}
+		if req.ObserveUsage != nil {
+			return workflows.CheckManagedSDKAuthority(ctx, req.RunID, req.InvocationID)
+		}
+		return ctx.Err()
+	}, func() error {
+		if req.ObserveUsage != nil {
+			return workflows.CheckManagedSDKAuthority(ctx, req.RunID, req.InvocationID)
+		}
+		return ctx.Err()
+	})
 	if req.Skill != nil && len(req.Skill.Children) != 0 && result.Outputs != nil {
 		raw, _ := result.Outputs["native_child_result"].(map[string]any)
 		if raw == nil {
@@ -365,7 +388,11 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		result.Outputs["provider_version"] = result.ProviderVersion
 		result.Outputs["session_id"] = result.SessionID
 	}
-	return limitResult(result, agent)
+	result, err = limitResult(result, agent)
+	if err == nil && input["managed_broker"] == true && req.ObserveUsage != nil {
+		err = workflows.CheckpointManagedSDKTerminal(ctx, result)
+	}
+	return result, err
 }
 
 // Only explicit provider authentication is added by each session adapter.
@@ -528,8 +555,14 @@ func (r *Runner) nativeTaskRuntime() (Agent, error) {
 	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
 		return Agent{}, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
 	}
-	if role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
-		return Agent{}, fmt.Errorf("Codex managed tool subsets are not certified")
+	if role.Provider == "codex-app-server" {
+		if role.ManagedBuild != nil {
+			if err := validateManagedBuildRole(role); err != nil {
+				return Agent{}, err
+			}
+		} else if role.Tools != nil || len(role.MCPGrants) > 0 {
+			return Agent{}, fmt.Errorf("Codex managed tool subsets are not certified")
+		}
 	}
 	return role, nil
 }
@@ -561,7 +594,7 @@ func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) erro
 	if contract == nil {
 		return nil
 	}
-	if role.Provider == "codex-app-server" && contract.RepairAttempts > 0 {
+	if role.Provider == "codex-app-server" && role.ManagedBuild == nil && contract.RepairAttempts > 0 {
 		return fmt.Errorf("Codex tool-free output repair is not certified; set repair-attempts: 0")
 	}
 	return r.ValidateConversationOutput(r.NativeTaskRole(), contract.Schema)
@@ -573,8 +606,11 @@ func (r *Runner) ValidateNativeOutput(contract *workflows.AgentOutputContract) e
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
-	if r.Config.NativeTaskAdmission != 1 {
+	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native output admission policy")
+	}
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
 	}
 	return r.AdmitNativeOutput(contract)
 }
@@ -585,13 +621,30 @@ func (r *Runner) ValidateNativeModel(model any) error {
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
-	if r.Config.NativeTaskAdmission != 1 {
+	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native task admission policy")
+	}
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
 	}
 	if model != nil {
 		if _, ok := model.(string); !ok {
 			return fmt.Errorf("agent model must be a string")
 		}
+	}
+	return nil
+}
+
+func (r *Runner) validateNativeAdmissionProfile() error {
+	role := r.Config.Agents[r.NativeTaskRole()]
+	if r.Config.NativeTaskAdmission == 2 {
+		if role.ManagedBuild == nil {
+			return fmt.Errorf("managed admission requires its original managed build")
+		}
+		return validateManagedBuildRole(role)
+	}
+	if role.ManagedBuild != nil {
+		return fmt.Errorf("historical native admission cannot acquire managed build authority")
 	}
 	return nil
 }

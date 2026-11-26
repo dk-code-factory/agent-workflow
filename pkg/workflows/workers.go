@@ -636,6 +636,11 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 	if err = w.validateSkillContinuation(); err != nil {
 		return WorkerMessage{}, err
 	}
+	if w.Status != RunStatusRunning {
+		if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+			return WorkerMessage{}, err
+		}
+	}
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
 		return WorkerMessage{}, err
 	}
@@ -881,6 +886,13 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
 			return
 		}
+		if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+			_ = tx.Rollback()
+			w.Status = RunStatusNeedsAttention
+			w.Error = err.Error()
+			_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
+			return
+		}
 		if w.Remaining <= 0 {
 			_ = tx.Rollback()
 			w.Status = RunStatusNeedsAttention
@@ -1008,6 +1020,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: retainJournalError}
 	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
 	ctx = context.WithValue(ctx, managedCodexTerminalKey{}, m.managedTerminalRecorder(w, msg, secrets))
+	ctx = context.WithValue(ctx, managedSDKTerminalKey{}, m.sdkTerminalRecorder(w, msg, secrets))
 	onProviderEvent := func(event ProviderEvent) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
@@ -1176,9 +1189,15 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			turnErr = errors.Join(turnErr, holdErr)
 		}
 	}
+	var sdkAttempt int
+	if usageIdentity.Provider == "claude-sdk" {
+		if e := m.Store.db.QueryRowContext(context.WithoutCancel(ctx), `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key=?`, msg.ID, managedSDKAttemptKey).Scan(&sdkAttempt); e != nil {
+			turnErr = errors.Join(turnErr, workerPersistenceError(e))
+		}
+	}
 	if usageErr == nil && !managedTerminal {
 		update := usageUpdate(result.Outputs, true)
-		if w.Skill != nil && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
+		if (w.Skill != nil || sdkAttempt != 0) && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
 			update.Incomplete = true
 		}
 		if update.SessionID == "" {
@@ -1213,6 +1232,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)
 	msg.UnsafeFailureClass = unsafeWorkerFailureClass(errors.Join(failureCauses, turnErr))
+	if sdkAttempt != 0 && (turnErr != nil || ctx.Err() != nil || result.Status != RunStatusSucceeded) {
+		msg.UnsafeFailureClass = "integrity"
+	}
 	msg.FinishedAt = time.Now().UTC()
 	msg.Status = RunStatusSucceeded
 	if turnErr != nil || result.Status != RunStatusSucceeded {
@@ -1263,8 +1285,13 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	current.FailureGeneration = msg.Generation
 	if current.Status != "closed" {
 		current.Status = "idle"
-		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) || (managedAdmission && turnErr != nil) {
+		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) || (managedAdmission && turnErr != nil) || (sdkAttempt != 0 && msg.Status != RunStatusSucceeded) {
 			current.Status = RunStatusNeedsAttention
+		}
+	}
+	if sdkAttempt != 0 && msg.Status == RunStatusSucceeded {
+		if err = settleManagedSDKAttempt(context.WithoutCancel(ctx), tx, current, msg, result); err != nil {
+			return
 		}
 	}
 	w = current
@@ -1378,6 +1405,9 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+		return err
+	}
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
 		return err
 	}

@@ -1,7 +1,9 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import { BrokerStream } from './broker-stream.mjs';
 import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { isolatedSettings, isolatedEnvironment, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
 
@@ -19,6 +21,18 @@ const nativeActive = new Set();
 let expected = new Set();
 let batchKnown = false;
 let modelIdle = false;
+let brokerStream;
+let nativeProcess;
+let nativeExit;
+let nativeExited = false;
+function invalidateOriginal(error) {
+  // SDK graceful close ends stdin and waits ~2 s. A malformed original
+  // response must not turn that EOF into synthetic tool results/new model work.
+  // This is exclusively the exact ChildProcess returned by our SDK spawn hook.
+  if (nativeProcess && !nativeExited) nativeProcess.kill('SIGKILL');
+  running?.close();
+  return error;
+}
 let start;
 let running;
 let sessionID = '';
@@ -39,6 +53,11 @@ function barrier() {
   // Later unstarted tools cannot run until this callback returns. Every tool
   // already started must await the broker or have finished; native work keeps
   // the execution lease occupied. The full assistant batch must be known.
+  if (brokerStream) {
+    const proof = brokerStream.blocked([...pending.keys()]);
+    if (proof && !nativePermits.size && !nativeActive.size) emit({ type: 'blocked', call_ids: [...pending.keys()], data: proof });
+    return;
+  }
   if (modelIdle && batchKnown && pending.size && !nativePermits.size && !nativeActive.size && [...pending.keys()].every(id => expected.has(id))) {
     emit({ type: 'blocked', call_ids: [...pending.keys()] });
   }
@@ -56,11 +75,14 @@ lines.on('line', line => {
     } else if (frame.type === 'tool_result') {
       const callback = pending.get(frame.call_id);
       if (!callback) throw new Error('unknown tool result identity');
+      brokerStream?.settle(frame.call_id);
       pending.delete(frame.call_id);
       if (frame.error) callback.resolve({ content: [{ type: 'text', text: frame.error }], isError: true });
       else callback.resolve({ content: [{ type: 'text', text: JSON.stringify(frame.result) }] });
     } else if (frame.type === 'interrupt') {
-      interrupted = true; rejectPending(new Error('turn interrupted'));
+      interrupted = true;
+      if (brokerStream) invalidateOriginal(new Error('turn interrupted'));
+      rejectPending(new Error('turn interrupted'));
       if (running) void running.interrupt().then(() => emit({ type: 'interrupted', session_id: sessionID })).catch(() => {});
     } else if (frame.type === 'native_permit') {
       const permit = nativePermits.get(frame.call_id);
@@ -71,12 +93,13 @@ lines.on('line', line => {
     } else throw new Error('unknown bridge control frame');
   } catch (error) {
     if (start) { start.reject(error); start = undefined; }
+    if (brokerStream) invalidateOriginal(error);
     rejectPending(error); process.exitCode = 1; running?.close(); lines.close();
   }
 });
 lines.on('close', () => {
   if (start) { start.reject(new Error('controller disconnected before turn start')); start = undefined; }
-  if (!terminal) { rejectPending(new Error('controller lifetime ended')); running?.close(); }
+  if (!terminal) { if (brokerStream) invalidateOriginal(new Error('controller lifetime ended')); rejectPending(new Error('controller lifetime ended')); running?.close(); }
 });
 
 emit({ type: 'hello', provider_version: 'claude-agent-sdk@' + sdkVersion });
@@ -165,10 +188,14 @@ try {
       });
     }, { annotations: { readOnlyHint: false } });
   });
+  if (request.managed_broker) {
+    if (skill || nativeTools.length) throw new Error('Managed broker profile cannot admit native/skill work');
+    brokerStream = new BrokerStream(brokerNames);
+  }
   if (child && (catalog.length || nativeTools.some(tool => !['Read', 'Skill', 'Agent'].includes(tool)))) throw new Error('Admitted child exceeds parent native authority');
   const allowed = [...nativeTools, ...brokerNames];
   // The pinned SDK synthesizes this formatting-only tool for outputFormat.
-  if (request.schema && !request.repair_only) allowed.push('StructuredOutput');
+  if (request.schema && !request.repair_only && !request.managed_broker) allowed.push('StructuredOutput');
   const postTool = async input => {
     if (nativeActive.delete(input.tool_use_id)) emit({ type: 'native_complete', call_id: input.tool_use_id });
     setImmediate(barrier); return {};
@@ -177,7 +204,7 @@ try {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: request.repair_only ? undefined : (sessionID || undefined),
     systemPrompt: request.repair_only ? 'Format the supplied repair data as JSON. Do not execute tools or perform the original task.' : (request.instructions || 'Follow the explicitly supplied task and engine policy.'),
     settingSources: [], settings: isolatedSettings,
-    env: { ...process.env, ...isolatedEnvironment },
+    env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' },
     extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
     pluginDelivery: skill ? 'initialize' : 'argv',
     skills: skill ? [skill.qualified] : [], plugins: skill ? [{ type: 'local', path: skill.root, skipMcpDiscovery: true }] : [],
@@ -185,9 +212,17 @@ try {
     mcpServers: customTools.length ? { broker: createSdkMcpServer({ name: 'broker', version: '2.0.0', tools: customTools }) } : {},
     tools: nativeTools, allowedTools: allowed, permissionMode: 'default', persistSession: !request.repair_only,
     includePartialMessages: true,
+    ...(brokerStream ? { spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
+      if (nativeProcess) throw new Error('Managed SDK attempted to replace its original process');
+      const child = spawn(command, args, { cwd, env, signal, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      nativeProcess = child;
+      nativeExit = new Promise(resolve => { child.once('exit', () => { nativeExited = true; resolve(); }); child.once('error', () => { if (!child.pid) { nativeExited = true; resolve(); } }); });
+      child.stderr.on('data', () => {}); // drain; no unbounded diagnostic retention
+      return child;
+    } } : {}),
     // process.env is already the controller's private, allowlisted bridge
     // environment. The SDK replaces env rather than merging it implicitly.
-    ...(skill ? { env: { ...process.env, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' } } : {}),
+    ...(skill ? { env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' } } : {}),
     ...(child ? { effort: 'high', maxTurns: 4, includeHookEvents: true, forwardSubagentText: true } : {}),
     hooks: {
       PreToolUse: [{ ...(skill ? { onFailure: 'block' } : {}), hooks: [async input => {
@@ -241,7 +276,7 @@ try {
     },
     canUseTool: async (name, input) => allowed.includes(name) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Tool is outside the engine role policy' },
   };
-  if (request.schema && !request.repair_only) options.outputFormat = { type: 'json_schema', schema: request.schema };
+  if (request.schema && !request.repair_only && !request.managed_broker) options.outputFormat = { type: 'json_schema', schema: request.schema };
   let finishInput;
   const inputDone = new Promise(resolve => { finishInput = resolve; });
   async function* prompt() {
@@ -259,15 +294,17 @@ try {
   if (interrupted) await running.interrupt();
   try {
     for await (const message of running) {
+      try {
       if (message.type === 'system' && message.subtype === 'init') {
         if (skill) assertSelectedInitialization(message, skill); else assertIsolatedInitialization(message);
         isolatedInitialization = true;
         emit({ type: 'progress', data: { type: 'discovery_isolation', plugins: message.plugins, skills: message.skills } });
       }
       if (message.session_id) { sessionID = message.session_id; emit({ type: 'session', session_id: sessionID }); }
-      if (skill && (message.type === 'system' && message.subtype === 'api_retry' || message.subagent_retry || message.type === 'assistant' && message.error)) {
+      if ((skill || brokerStream) && (message.type === 'system' && message.subtype === 'api_retry' || message.subagent_retry || message.type === 'assistant' && message.error)) {
         attemptEvidence = message;
-        emit({ type: 'skill_attempt_uncertainty', session_id: sessionID, data: { key: 'retry:' + createHash('sha256').update(canonical(message)).digest('hex'), session_id: sessionID, provider: 'claude-sdk', raw: message } });
+        if (brokerStream) invalidateOriginal(new Error('Original native attempt is uncertain'));
+        emit({ type: skill ? 'skill_attempt_uncertainty' : 'broker_attempt_uncertainty', session_id: sessionID, data: { key: 'retry:' + createHash('sha256').update(canonical(message)).digest('hex'), session_id: sessionID, provider: 'claude-sdk', raw: message } });
         // Cancel the same query, then drain its original terminal/accounting.
         // Never start another query or turn to recover missing usage.
         if (!attemptTimer) attemptTimer = setTimeout(() => running?.close(), 5000);
@@ -308,7 +345,7 @@ try {
         // tool IDs; replacing the set loses earlier calls in the same batch.
         for (const item of message.message?.content ?? []) if (item.type === 'tool_use') expected.add(item.id);
         batchKnown = true;
-        if (message.message?.usage) { partialUsage = message.message.usage; emit({ type: 'usage', session_id: sessionID, data: { usage: partialUsage, observation_key: message.message.id ?? 'counter' } }); }
+        if (!brokerStream && message.message?.usage) { partialUsage = message.message.usage; emit({ type: 'usage', session_id: sessionID, data: { usage: partialUsage, observation_key: message.message.id ?? 'counter' } }); }
         setImmediate(barrier);
       }
       if (child && message.type === 'stream_event') {
@@ -322,10 +359,16 @@ try {
         }
       }
       if (message.type === 'stream_event') {
+        if (brokerStream) {
+          const proof = brokerStream.event(message.event);
+          if (message.event.type === 'message_start') emit({ type: 'broker_model_start', session_id: sessionID, data: { response_id: brokerStream.current.id, model: brokerStream.current.model } });
+          if (proof) emit({ type: 'broker_batch', session_id: sessionID, data: proof });
+        }
         if (message.event?.type === 'message_start') modelIdle = false;
         if (message.event?.type === 'message_stop') { modelIdle = true; setImmediate(barrier); }
       }
       if (message.type === 'result') {
+        if (brokerStream && (!brokerStream.current?.proof || brokerStream.current.remaining.size)) throw new Error('Original broker/model batch did not settle');
         if (!isolatedInitialization) throw new Error('Provider omitted isolation initialization');
         const succeeded = !attemptEvidence && message.subtype === 'success' && !message.is_error && (!skill || message.api_error == null && message.api_error_status == null);
         const text = message.structured_output !== undefined ? JSON.stringify(message.structured_output) : (message.result ?? '');
@@ -336,10 +379,12 @@ try {
         break;
       }
       emit({ type: 'progress', session_id: sessionID, data: { type: message.type } });
+      } catch (error) { throw invalidateOriginal(error); }
     }
   } finally { finishInput(); }
   if (!terminal) throw new Error('SDK ended without terminal result');
 } catch (error) {
+  if (brokerStream) { invalidateOriginal(error); if (nativeExit) await nativeExit; }
   terminal = true;
   emit({ type: 'result', session_id: sessionID, status: 'failed', outputs: { usage: knownMessageUsage ?? partialUsage, usage_incomplete: true, ...(attemptEvidence ? { native_attempt_error: attemptEvidence } : {}) }, error: String(error) }); process.exitCode = 1;
 } finally { terminal = true; clearTimeout(attemptTimer); releasePrompt(false); rejectPending(new Error('provider turn ended')); running?.close(); lines.close(); }

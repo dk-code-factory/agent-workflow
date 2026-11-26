@@ -28,6 +28,12 @@ type skillChildSDKWriter struct {
 	id string
 }
 
+func (w skillChildSDKWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (w skillChildSDKWriter) Write(p []byte) (int, error) {
 	_, err := w.ResponseWriter.Write(bytes.ReplaceAll(p, []byte("msg_broker_fixture"), []byte(w.id)))
 	return len(p), err

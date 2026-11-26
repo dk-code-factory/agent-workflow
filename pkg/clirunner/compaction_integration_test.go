@@ -38,7 +38,7 @@ func testSDKCompactionCeilingAgainstFakeGateway(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, file := range []string{"bridge.mjs", "isolation.mjs"} {
+			for _, file := range []string{"bridge.mjs", "isolation.mjs", "broker-stream.mjs"} {
 				data, err := os.ReadFile(filepath.Join(original, file))
 				if err != nil {
 					t.Fatal(err)

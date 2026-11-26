@@ -103,3 +103,11 @@ func testSDKRepairAgainstFakeGateway(t *testing.T) {
 		t.Fatalf("continuation failed: %+v %v calls=%d", continued, err, calls.Load())
 	}
 }
+
+func TestSelectedSkillRepairRejectsBeforeProviderSetup(t *testing.T) {
+	runner := &Runner{}
+	_, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{RepairOnly: true, Skill: &workflows.SkillInvocation{}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "selected skill formatting repair") {
+		t.Fatalf("selected repair reached runtime role/provider setup: %v", err)
+	}
+}

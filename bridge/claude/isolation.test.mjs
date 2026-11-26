@@ -24,6 +24,7 @@ test('known builtin native hooks are explicitly disabled', () => {
 test('bridge closes an unexpected init and denies native work before verification', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bridge-isolation-'));
   try {
+    await writeFile(join(dir, 'broker-stream.mjs'), await readFile(new URL('./broker-stream.mjs', import.meta.url)));
     await writeFile(join(dir, 'isolation.mjs'), await readFile(new URL('./isolation.mjs', import.meta.url)));
     await writeFile(join(dir, 'sdk.mjs'), `
       import { writeFileSync } from 'node:fs';

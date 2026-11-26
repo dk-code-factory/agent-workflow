@@ -294,3 +294,46 @@ descriptor must declare the canonical source digest. Changing runtime admission
 or descriptive status does not alter build identity. Preparing or building a
 descriptor never enables admission. Final current
 `make test`, `make check` and `make ui-pr-check` remain required after integration.
+
+## SDK integration checkpoint after issue 139
+
+The branch now includes the merged supplied-skill implementation. Selected
+skills remain outside the managed Codex build profile and selected-skill output
+repair remains rejected before provider setup. Fresh managed Codex admission
+uses policy 2; historical policy 0/1 roles cannot acquire a managed build.
+The source profile is still disabled while the remaining acceptance work runs.
+
+The locked SDK broker-only controller captures the original model response ID,
+all original tool IDs/arguments, final usage delta and completed block set.
+Callbacks queue until this full response proof is known and known usage is
+committed. Each observed serial callback suspends the parent, invokes the engine
+broker, reacquires the parent lease and then returns its semantic result. The
+reader stays live during reacquisition. A later original callback from that
+same plan is permitted exactly once; a new response cannot overlap an unresolved
+plan. Final SDK counters must equal the sum of those original response counters.
+
+A normalized SDK `message_stop` is not independently a completion proof. Native
+2.1.322 also emits it after a source error. Its source explicitly accepts a
+finished block set plus final stop-reason/usage delta as a complete response,
+including a connection error after that delta. The local control verifies that
+any next model request follows both actual broker results with the parent lease
+held. Missing final usage and unadmitted trailing tools must instead stop the
+original native process before iterator cleanup can synthesize interrupted
+results and continue. The public `spawnClaudeCodeProcess` hook retains the exact
+owned ChildProcess for that termination; it preserves the SDK-provided command,
+arguments, directory, environment and forwarded signal. The existing outer
+runtime guardian still joins descendants and records cleanup.
+
+Current deterministic tests include a capacity-one SDK engine invocation with
+two child workers, four broker receipts, three API responses, zero remaining
+parent allowance and 50/17 aggregate tokens; delayed final-delta/EOF, omitted
+final-delta, trailing unadmitted-tool and cancellation during reacquisition
+controls; and SQLite-reopen holds retaining an original known 16/5 token charge.
+The private attempt marker is installed before task data can reach the SDK.
+Only the private original-message terminal checkpoint and existing completion
+transaction can settle it. An unknown SDK callback is held rather than replayed.
+
+These worker proofs do not establish task/conversation coverage. Original
+nonworker attempt admission/settlement, native unknown-response restart,
+known-denial continuation, final cross-adapter conformance and current whole-PR
+validation remain required before enabling the profile or claiming issue 134.

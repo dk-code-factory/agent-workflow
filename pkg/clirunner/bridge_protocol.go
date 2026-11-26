@@ -45,12 +45,24 @@ type bridgeFrame struct {
 // bridgeTurn has exactly one reader. Broker calls run independently, while the
 // adapter's blocked barrier serializes suspension with result delivery.
 func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func(), authorizeChild ...func(context.Context, workflows.SkillChildObservation) error) (workflows.SessionResult, error) {
+	var child func(context.Context, workflows.SkillChildObservation) error
+	if len(authorizeChild) == 1 {
+		child = authorizeChild[0]
+	}
+	return bridgeTurnControlled(ctx, reader, writer, input, tools, emit, stop, child, nil, nil)
+}
+
+func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func(), authorizeChild func(context.Context, workflows.SkillChildObservation) error, observe func(sdkBrokerProof) error, authority func() error) (workflows.SessionResult, error) {
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	var callbacks sync.WaitGroup
 	defer func() { cancel(); stop(); callbacks.Wait() }()
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxOutput)
+	var managed *sdkBrokerBatch
+	if input["managed_broker"] == true {
+		managed = newSDKBrokerBatch(tools, observe, authority)
+	}
 	var result workflows.SessionResult
 	var stateMu sync.Mutex
 	pending := map[string]string{}
@@ -121,7 +133,27 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 		switch frame.Type {
 		case "hello":
 			return result, fmt.Errorf("duplicate bridge negotiation")
+		case "broker_model_start":
+			if managed == nil {
+				return result, fmt.Errorf("unadmitted SDK model start")
+			}
+			if err := managed.start(frame.Data); err != nil {
+				return result, err
+			}
+		case "broker_batch":
+			if managed == nil {
+				return result, fmt.Errorf("unadmitted SDK response proof")
+			}
+			model, _ := input["model"].(string)
+			if err := managed.seal(ctx, frame.Data, model, frame.SessionID); err != nil {
+				return result, err
+			}
+		case "broker_attempt_uncertainty":
+			return result, fmt.Errorf("original SDK model attempt is uncertain")
 		case "native_request":
+			if managed != nil {
+				return result, fmt.Errorf("native work outside managed broker profile")
+			}
 			allowed := false
 			if native, ok := input["tools"].([]string); ok {
 				for _, name := range native {
@@ -140,10 +172,10 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			if frame.Tool == "Agent" {
 				var observation workflows.SkillChildObservation
 				raw, err := json.Marshal(frame.Data)
-				if err != nil || json.Unmarshal(raw, &observation) != nil || observation.ParentCallID != frame.CallID || observation.Kind != "permit" || len(authorizeChild) != 1 || authorizeChild[0] == nil {
+				if err != nil || json.Unmarshal(raw, &observation) != nil || observation.ParentCallID != frame.CallID || observation.Kind != "permit" || authorizeChild == nil {
 					return result, fmt.Errorf("native child lacks original durable authorization")
 				}
-				if err = authorizeChild[0](ctx, observation); err != nil {
+				if err = authorizeChild(ctx, observation); err != nil {
 					return result, err
 				}
 			}
@@ -189,6 +221,12 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 				return result, fmt.Errorf("invalid bridge tool call identity")
 			}
 			request := workflows.ToolRequest{CallID: frame.CallID, Server: frame.Server, Tool: frame.Tool, Arguments: frame.Arguments}
+			if managed != nil {
+				if err := managed.queue(request); err != nil {
+					return result, err
+				}
+				continue
+			}
 			identityBytes, _ := json.Marshal(request)
 			identity := string(identityBytes)
 			stateMu.Lock()
@@ -236,6 +274,12 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 				delete(pending, request.CallID)
 			}(request)
 		case "blocked":
+			if managed != nil {
+				if err := managed.blocked(ctx, frame, writer, &callbacks, report); err != nil {
+					return result, err
+				}
+				continue
+			}
 			if tools == nil || tools.Lease == nil {
 				return result, fmt.Errorf("unconfigured provider wait barrier")
 			}
@@ -266,6 +310,11 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			}
 			stateMu.Unlock()
 		case "result":
+			if managed != nil {
+				if err := managed.complete(frame.Outputs); err != nil {
+					return result, err
+				}
+			}
 			stateMu.Lock()
 			remaining := len(pending) + len(nativeWork)
 			stateMu.Unlock()

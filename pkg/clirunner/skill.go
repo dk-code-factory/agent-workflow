@@ -18,6 +18,9 @@ const codexSkillProfile = "codex-app-server@0.167.1/local-skill-no-delegation-v1
 // AdmitSkillTask advertises only capabilities established for the pinned
 // adapter. This runs before provider discovery, run claims and worker enqueue.
 func (r *Runner) AdmitSkillTask(plan *workflows.SkillInvocation) (*workflows.SkillInvocation, error) {
+	if role := r.Config.Agents[r.NativeTaskRole()]; role.ManagedBuild != nil {
+		return nil, fmt.Errorf("managed Codex build does not support selected skill bindings")
+	}
 	role, err := r.nativeTaskRuntime()
 	if err != nil {
 		return nil, err

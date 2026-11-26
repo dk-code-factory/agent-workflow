@@ -76,3 +76,19 @@ func TestManagedCodexCanonicalProfileIsClosedAndNilRoleCompatible(t *testing.T) 
 		t.Fatal("programmatic admission bypassed disabled profile")
 	}
 }
+
+func TestManagedAdmissionCannotReplaceHistoricalOrSelectedAuthority(t *testing.T) {
+	for _, version := range []int{1, 2, 3} {
+		r := &Runner{Config: Config{AgentRuntime: "worker", NativeTaskAdmission: version, Agents: map[string]Agent{"worker": {Provider: "codex-app-server", ManagedBuild: &ManagedBuild{Manifest: "must-not-open"}}}}}
+		if err := r.ValidateNativeModel("gpt-5.4"); err == nil {
+			t.Fatalf("policy %d admitted disabled/mismatched managed authority", version)
+		}
+		if _, err := r.AdmitSkillTask(nil); err == nil || !strings.Contains(err.Error(), "selected skill") {
+			t.Fatalf("policy %d did not reject managed selected skill before discovery: %v", version, err)
+		}
+	}
+	r := &Runner{Config: Config{AgentRuntime: "worker", NativeTaskAdmission: 2, Agents: map[string]Agent{"worker": {Provider: "codex-app-server"}}}}
+	if err := r.ValidateNativeOutput(nil); err == nil {
+		t.Fatal("managed admission accepted a stock retained role")
+	}
+}

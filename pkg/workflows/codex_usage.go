@@ -66,6 +66,10 @@ func managedCodexUsageFence(ctx context.Context, tx *sql.Tx, binding runtimeexec
 }
 
 func managedCodexUsageIdentity(ctx context.Context, tx *sql.Tx, run, invocation string) (UsageIdentity, error) {
+	return managedProviderUsageIdentity(ctx, tx, run, invocation, "codex-app-server")
+}
+
+func managedProviderUsageIdentity(ctx context.Context, tx *sql.Tx, run, invocation, provider string) (UsageIdentity, error) {
 	var identity UsageIdentity
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=? AND origin_id=?`, invocation, run).Scan(&raw); err != nil {
@@ -74,7 +78,7 @@ func managedCodexUsageIdentity(ctx context.Context, tx *sql.Tx, run, invocation 
 	if err := decodeJSONWithNumbers(raw, &identity); err != nil {
 		return identity, err
 	}
-	if identity.ID != invocation || identity.RunID != run || identity.Provider != "codex-app-server" {
+	if identity.ID != invocation || identity.RunID != run || identity.Provider != provider {
 		return identity, fmt.Errorf("managed usage identity differs from original provider invocation")
 	}
 	return identity, nil
@@ -293,6 +297,10 @@ func ManagedCodexUsageTotals(ctx context.Context, run, invocation, finalResponse
 // admitted deadline; worker messages must remain the same running, previously
 // admitted turn (Remaining may correctly be zero after its last admission).
 func CheckManagedCodexAuthority(ctx context.Context, run, invocation string) error {
+	return checkManagedProviderAuthority(ctx, run, invocation, "codex-app-server")
+}
+
+func checkManagedProviderAuthority(ctx context.Context, run, invocation, provider string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -311,7 +319,7 @@ func CheckManagedCodexAuthority(ctx context.Context, run, invocation string) err
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
 		return err
 	}
-	identity, err := managedCodexUsageIdentity(ctx, tx, run, invocation)
+	identity, err := managedProviderUsageIdentity(ctx, tx, run, invocation, provider)
 	if err != nil {
 		return err
 	}

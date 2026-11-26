@@ -342,7 +342,7 @@ func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error
 	// Reject explicitly selected Codex policy before discovery can launch an
 	// MCP connector for grants this adapter cannot enforce. Legacy configs may
 	// retain an unused Codex role; native task admission checks defaults.
-	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
+	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && role.ManagedBuild == nil && (role.Tools != nil || len(role.MCPGrants) > 0) {
 		return nil, fmt.Errorf("Codex managed tool subsets are not certified")
 	}
 	cfg, err := r.Config.PinRuntimes(ctx)
@@ -353,6 +353,9 @@ func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error
 	// are decoded by RunnerForRoles without rewriting historical bytes.
 	cfg.AgentRuntime = cfg.NativeRole()
 	cfg.NativeTaskAdmission = 1
+	if cfg.Agents[cfg.NativeRole()].ManagedBuild != nil {
+		cfg.NativeTaskAdmission = 2
+	}
 	return json.Marshal(cfg)
 }
 
