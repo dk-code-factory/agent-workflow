@@ -41,8 +41,8 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	_ = os.Mkdir(filepath.Join(root, ".claude"), 0700)
 	hook := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch NATIVE_HOOK_RAN"}]}]}}`
 	_ = os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(hook), 0600)
-	// Same-name project/user skills and attempted builtin re-enablement remain
-	// outside the explicit empty skill/plugin selection.
+	// Same-name project/user skills remain outside the explicit empty selection;
+	// the project settings above also exercise ignored SessionStart hooks.
 	state, err := providerStateDir(root, "claude", workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer"}})
 	if err != nil {
 		t.Fatal(err)
