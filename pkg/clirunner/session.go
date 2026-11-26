@@ -114,6 +114,15 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			agent.Model = req.Definition.Model
 		}
 	}
+	if req.Skill != nil {
+		if _, err := r.AdmitSkillTask(req.Skill); err != nil {
+			return workflows.SessionResult{}, err
+		}
+		if req.Model != "" && req.Model != req.Skill.Model {
+			return workflows.SessionResult{}, fmt.Errorf("skill model changed")
+		}
+		req.Model = req.Skill.Model
+	}
 	if req.Input != nil {
 		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)
 		if err != nil {
@@ -193,6 +202,14 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			catalog = append(catalog, map[string]any{"server": d.Server, "name": d.Name, "description": d.Description, "input_schema": d.InputSchema, "wire_name": workflows.ToolWireName(d), "controller_validation": d.ControllerValidation})
 		}
 		input["broker_tools"] = catalog
+	}
+	if req.Skill != nil {
+		skill, err := skillBridgeInput(req)
+		if err != nil {
+			return workflows.SessionResult{}, err
+		}
+		input["skill"] = skill
+		input["tools"] = append(append([]string(nil), agent.Tools...), "Skill")
 	}
 	command := agent.Command
 	if command == "" {

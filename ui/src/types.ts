@@ -57,7 +57,7 @@ export interface ActionDefinition {
   renderInspector?: (element: HTMLElement, context: CustomInspectorContext) => void | (() => void);
 }
 export interface CatalogEntry { id: string; label?: string }
-export type InputType = 'string' | 'boolean' | 'number' | 'object' | 'array';
+export type InputType = 'string' | 'boolean' | 'number' | 'object' | 'array' | 'skill';
 export interface WorkflowInput { type?: InputType; required?: boolean; default?: unknown }
 export interface WorkflowCatalogEntry extends CatalogEntry {
   interface?: { inputs?: Record<string, WorkflowInput>; secrets?: Record<string, { required?: boolean }> };

@@ -21,6 +21,8 @@ type WorkerAccess struct {
 }
 
 type Worker struct {
+	Skill                  *SkillInvocation              `json:"skill,omitempty"`
+	SkillEvidence          *SkillEvidence                `json:"skill_evidence,omitempty"`
 	TaskWorkspace          string                        `json:"task_workspace,omitempty"`
 	Definition             *AgentDefinition              `json:"agent_definition,omitempty"`
 	SessionOwnerID         string                        `json:"session_owner_id,omitempty"`
@@ -71,6 +73,7 @@ type WorkerMessage struct {
 	FinishedAt             time.Time                     `json:"finished_at,omitempty"`
 }
 type WorkerSpec struct {
+	Skill             *SkillInvocation `json:"-"`
 	TaskWorkspace     string           `json:"-"`
 	Definition        *AgentDefinition `json:"-"`
 	Owner             string           `json:"-"`
@@ -328,6 +331,19 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 	} else if !caps.ManagedPolicy {
 		return Worker{}, fmt.Errorf("role backend cannot enforce engine-owned worker policy")
 	}
+	if spec.Skill != nil {
+		validator, ok := runner.(SkillTaskRunner)
+		if !ok {
+			return Worker{}, fmt.Errorf("runtime cannot admit skills")
+		}
+		admitted, err := validator.AdmitSkillTask(spec.Skill)
+		if err != nil {
+			return Worker{}, err
+		}
+		if actionHash(admitted) != actionHash(spec.Skill) {
+			return Worker{}, fmt.Errorf("%w: skill controls changed", ErrActionIntegrity)
+		}
+	}
 	access := WorkerAccess{Writable: true}
 	if source, ok := runner.(interface {
 		WorkerAccess(string) (WorkerAccess, error)
@@ -401,7 +417,7 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			if admissionErr != nil && (existing.ParentID != spec.ParentID || existing.CreatorInvocation != spec.CreatorInvocation) {
 				return Worker{}, fmt.Errorf("stable worker creator identity changed")
 			}
-			if existing.Role != spec.Role || existing.TaskWorkspace != spec.TaskWorkspace || (spec.Definition != nil && spec.Turns != 0 && existing.TaskTurns != spec.Turns) || actionHash(existing.Definition) != actionHash(spec.Definition) {
+			if existing.Role != spec.Role || existing.TaskWorkspace != spec.TaskWorkspace || (spec.Definition != nil && spec.Turns != 0 && existing.TaskTurns != spec.Turns) || actionHash(existing.Definition) != actionHash(spec.Definition) || actionHash(existing.Skill) != actionHash(spec.Skill) {
 				return Worker{}, fmt.Errorf("%w: agent binding changed", ErrActionIntegrity)
 			}
 			return existing, nil
@@ -535,7 +551,7 @@ func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, err
 			return Worker{}, err
 		}
 	}
-	w := Worker{TaskWorkspace: spec.TaskWorkspace, Definition: spec.Definition, Access: access, MaxQueued: policy.MaxQueued, MaxDepth: policy.MaxDepth, TurnDuration: policy.TurnDuration, MaxOutput: policy.MaxOutput, ID: randomID(), RunID: spec.RunID, ParentID: spec.ParentID, Role: spec.Role, Status: "idle", Tools: tools, Remaining: turns, Depth: depth}
+	w := Worker{Skill: spec.Skill, TaskWorkspace: spec.TaskWorkspace, Definition: spec.Definition, Access: access, MaxQueued: policy.MaxQueued, MaxDepth: policy.MaxDepth, TurnDuration: policy.TurnDuration, MaxOutput: policy.MaxOutput, ID: randomID(), RunID: spec.RunID, ParentID: spec.ParentID, Role: spec.Role, Status: "idle", Tools: tools, Remaining: turns, Depth: depth}
 	if spec.Definition != nil {
 		w.TaskTurns = turns
 	}
@@ -854,7 +870,15 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		journalErr = errors.Join(journalErr, err)
 	}
 	expectedSession := w.SessionID
-	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
+	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Skill: w.Skill, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
+	if w.Skill != nil {
+		root, skillErr := m.Store.SkillAssets(ctx, w.RunID, w.Skill)
+		if skillErr != nil {
+			runner = &failedSessionRunner{err: skillErr}
+		} else {
+			request.SkillRoot = root
+		}
+	}
 	usageIdentity := UsageIdentity{TaskAttemptID: msg.TaskAttemptID, ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
 	if source, ok := runner.(interface {
 		UsageProvider(string, string) (string, string)
@@ -904,6 +928,26 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			expectedSession = event.SessionID
 		}
 
+		var skillObservation *SkillObservation
+		if event.Type == "skill_evidence" {
+			var observation SkillObservation
+			if decodeSkillValue(event.Data, &observation) != nil {
+				progressErr = fmt.Errorf("malformed skill observation")
+				cancelTurn()
+				return
+			}
+			if expectedSession == "" || observation.SessionID != expectedSession {
+				progressErr = fmt.Errorf("skill observation is outside the provider session")
+				cancelTurn()
+				return
+			}
+			if secret, err := containsCredential(observation, secrets); err != nil || secret {
+				progressErr = fmt.Errorf("skill evidence contains credential material")
+				cancelTurn()
+				return
+			}
+			skillObservation = &observation
+		}
 		event.Data, _ = redactValue(event.Data, secrets).(map[string]any)
 		eventCtx := context.WithoutCancel(ctx)
 		tx, err := m.Store.db.BeginTx(eventCtx, nil)
@@ -923,9 +967,18 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		if err = tx.QueryRowContext(eventCtx, "SELECT record FROM workers WHERE id=?", w.ID).Scan(&b); err == nil {
 			err = decodeJSONWithNumbers(b, &current)
 		}
-		if err == nil && event.SessionID != "" {
-			current.SessionID = event.SessionID
-			w.SessionID = event.SessionID
+		if err == nil && skillObservation != nil {
+			if current.SkillEvidence == nil {
+				current.SkillEvidence = &SkillEvidence{}
+			}
+			err = current.SkillEvidence.Observe(current.Skill, *skillObservation)
+		}
+		if err == nil && (event.SessionID != "" || skillObservation != nil) {
+			if event.SessionID != "" {
+				current.SessionID = event.SessionID
+				w.SessionID = event.SessionID
+			}
+			w.SkillEvidence = current.SkillEvidence
 			b, _ = json.Marshal(current)
 			_, err = tx.ExecContext(eventCtx, "UPDATE workers SET record=? WHERE id=?", b, w.ID)
 		}
@@ -946,6 +999,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	retainedJournalErr := journalErr
 	eventMu.Unlock()
 	turnErr = errors.Join(turnErr, retainedJournalErr)
+	if w.Skill != nil && turnErr == nil {
+		turnErr = w.SkillEvidence.Complete(w.Skill)
+	}
 	// Failed admission never starts the provider. In particular, cancellation
 	// can leave no usage row, so final accounting would invent a storage failure.
 	if usageErr == nil {

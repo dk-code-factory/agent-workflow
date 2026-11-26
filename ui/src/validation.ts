@@ -405,7 +405,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
   }
   const callable = w.on?.workflow_call as Mapping | undefined;
   if (mapping(callable?.inputs)) for (const [id, input] of Object.entries(callable.inputs)) {
-    if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
+    if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array', 'skill'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
   }
   const validateFiles = (files: unknown, path: Path) => {
     if (!Array.isArray(files) || files.some(value => typeof value !== 'string' || !value || value.startsWith('/') || /[\\\x00]/.test(value) || value.split('/').includes('..') || value.includes('${{'))) add('files', 'Helper files require static relative paths without traversal', path);
@@ -557,7 +557,23 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
               add('agent-definition', 'Agent selection requires select and 1–32 literal named definition paths', [...sp, 'with', 'agent']);
             }
           } else if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path, agent reference or definition selection', [...sp, 'with', 'agent']);
-          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns', 'checklist'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns', 'checklist', 'skill'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          if (Object.hasOwn(params, 'skill')) {
+            const skill = params.skill;
+            const declared = mapping(callable?.inputs) && mapping(skill) && typeof skill.input === 'string' ? callable.inputs[skill.input] : undefined;
+            const evidence = mapping(skill) ? skill.evidence : undefined;
+            const valid = mapping(skill) && Object.keys(skill).every(key => ['input', 'arguments', 'resources', 'evidence', 'children'].includes(key))
+              && typeof skill.input === 'string' && mapping(declared) && declared.type === 'skill'
+              && (skill.arguments === undefined || typeof skill.arguments === 'string' && new TextEncoder().encode(skill.arguments).length <= 65536
+                && !skill.arguments.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{'))
+              && (skill.resources === undefined || Array.isArray(skill.resources) && skill.resources.length <= 128 && skill.resources.every(resource => typeof resource === 'string' && resource && !resource.startsWith('/') && !/[\\\x00]/.test(resource) && !resource.split('/').includes('..') && !resource.includes('${{')))
+              && mapping(evidence) && evidence.invocation === 'required' && Object.keys(evidence).every(key => ['invocation', 'children'].includes(key))
+              && (evidence.children === undefined || Array.isArray(evidence.children) && evidence.children.length === 0)
+              && (skill.children === undefined || Array.isArray(skill.children) && skill.children.length === 0)
+              && typeof params.agent === 'string' && !params.agent.includes('${{');
+            if (!valid) add('skill', 'Skill requires a declared type: skill input, admitted input arguments, literal resources and required invocation evidence; native children are not certified', [...sp, 'with', 'skill']);
+            else add('host-skill', 'Skill source bytes, pinned model and supported provider profile require host admission', [...sp, 'with', 'skill'], undefined, 'host', 'info');
+          }
           if (Object.hasOwn(params, 'checklist')) {
             const normalizeBudget = (object: Mapping, path: Path) => {
               if (!Object.hasOwn(object, 'max-retries')) return;

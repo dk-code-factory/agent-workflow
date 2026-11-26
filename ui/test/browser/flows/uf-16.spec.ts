@@ -248,3 +248,23 @@ test('quote a date entered in a concise prompt for runner admission', async ({ p
   expect(state.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
   await expect(ui.getByLabel('Prompt', { exact: true })).toHaveValue('2026-11-06');
 });
+
+
+test('configure a selected skill and repair unsupported child requirements', async ({ page }) => {
+  const ui = await open(page, 'on: {workflow_call: {inputs: {selected: {type: skill, required: true}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.yaml, prompt: Review}}]}}');
+  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.getByRole('button', { name: '1. review', exact: true }).click();
+  const skill = '{input: selected, arguments: exact, resources: [reference.txt], evidence: {invocation: required}}';
+  await field(page, 'Skill invocation (YAML)', skill);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'host-skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', skill.replace('arguments: exact', 'children: [{name: child}], arguments: exact'));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', skill);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children).toEqual([{ name: 'child' }]);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.evidence).toEqual({ invocation: 'required' });
+  expect(await downloadText(page)).toContain('reference.txt');
+});

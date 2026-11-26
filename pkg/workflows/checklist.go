@@ -161,7 +161,7 @@ func (e *Executor) executeChecklist(ctx context.Context, step Step, ec expressio
 	if err != nil {
 		return nil, err
 	}
-	initial := Step{ID: step.ID + "/checklist/task", Uses: "agent/run", With: cloneJSONMap(step.With), Definition: step.Definition, Definitions: step.Definitions}
+	initial := Step{ID: step.ID + "/checklist/task", Uses: "agent/run", With: cloneJSONMap(step.With), Definition: step.Definition, Skill: step.Skill, Definitions: step.Definitions}
 	delete(initial.With, "checklist")
 	args, err := renderMap(initial.With, ec)
 	if err != nil {

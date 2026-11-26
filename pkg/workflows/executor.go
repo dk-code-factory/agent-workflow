@@ -53,6 +53,7 @@ type RunStore interface {
 }
 
 type Executor struct {
+	ResolveSkillPackage        func(context.Context, SkillPackageReference) (*SkillSource, error)
 	Boundary                   ExecutionBoundary
 	ContainerGuardianDirectory string
 	bundleOrigin               string
@@ -87,6 +88,8 @@ type Executor struct {
 }
 
 type RunRequest struct {
+	SkillSources      map[string]*SkillSource
+	skillInputs       map[string]string
 	Package           *PackageSource
 	packageBinding    *PackageBinding
 	TaskGroup         string
@@ -235,6 +238,9 @@ func (e *Executor) Run(ctx context.Context, req RunRequest) (*Run, error) {
 	}
 	all, err := e.Load(req.Ref)
 	if err != nil {
+		return nil, err
+	}
+	if err = e.admitSkills(ctx, all, &req); err != nil {
 		return nil, err
 	}
 	if err = e.discoverExecution(ctx); err != nil {
@@ -877,7 +883,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, ec expressionCont
 	if err != nil {
 		return nil, err
 	}
-	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: e.nativeRole(), Definition: step.Definition, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
+	req := AgentRequest{RunID: owner, InvocationID: invocation, AgentID: e.nativeRole(), Definition: step.Definition, Skill: step.Skill, Input: args["input"], Turns: turns, Model: nativeString(args, "model"), Prompt: prompt, Workspace: workspace, Output: contract}
 	if step.Uses != "agent/run" {
 		return nil, fmt.Errorf("only agent/run accepts native definitions")
 	}
@@ -1095,6 +1101,9 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 		if hex.EncodeToString(hash[:]) != snap.Hashes[ref] {
 			return nil, fmt.Errorf("snapshot hash mismatch for %s", ref)
 		}
+	}
+	if err = e.validateRetainedSkills(snap.Definitions); err != nil {
+		return nil, err
 	}
 	if err = e.preflight(ctx, snap.Definitions); err != nil {
 		return nil, err

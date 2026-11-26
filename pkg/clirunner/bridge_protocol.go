@@ -294,6 +294,13 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			if emit != nil {
 				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: result.SessionID, Data: frame.Data})
 			}
+		case "skill_evidence":
+			if input["skill"] == nil {
+				return result, fmt.Errorf("unadmitted skill evidence")
+			}
+			if emit != nil {
+				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: frame.SessionID, Data: frame.Data})
+			}
 		case "session", "progress", "interrupted":
 			if emit != nil {
 				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: result.SessionID, Data: frame.Data})

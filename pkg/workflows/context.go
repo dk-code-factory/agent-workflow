@@ -76,6 +76,8 @@ type JobExecution struct {
 }
 
 type AgentRequest struct {
+	Skill      *SkillInvocation
+	SkillRoot  string
 	Definition *AgentDefinition
 	Input      any
 	Turns      int

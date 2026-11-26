@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
-import { isolatedSettings, assertIsolatedInitialization } from './isolation.mjs';
+import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
 
 const sdkVersion = '0.3.322';
 const sdkMetadata = JSON.parse(await readFile(new URL('./package.json', import.meta.resolve('@anthropic-ai/claude-agent-sdk')), 'utf8'));
@@ -25,6 +25,8 @@ let terminal = false;
 let interrupted = false;
 let partialUsage;
 let isolatedInitialization = false;
+let releasePrompt;
+const promptReady = new Promise(resolve => { releasePrompt = resolve; });
 const requestReady = new Promise((resolve, reject) => { start = { resolve, reject }; });
 
 function barrier() {
@@ -77,8 +79,11 @@ emit({ type: 'hello', provider_version: 'claude-agent-sdk@' + sdkVersion });
 try {
   const request = await requestReady;
   sessionID = request.session_id ?? '';
+  const skill = request.skill;
+  if (skill && (request.repair_only || skill.profile !== 'claude-sdk@0.3.322/local-skill-v1' || skill.qualified !== 'aw-' + skill.name + ':' + skill.name || typeof skill.root !== 'string' || typeof skill.arguments !== 'string')) throw new Error('Invalid admitted skill contract');
+  const skillCalls = new Set();
   const nativeTools = request.repair_only ? [] : (request.tools ?? []);
-  if (!Array.isArray(nativeTools) || nativeTools.some(t => ['agent', 'task', 'skill', 'toolsearch', 'teamcreate', 'teamdelete', 'sendmessage'].includes(String(t).toLowerCase().replace(/[_-]/g, '')))) throw new Error('native delegation, discovery, and skills are disabled');
+  if (!Array.isArray(nativeTools) || nativeTools.some(t => ['agent', 'task', ...(skill ? [] : ['skill']), 'toolsearch', 'teamcreate', 'teamdelete', 'sendmessage'].includes(String(t).toLowerCase().replace(/[_-]/g, '')))) throw new Error('native delegation, discovery, and skills are disabled');
   const catalog = request.repair_only ? [] : (request.broker_tools ?? []);
   const brokerNames = new Set();
   const customTools = catalog.map(definition => {
@@ -115,14 +120,21 @@ try {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: sessionID || undefined,
     systemPrompt: request.instructions || 'Follow the explicitly supplied task and engine policy.',
     settingSources: [], settings: isolatedSettings,
-    extraArgs: { 'disable-slash-commands': null, 'strict-mcp-config': null, 'no-chrome': null },
-    skills: [], plugins: [], agents: {},
+    extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
+    pluginDelivery: skill ? 'initialize' : 'argv',
+    skills: skill ? [skill.qualified] : [], plugins: skill ? [{ type: 'local', path: skill.root, skipMcpDiscovery: true }] : [], agents: {},
     mcpServers: customTools.length ? { broker: createSdkMcpServer({ name: 'broker', version: '2.0.0', tools: customTools }) } : {},
     tools: nativeTools, allowedTools: allowed, permissionMode: 'default', persistSession: !request.repair_only,
     includePartialMessages: true,
     hooks: {
-      PreToolUse: [{ hooks: [async input => {
+      PreToolUse: [{ ...(skill ? { onFailure: 'block' } : {}), hooks: [async input => {
         if (!isolatedInitialization) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Provider initialization is not verified' } };
+        if (input.tool_name === 'Skill') {
+          const args = input.tool_input;
+          if (!skill || !args || args.skill !== skill.qualified || (args.args ?? '') !== skill.arguments || Object.keys(args).some(key => !['skill', 'args'].includes(key))) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Skill invocation differs from admitted identity/options' } };
+          skillCalls.add(input.tool_use_id);
+          emit({ type: 'skill_evidence', session_id: input.session_id, data: { key: 'invoke:' + input.tool_use_id, kind: 'invocation', session_id: input.session_id, call_id: input.tool_use_id, name: skill.name, arguments: skill.arguments, raw: input } });
+        }
         if (!allowed.includes(input.tool_name)) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Outside engine tool policy' } };
         if (brokerNames.has(input.tool_name)) {
           const key = input.tool_name + '\0' + canonical(input.tool_input);
@@ -145,19 +157,34 @@ try {
   let finishInput;
   const inputDone = new Promise(resolve => { finishInput = resolve; });
   async function* prompt() {
+    if (skill && !await promptReady) return;
     yield { type: 'user', session_id: sessionID, message: { role: 'user', content: request.prompt }, parent_tool_use_id: null };
     await inputDone;
   }
   running = query({ prompt: prompt(), options });
+  if (skill) {
+    const initialization = await running.initializationResult();
+    assertSkillAcknowledgement(initialization, skill.qualified);
+    emit({ type: 'progress', data: { type: 'skill_acknowledged', qualified: skill.qualified } });
+    releasePrompt(true);
+  }
   if (interrupted) await running.interrupt();
   try {
     for await (const message of running) {
       if (message.type === 'system' && message.subtype === 'init') {
-        assertIsolatedInitialization(message);
+        if (skill) assertSelectedInitialization(message, skill); else assertIsolatedInitialization(message);
         isolatedInitialization = true;
         emit({ type: 'progress', data: { type: 'discovery_isolation', plugins: message.plugins, skills: message.skills } });
       }
       if (message.session_id) { sessionID = message.session_id; emit({ type: 'session', session_id: sessionID }); }
+      if (skill && message.parent_tool_use_id) throw new Error('Unexpected native child in skill session');
+      if (skill && message.type === 'user') {
+        for (const result of message.message?.content ?? []) {
+          if (result.type === 'tool_result' && skillCalls.has(result.tool_use_id) && result.is_error !== true && message.tool_use_result?.success === true && message.tool_use_result.commandName === skill.qualified) {
+            emit({ type: 'skill_evidence', session_id: message.session_id, data: { key: 'result:' + result.tool_use_id, kind: 'result', session_id: message.session_id, call_id: result.tool_use_id, name: skill.name, arguments: skill.arguments, raw: message } });
+          }
+        }
+      }
       if (message.type === 'assistant') {
         emit({ type: 'progress', data: { type: 'assistant_batch', tool_ids: (message.message?.content ?? []).filter(item => item.type === 'tool_use').map(item => item.id), stop_reason: message.message?.stop_reason } });
         // The SDK emits one assistant envelope per content block. Accumulate
@@ -187,7 +214,7 @@ try {
 } catch (error) {
   terminal = true;
   emit({ type: 'result', session_id: sessionID, status: 'failed', outputs: { usage: partialUsage, usage_incomplete: true }, error: String(error) }); process.exitCode = 1;
-} finally { terminal = true; rejectPending(new Error('provider turn ended')); running?.close(); lines.close(); }
+} finally { terminal = true; releasePrompt(false); rejectPending(new Error('provider turn ended')); running?.close(); lines.close(); }
 
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';

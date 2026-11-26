@@ -117,8 +117,64 @@ Ordinary native tools retain their role policy.
 
 Claude's init validation occurs when the SDK emits `system/init`; it is not a
 pre-model API admission barrier. Inline plugin suppression is the startup
-control, and native tool dispatch requires verified initialization. Supplied
-skill admission, loading and observed child evidence are separate future work.
+control, and native tool dispatch requires verified initialization.
+
+An explicitly supplied skill uses a declared `type: skill` input and a
+`with.skill` selection on one literal agent definition:
+
+```yaml
+on:
+  workflow_call:
+    inputs:
+      selected: {type: skill, required: true}
+jobs:
+  review:
+    steps:
+      - uses: agent/run
+        with:
+          agent: reviewer.yaml
+          prompt: Review the supplied target.
+          skill:
+            input: selected
+            arguments: exact arguments
+            resources: [reference.txt]
+            evidence: {invocation: required}
+```
+
+Supply `selected` as `{directory: /absolute/path/to/skill}`, or
+`{package: {root: /absolute/local/package, digest: <64-hex-digest>, skill: name}}`.
+The application resolves the local package through its captured manifest; no
+registry or installed-skill lookup occurs. The skill directory contains a
+`SKILL.md` with only `name` and `description` frontmatter. Authority-changing
+metadata, symlinks and additional skill entries are rejected. Resource paths
+are literal paths inside that skill directory. Admission captures exact bytes,
+source modes and empty directories. Each selected occurrence receives only its
+entry and explicitly selected resources in an engine-owned plugin; independent
+siblings retain the empty skill configuration.
+
+Arguments and model overrides can use literals and admitted `inputs` expressions.
+Admission pins these values, resources, model and capability profile before run
+claims. Resume uses the retained assets, original session and original turn
+allowance even after source removal; it does not recapture or replenish them.
+
+The initial supported profile is the locked Claude SDK 0.3.322 local runtime,
+with a pinned model and no reasoning-effort override. Before releasing the
+prompt, the adapter requires the initialize acknowledgement and the selected
+qualified command. The acknowledgement alone does not establish successful
+loading. The later `system/init` event must report exactly the admitted plugin;
+this complete plugin-set validation still occurs after prompt release and is
+not a pre-model barrier. Native Skill calls require the exact qualified name
+and admitted arguments. Original provider invocation and successful tool-result
+events, linked by call and session identity, are retained separately from
+redacted progress. A terminal report without those events remains incomplete;
+observed invocation does not establish model adherence or task correctness.
+
+Required native children, Codex supplied-skill sessions, containers, reusable
+workflow selections and unsupported effort controls reject admission. They do
+not fall back to prompt imports or host skills. Native child evidence and the
+remaining provider profiles require separate protocol support before activation.
+The editor exposes skill input mappings and **Skill invocation (YAML)**;
+host admission remains responsible for source and provider capability checks.
 
 Workspace `agents.yml` selects the configured role for every native task with
 `agent-runtime`. Omit it to use `codex`. The selected role must use

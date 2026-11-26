@@ -125,14 +125,14 @@ fields. Escape discards an uncommitted field edit.
 
 **UI tests**: [UI tests](../ui/test/browser/flows/uf-08.spec.ts)
 
-- **Coverage:** The shared workflow fixture uses canonical YAML agent-definition paths; this flow keeps its interaction and recovery assertions while exercising those revised source references. The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls. Boolean, numeric, and literal string defaults keep their types; object defaults use field YAML, and defaults have no result-binding control.
+- **Coverage:** The shared workflow fixture uses canonical YAML agent-definition paths; this flow keeps its interaction and recovery assertions while exercising those revised source references. The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Callable input type/default/required, secret identifiers, and output expressions are stored through guided controls. Boolean, numeric, and literal string defaults keep their types; object defaults use field YAML, and defaults have no result-binding control. Skill defaults use field YAML and preserve the explicit source mapping.
 
 - **Starting point:** I have enabled **workflow_call** in Workflow properties.
 - **My flow:** I open **Callable inputs**, **Callable secrets**, or **Callable
   outputs** → select **Add input**, **Add secret**, or **Add output** → edit
   the generated identifier and its settings.
 - **What I see:** Inputs offer a type, a matching text, boolean, or number
-  default control, field YAML for object/array values, and a required checkbox;
+  default control, field YAML for object/array/skill values, and a required checkbox;
   secrets offer a required checkbox; outputs offer a value expression. These
   controls define the interface, rather than entering actual secret values.
 
@@ -243,12 +243,13 @@ fields. Escape discards an uncommitted field edit.
 
 - **Coverage:** The shared workflow fixture uses canonical YAML agent-definition paths; this flow keeps its interaction and recovery assertions while exercising those revised source references. Imported agent definition selections are edited as structured YAML; literal catalogs, unknown names and dynamic paths receive diagnostics. Selection edits, correction, export and Undo/Redo preserve every declared role. The shared native task fixture carries an explicit definition path; the controls and history below are exercised with canonical task parameters.  Agent settings include prompt, message, model, workspace, and structured output; imported empty and null command fields preserve agent inspection and produce no command-conflict errors for canonical native agent tasks, matching runner admission. Definition, prompt, and option edits retain multiline text and unrelated comments. Undoing the output-contract edit preserves the native definition and other options, and Redo restores the contract. Date prompts entered through the inspector are quoted so the runner admits them as strings. Named output schema references and workflow-local declarations survive prompt edits, contract edits, undo/redo, and YAML export; unknown names produce a field diagnostic that clears after correcting the contract. Conversation controls edit participants, starter, finisher, call/message budgets, timeout, prompt, and the existing output contract; an undeclared finisher produces a diagnostic that clears on repair. Command conversion lists discarded conversation fields, cancellation preserves them, and confirmed conversion reverses completely through Undo. Imported fractional conversation call and message budgets produce field errors instead of being truncated; replacing them with integer values through the visible YAML editor clears the errors and retains the declared bounds. Conversation-owned lifecycle hooks produce an explicit diagnostic; removing the unsupported hook through the YAML editor restores the conversation controls without offering handler settings.
  The Checklist YAML control edits the shared retry budget and ordered prompt, argv and shell stages with local retry limits. Invalid negative budgets produce a diagnostic that clears on repair; Undo, Redo and export preserve the configured limits and command arguments. Imported unquoted date arguments produce a checklist diagnostic; quoting them through the YAML editor clears it and preserves the string argument on export. Imported binary-tagged checklist prompt and argv values decode as strings, including BOM text, remain valid during prompt edits and Undo/Redo, and export with their decoded text.
+- **Coverage:** Skill invocation YAML preserves the selected typed input, arguments, resource paths and required invocation evidence through correction, export and Undo/Redo. Unsupported native-child requirements produce a diagnostic that clears after repair; provider capabilities remain host-validated.
 - **Starting point:** I add or select an agent or conversation step.
 - **My flow:** For a conversation I select **Conversation** under **Step type**,
   edit **Participants (YAML)**, **Starter**, **Finisher**, and bounded call, message,
   and timeout settings. For an agent I choose it under **Step type**, or edit **Action target**
   → write the **Prompt** → optionally set **Message**, **Model**, **Workspace**,
-  and a **Structured output contract (YAML)**. Imported named definition selections
+  a **Skill invocation (YAML)**, and a **Structured output contract (YAML)**. Imported named definition selections
   use **Agent definition selection (YAML)** to edit the selector and literal catalog.
   I optionally set **Checklist (YAML)** to define the shared retry budget and
   ordered verification stages, including stage retry limits and script checks.
