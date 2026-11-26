@@ -39,7 +39,7 @@ WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 HELPERS = ("agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance")
-BRIDGE_FILES = ("bridge.mjs", "package.json", "package-lock.json")
+BRIDGE_FILES = ("bridge.mjs", "isolation.mjs", "package.json", "package-lock.json")
 
 
 class InstallError(Exception):

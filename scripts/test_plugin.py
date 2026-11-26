@@ -436,6 +436,26 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.cache / "bridges").exists())
         self.assertEqual(outside.read_text(), "untouched")
 
+    def test_bridge_cache_retains_required_isolation_module_and_rejects_tampering(self):
+        distribution = self.candidate()
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup):
+            bridge = launcher.setup_claude_bridge(distribution, self.cache)
+        isolation = bridge.parent / "isolation.mjs"
+        self.assertEqual(isolation.read_bytes(), (ROOT / "bridge/claude/isolation.mjs").read_bytes())
+        self.assertIn("from './isolation.mjs'", bridge.read_text())
+        isolation.write_text("export const isolatedSettings = {};\n")
+        with patch.object(launcher, "command", side_effect=AssertionError("must not silently reinstall")), \
+                self.assertRaisesRegex(launcher.InstallError, "corrupt"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+
+    def test_bridge_setup_rejects_missing_isolation_module_before_dependency_install(self):
+        distribution = self.candidate()
+        (distribution / "bridge/claude/isolation.mjs").unlink()
+        with patch.object(launcher, "command", side_effect=AssertionError("missing source must not install")), \
+                self.assertRaisesRegex(launcher.InstallError, "source unavailable: isolation.mjs"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse((self.cache / "bridges").exists())
+
     def test_bridge_cache_isolates_engine_receipt_and_candidate_authority(self):
         candidate = self.candidate()
         other = self.root / "verified-release"
