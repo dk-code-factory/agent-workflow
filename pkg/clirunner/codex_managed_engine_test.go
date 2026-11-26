@@ -22,10 +22,11 @@ import (
 // This test-only runner reaches the production managed transport while its
 // canonical profile is disabled. It does not expose a runtime admission bypass.
 type managedEngineFixture struct {
-	runner   *Runner
-	identity *ManagedCodexBuildIdentity
-	pool     *workflows.Capacity
-	children atomic.Int32
+	runner     *Runner
+	identity   *ManagedCodexBuildIdentity
+	pool       *workflows.Capacity
+	children   atomic.Int32
+	gatewayURL string
 }
 
 func (f *managedEngineFixture) Capabilities(string) (workflows.ProviderCapabilities, error) {
@@ -65,7 +66,25 @@ func (f *managedEngineFixture) RunTurn(ctx context.Context, req workflows.Sessio
 	}
 	// Exactly the production transport, including owner/admission checks, held
 	// executable verification, native protocol, batch controller and accounting.
-	return f.runner.codexManagedTransport(ctx, f.runner.Config.Agents[req.AgentID], req, emit, f.identity)
+	agent, req := isolateRepairTurn(f.runner.Config.Agents[req.AgentID], req)
+	if req.Input != nil {
+		var err error
+		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)
+		if err != nil {
+			return workflows.SessionResult{}, err
+		}
+	}
+	if f.gatewayURL != "" {
+		state, err := providerStateDir(f.runner.Workspace, "codex", req)
+		if err != nil {
+			return workflows.SessionResult{}, err
+		}
+		config := fmt.Sprintf("model_provider = \"fixture\"\n[model_providers.fixture]\nname = \"fixture\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = false\n", f.gatewayURL)
+		if err = os.WriteFile(filepath.Join(state, "config.toml"), []byte(config), 0600); err != nil {
+			return workflows.SessionResult{}, err
+		}
+	}
+	return f.runner.codexManagedTransport(ctx, agent, req, emit, f.identity)
 }
 func managedNativeFixtureIdentity(t *testing.T) *ManagedCodexBuildIdentity {
 	t.Helper()

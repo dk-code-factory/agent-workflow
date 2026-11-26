@@ -163,7 +163,16 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 	if nativePID, err = image.verifyGuardianChild(ctx, cmd.Process); err != nil {
 		return result, err
 	}
-	call := func(method string, params any) (json.RawMessage, error) { return rpc.callContext(ctx, method, params) }
+	call := func(method string, params any) (json.RawMessage, error) {
+		raw, err := rpc.callContext(ctx, method, params)
+		var rejection *appRPCResponseError
+		if errors.As(err, &rejection) {
+			// Recovery rejection can occur before a turn exists. It must not
+			// enter the ordinary provider-failure acknowledgement path.
+			err = managedTerminalFailure(method+" rejected", json.RawMessage(rejection.raw))
+		}
+		return raw, err
+	}
 	raw, err := call("initialize", map[string]any{"clientInfo": map[string]string{"name": "agent-workflow", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": true}})
 	if err != nil {
 		return result, err
@@ -356,7 +365,7 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 			result.ProviderStatus = status
 			result.Outputs["provider_status"] = status
 			if status != "completed" {
-				return result, fmt.Errorf("%w: managed terminal status %s", workflows.ErrProviderFailure, status)
+				return result, managedTerminalFailure(status, turn["error"])
 			}
 			if active := controller.Load(); active != nil {
 				active.mu.Lock()
@@ -387,4 +396,14 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 			emit(workflows.ProviderEvent{Type: frame.Method, SessionID: result.SessionID})
 		}
 	}
+}
+
+// A managed source failure may represent missing or conflicting native recovery
+// evidence. It cannot authorize observed-provider-failure continuation.
+func managedTerminalFailure(status string, nativeError any) error {
+	diagnostic, _ := json.Marshal(nativeError)
+	if len(diagnostic) > 4096 {
+		diagnostic = []byte("native diagnostic exceeds limit")
+	}
+	return fmt.Errorf("%w: managed terminal status %q: %s", workflows.ErrActionIntegrity, status, diagnostic)
 }

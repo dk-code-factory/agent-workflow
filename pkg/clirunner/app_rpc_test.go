@@ -100,3 +100,28 @@ func TestAppRPCDeniesUnknownInteractiveRequests(t *testing.T) {
 		t.Fatalf("unknown request was not denied: %+v %v", response, err)
 	}
 }
+
+func TestAppRPCDistinguishesPeerRejectionFromConnectionLoss(t *testing.T) {
+	for _, rejected := range []bool{true, false} {
+		client, server := net.Pipe()
+		rpc := newAppRPC(context.Background(), client, client, nil, nil)
+		go func() {
+			defer server.Close()
+			var request rpcFrame
+			if json.NewDecoder(server).Decode(&request) == nil && rejected {
+				_ = json.NewEncoder(server).Encode(map[string]any{"id": request.ID, "error": map[string]any{"code": -32603, "message": "source recovery hold"}})
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err := rpc.callContext(ctx, "thread/resume", nil)
+		cancel()
+		rpc.Close()
+		var rejection *appRPCResponseError
+		if err == nil || errors.As(err, &rejection) != rejected {
+			t.Fatal("source rejection and unacknowledged transport loss collapsed", rejected, err)
+		}
+		if rejected && err.Error() != `app-server thread/resume failed: {"code":-32603,"message":"source recovery hold"}` {
+			t.Fatal("stock diagnostic changed", err)
+		}
+	}
+}

@@ -265,16 +265,20 @@ completion acknowledgement without launching a provider.
 | First native stream ends before Completed, despite forced retry/websocket configuration | One API request, no Completed observation, no broker callback, unknown usage retained; later queued work and public mailbox acknowledgement stay blocked across SQLite reopen/current-owner replacement. |
 | Historical native crash cuts at seal, partial result buffering, accepted semantic results and real outputs before completion marker | Original IDs, exact real output list and fresh permit epochs were verified. The precise fsync boundary used an explicitly labelled owned test-only interposer; recovery ran without it. These native proofs supplement the connected engine cases. |
 | Known-charge, conflict, overflow, deadline, ownership and bookkeeping controls | Focused race tests preserve prior charges, reject arbitrary unknown observations and charged bookkeeping, and reject replacement original results. They do not establish provider usage that was never observed. |
+| Actual empty-catalog Codex repair followed by original-session continuation | Catalog sizes are 2, 0 and 2. Original instructions, prompt and input are absent from repair; repair data is absent from original continuation. Three responses total 33/9 usage and consume the original allowance. A forced omitted native tool produces no callback or file effect. The native fixture seeds existing private queued-repair fields; focused public output-controller and public SDK adapter tests separately verify the production repair caller and shared sanitation. |
+| Known pre-dispatch denial versus external effect with lost reply | A committed denial performs no effect and permits a normal final response (22/6 usage). A lost reply after an actual disposable effect retains an uncertain receipt, one request and 11/3 known usage; later queued work and public acknowledgement remain blocked without spending the remaining allowance. |
+| Explicit cancellation while parent reacquisition is blocked | Two completed physical effects remain recorded, one request has 11/3 known usage, and two unused turns stay unchanged across owner replacement. Runtime cleanup joins before recovery checks; cancellation cannot become original-message process-loss recovery. |
+| Extra original call inserted only into owned native raw history | The independent sealed journal and engine witness remain unchanged. Cold resume rejects the full-call mismatch before another request or effect and retains the original message and known charge. Explicit managed peer rejection and failed native terminal status carry an integrity hold, while transport EOF remains distinct for verified process-loss recovery. |
+| Ordinary worker emits progress or returns a result after its execution owner changes | Both publication paths retain the original worker/message bytes and publish no progress or completion event. The original execution fence now covers workers without native definitions as well as managed workers. |
 | Locked SDK repair and forced automatic/reactive compaction controls | Actual fake-gateway repair and native summarization controls exist. Separate idle/precompute positive-path activation, shared broker durability/recovery, ordinary SDK retry/usage integration and final cross-adapter conformance still need proof. |
 
-The public managed profile remains disabled. Before enabling it, complete fresh
-Codex repair/original-session continuation, the remaining engine cancellation,
-uncertain-effect and malformed-protocol controls, shared SDK conformance, and
-retained admission policy integration. Preserve incoming native-skill policy and
+The public managed profile remains disabled. Before enabling it, complete the
+remaining malformed-protocol controls, shared SDK conformance, final artifact
+conformance and retained admission policy integration. Preserve incoming native-skill policy and
 usage changes; this Codex build declares selected native skills unsupported.
 Unproven direct native execution/background work, native delegation, container and
-other platform profiles remain closed. Whole engine OS process crash coverage is
-additional work if the bounded fixture can establish it meaningfully.
+other platform profiles remain closed. The SQLite/native-process recovery scope
+does not establish a whole engine OS process crash claim.
 
 A final promotion must keep build preparation reproducible. The current prototype
 recipe deliberately rejects an enabled descriptor; revise that contract and freeze

@@ -98,11 +98,9 @@ func (r *Runner) ValidateConversationOutput(id string, schema map[string]any) er
 	return nil
 }
 
-func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
-	agent, ok := r.Config.Agents[req.AgentID]
-	if !ok {
-		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
-	}
+// isolateRepairTurn is shared by session transport preparation. It retains
+// engine invocation ownership while removing task authority and history.
+func isolateRepairTurn(agent Agent, req workflows.SessionRequest) (Agent, workflows.SessionRequest) {
 	if req.RepairOnly {
 		// A formatting repair is a fresh, tool-free operation. In particular a
 		// native task's retained definition/input/session must not restore its
@@ -118,6 +116,15 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		agent.InstructionText = "Format the supplied repair data as JSON. Do not execute tools or perform the original task."
 		agent.Tools = []string{}
 	}
+	return agent, req
+}
+
+func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
+	agent, ok := r.Config.Agents[req.AgentID]
+	if !ok {
+		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
+	}
+	agent, req = isolateRepairTurn(agent, req)
 	if req.Definition != nil {
 		if req.AgentID != r.NativeTaskRole() {
 			return workflows.SessionResult{}, fmt.Errorf("native task runtime role binding changed")

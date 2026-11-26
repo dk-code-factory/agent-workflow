@@ -183,3 +183,9 @@ func holdManagedCodexAdmission(ctx context.Context, run, inv string) error {
 	}
 	return tx.Commit()
 }
+
+func managedCodexAdmissionPresent(ctx context.Context, store *SQLiteStore, inv string) (bool, error) {
+	var count int
+	err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key=?`, inv, managedCodexAdmissionKey).Scan(&count)
+	return count == 1, err
+}

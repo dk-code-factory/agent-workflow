@@ -841,9 +841,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	msg.Generation = origin.Generation
-	if w.Definition != nil || recovering {
-		ctx = fenceContext(ctx, origin)
-	}
+	// Provider progress and terminal publication share the original execution
+	// owner even for legacy workers without a native definition.
+	ctx = fenceContext(ctx, origin)
 	w.FailureAcknowledgement = nil
 	runner, _, secrets, err := m.Factory(ctx, w.RunID, w.Role, w.Tools)
 	secrets = m.taskRedactions(w.RunID, secrets)
@@ -1160,9 +1160,13 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	// Failed admission never starts the provider. In particular, cancellation
 	// can leave no usage row, so final accounting would invent a storage failure.
 	managedTerminal := false
+	managedAdmission := false
 	var checkpointErr error
 	if usageIdentity.Provider == "codex-app-server" {
 		managedTerminal, checkpointErr = managedCheckpointExists(context.WithoutCancel(ctx), m.Store, msg.ID)
+		var admissionErr error
+		managedAdmission, admissionErr = managedCodexAdmissionPresent(context.WithoutCancel(ctx), m.Store, msg.ID)
+		checkpointErr = errors.Join(checkpointErr, admissionErr)
 	}
 	if checkpointErr != nil {
 		turnErr = errors.Join(turnErr, checkpointErr)
@@ -1259,7 +1263,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	current.FailureGeneration = msg.Generation
 	if current.Status != "closed" {
 		current.Status = "idle"
-		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) {
+		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) || (managedAdmission && turnErr != nil) {
 			current.Status = RunStatusNeedsAttention
 		}
 	}

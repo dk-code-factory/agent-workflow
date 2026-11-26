@@ -84,6 +84,15 @@ func killOwnedManagedFixture(t *testing.T, identity *ManagedCodexBuildIdentity, 
 }
 
 func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
+	managedCodexRestartFixture(t, "restart")
+}
+func TestManagedCodexCancelledBatchCannotMintAnotherTurn(t *testing.T) {
+	managedCodexRestartFixture(t, "cancel")
+}
+func TestManagedCodexForeignRawCallHoldsOriginalRecovery(t *testing.T) {
+	managedCodexRestartFixture(t, "foreign-raw")
+}
+func managedCodexRestartFixture(t *testing.T, mode string) {
 	identity := managedNativeFixtureIdentity(t)
 	root := t.TempDir()
 	stateRoot := filepath.Join(root, "state")
@@ -220,7 +229,11 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 	if err = manager.Init(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	worker, err := manager.Spawn(t.Context(), workflows.WorkerSpec{RunID: run.ID, Role: "effects", Turns: 1})
+	turns := 1
+	if mode == "cancel" {
+		turns = 3
+	}
+	worker, err := manager.Spawn(t.Context(), workflows.WorkerSpec{RunID: run.ID, Role: "effects", Turns: turns})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +286,14 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 	if requests.Load() != 1 || effects.Load() != 2 || pool.Suspended() != 1 {
 		t.Fatal("crash cut not sealed original pending batch", requests.Load(), effects.Load(), pool.Suspended())
 	}
-	killedPID := killOwnedManagedFixture(t, identity, state)
+	killedPID := 0
+	if mode == "cancel" {
+		if err = manager.Interrupt(ctx, run.ID, worker.ID, false); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		killedPID = killOwnedManagedFixture(t, identity, state)
+	}
 	lease.Release()
 	var before workflows.WorkerMessage
 	for ctx.Err() == nil {
@@ -291,7 +311,11 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if before.Status != workflows.RunStatusRunning || before.ID != message.ID || before.StartedAt.IsZero() {
+	expectedStatus := workflows.RunStatusRunning
+	if mode == "cancel" {
+		expectedStatus = "interrupted"
+	}
+	if before.Status != expectedStatus || before.ID != message.ID || before.StartedAt.IsZero() {
 		t.Fatalf("original invocation was finalized or replaced %+v", before)
 	}
 	if err = store.CheckInvocationCleanup(ctx, run.ID); err != nil {
@@ -299,6 +323,14 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 	}
 	stopFirst()
 	<-firstDone
+	if mode == "cancel" {
+		if _, err = manager.Send(ctx, run.ID, worker.ID, "queued-after-cancel", "must retain original allowance without dispatch"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "foreign-raw" {
+		insertForeignManagedRawCall(t, state)
+	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +375,75 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
 	defer func() { stopSecond(); <-secondDone }()
+	if mode != "restart" {
+		var outcome workflows.WorkerMessage
+		if mode == "cancel" {
+			select {
+			case <-time.After(2200 * time.Millisecond):
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		} else {
+			for ctx.Err() == nil {
+				messages, err := manager.Messages(ctx, run.ID, worker.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(messages) == 1 && messages[0].Status == workflows.RunStatusFailed {
+					outcome = messages[0]
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		messages, err := manager.Messages(ctx, run.ID, worker.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode == "cancel" {
+			if len(messages) != 2 || messages[0].ID != message.ID || messages[0].Status != "interrupted" || messages[1].Status != workflows.RunStatusQueued {
+				t.Fatal("cancelled original turn admitted later work", messages)
+			}
+		} else if outcome.ID != message.ID || !outcome.StartedAt.Equal(before.StartedAt) || outcome.Generation != resumed.Generation {
+			t.Fatal("foreign raw history replaced original invocation", messages)
+		} else if outcome.FailureClass != "action_integrity" || outcome.UnsafeFailureClass != "action_integrity" {
+			t.Fatal("source uncertainty became acknowledgeable provider failure", outcome)
+		}
+		expectedRemaining := 0
+		expectedRuntime := 2
+		if mode == "cancel" {
+			expectedRemaining = 2
+			expectedRuntime = 1
+		}
+		current, err := manager.Get(ctx, run.ID, worker.ID)
+		if err != nil || current.Remaining != expectedRemaining || current.Status != workflows.RunStatusNeedsAttention {
+			t.Fatal("held original authority changed", current, err)
+		}
+		if err = manager.Resume(ctx, run.ID, worker.ID); err == nil {
+			t.Fatal("held original turn acknowledged into fresh authority")
+		}
+		if requests.Load() != 1 || effects.Load() != 2 {
+			t.Fatal("held source allowed model/effect replay", requests.Load(), effects.Load())
+		}
+		report, err := store.Usage(ctx, run.ID)
+		if err != nil || report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 11 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 3 {
+			t.Fatal("hold lost original known charge", report, err)
+		}
+		if err = store.CheckInvocationCleanup(ctx, run.ID); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := store.Invocations(ctx, run.ID, false)
+		if err != nil || len(rows) != expectedRuntime {
+			t.Fatal(rows, err)
+		}
+		for _, row := range rows {
+			if row.State != "cleaned" {
+				t.Fatal("source work not joined", row)
+			}
+		}
+		t.Logf("binary=%s mode=%s original=%s old-owner=%s/%d new-owner=%s/%d APIs=1 physical-effects=2 Remaining=%d known-usage=11/3 incomplete=true cleaned-runtime=%d", identity.BinarySHA256, mode, message.ID, originalOwner, originalGeneration, resumed.Owner, resumed.Generation, expectedRemaining, expectedRuntime)
+		return
+	}
 	var after workflows.WorkerMessage
 	for ctx.Err() == nil {
 		messages, err := manager.Messages(ctx, run.ID, worker.ID)
@@ -397,4 +498,69 @@ func TestManagedCodexOriginalMessageSQLiteAndNativeRestart(t *testing.T) {
 		t.Fatal("original usage lost/reset/recharged", report, err)
 	}
 	t.Logf("binary=%s killed-owned-native=%d owner=%s/%d→%s/%d original=%s started=%s Remaining=0 physical-effects=2 APIs=2 usage=22/6 cleaned-runtime-rows=2", identity.BinarySHA256, killedPID, originalOwner, originalGeneration, resumed.Owner, resumed.Generation, message.ID, before.StartedAt.Format(time.RFC3339Nano))
+}
+
+// Alter only the owned native raw history, leaving the sealed journal and
+// private engine witness unchanged. An extra original call in that sealed
+// segment must hold at the real recovery boundary before another API request.
+func insertForeignManagedRawCall(t *testing.T, state string) {
+	t.Helper()
+	var rollouts []string
+	if err := filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			rollouts = append(rollouts, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rollouts) != 1 {
+		t.Fatal("exact owned native rollout required", rollouts)
+	}
+	path := rollouts[0]
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 64<<20 {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	inserted := false
+	for index, line := range lines {
+		var envelope map[string]any
+		if json.Unmarshal([]byte(line), &envelope) != nil {
+			continue
+		}
+		payload, _ := envelope["payload"].(map[string]any)
+		if envelope["type"] != "response_item" || payload["type"] != "function_call" {
+			continue
+		}
+		payload["call_id"] = "foreign-extra-original"
+		payload["id"] = "foreign-extra-original"
+		payload["arguments"] = `{"nonce":"foreign"}`
+		extra, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines[:index], append([]string{string(extra)}, lines[index:]...)...)
+		inserted = true
+		break
+	}
+	if !inserted {
+		t.Fatal("owned original raw call not found")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.WriteString(strings.Join(lines, "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
