@@ -116,6 +116,13 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 	}
 	if req.Skill != nil {
+		workspace := req.Workspace
+		if workspace == "" {
+			workspace = r.Workspace
+		}
+		if req.Skill.Workspace != "" && workspace != req.Skill.Workspace {
+			return workflows.SessionResult{}, fmt.Errorf("selected-skill workspace changed after admission")
+		}
 		admitted, err := r.AdmitSkillTask(req.Skill)
 		if err != nil {
 			return workflows.SessionResult{}, err

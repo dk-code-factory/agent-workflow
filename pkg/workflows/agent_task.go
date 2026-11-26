@@ -83,6 +83,9 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		}
 		request.Skill = worker.Skill
 	}
+	if request.Skill != nil && request.Skill.Workspace != "" && request.Workspace != request.Skill.Workspace {
+		return nil, fmt.Errorf("%w: admitted skill workspace changed", ErrActionIntegrity)
+	}
 	if request.Skill != nil {
 		if request.Model == "" {
 			request.Model = request.Skill.Model

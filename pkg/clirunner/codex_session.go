@@ -44,12 +44,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if command == "" {
 		command = "codex"
 	}
-	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`, "--config", "skills.bundled.enabled=false", "--config", "skills.include_instructions=false", "--config", "features.plugins=false"}
-	if req.Skill != nil {
-		args = append(args, "--config", "agents.enabled=false", "--config", "features.multi_agent=false", "--config", "features.multi_agent_v2=false")
-		args = append(args, codexSkillRetryArgs()...)
-	}
-	args = append(args, agent.Args...)
+	args := codexSessionArgs(req.Skill != nil)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workspace
 	cmd.Env = providerEnvironment("")
@@ -329,4 +324,13 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 			emit(workflows.ProviderEvent{Type: frame.Method, SessionID: result.SessionID})
 		}
 	}
+}
+
+func codexSessionArgs(selected bool) []string {
+	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`, "--config", "skills.bundled.enabled=false", "--config", "skills.include_instructions=false", "--config", "features.plugins=false"}
+	if selected {
+		args = append(args, "--config", "agents.enabled=false", "--config", "features.multi_agent=false", "--config", "features.multi_agent_v2=false")
+		args = append(args, codexSkillRetryArgs()...)
+	}
+	return args
 }

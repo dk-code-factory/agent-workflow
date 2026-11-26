@@ -19,6 +19,9 @@ import (
 
 const SkillAdmissionVersion = 1
 
+// Reserve ample bounded ledger space for native envelopes and child outputs.
+const MaxSkillEncodedInstructionBytes = 64 << 10
+
 // SkillSource owns captured bytes. Only fresh admission consumes source paths;
 // provider sessions and recovery receive retained, verified assets instead.
 type SkillSource struct {
@@ -51,6 +54,7 @@ type SkillBinding struct {
 // SkillInvocation is pinned before run admission. It never grants tools,
 // credentials, publication authority or a different provider runtime.
 type SkillInvocation struct {
+	Workspace      string       `json:"workspace,omitempty"`
 	Children       []SkillChild `json:"children,omitempty"`
 	EffectiveTools []string     `json:"effective_parent_tools,omitempty"`
 	ResolvedEffort string       `json:"resolved_effort,omitempty"`
@@ -123,6 +127,10 @@ func parseSkillSelection(value any) (*SkillSelection, error) {
 // ParseSkillMetadata deliberately accepts only portable metadata. Provider
 // frontmatter that changes agents, hooks, tools or models cannot expand policy.
 func ParseSkillMetadata(data []byte) (string, error) {
+	encoded, err := json.Marshal(string(data))
+	if err != nil || len(encoded) > MaxSkillEncodedInstructionBytes {
+		return "", fmt.Errorf("skill instruction exceeds 64 KiB JSON evidence admission bound")
+	}
 	if len(data) > 1<<20 || !bytes.HasPrefix(data, []byte("---\n")) {
 		return "", fmt.Errorf("skill requires bounded YAML name/description frontmatter")
 	}
@@ -464,8 +472,8 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if step.Definition == nil || len(step.Definitions) != 0 {
 					return step, fmt.Errorf("skill task requires one admitted literal agent definition")
 				}
-				context := expressionContext{Inputs: inputs}
-				arguments, err := admitSkillText(selection.Arguments, context)
+				expressionCtx := expressionContext{Inputs: inputs}
+				arguments, err := admitSkillText(selection.Arguments, expressionCtx)
 				if err != nil {
 					return step, err
 				}
@@ -527,7 +535,7 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 					if !ok {
 						return step, fmt.Errorf("skill model must be a string or null")
 					}
-					model, err := admitSkillText(text, context)
+					model, err := admitSkillText(text, expressionCtx)
 					if err != nil {
 						return step, err
 					}
@@ -547,7 +555,29 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if contract != nil && contract.RepairAttempts > 0 {
 					return step, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
 				}
-				if err := admitSkillChildren(plan, selection, context); err != nil {
+				workspace := e.WorkspaceDir
+				if value, ok := step.With["workspace"]; ok && value != nil {
+					text, ok := value.(string)
+					if !ok {
+						return step, fmt.Errorf("skill workspace must resolve from admitted text")
+					}
+					text, err = admitSkillText(text, expressionCtx)
+					if err != nil {
+						return step, err
+					}
+					if text != "" {
+						if filepath.IsAbs(text) {
+							workspace = text
+						} else {
+							workspace = filepath.Join(e.WorkspaceDir, text)
+						}
+					}
+				}
+				plan.Workspace, err = filepath.Abs(workspace)
+				if err != nil {
+					return step, err
+				}
+				if err := admitSkillChildren(plan, selection, expressionCtx); err != nil {
 					return step, err
 				}
 				runner, ok := e.Agents.(SkillTaskRunner)
@@ -561,6 +591,13 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if plan == nil {
 					return step, fmt.Errorf("runtime returned no admitted skill contract")
 				}
+				if checker, ok := e.Agents.(interface {
+					SkillTaskPreflight(context.Context, *SkillInvocation, string) error
+				}); ok {
+					if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
+						return step, err
+					}
+				}
 				retained, err := store.CaptureAssetBundle(ctx, e.bundleOrigin, entries)
 				if err != nil {
 					return step, err
@@ -573,6 +610,7 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if secret, err := containsCredential(plan, e.redactions(req.Secrets)); err != nil || secret {
 					return step, fmt.Errorf("skill admission contains credential material")
 				}
+				step.With["workspace"] = plan.Workspace
 				step.With["model"] = plan.Model
 				step.Skill = plan
 				return step, nil
@@ -588,7 +626,7 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 
 // Revalidate retained controls without consulting any mutable source. A changed
 // adapter profile cannot silently rewrite a previously admitted invocation.
-func (e *Executor) validateRetainedSkills(definitions map[string]*Workflow) error {
+func (e *Executor) validateRetainedSkills(ctx context.Context, definitions map[string]*Workflow) error {
 	for _, w := range definitions {
 		for _, job := range w.Jobs {
 			_, err := mapSteps(job.Steps, "", func(step Step) (Step, error) {
@@ -606,6 +644,13 @@ func (e *Executor) validateRetainedSkills(definitions map[string]*Workflow) erro
 				admitted, err := runner.AdmitSkillTask(plan)
 				if err != nil {
 					return step, err
+				}
+				if checker, ok := e.Agents.(interface {
+					SkillTaskPreflight(context.Context, *SkillInvocation, string) error
+				}); ok {
+					if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
+						return step, err
+					}
 				}
 				if admitted == nil || skillPlanID(admitted) != plan.ID || admitted.ID != plan.ID {
 					return step, fmt.Errorf("retained skill capability profile changed")

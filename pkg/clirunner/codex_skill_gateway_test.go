@@ -177,6 +177,16 @@ func testCodexSkillGateway(t *testing.T, scenario string) {
 	}
 	t.Setenv("CODEX_SKILL_FIXTURE_KEY", "synthetic-no-provider-key")
 	runner := &Runner{Workspace: root, Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "codex-app-server", Command: command, Authentication: Authentication{Mode: "api-key", CredentialEnv: "CODEX_SKILL_FIXTURE_KEY"}}}}}
+	if strings.HasSuffix(scenario, "-control") && scenario != "inherited-url-control" && scenario != "project-url-control" {
+		assertCodexSkillControlRejectsBeforeAdmission(t, root, req.SkillRoot, runner)
+	} else if scenario == "native" || scenario == "socket-cut" {
+		if err := runner.SkillTaskPreflight(t.Context(), req.Skill, root); err != nil {
+			t.Fatal("valid selected controls failed preclaim probe", err)
+		}
+		if calls.Load() != 0 {
+			t.Fatal("control probe dispatched model request", calls.Load())
+		}
+	}
 	ledger := &workflows.SkillEvidence{}
 	observations := 0
 	observe := func(event workflows.ProviderEvent) {
@@ -251,4 +261,45 @@ func testCodexSkillGateway(t *testing.T, scenario string) {
 		t.Fatalf("missing root dispatched: %v calls=%d", err, calls.Load())
 	}
 	t.Logf("loopback calls=%d original observations=%d initial session=%s continued session=%s missing-ledger extra API=0 missing-root extra API=0", calls.Load(), observations, first.SessionID, resumed.SessionID)
+}
+
+func assertCodexSkillControlRejectsBeforeAdmission(t *testing.T, root, skillRoot string, runner *Runner) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := `on: {workflow_call: {inputs: {selected: {type: skill, required: true}}}}
+jobs:
+  task:
+    steps:
+      - id: selected
+        uses: agent/run
+        with:
+          agent: reviewer.yaml
+          prompt: Work.
+          skill: {input: selected, evidence: {invocation: required}}
+`
+	for name, text := range map[string]string{"main.yml": source, "reviewer.yaml": "name: reviewer\ndescription: Review\ninstructions: Work\nmodel: gpt-5.4\n"} {
+		if err := os.WriteFile(filepath.Join(root, "workflows", name), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := workflows.OpenSQLite(filepath.Join(root, "preclaim-journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	executor := &workflows.Executor{WorkspaceDir: root, Store: store, Agents: runner}
+	run, err := executor.Prepare(t.Context(), workflows.RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"selected": map[string]any{"directory": filepath.Join(skillRoot, "skills/probe")}}})
+	if err == nil || run != nil || !strings.Contains(err.Error(), "selected-skill") {
+		t.Fatal("ineffective controls admitted run", run, err)
+	}
+	runs, e := store.List(t.Context())
+	if e != nil || len(runs) != 0 {
+		t.Fatal("control rejection retained run/claim", runs, e)
+	}
+	if dirs, _ := filepath.Glob(filepath.Join(store.Dir, "assets", "*")); len(dirs) != 0 {
+		t.Fatal("control rejection projected assets", dirs)
+	}
+	t.Logf("effective control mismatch rejects before run/worker claim or projection: %v", err)
 }

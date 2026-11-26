@@ -146,7 +146,7 @@ Supply `selected` as `{directory: /absolute/path/to/skill}`, or
 The application resolves the local package through its captured manifest; no
 registry or installed-skill lookup occurs. The skill directory contains a
 `SKILL.md` with only `name` and `description` frontmatter. Authority-changing
-metadata, symlinks and additional skill entries are rejected. Resource paths
+metadata, symlinks and additional skill entries are rejected. The instruction entry is limited to 64 KiB after Go JSON string escaping, reserving bounded ledger space for original provider envelopes and outputs. Resource paths
 are literal paths inside that skill directory. Package resource declarations
 outside the selected skill directory reject admission in this profile. The
 application capture binds both complete package provenance and selected entry
@@ -251,8 +251,7 @@ lower bounds rather than inferring unreported tokens or cost. The original
 allowance remains consumed.
 Selected Codex turns use an engine-owned OpenAI descriptor with zero request and
 stream retries, no WebSocket transport/fallback and no unbounded connection
-retries. The adapter verifies the effective descriptor and thread provider before
-a turn. It rejects inherited credential, header and endpoint overrides; an
+retries. Admission and retained recovery run a bounded private native control probe: initialize and config/read only, without credentials, login, threads or model requests. The effective descriptor is checked before run claims and asset projection; the selected workspace is pinned. The adapter rechecks the effective descriptor and thread provider before each turn so later configuration drift also fails closed. It rejects inherited credential, header and endpoint overrides; an
 explicit application command may supply its endpoint only through the verified
 session-flags layer. A matching public retry notification retains uncertainty and
 cancels the original turn even if a later terminal would report success.

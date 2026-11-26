@@ -46,7 +46,7 @@ func ResolveSkillPackage(ctx context.Context, ref workflows.SkillPackageReferenc
 			continue
 		}
 		if path.Base(entry.Path) == "SKILL.md" && entry.Path != selected.Path {
-			continue
+			return nil, fmt.Errorf("selected skill directory contains another SKILL.md")
 		}
 		file := captured.files[entry.Path]
 		entries = append(entries, workflows.AssetInput{Path: entry.Path, Mode: file.mode, Data: append([]byte(nil), file.data...)})

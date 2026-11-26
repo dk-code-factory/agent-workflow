@@ -80,6 +80,9 @@ func skillBridgeInput(req workflows.SessionRequest) (map[string]any, error) {
 	if req.Skill == nil {
 		return nil, nil
 	}
+	if req.Skill.Workspace != "" && req.Workspace != req.Skill.Workspace {
+		return nil, fmt.Errorf("selected skill workspace differs from admission")
+	}
 	if req.SkillRoot == "" || !filepath.IsAbs(req.SkillRoot) {
 		return nil, fmt.Errorf("skill requires verified retained root")
 	}

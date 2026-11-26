@@ -1105,7 +1105,7 @@ func (e *Executor) Resume(ctx context.Context, id string, secrets map[string]str
 			return nil, fmt.Errorf("snapshot hash mismatch for %s", ref)
 		}
 	}
-	if err = e.validateRetainedSkills(snap.Definitions); err != nil {
+	if err = e.validateRetainedSkills(ctx, snap.Definitions); err != nil {
 		return nil, err
 	}
 	if err = e.preflight(ctx, snap.Definitions); err != nil {

@@ -40,11 +40,22 @@ func suppliedSkillFixture(t *testing.T) (string, map[string]any) {
 
 type suppliedSession struct {
 	*nativeTaskFixture
-	reportOnly   bool
-	reject       bool
-	continuation bool
-	nonWritable  bool
-	keepModel    bool
+	reportOnly      bool
+	reject          bool
+	continuation    bool
+	nonWritable     bool
+	keepModel       bool
+	preflightReject bool
+}
+
+func (f *suppliedSession) SkillTaskPreflight(ctx context.Context, plan *SkillInvocation, workspace string) error {
+	if f.preflightReject {
+		return fmt.Errorf("unsupported effective native controls")
+	}
+	if workspace == "" || plan.Workspace != workspace {
+		return fmt.Errorf("preflight workspace is not pinned")
+	}
+	return ctx.Err()
 }
 
 func (f *suppliedSession) WorkerAccess(string) (WorkerAccess, error) {
@@ -505,5 +516,71 @@ func TestSkillNestedModelAndFormattingRepairsRejectBeforeAdmission(t *testing.T)
 				t.Fatal("unsupported controls projected assets", dirs)
 			}
 		})
+	}
+}
+
+func TestSkillEncodedInstructionRejectsBeforeClaimsOrProjection(t *testing.T) {
+	directory, inputs := suppliedSkillFixture(t)
+	body := "---\nname: probe\ndescription: Fixture.\n---\n" + strings.Repeat("<", 819200)
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e, s, f := skillExecutorFixture(t, skillWorkflow, false)
+	run, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+	if err == nil || !strings.Contains(err.Error(), "JSON evidence admission bound") || run != nil || len(f.requests) != 0 {
+		t.Fatal("unretainable mandatory evidence reached admission", run, err)
+	}
+	var n int
+	if err = s.db.QueryRow("SELECT count(*) FROM runs").Scan(&n); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	if dirs, _ := filepath.Glob(filepath.Join(s.Dir, "assets", "*")); len(dirs) != 0 {
+		t.Fatal("unretainable evidence projected assets", dirs)
+	}
+}
+
+func TestSkillRetainedEffectiveControlRejectsBeforeRecoveryClaim(t *testing.T) {
+	_, inputs := suppliedSkillFixture(t)
+	e, s, f := skillExecutorFixture(t, skillWorkflow, false)
+	run, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := s.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.preflightReject = true
+	resumed, err := e.Resume(t.Context(), run.ID, nil, true)
+	if err == nil || resumed != nil || !strings.Contains(err.Error(), "effective native controls") {
+		t.Fatal("retained unsupported controls reached recovery", resumed, err)
+	}
+	after, _, err := s.Load(t.Context(), run.ID)
+	if err != nil || after.Generation != before.Generation || after.Status != before.Status || len(f.requests) != 0 {
+		t.Fatal("preflight failure claimed recovery", before, after, err)
+	}
+	workers, err := e.Workers.List(t.Context(), run.ID)
+	if err != nil || len(workers) != 0 {
+		t.Fatal("preflight failure created workers", workers, err)
+	}
+}
+
+func TestSkillInstructionBoundUsesActualJSONEscaping(t *testing.T) {
+	header := "---\nname: probe\ndescription: Fixture.\n---\n"
+	for _, body := range []string{strings.Repeat("a", 60000), strings.Repeat("<", 10000)} {
+		encoded, _ := json.Marshal(header + body)
+		if len(encoded) > MaxSkillEncodedInstructionBytes {
+			t.Fatal("positive encoded fixture exceeds bound")
+		}
+		if _, err := ParseSkillMetadata([]byte(header + body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encoded, _ := json.Marshal(header + strings.Repeat("<", 11000))
+	if len(encoded) <= MaxSkillEncodedInstructionBytes {
+		t.Fatal("negative escaped fixture does not exceed bound")
+	}
+	if _, err := ParseSkillMetadata([]byte(header + strings.Repeat("<", 11000))); err == nil {
+		t.Fatal("JSON-expanded instructions admitted")
 	}
 }
