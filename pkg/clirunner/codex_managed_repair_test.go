@@ -172,7 +172,7 @@ func managedCodexRepairFixture(t *testing.T, forcedTool bool) {
 		turnCtx, stop := context.WithCancel(ctx)
 		done := make(chan struct{})
 		go func() { manager.Serve(turnCtx); close(done) }()
-		defer func() { stop(); <-done }()
+		defer func() { stop(); awaitManagedServe(t, done) }()
 		for ctx.Err() == nil {
 			messages, err := manager.Messages(ctx, run.ID, worker.ID)
 			if err != nil {

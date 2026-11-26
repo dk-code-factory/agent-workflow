@@ -109,6 +109,14 @@ func KnownToolDenial(ctx context.Context, binding ToolBinding, req ToolRequest, 
 	if errors.As(failure, &storage) || !errors.As(failure, &proof) || proof == nil {
 		return false
 	}
+	// Only this private controller wrapper delegates unchanged broker calls.
+	// Validate its active original turn as well as the underlying broker owner.
+	if conversation, ok := binding.(*conversationTools); ok {
+		if CheckToolBindingAuthority(ctx, conversation, proof.run, proof.invocation) != nil {
+			return false
+		}
+		binding = conversation.base
+	}
 	actual, ok := engineToolBinding(binding)
 	if !ok {
 		return false

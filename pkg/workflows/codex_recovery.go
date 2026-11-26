@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -754,19 +755,21 @@ func managedReadCandidate(ctx context.Context, tx *sql.Tx, w Worker) (*managedCo
 	return &managedCodexCandidate{worker: w, message: msg, recovery: r, run: run}, nil
 }
 func (m *WorkerManager) managedCodexCandidates(ctx context.Context) ([]managedCodexCandidate, error) {
-	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND (json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object' OR (u.observation_key='managed-sdk-attempt' AND json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state')='terminal'))) ORDER BY w.rowid LIMIT 100`, RunStatusNeedsAttention)
+	rows, err := m.Store.db.QueryContext(ctx, `SELECT w.id,w.run_id,w.record FROM workers w JOIN runs r ON r.id=w.run_id WHERE w.status=? AND r.status='running' AND EXISTS(SELECT 1 FROM messages m JOIN usage_observations u ON u.invocation_id=m.id WHERE m.worker_id=w.id AND m.status='running' AND (json_type(CAST(u.record AS TEXT),'$.managed_codex_recovery')='object' OR (u.observation_key='managed-sdk-attempt' AND json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state')='terminal'))) ORDER BY w.rowid LIMIT 100`, RunStatusNeedsAttention)
 	if err != nil {
 		return nil, err
 	}
 	var workers []Worker
 	for rows.Next() {
 		var raw []byte
-		if err = rows.Scan(&raw); err != nil {
+		var id, run string
+		if err = rows.Scan(&id, &run, &raw); err != nil {
 			break
 		}
 		var w Worker
-		if err = decodeJSONWithNumbers(raw, &w); err != nil {
-			break
+		if decodeJSONWithNumbers(raw, &w) != nil || w.ID != id || w.RunID != run {
+			slog.Error("managed original worker record remains held", "worker_id", id)
+			continue
 		}
 		workers = append(workers, w)
 	}
@@ -787,7 +790,11 @@ func (m *WorkerManager) managedCodexCandidates(ctx context.Context) ([]managedCo
 		candidate, err := managedReadCandidate(ctx, tx, w)
 		tx.Rollback()
 		if err != nil {
-			return nil, err
+			// This original stays held on every read/integrity/admission error.
+			// It cannot suppress independently fenced workers in other runs.
+			// Query/transaction creation failures above remain global failures.
+			slog.Error("managed original recovery remains held", "worker_id", w.ID)
+			continue
 		}
 		if candidate != nil {
 			result = append(result, *candidate)

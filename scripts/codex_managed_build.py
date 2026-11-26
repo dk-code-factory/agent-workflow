@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import tarfile
 import time
@@ -224,6 +225,71 @@ def terminate_group(process, grace=5):
     return {"before": before, "after": after}
 
 
+def bounded_cache_copy(source, destination, root, cache, started):
+    """Copy regular pinned inputs without crossing the owned byte/free ceiling.
+
+    A whole tree is reserved before its first write, and every bounded chunk
+    rechecks both the deadline and actual remaining free space. Symlinks and
+    special files are rejected rather than followed into unbounded inputs.
+    """
+    entries, total = [], 0
+
+    def guard(reserve=0):
+        if (time.monotonic() - started >= DEADLINE or
+                shutil.disk_usage(root).free - reserve < MIN_FREE or
+                owned_size(cache) + reserve > MAX_COMBINED):
+            raise ValueError("owned cache preparation resource limit exceeded")
+
+    def inventory(path, target):
+        nonlocal total
+        guard()
+        info = path.lstat()
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+            entries.append((path, target, info))
+        elif stat.S_ISDIR(info.st_mode):
+            entries.append((path, target, info))
+            for child in sorted(path.iterdir()):
+                inventory(child, target / child.name)
+        else:
+            raise ValueError("cache copy input is not a regular file/directory")
+        if len(entries) > 100000:
+            raise ValueError("cache copy entry limit exceeded")
+        guard(total)
+
+    inventory(source, destination)
+    guard(total)
+    for path, target, expected in entries:
+        guard()
+        if stat.S_ISDIR(expected.st_mode):
+            target.mkdir(parents=True, exist_ok=False)
+            target.chmod(stat.S_IMODE(expected.st_mode))
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as original:
+            actual = os.fstat(original.fileno())
+            if (not stat.S_ISREG(actual.st_mode) or actual.st_dev != expected.st_dev or
+                    actual.st_ino != expected.st_ino or actual.st_size != expected.st_size):
+                raise ValueError("cache copy input changed after reservation")
+            guard(expected.st_size)
+            with target.open("xb") as copied:
+                remaining = expected.st_size
+                while remaining:
+                    size = min(remaining, 1 << 20)
+                    guard(size)
+                    chunk = original.read(size)
+                    if not chunk:
+                        raise ValueError("cache copy input truncated")
+                    copied.write(chunk)
+                    copied.flush()
+                    remaining -= len(chunk)
+                if original.read(1):
+                    raise ValueError("cache copy input grew after reservation")
+        shutil.copystat(path, target, follow_symlinks=False)
+        guard()
+
+
 def prepare_cache(args):
     value, _ = manifest()
     root = args.output.resolve(strict=True)
@@ -245,8 +311,7 @@ def prepare_cache(args):
 
     def copy(source, destination):
         guard()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+        bounded_cache_copy(source, destination, root, cache, started)
         copied.append(str(source.relative_to(origin)))
 
     source_index = origin / "registry/index" / registry
@@ -299,8 +364,7 @@ def prepare_cache(args):
         guard()
         destination = cache / "git/db" / source_db.name
         if not destination.exists():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source_db, destination)
+            bounded_cache_copy(source_db, destination, root, cache, started)
             copied.append(str(source_db.relative_to(origin)))
         pinned_git.append({"url": url, "commit": commit, "owned_db": str(destination.relative_to(cache))})
         modules = subprocess.run(["git", "--git-dir", str(source_db), "show", commit + ":.gitmodules"], capture_output=True, text=True)

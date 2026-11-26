@@ -2336,13 +2336,15 @@ index 8724766..882ef77 100644
              session_id: child_thread.session.session_id(),
 diff --git a/codex-rs/core/src/agent_workflow_journal.rs b/codex-rs/core/src/agent_workflow_journal.rs
 new file mode 100644
-index 0000000..0d468a8
+index 0000000..8135bcc
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_journal.rs
-@@ -0,0 +1,1242 @@
+@@ -0,0 +1,1244 @@
 +//! Durable broker recovery records. Native normalized history is never a receipt.
 +//!
-+//! All I/O stays on the already counted model task. This module deliberately
++//! Journal I/O is synchronous within its owning model or control operation.
++//! Cancellation and accepted results can persist while the model is parked.
++//! This module deliberately
 +//! rejects non-local/non-regular persistence, corrupt records and oversized data.
 +//! It does not infer storage durability from the upstream buffered flush API.
 +

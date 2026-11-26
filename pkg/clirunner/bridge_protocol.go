@@ -13,6 +13,9 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+type sdkModelBindingKey struct{}
+type sdkModelBinding func(requested, resolved string) error
+
 type bridgeWriter struct {
 	mu     sync.Mutex
 	writer io.Writer
@@ -133,8 +136,25 @@ func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeW
 		switch frame.Type {
 		case "hello":
 			return result, fmt.Errorf("duplicate bridge negotiation")
+		case "broker_model_identity":
+			requested, _ := input["model"].(string)
+			got, _ := frame.Data["requested"].(string)
+			resolved, _ := frame.Data["resolved"].(string)
+			if managed == nil || input["model_bound"] == true || got != requested || resolved == "" || len(resolved) > 256 {
+				return result, fmt.Errorf("invalid SDK initialization model identity")
+			}
+			if bind, ok := ctx.Value(sdkModelBindingKey{}).(sdkModelBinding); ok {
+				if err := bind(requested, resolved); err != nil {
+					return result, err
+				}
+			}
+			input["model"], input["model_bound"] = resolved, true
+			if err := writer.send(map[string]any{"type": "model_bound", "model": resolved}); err != nil {
+				return result, err
+			}
 		case "broker_model_start":
-			if managed == nil {
+			_, bindingRequired := ctx.Value(sdkModelBindingKey{}).(sdkModelBinding)
+			if managed == nil || bindingRequired && input["model_bound"] != true {
 				return result, fmt.Errorf("unadmitted SDK model start")
 			}
 			if err := managed.start(frame.Data); err != nil {

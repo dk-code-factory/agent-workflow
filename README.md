@@ -858,6 +858,14 @@ controller. Shared deterministic tests cover capacity-one nested worker/wait,
 denied tools, false barriers, uncertain effects, cancellation and original
 terminal recovery. Another backend is never substituted automatically.
 
+The SDK broker route binds aliases and the default model from its pinned public
+initialization catalog before releasing the prompt. Original arguments must
+match the native callback exactly; normalized, non-object or oversized inputs
+hold the original attempt without granting effects. Complete original response
+proofs retain known usage; rejected frames do not invent it. See the
+[managed profile contract](docs/MANAGED_CODEX_BUILD.md) for retained-session and
+native error limits.
+
 ## Usage accounting
 
 `agent-workflow usage RUN_ID`, `GET /runs/RUN_ID/usage`, and MCP `run_usage`

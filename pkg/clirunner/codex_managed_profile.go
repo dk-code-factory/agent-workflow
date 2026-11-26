@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -135,7 +134,7 @@ func validateManagedIdentity(value *ManagedCodexBuildIdentity, source managedCod
 }
 
 func captureManagedBuild(path string, source managedCodexDescriptor) (*ManagedCodexBuildIdentity, error) {
-	file, err := os.Open(path)
+	file, err := openManagedManifest(path)
 	if err != nil {
 		return nil, err
 	}

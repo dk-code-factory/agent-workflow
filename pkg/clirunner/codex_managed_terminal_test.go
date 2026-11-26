@@ -113,7 +113,7 @@ func TestManagedCodexTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	firstCtx, stopFirst := context.WithCancel(ctx)
 	firstDone := make(chan struct{})
 	go func() { manager.Serve(firstCtx); close(firstDone) }()
-	defer func() { stopFirst(); <-firstDone }()
+	defer func() { stopFirst(); awaitManagedServe(t, firstDone) }()
 	var before workflows.WorkerMessage
 	for ctx.Err() == nil {
 		var terminals int
@@ -132,7 +132,7 @@ func TestManagedCodexTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 		t.Fatal("cut was not durable terminal before mailbox acknowledgement", before, requests.Load())
 	}
 	stopFirst()
-	<-firstDone
+	awaitManagedServe(t, firstDone)
 	var finalRows int
 	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='final'`, message.ID).Scan(&finalRows); err != nil || finalRows != 0 {
 		t.Fatal("failed completion transaction partially committed accounting", finalRows, err)
@@ -169,7 +169,7 @@ func TestManagedCodexTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	secondCtx, stopSecond := context.WithCancel(ctx)
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
-	defer func() { stopSecond(); <-secondDone }()
+	defer func() { stopSecond(); awaitManagedServe(t, secondDone) }()
 	var after workflows.WorkerMessage
 	for ctx.Err() == nil {
 		messages, err := manager.Messages(ctx, run.ID, worker.ID)

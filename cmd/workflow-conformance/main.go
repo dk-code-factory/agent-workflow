@@ -178,6 +178,11 @@ func run() (resultErr error) {
 	if !ok {
 		return fmt.Errorf("role is not configured")
 	}
+	switch spec.Driver {
+	case "nested", "external-uncertain", "managed-canary", "container", "container-owner-loss":
+		// These generated public agent tasks must use this exact admitted role.
+		cfg.AgentRuntime = *role
+	}
 	report.Provider = selected.Provider
 	report.Authentication = selected.Authentication.Mode
 	if report.Authentication == "" {

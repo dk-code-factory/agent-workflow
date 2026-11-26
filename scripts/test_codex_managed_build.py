@@ -19,6 +19,44 @@ SPEC.loader.exec_module(BUILD)
 
 
 class ManagedSourceBuildTests(unittest.TestCase):
+    def test_cache_copy_reserves_tree_before_any_write(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(BUILD, "MIN_FREE", 0):
+            root = Path(directory)
+            source, cache = root / "input", root / "owned"
+            source.mkdir(); cache.mkdir()
+            (source / "pack").write_bytes(b"12345678")
+            with patch.object(BUILD, "MIN_FREE", 24), patch.object(BUILD, "MAX_COMBINED", 16), patch.object(BUILD.shutil, "disk_usage", return_value=type("Space", (), {"free": 30})()):
+                with self.assertRaisesRegex(ValueError, "resource limit"):
+                    BUILD.bounded_cache_copy(source, cache / "git", root, cache, time.monotonic())
+                self.assertEqual(list(cache.iterdir()), [])
+            with patch.object(BUILD, "MIN_FREE", 0), patch.object(BUILD, "MAX_COMBINED", 7):
+                with self.assertRaisesRegex(ValueError, "resource limit"):
+                    BUILD.bounded_cache_copy(source, cache / "git", root, cache, time.monotonic())
+                self.assertEqual(list(cache.iterdir()), [])
+            BUILD.bounded_cache_copy(source, cache / "git", root, cache, time.monotonic())
+            self.assertEqual((cache / "git/pack").read_bytes(), b"12345678")
+
+    def test_cache_copy_rejects_links_and_checks_deadline_between_chunks(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(BUILD, "MIN_FREE", 0):
+            root = Path(directory)
+            source, cache = root / "input", root / "owned"
+            source.mkdir(); cache.mkdir()
+            (source / "escape").symlink_to(root)
+            with self.assertRaisesRegex(ValueError, "not a regular"):
+                BUILD.bounded_cache_copy(source, cache / "git", root, cache, time.monotonic())
+            (source / "escape").unlink()
+            data = source / "pack"
+            data.write_bytes(b"x" * (2 << 20))
+            calls = 0
+            def clock():
+                nonlocal calls
+                calls += 1
+                return 0 if calls < 10 else BUILD.DEADLINE
+            with patch.object(BUILD.time, "monotonic", side_effect=clock):
+                with self.assertRaisesRegex(ValueError, "resource limit"):
+                    BUILD.bounded_cache_copy(source, cache / "git", root, cache, 0)
+            self.assertLess((cache / "git/pack").stat().st_size, data.stat().st_size)
+
     def test_runtime_admission_gate_does_not_change_source_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

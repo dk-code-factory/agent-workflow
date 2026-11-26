@@ -21,6 +21,8 @@ type managedSDKAttempt struct {
 	InvocationID   string                 `json:"invocation_id"`
 	Profile        string                 `json:"profile"`
 	Model          string                 `json:"model"`
+	RequestedModel string                 `json:"requested_model"`
+	ModelBound     bool                   `json:"model_bound,omitempty"`
 	Generation     int64                  `json:"generation"`
 	LastGeneration int64                  `json:"last_generation,omitempty"`
 	LastOwner      string                 `json:"last_owner,omitempty"`
@@ -61,26 +63,21 @@ func BeginManagedSDKInvocation(ctx context.Context, run, inv, model string) erro
 	if err != nil {
 		return err
 	}
-	costIdentity := identity
-	costIdentity.Model = model
-	if err = validateManagedSDKRetainedCost(ctx, tx, costIdentity); err != nil {
-		return err
-	}
-	if identity.Model != "unknown" && identity.Model != model {
+	if identity.Model != "unknown" && identity.Model != model && model != "" {
 		return fmt.Errorf("SDK model differs from original usage admission")
 	}
 	var count int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key=?`, inv, managedSDKAttemptKey).Scan(&count); err != nil {
 		return err
 	}
-	if count != 0 || model == "" {
+	if count != 0 {
 		return fmt.Errorf("SDK original invocation cannot acquire another native attempt")
 	}
 	admission, err := managedCaptureAdmission(ctx, tx, binding, inv)
 	if err != nil {
 		return err
 	}
-	row := managedSDKAttemptRow{UsageObservation: UsageObservation{Scope: "invocation"}, Attempt: &managedSDKAttempt{RunID: run, InvocationID: inv, Profile: managedSDKProfile, Model: model, Generation: binding.Generation, Owner: binding.Owner, Admission: admission, State: "active"}}
+	row := managedSDKAttemptRow{UsageObservation: UsageObservation{Scope: "invocation"}, Attempt: &managedSDKAttempt{RunID: run, InvocationID: inv, Profile: managedSDKProfile, Model: model, RequestedModel: model, Generation: binding.Generation, Owner: binding.Owner, Admission: admission, State: "active"}}
 	raw, err := json.Marshal(row)
 	if err != nil {
 		return err
@@ -90,6 +87,75 @@ func BeginManagedSDKInvocation(ctx context.Context, run, inv, model string) erro
 	}
 	return tx.Commit()
 }
+
+// BindManagedSDKModel records the pinned public initialization's once-resolved
+// model before the bridge releases any task data. The requested selector stays
+// immutable; retained cost/session identity must match the canonical model.
+func BindManagedSDKModel(ctx context.Context, run, inv, requested, resolved string) error {
+	if resolved == "" || resolved == "unknown" || len(resolved) > 256 {
+		return fmt.Errorf("SDK initialized model is missing or invalid")
+	}
+	store, binding, err := managedCodexUsageOwner(ctx, run, inv)
+	if err != nil {
+		return err
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = managedCodexUsageFence(ctx, tx, binding); err != nil {
+		return err
+	}
+	fields, a, err := readManagedSDKAttempt(ctx, tx, inv)
+	if err != nil {
+		return err
+	}
+	if a.Profile != managedSDKProfile || a.RunID != run || a.InvocationID != inv || a.Generation != binding.Generation || a.Owner != binding.Owner || a.State != "active" || a.ModelBound || a.RequestedModel != requested {
+		return fmt.Errorf("SDK initialized model differs from original admission")
+	}
+	id, err := managedProviderUsageIdentity(ctx, tx, run, inv, "claude-sdk")
+	if err != nil {
+		return err
+	}
+	var count int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key!=?`, inv, managedSDKAttemptKey).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 || id.Finished {
+		return fmt.Errorf("SDK model binding follows task effects")
+	}
+	id.Model = resolved
+	if err = validateManagedSDKRetainedCost(ctx, tx, id); err != nil {
+		return err
+	}
+	if _, err = managedCaptureAdmission(ctx, tx, binding, inv); err != nil {
+		return err
+	}
+	a.Model, a.ModelBound = resolved, true
+	if err = putManagedSDKAttempt(ctx, tx, inv, fields, a); err != nil {
+		return err
+	}
+	// Preserve any independently retained JSON fields in the usage identity.
+	var raw []byte
+	if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, inv).Scan(&raw); err != nil {
+		return err
+	}
+	var identity map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &identity); err != nil {
+		return err
+	}
+	identity["model"], _ = json.Marshal(resolved)
+	raw, err = json.Marshal(identity)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE usage_invocations SET record=? WHERE id=?`, raw, inv); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func readManagedSDKAttempt(ctx context.Context, tx *sql.Tx, inv string) (map[string]json.RawMessage, *managedSDKAttempt, error) {
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, inv, managedSDKAttemptKey).Scan(&raw); err != nil {

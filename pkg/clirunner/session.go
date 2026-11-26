@@ -333,6 +333,11 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.RepairOnly {
 		invocationTools = nil
 	}
+	if input["managed_broker"] == true && req.ObserveUsage != nil {
+		ctx = context.WithValue(ctx, sdkModelBindingKey{}, sdkModelBinding(func(requested, resolved string) error {
+			return workflows.BindManagedSDKModel(ctx, req.RunID, req.InvocationID, requested, resolved)
+		}))
+	}
 	result, parseErr := bridgeTurnControlled(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild, func(proof sdkBrokerProof) error {
 		if req.ObserveUsage != nil {
 			if err := req.ObserveUsage(workflows.UsageUpdate{Key: "sdk-response:" + proof.ResponseID, Provider: "claude-sdk", Model: proof.Model, SessionID: proof.SessionID, Usage: proof.Usage, Incomplete: true}); err != nil {

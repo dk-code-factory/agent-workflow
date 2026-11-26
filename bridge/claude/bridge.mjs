@@ -43,6 +43,9 @@ let attemptEvidence;
 let attemptTimer;
 let knownMessageUsage;
 let isolatedInitialization = false;
+let bindModel;
+let initializedModel;
+const modelBound = new Promise(resolve => { bindModel = resolve; });
 let releasePrompt;
 const promptReady = new Promise(resolve => { releasePrompt = resolve; });
 const requestReady = new Promise((resolve, reject) => { start = { resolve, reject }; });
@@ -72,6 +75,9 @@ lines.on('line', line => {
     if (frame.type === 'turn_start') {
       if (!start) throw new Error('duplicate turn start');
       const resolve = start.resolve; start = undefined; resolve(frame);
+    } else if (frame.type === 'model_bound') {
+      if (!initializedModel || frame.model !== initializedModel) throw new Error('Controller model identity differs from initialization');
+      bindModel(true);
     } else if (frame.type === 'tool_result') {
       const callback = pending.get(frame.call_id);
       if (!callback) throw new Error('unknown tool result identity');
@@ -205,12 +211,12 @@ try {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: request.repair_only ? undefined : (sessionID || undefined),
     systemPrompt: request.repair_only ? 'Format the supplied repair data as JSON. Do not execute tools or perform the original task.' : (request.instructions || 'Follow the explicitly supplied task and engine policy.'),
     settingSources: [], settings: isolatedSettings,
-    env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' },
+    env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0', ...(brokerStream ? { ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' } : {}) },
     extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
     pluginDelivery: skill ? 'initialize' : 'argv',
     skills: skill ? [skill.qualified] : [], plugins: skill ? [{ type: 'local', path: skill.root, skipMcpDiscovery: true }] : [],
     agents: child ? { [child.type]: { description: child.description, prompt: 'Use only the explicitly retained resource files. Never delegate.\n' + child.resources.join('\n'), tools: ['Read'], disallowedTools: ['Agent', 'Task', 'Skill', 'Bash', 'ToolSearch', 'TeamCreate', 'TeamDelete', 'SendMessage'], model: 'inherit', effort: 'high', skills: [], maxTurns: 2, background: false, omitClaudeMd: true, mcpServers: [] } } : {},
-    mcpServers: customTools.length ? { broker: createSdkMcpServer({ name: 'broker', version: '2.0.0', tools: customTools }) } : {},
+    mcpServers: customTools.length ? { broker: createSdkMcpServer({ name: 'broker', version: '2.0.0', tools: customTools, ...(brokerStream ? { alwaysLoad: true } : {}) }) } : {},
     tools: nativeTools, allowedTools: allowed, permissionMode: 'default', persistSession: !request.repair_only,
     includePartialMessages: true,
     ...(brokerStream ? { spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
@@ -292,6 +298,21 @@ try {
       assertSkillAcknowledgement(initialization, skill.qualified);
       emit({ type: 'progress', data: { type: 'skill_acknowledged', qualified: skill.qualified } });
     } else if (initialization.claude_code_version !== '2.1.322') throw new Error('Managed broker native CLI version differs before prompt release');
+    if (brokerStream) {
+      const requested = request.model || '';
+      const selector = requested || 'default';
+      const rows = initialization.models;
+      if (!Array.isArray(rows)) throw new Error('Managed initialization omitted public model catalog');
+      const matches = rows.filter(row => row.value === selector);
+      if (matches.length > 1) throw new Error('Managed initialization has ambiguous model selector');
+      initializedModel = matches.length === 1 ? matches[0].resolvedModel : requested;
+      // Explicit canonical IDs are permitted without inventing an alias map.
+      if (typeof initializedModel !== 'string' || !initializedModel || initializedModel.length > 256 || (!matches.length && !requested.startsWith('claude-'))) throw new Error('Managed initialization cannot resolve model selector');
+      // options.model already selected this native model. setModel performs
+      // an extra validation API request for some IDs in this pinned SDK.
+      emit({ type: 'broker_model_identity', data: { requested, resolved: initializedModel } });
+      await modelBound;
+    }
     releasePrompt(true);
   }
   if (interrupted) await running.interrupt();

@@ -152,3 +152,44 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 		t.Fatal("settled original remained held", err)
 	}
 }
+
+func TestManagedSDKRequestedModelBindsOnceBeforeOriginalResponses(t *testing.T) {
+	for _, selector := range []string{"sonnet", ""} {
+		t.Run("selector-"+selector, func(t *testing.T) {
+			store, ctx, id := sdkAttemptFixture(t)
+			id.Model = selector
+			raw, _ := json.Marshal(id)
+			if _, err := store.db.Exec(`UPDATE usage_invocations SET record=? WHERE id=?`, raw, id.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := BeginManagedSDKInvocation(ctx, id.RunID, id.ID, selector); err != nil {
+				t.Fatal(err)
+			}
+			if err := BindManagedSDKModel(ctx, id.RunID, id.ID, "changed", "canonical-model"); err == nil {
+				t.Fatal("requested selector changed")
+			}
+			if err := BindManagedSDKModel(ctx, id.RunID, id.ID, selector, "canonical-model"); err != nil {
+				t.Fatal(err)
+			}
+			if err := BindManagedSDKModel(ctx, id.RunID, id.ID, selector, "other-model"); err == nil {
+				t.Fatal("canonical model rebound")
+			}
+			tx, err := store.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, attempt, err := readManagedSDKAttempt(ctx, tx, id.ID)
+			tx.Rollback()
+			if err != nil || !attempt.ModelBound || attempt.RequestedModel != selector || attempt.Model != "canonical-model" {
+				t.Fatal(attempt, err)
+			}
+			if err := store.db.QueryRow(`SELECT record FROM usage_invocations WHERE id=?`, id.ID).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var current UsageIdentity
+			if err := json.Unmarshal(raw, &current); err != nil || current.Model != "canonical-model" || current.Finished {
+				t.Fatal(current, err)
+			}
+		})
+	}
+}

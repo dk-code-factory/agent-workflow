@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagedCodexSealPreservesOriginalProofAndUnknownExtensions(t *testing.T) {
@@ -154,4 +155,71 @@ func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T)
 	if err != nil || !report.Summary.Complete || *report.Summary.InputTokens != 10 {
 		t.Fatal(report, err)
 	}
+}
+
+func TestManagedRecoveryHeldCandidateDoesNotStarveUnrelatedWorker(t *testing.T) {
+	store, ctx, id := sdkAttemptFixture(t)
+	// This malformed original is a recovery candidate, never an authority.
+	var raw []byte
+	if err := store.db.QueryRow(`SELECT record FROM workers WHERE id=?`, id.WorkerID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var held Worker
+	json.Unmarshal(raw, &held)
+	held.Status = RunStatusNeedsAttention
+	raw, _ = json.Marshal(held)
+	if _, err := store.db.Exec(`UPDATE workers SET status=?,record=? WHERE id=?`, held.Status, raw, held.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO usage_observations VALUES(?,?,?)`, id.ID, managedSDKAttemptKey, `{"scope":"invocation","managed_sdk_attempt":{"state":"terminal","profile":"corrupt"}}`); err != nil {
+		t.Fatal(err)
+	}
+	other := &Run{ID: "independent-run", Status: RunStatusQueued, Jobs: map[string]JobExecution{}}
+	if err := store.Admit(ctx, other, Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	other.Status = RunStatusRunning
+	if err := store.Claim(context.Background(), other, RunStatusQueued); err != nil {
+		t.Fatal(err)
+	}
+	manager := &WorkerManager{Store: store, Limits: DefaultWorkerLimits(), Factory: func(context.Context, string, string, []string) (SessionRunner, []string, map[string]string, error) {
+		return &fakeSession{}, nil, nil, nil
+	}}
+	if err := manager.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := manager.Spawn(context.Background(), WorkerSpec{RunID: other.ID, Role: "ordinary", Turns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := manager.Send(context.Background(), other.ID, worker.ID, "ordinary", "independent work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); manager.Serve(service) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("scheduler did not join")
+		}
+	}()
+	for service.Err() == nil {
+		messages, e := manager.Messages(service, other.ID, worker.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(messages) == 1 && messages[0].ID == message.ID && messages[0].Status == RunStatusSucceeded {
+			heldNow, e := manager.Get(service, id.RunID, id.WorkerID)
+			if e != nil || heldNow.Status != RunStatusNeedsAttention || heldNow.Remaining != 0 {
+				t.Fatal("held original gained authority", heldNow, e)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("held recovery candidate starved independent worker")
 }

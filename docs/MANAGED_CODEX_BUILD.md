@@ -324,6 +324,26 @@ reader stays live during reacquisition. A later original callback from that
 same plan is permitted exactly once; a new response cannot overlap an unresolved
 plan. Final SDK counters must equal the sum of those original response counters.
 
+Before the original prompt is released, the controller binds the immutable
+requested model selector to the canonical model in the pinned SDK's public
+initialization catalog. An omitted selector uses that catalog's default entry.
+The durable original attempt records this binding once; changing it or adopting
+an incompatible retained session holds before another model request. Resolving
+the selector does not issue a validation request or change the native model.
+Managed broker sessions disable deferred tool search and experimental betas.
+The latter closes a native HTTP400 beta-healing retry that otherwise bypasses
+the configured zero retry count. The local negative control observes the
+rejected second request, no third request, retained earlier known usage and an
+original-attempt hold. Native-only and selected-skill routes keep their settings.
+
+The original sealed arguments must also match the observed native callback.
+Inputs that the SDK normalizes, non-object inputs and oversized inputs hold
+rather than being substituted or repaired. A complete original response proof
+can retain its known usage before this mismatch; an oversized frame rejected
+before that proof cannot establish usage. Prototype-looking keys remain data
+and cannot change the tool catalog or controller authority. This is a bounded
+wire-fidelity contract, not support for every native argument representation.
+
 A normalized SDK `message_stop` is not independently a completion proof. Native
 2.1.322 also emits it after a source error. Its source explicitly accepts a
 finished block set plus final stop-reason/usage delta as a complete response,
@@ -422,3 +442,7 @@ the attempt. Later cancellation, protocol errors and cleanup failures retain the
 hold. Successful original completion upgrades that same receipt and advances
 the baseline atomically. Returning each broker result also rechecks the original
 durable owner after capacity reacquisition; a live context alone is insufficient.
+This terminal-cost control reaches an actual successful native terminal followed
+by cancelled cleanup. A rejected HTTP400 request reaches a synthetic native error
+and an original-attempt hold; it does not establish cost for a failed native
+terminal that the provider never reported.

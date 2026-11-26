@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
+	"golang.org/x/sys/unix"
 )
 
 func managedFixtureExecutable(t *testing.T) *ManagedCodexBuildIdentity {
@@ -79,10 +80,18 @@ func TestManagedCodexActualGuardianChildUsesHeldImage(t *testing.T) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = cmd.Cancel()
+			_ = cmd.Wait()
+		}
+	}()
 	pid, err := image.verifyGuardianChild(ctx, cmd.Process)
 	if err != nil {
 		_ = cmd.Cancel()
 		_ = cmd.Wait()
+		waited = true
 		t.Fatalf("%v; guardian=%d path=%s argv=%q stderr=%s exit=%v", err, cmd.Process.Pid, cmd.Path, cmd.Args, diagnostics.String(), cmd.ProcessState)
 	}
 	if pid == cmd.Process.Pid {
@@ -92,7 +101,9 @@ func TestManagedCodexActualGuardianChildUsesHeldImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	input.Close()
-	if err = cmd.Wait(); err != nil {
+	err = cmd.Wait()
+	waited = true
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(output.String(), "input after image verification") {
@@ -132,5 +143,22 @@ func TestManagedCodexExecutableRejectsChangedMissingAndSymlink(t *testing.T) {
 				t.Fatal("changed executable accepted")
 			}
 		})
+	}
+}
+
+func TestManagedCodexManifestFIFORejectedWithoutWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest-fifo")
+	if err := unix.Mkfifo(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := captureManagedBuild(path, managedCodexDescriptor{}); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("FIFO became a build manifest")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manifest admission blocked on FIFO without writer")
 	}
 }

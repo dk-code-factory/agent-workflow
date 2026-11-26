@@ -19,6 +19,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// A FIFO or device at the manifest path cannot block fresh admission.
+func openManagedManifest(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), "managed-manifest"), nil
+}
+
 // The held descriptor chooses the executed image without reopening its path.
 // Verification observes the guardian's actual child before any protocol input.
 // This binds an image; it does not provide filesystem isolation.

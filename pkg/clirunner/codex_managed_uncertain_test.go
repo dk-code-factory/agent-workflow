@@ -114,7 +114,7 @@ func managedCodexReceiptFixture(t *testing.T, knownDenied bool) {
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { manager.Serve(serveCtx); close(done) }()
-	defer func() { stop(); <-done }()
+	defer func() { stop(); awaitManagedServe(t, done) }()
 	var message workflows.WorkerMessage
 	for ctx.Err() == nil {
 		messages, err := manager.Messages(ctx, run.ID, worker.ID)

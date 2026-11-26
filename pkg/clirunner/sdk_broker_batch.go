@@ -155,12 +155,6 @@ func (b *sdkBrokerBatch) seal(ctx context.Context, data map[string]any, model, s
 		}
 		plan[call.ID] = workflows.ToolRequest{CallID: call.ID, Server: definition.Server, Tool: definition.Name, Arguments: call.Arguments}
 	}
-	for id, request := range b.pending {
-		original, ok := plan[id]
-		if !ok || !sameSDKRequest(original, request) {
-			return fmt.Errorf("SDK callback differs from original response plan")
-		}
-	}
 	for name, value := range p.Usage {
 		number, ok := value.(json.Number)
 		if !ok {
@@ -174,6 +168,14 @@ func (b *sdkBrokerBatch) seal(ctx context.Context, data map[string]any, model, s
 	if b.observe != nil {
 		if err = b.observe(*p); err != nil {
 			return err
+		}
+	}
+	// A full original response has known charges even if a normalized callback
+	// subsequently fails identity validation. Recording them grants no effects.
+	for id, request := range b.pending {
+		original, ok := plan[id]
+		if !ok || !sameSDKRequest(original, request) {
+			return fmt.Errorf("SDK callback differs from original response plan")
 		}
 	}
 	if err = ctx.Err(); err != nil {

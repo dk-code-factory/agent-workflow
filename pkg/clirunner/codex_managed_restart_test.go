@@ -255,7 +255,7 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	firstCtx, stopFirst := context.WithCancel(ctx)
 	firstDone := make(chan struct{})
 	go func() { manager.Serve(firstCtx); close(firstDone) }()
-	defer func() { stopFirst(); <-firstDone }()
+	defer func() { stopFirst(); awaitManagedServe(t, firstDone) }()
 	var lease *workflows.CapacityLease
 	select {
 	case lease = <-blocked:
@@ -322,7 +322,7 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 		t.Fatal("owned runtime cleanup not durably complete", err)
 	}
 	stopFirst()
-	<-firstDone
+	awaitManagedServe(t, firstDone)
 	if mode == "cancel" {
 		if _, err = manager.Send(ctx, run.ID, worker.ID, "queued-after-cancel", "must retain original allowance without dispatch"); err != nil {
 			t.Fatal(err)
@@ -374,7 +374,7 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	secondCtx, stopSecond := context.WithCancel(ctx)
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
-	defer func() { stopSecond(); <-secondDone }()
+	defer func() { stopSecond(); awaitManagedServe(t, secondDone) }()
 	if mode != "restart" {
 		var outcome workflows.WorkerMessage
 		if mode == "cancel" {

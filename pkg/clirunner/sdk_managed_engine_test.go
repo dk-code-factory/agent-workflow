@@ -29,7 +29,7 @@ func (f *sdkManagedEngineFixture) UsageProvider(role, model string) (string, str
 	if role == "child" {
 		return "fixture", model
 	}
-	return "claude-sdk", "claude-sonnet-4-6"
+	return f.runner.UsageProvider(role, model)
 }
 func (f *sdkManagedEngineFixture) ToolPolicy(role string) ([]workflows.ToolGrant, []workflows.ToolDefinition) {
 	if role == "child" || role == "empty" {
@@ -51,9 +51,14 @@ func (f *sdkManagedEngineFixture) RunTurn(ctx context.Context, req workflows.Ses
 	}
 	return f.runner.RunTurn(ctx, req, emit)
 }
+func TestSDKManagedProductionEngineModelSelectors(t *testing.T) {
+	for _, selector := range []string{"sonnet", "opus", "haiku", ""} {
+		t.Run("selector-"+selector, func(t *testing.T) { testSDKManagedEngine(t, "model:"+selector) })
+	}
+}
 func TestSDKManagedProductionEngineCapacityOne(t *testing.T) { testSDKManagedEngine(t, "capacity") }
 func TestSDKManagedProductionEngineControls(t *testing.T) {
-	for _, mode := range []string{"known-denial-continuation", "known-denial-wrong-type", "known-denial-unknown-argument", "unknown-after-batch"} {
+	for _, mode := range []string{"known-denial-continuation", "known-denial-wrong-type", "known-denial-unknown-argument", "unknown-after-batch", "known-response-then-rejected-request"} {
 		t.Run(mode, func(t *testing.T) { testSDKManagedEngine(t, mode) })
 	}
 }
@@ -91,6 +96,10 @@ func testSDKManagedEngine(t *testing.T, mode string) {
 			return
 		}
 		stage := requests.Add(1)
+		if mode == "known-response-then-rejected-request" {
+			raw, _ := json.Marshal(map[string]any{"stage": stage, "headers": r.Header, "body": body})
+			t.Logf("HTTP400 original request: %s", raw)
+		}
 		model, _ := body["model"].(string)
 		w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("sdk-engine-response-", stage)}
 		call := func(id, name string, args map[string]any) map[string]any {
@@ -109,6 +118,12 @@ func testSDKManagedEngine(t *testing.T, mode string) {
 			} else {
 				writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": "SDK_KNOWN_DENIAL_SETTLED"}}, "end_turn")
 			}
+			return
+		}
+		if mode == "known-response-then-rejected-request" && stage == 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"Bounded fixture rejects next original request"}}`)
 			return
 		}
 		if mode == "unknown-after-batch" && stage == 2 {
@@ -164,9 +179,31 @@ func testSDKManagedEngine(t *testing.T, mode string) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if mode == "known-response-then-rejected-request" {
+		// Test-only transparent capture of the maintained production bridge's
+		// exact frames; no model/request/permission behavior is replaced.
+		trace := filepath.Join(root, "original-bridge-frames.jsonl")
+		wrapper := filepath.Join(root, "capture.mjs")
+		script := fmt.Sprintf(`import { appendFileSync } from 'node:fs';
+const write = process.stdout.write.bind(process.stdout); let bytes=0;
+process.stdout.write = (chunk, ...args) => { bytes+=Buffer.byteLength(chunk); if(bytes>16*1024*1024) throw new Error('owned capture bound'); appendFileSync(%q,chunk); return write(chunk,...args); };
+await import(%q);`, trace, "file://"+bridge)
+		if err := os.WriteFile(wrapper, []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+		bridge = wrapper
+		defer func() {
+			raw, err := os.ReadFile(trace)
+			t.Logf("HTTP400 original bridge frames (read=%v):\n%s", err, raw)
+		}()
+	}
 	t.Setenv("SDK_ENGINE_FIXTURE_KEY", "fake-only")
 	pool := &workflows.Capacity{Slots: make(chan struct{}, 1), MaxSuspended: 8}
-	fixture := &sdkManagedEngineFixture{pool: pool, runner: &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"parent": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_ENGINE_FIXTURE_KEY"}}}}}}
+	selector := "claude-sonnet-4-6"
+	if strings.HasPrefix(mode, "model:") {
+		selector = strings.TrimPrefix(mode, "model:")
+	}
+	fixture := &sdkManagedEngineFixture{pool: pool, runner: &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"parent": {Provider: "claude-sdk", Bridge: bridge, Model: selector, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_ENGINE_FIXTURE_KEY"}}}}}}
 	manager := &workflows.WorkerManager{Store: store, Capacity: pool, Factory: func(ctx context.Context, _, role string, _ []string) (workflows.SessionRunner, []string, map[string]string, error) {
 		if role == "child" {
 			report, e := store.Usage(ctx, run.ID)
@@ -260,7 +297,7 @@ func testSDKManagedEngine(t *testing.T, mode string) {
 		t.Logf("known committed denied receipt + normal same-session continuation;0child/API3/Remaining0/48-15")
 		return
 	}
-	if mode == "unknown-after-batch" {
+	if mode == "unknown-after-batch" || mode == "known-response-then-rejected-request" {
 		if completed.Status == workflows.RunStatusSucceeded || requests.Load() != 2 || completed.UnsafeFailureClass != "integrity" {
 			t.Fatalf("unknown original response escaped hold: %+v API%d", completed, requests.Load())
 		}

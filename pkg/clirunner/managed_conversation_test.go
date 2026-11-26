@@ -62,7 +62,13 @@ func TestManagedConversationNativeUnknownReplayHold(t *testing.T) {
 		t.Run(provider, func(t *testing.T) { testManagedConversationNative(t, provider, true) })
 	}
 }
-func testManagedConversationNative(t *testing.T, provider string, unknown bool) {
+func TestManagedConversationNativeDelegatedDenial(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		t.Run(provider, func(t *testing.T) { testManagedConversationNative(t, provider, false, true) })
+	}
+}
+func testManagedConversationNative(t *testing.T, provider string, unknown bool, delegatedDenial ...bool) {
+	denial := len(delegatedDenial) == 1 && delegatedDenial[0]
 	if provider == "claude-sdk" && os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("locked SDK and local fake API only")
 	}
@@ -109,25 +115,45 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool) 
 			t.Errorf("API%d began without original parent lease", n)
 		}
 		tools, _ := body["tools"].([]any)
-		if len(tools) != 2 {
-			t.Errorf("conversation catalog=%d want exact send/finish", len(tools))
+		expectedTools := 2
+		if denial {
+			expectedTools++
+		}
+		if len(tools) != expectedTools {
+			t.Errorf("conversation catalog=%d want %d", len(tools), expectedTools)
+		}
+		step := n
+		if denial && n > 1 {
+			step--
 		}
 		name := "send"
 		args := map[string]any{"to": "reviewer", "message": "review this"}
-		if n == 3 {
+		if step == 3 {
 			args = map[string]any{"to": "builder", "message": "reviewed"}
 		}
-		if n == 5 {
+		if step == 5 {
 			name = "finish"
 			args = map[string]any{"answer": "approved"}
 		}
 		wire := workflows.ToolWireName(workflows.ToolDefinition{Server: "workflow-conversation", Name: name})
+		toolResponse := step%2 == 1
+		if denial && n == 1 {
+			wire = workflows.ToolWireName(workflows.ToolDefinition{Server: "external", Name: "lookup"})
+			args = map[string]any{"query": 7}
+			toolResponse = true
+		}
+		if denial && n == 2 {
+			raw, _ := json.Marshal(body)
+			if !strings.Contains(string(raw), "original-call-1") {
+				t.Error("original denied result missing before continuation")
+			}
+		}
 		model, _ := body["model"].(string)
 		if provider == "claude-sdk" {
 			w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("conversation-native-", n)}
 			blocks := []map[string]any{{"type": "text", "text": "TURN_DONE"}}
 			stop := "end_turn"
-			if n%2 == 1 {
+			if toolResponse {
 				blocks = []map[string]any{{"type": "tool_use", "id": fmt.Sprint("original-call-", n), "name": "mcp__broker__" + wire, "input": args}}
 				stop = "tool_use"
 			}
@@ -136,7 +162,7 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool) 
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		send := func(value any) { raw, _ := json.Marshal(value); fmt.Fprintf(w, "data: %s\n\n", raw) }
-		if n%2 == 1 {
+		if toolResponse {
 			raw, _ := json.Marshal(args)
 			send(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "id": fmt.Sprint("fc-", n), "call_id": fmt.Sprint("original-call-", n), "name": wire, "arguments": string(raw)}})
 		} else {
@@ -169,6 +195,23 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool) 
 	}
 	defer store.Close()
 	executor := &workflows.Executor{WorkspaceDir: root, Agents: agents, Store: store, Capacity: pool, Slots: pool.Slots}
+	var delegatedEffects atomic.Int32
+	if denial {
+		broker := &workflows.Broker{Store: store, External: func(context.Context, workflows.ToolDefinition, json.RawMessage) (json.RawMessage, error) {
+			delegatedEffects.Add(1)
+			return json.RawMessage(`{}`), nil
+		}}
+		executor.BindTools = func(ctx context.Context, in workflows.ToolInvocation) (workflows.ToolBinding, error) {
+			in.Grants = []workflows.ToolGrant{{Server: "external", Tool: "lookup"}}
+			in.Catalog = []workflows.ToolDefinition{{Server: "external", Name: "lookup", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)}}
+			return broker.Bind(ctx, in)
+		}
+	}
+	expectedAPIs := int32(6)
+	if denial {
+		expectedAPIs++
+	}
+
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
 	executor.RoleRunner = func(json.RawMessage) (workflows.AgentRunner, error) { return agents, nil }
@@ -224,13 +267,19 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool) 
 			turns++
 		}
 	}
-	if conversation == nil || !conversation.Finished || conversation.Calls != 3 || conversation.Turns != 3 || len(conversation.Receipts) != 3 || len(conversation.Sessions) != 2 || turns != 3 || requests.Load() != 6 {
+	if conversation == nil || !conversation.Finished || conversation.Calls != 3 || conversation.Turns != 3 || len(conversation.Receipts) != 3 || len(conversation.Sessions) != 2 || turns != 3 || requests.Load() != expectedAPIs {
 		t.Fatalf("original conversation=%+v turns=%d APIs=%d", conversation, turns, requests.Load())
 	}
 	if fixture != nil {
 		builder := fixture.sessions["builder"]
 		if len(builder) != 2 || builder[0] == "" || builder[0] != builder[1] {
 			t.Fatal("original participant session changed", builder)
+		}
+	}
+	if denial {
+		calls, err := store.ToolCalls(ctx, run.ID, false)
+		if err != nil || len(calls) != 1 || calls[0].Status != "denied" || calls[0].CallID != "original-call-1" || delegatedEffects.Load() != 0 {
+			t.Fatal("delegated original denial lost receipt/ran effects", calls, err)
 		}
 	}
 	usage, err := store.Usage(ctx, run.ID)
@@ -245,7 +294,7 @@ func testManagedConversationNative(t *testing.T, provider string, unknown bool) 
 	for _, a := range attempts {
 		if a.Conversation != nil {
 			same, reused, e := store.BeginConversation(ctx, run.ID, a.JobID, a.StepID, a.Iteration, a.InputFingerprint, "")
-			if e != nil || !reused || same.ID != a.ID || requests.Load() != 6 {
+			if e != nil || !reused || same.ID != a.ID || requests.Load() != expectedAPIs {
 				t.Fatal("completed original conversation journal not reused", same, reused, e)
 			}
 		}
@@ -347,7 +396,7 @@ func TestManagedPublicAgentTaskNativeContinuation(t *testing.T) {
 			defer cancel()
 			done := make(chan struct{})
 			go func() { defer close(done); manager.Serve(ctx) }()
-			defer func() { cancel(); <-done }()
+			defer func() { cancel(); awaitManagedServe(t, done) }()
 			executor := &workflows.Executor{WorkspaceDir: root, Agents: agents, Store: store, Workers: manager, Slots: slots, BeforeFinalize: manager.StopRun}
 			run, err := executor.Run(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
 			if err != nil || run.Status != workflows.RunStatusSucceeded || requests.Load() != 2 {
