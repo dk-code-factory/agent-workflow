@@ -39,7 +39,7 @@ WORKFLOW = REPOSITORY + "/.github/workflows/release.yml"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 HELPERS = ("agent-workflow", "agent-workflow-runtime", "agent-workflow-guardian", "workflow-conformance")
-BRIDGE_FILES = ("bridge.mjs", "package.json", "package-lock.json")
+BRIDGE_FILES = ("bridge.mjs", "isolation.mjs", "package.json", "package-lock.json")
 
 
 class InstallError(Exception):
@@ -329,6 +329,12 @@ def setup_claude_bridge(distribution, cache):
     captured = {}
     for name in BRIDGE_FILES:
         path = source / name
+        # Older verified engines have no local isolation-module dependency.
+        # Keep their original source identity, while requiring the sidecar for
+        # bridge versions that import it. Existing sidecars are always captured.
+        if (name == "isolation.mjs" and not path.exists() and not path.is_symlink()
+                and not re.search(rb"(?:from\s+|import\s*)['\"]\./isolation\.mjs['\"]", captured["bridge.mjs"])):
+            continue
         require(path.is_file() and not path.is_symlink(), "Locked Claude bridge source unavailable: " + name)
         captured[name] = path.read_bytes()
     # Candidate setup must never seed a certified engine's dependency cache,

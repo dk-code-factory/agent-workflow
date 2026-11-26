@@ -155,7 +155,7 @@ class PluginArchiveTests(unittest.TestCase):
                 files.update({name: ((self.root / name).read_bytes(), mode) for name, mode in plugin_files().items()})
                 for name in ['agent-workflow', 'agent-workflow-runtime', 'agent-workflow-guardian', 'workflow-conformance']:
                     files[name] = (b'fixture executable', 0o755)
-                for name in ['agents.yml', 'LICENSE', 'NOTICE', 'licenses/index.json', 'bridge/claude/bridge.mjs', 'bridge/claude/package-lock.json']:
+                for name in ['agents.yml', 'LICENSE', 'NOTICE', 'licenses/index.json', 'bridge/claude/bridge.mjs', 'bridge/claude/isolation.mjs', 'bridge/claude/package-lock.json']:
                     files[name] = (b'fixture', 0o644)
                 with tempfile.TemporaryDirectory() as guardian_fixture:
                     fixture_guardians(Path(guardian_fixture))

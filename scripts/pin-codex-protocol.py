@@ -25,7 +25,9 @@ sources = [
     "v1/InitializeParams.json", "v2/ThreadStartParams.json",
     "v2/ThreadResumeParams.json", "v2/TurnInterruptParams.json",
     "v2/LoginAccountParams.json", "DynamicToolCallParams.json",
-    "DynamicToolCallResponse.json",
+    "DynamicToolCallResponse.json", "v2/SkillsListParams.json",
+    "v2/SkillsListResponse.json", "v2/SkillsConfigWriteParams.json",
+    "v2/SkillsConfigWriteResponse.json",
 ]
 with tempfile.TemporaryDirectory(dir=temporary) as directory:
     subprocess.run([args.codex_binary, "app-server", "generate-json-schema",

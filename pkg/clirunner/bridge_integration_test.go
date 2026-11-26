@@ -41,7 +41,23 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	_ = os.Mkdir(filepath.Join(root, ".claude"), 0700)
 	hook := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch NATIVE_HOOK_RAN"}]}]}}`
 	_ = os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(hook), 0600)
+	// Same-name project/user skills remain outside the explicit empty selection;
+	// the project settings above also exercise ignored SessionStart hooks.
+	state, err := providerStateDir(root, "claude", workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []string{filepath.Join(root, ".claude"), state, filepath.Join(state, "home", ".claude")} {
+		path := filepath.Join(base, "skills", "probe", "SKILL.md")
+		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(path, []byte("---\nname: probe\ndescription: HOSTILE_SKILL_CATALOG_139\n---\nHOSTILE_SKILL_BODY_139\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var messages atomic.Int32
+	var rejectedSkill atomic.Bool
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "count_tokens") {
 			w.Header().Set("Content-Type", "application/json")
@@ -70,15 +86,32 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 		if strings.Contains(string(system), marker) {
 			t.Error("native memory was discovered")
 		}
+		if strings.Contains(string(system), "HOSTILE_SKILL_") {
+			t.Error("unadmitted skill entered prompt")
+		}
+		modelTools, _ := payload["tools"].([]any)
+		for _, tool := range modelTools {
+			name, _ := tool.(map[string]any)["name"].(string)
+			if name == "Skill" || name == "Agent" || name == "Task" {
+				t.Errorf("discovery/delegation tool exposed: %s", name)
+			}
+		}
 		if !strings.Contains(string(system), "ENGINE_ONLY_FIXTURE") {
 			t.Error("engine instructions missing")
 		}
 		reply := "SDK_OK"
 		nativeStructured := false
 		body, _ := json.Marshal(payload["messages"])
+		if strings.Contains(string(body), "HOSTILE_SKILL_") {
+			t.Error("unadmitted skill entered conversation history")
+		}
 		if strings.Contains(string(body), "VALID_STRUCTURED_FIXTURE") {
 			reply = `{"ok":true}`
 			nativeStructured = true
+		}
+		forceSkill := strings.Contains(string(body), "ISOLATION_TOOL_FIXTURE") && !strings.Contains(string(body), "tool_skill_unadmitted")
+		if strings.Contains(string(body), "tool_skill_unadmitted") && strings.Contains(string(body), "No such tool available: Skill") {
+			rejectedSkill.Store(true)
 		}
 		model, _ := payload["model"].(string)
 		message := map[string]any{"id": "msg_fixture", "type": "message", "role": "assistant", "model": model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]int{"input_tokens": 16, "output_tokens": 0}}
@@ -92,7 +125,11 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 		block := map[string]any{"type": "text", "text": ""}
 		delta := map[string]any{"type": "text_delta", "text": reply}
 		stop := "end_turn"
-		if nativeStructured {
+		if forceSkill {
+			block = map[string]any{"type": "tool_use", "id": "tool_skill_unadmitted", "name": "Skill", "input": map[string]any{}}
+			delta = map[string]any{"type": "input_json_delta", "partial_json": `{"skill":"probe"}`}
+			stop = "tool_use"
+		} else if nativeStructured {
 			block = map[string]any{"type": "tool_use", "id": "tool_fixture", "name": "StructuredOutput", "input": map[string]any{}}
 			delta = map[string]any{"type": "input_json_delta", "partial_json": reply}
 			stop = "tool_use"
@@ -114,11 +151,18 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"reviewer": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", InstructionText: "ENGINE_ONLY_FIXTURE", Tools: []string{}, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_FIXTURE_KEY"}}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer", Prompt: "Reply SDK_OK. Remember FIRST_TURN_PUBLIC_NONCE_d41d"}}, nil)
+	isolatedInit := false
+	result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer", Prompt: "Reply SDK_OK. Remember FIRST_TURN_PUBLIC_NONCE_d41d"}}, func(event workflows.ProviderEvent) {
+		if event.Data["type"] == "discovery_isolation" {
+			plugins, pluginsOK := event.Data["plugins"].([]any)
+			skills, skillsOK := event.Data["skills"].([]any)
+			isolatedInit = pluginsOK && skillsOK && len(plugins) == 0 && len(skills) == 0
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != workflows.RunStatusSucceeded || result.Outputs["text"] != "SDK_OK" || result.SessionID == "" || messages.Load() != 1 {
+	if !isolatedInit || result.Status != workflows.RunStatusSucceeded || result.Outputs["text"] != "SDK_OK" || result.SessionID == "" || messages.Load() != 1 {
 		t.Fatalf("bridge contract failed: %+v requests=%d", result, messages.Load())
 	}
 	resumed, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer", Prompt: "Reply SDK_OK again"}, SessionID: result.SessionID}, nil)
@@ -134,6 +178,10 @@ func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	valid, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer", Prompt: "VALID_STRUCTURED_FIXTURE", Output: schema}}, nil)
 	if err != nil || valid.Outputs["structured"] == nil {
 		t.Fatalf("native structured decoding failed: %+v %v", valid, err)
+	}
+	isolated, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "reviewer", Prompt: "ISOLATION_TOOL_FIXTURE $probe $plugin-authoring"}}, nil)
+	if err != nil || isolated.Outputs["text"] != "SDK_OK" || !rejectedSkill.Load() {
+		t.Fatalf("unadmitted invocation not rejected: %+v %v rejected=%v", isolated, err, rejectedSkill.Load())
 	}
 	if _, err = os.Stat(filepath.Join(root, "NATIVE_HOOK_RAN")); !os.IsNotExist(err) {
 		t.Fatal("native hook executed")

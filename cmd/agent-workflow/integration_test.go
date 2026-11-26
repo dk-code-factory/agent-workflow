@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/clirunner"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
@@ -46,11 +47,13 @@ for line in sys.stdin:
     def send(x): print(json.dumps(x),flush=True)
     if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.1 (fixture)'}})
     elif method in ('account/login/start','turn/interrupt'): send({'id':i,'result':{}})
+    elif method=='skills/list': send({'id':i,'result':{'data':[{'cwd':f['params']['cwds'][0],'skills':[],'errors':[]}]}})
     elif method in ('thread/start','thread/resume'): send({'id':i,'result':{'thread':{'id':'fixture-thread'}}})
     elif method=='turn/start':
         send({'id':i,'result':{'turn':{'id':'turn-1'}}})
         send({'method':'item/completed','params':{'threadId':'fixture-thread','turnId':'turn-1','item':{'type':'agentMessage','text':'fixture result'}}})
         send({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'turn-1','status':'completed'}}})
+    elif i is not None: send({'id':i,'error':{'code':-32601,'message':'unsupported fixture method'}})
 `
 	if err := os.WriteFile(path, []byte(fake), 0700); err != nil {
 		t.Fatal(err)
@@ -65,7 +68,9 @@ for line in sys.stdin:
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	err = command(context.Background(), []string{"run", "--foreground", "--workspace", root, "--parallel", "2", "--input", "task=example", "workflows/main.yml"}, &stdout, &stderr)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = command(ctx, []string{"run", "--foreground", "--workspace", root, "--parallel", "2", "--input", "task=example", "workflows/main.yml"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run failed: %v stderr=%s", err, stderr.String())
 	}

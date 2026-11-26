@@ -44,14 +44,18 @@ class InstallerTests(unittest.TestCase):
                       "commit": "a" * 40, "source_fingerprint": "b" * 64, "dirty": "false"}
         self.archive = self.make_archive()
 
-    def make_archive(self, extra=None, build=None, executable_build=None, engine_body=None):
+    def make_archive(self, extra=None, build=None, executable_build=None, engine_body=None,
+                     bridge_body=None, include_isolation=True):
         path = self.root / ("fixture-" + str(len(list(self.root.glob("*.tar.gz")))) + ".tar.gz")
         build = self.build if build is None else build
         executable_build = build if executable_build is None else executable_build
         files = {"build.json": (json.dumps(build).encode(), 0o644),
                  "docs/distribution.txt": (b"complete distribution", 0o644)}
         for name in launcher.BRIDGE_FILES:
-            files["bridge/claude/" + name] = ((ROOT / "bridge/claude" / name).read_bytes(), 0o644)
+            if name == "isolation.mjs" and not include_isolation:
+                continue
+            body = bridge_body if name == "bridge.mjs" and bridge_body is not None else (ROOT / "bridge/claude" / name).read_bytes()
+            files["bridge/claude/" + name] = (body, 0o644)
         engine_body = engine_body or "print('engine stdout'); print('engine stderr',file=sys.stderr); sys.exit(7)"
         code = ("#!" + sys.executable + "\nimport json,sys\n"
                 "if sys.argv[1:] == ['version']: print(" + repr(json.dumps(executable_build)) + ")\n"
@@ -435,6 +439,38 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(list(self.cache.glob(".bridge-*")))
         self.assertFalse((self.cache / "bridges").exists())
         self.assertEqual(outside.read_text(), "untouched")
+
+    def test_bridge_cache_retains_required_isolation_module_and_rejects_tampering(self):
+        distribution = self.candidate()
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup):
+            bridge = launcher.setup_claude_bridge(distribution, self.cache)
+        isolation = bridge.parent / "isolation.mjs"
+        self.assertEqual(isolation.read_bytes(), (ROOT / "bridge/claude/isolation.mjs").read_bytes())
+        self.assertIn("from './isolation.mjs'", bridge.read_text())
+        isolation.write_text("export const isolatedSettings = {};\n")
+        with patch.object(launcher, "command", side_effect=AssertionError("must not silently reinstall")), \
+                self.assertRaisesRegex(launcher.InstallError, "corrupt"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+
+    def test_bridge_setup_rejects_missing_isolation_module_before_dependency_install(self):
+        distribution = self.candidate()
+        (distribution / "bridge/claude/isolation.mjs").unlink()
+        with patch.object(launcher, "command", side_effect=AssertionError("missing source must not install")), \
+                self.assertRaisesRegex(launcher.InstallError, "source unavailable: isolation.mjs"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse((self.cache / "bridges").exists())
+
+    def test_bridge_setup_preserves_legacy_verified_sources_without_isolation_import(self):
+        legacy = b"// Verified legacy bridge fixture without local imports.\nexport const legacy = true;\n"
+        distribution = self.candidate(self.make_archive(bridge_body=legacy, include_isolation=False))
+        before = launcher.tree_identity(distribution)
+        with patch.object(launcher, "command", side_effect=self.fake_bridge_setup):
+            bridge = launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertEqual(bridge.read_bytes(), legacy)
+        self.assertFalse((bridge.parent / "isolation.mjs").exists())
+        self.assertEqual(launcher.tree_identity(distribution), before)
+        with patch.object(launcher, "command", side_effect=AssertionError("legacy cache reuse must be offline")):
+            self.assertEqual(launcher.setup_claude_bridge(distribution, self.cache), bridge)
 
     def test_bridge_cache_isolates_engine_receipt_and_candidate_authority(self):
         candidate = self.candidate()

@@ -30,12 +30,14 @@ for line in sys.stdin:
     def send(x): print(json.dumps(x),flush=True)
     if method=='initialize': send({'id':i,'result':{'userAgent':'codex_cli_rs/0.167.1 (fixture)'}})
     elif method in ('account/login/start','turn/interrupt'): send({'id':i,'result':{}})
+    elif method=='skills/list': send({'id':i,'result':{'data':[{'cwd':f['params']['cwds'][0],'skills':[],'errors':[]}]}})
     elif method in ('thread/start','thread/resume'): send({'id':i,'result':{'thread':{'id':'archive-fixture'}}})
     elif method=='turn/start':
         send({'id':i,'result':{'turn':{'id':'turn-1'}}})
         send({'method':'thread/tokenUsage/updated','params':{'threadId':'archive-fixture','tokenUsage':{'total':{'inputTokens':1,'outputTokens':1}}}})
         send({'method':'item/completed','params':{'threadId':'archive-fixture','turnId':'turn-1','item':{'type':'agentMessage','text':'ARCHIVE_SMOKE_OK'}}})
         send({'method':'turn/completed','params':{'threadId':'archive-fixture','turn':{'id':'turn-1','status':'completed'}}})
+    elif i is not None: send({'id':i,'error':{'code':-32601,'message':'unsupported fixture method'}})
 """)
     path.chmod(0o700)
     gh = fakebin / "gh"

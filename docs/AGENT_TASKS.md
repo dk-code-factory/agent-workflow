@@ -106,6 +106,20 @@ outputs are never overwritten. Previously admitted TOML snapshots retain their
 original bytes, hashes, identities and Codex bindings without reopening sources;
 this is a source-format change for new runs, not a snapshot migration.
 
+Managed `codex-app-server` and `claude-sdk` sessions exclude installed,
+repository and bundled skills from the model's skill catalog and explicit skill
+invocation. Codex disables discovered skill paths in its private state before
+starting or resuming a thread, suppresses the catalog, and disables plugins.
+Claude disables builtin plugins through inline settings, retains its empty skill
+allowlist and disabled Skill/Agent/Task tools, and rejects an init plugin set
+that is not empty. This also applies when the prompt mentions `$skill-name`.
+Ordinary native tools retain their role policy.
+
+Claude's init validation occurs when the SDK emits `system/init`; it is not a
+pre-model API admission barrier. Inline plugin suppression is the startup
+control, and native tool dispatch requires verified initialization. Supplied
+skill admission, loading and observed child evidence are separate future work.
+
 Workspace `agents.yml` selects the configured role for every native task with
 `agent-runtime`. Omit it to use `codex`. The selected role must use
 `codex-app-server` or `claude-sdk`; this selection is independent of the YAML

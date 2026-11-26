@@ -76,6 +76,7 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER") == "1" {
 		scanner := bufio.NewScanner(os.Stdin)
 		encoder := json.NewEncoder(os.Stdout)
+		disabled := map[string]bool{}
 		for scanner.Scan() {
 			var frame struct {
 				ID     int            `json:"id"`
@@ -90,7 +91,53 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"userAgent": "codex_cli_rs/0.167.1 (fixture)"}})
 			case "account/login/start":
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
+			case "skills/list":
+				if os.Getenv("ISOLATION_FAILURE") == "unknown-list" {
+					_ = encoder.Encode(map[string]any{"id": frame.ID, "error": map[string]any{"code": -32601, "message": "unsupported skill discovery"}})
+					continue
+				}
+				cwd := frame.Params["cwds"].([]any)[0].(string)
+				if frame.Params["forceReload"] != true {
+					os.Exit(6)
+				}
+				skills := []any{}
+				for _, name := range []string{"repo", "user"} {
+					path := filepath.Join(cwd, name, "SKILL.md")
+					skill := map[string]any{"path": path, "enabled": !disabled[path]}
+					if os.Getenv("ISOLATION_FAILURE") == "missing-state" {
+						delete(skill, "enabled")
+					}
+					skills = append(skills, skill)
+				}
+				entry := map[string]any{"cwd": cwd, "skills": skills, "errors": []any{}}
+				if os.Getenv("ISOLATION_FAILURE") == "errors" {
+					entry["errors"] = []any{map[string]any{"message": "unreadable skill root"}}
+				}
+				var data any = []any{entry}
+				if os.Getenv("ISOLATION_FAILURE") == "malformed" {
+					data = nil
+				}
+				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"data": data}})
+			case "skills/config/write":
+				path, _ := frame.Params["path"].(string)
+				if !filepath.IsAbs(path) || frame.Params["enabled"] != false {
+					os.Exit(7)
+				}
+				if os.Getenv("ISOLATION_FAILURE") != "ineffective" {
+					disabled[path] = true
+				}
+				if os.Getenv("ISOLATION_FAILURE") == "rejected" {
+					_ = encoder.Encode(map[string]any{"id": frame.ID, "error": map[string]any{"code": -32601, "message": "unsupported control"}})
+				} else if os.Getenv("ISOLATION_FAILURE") == "missing-confirmation" {
+					_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
+				} else {
+					_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{"effectiveEnabled": false}})
+				}
 			case "thread/start", "thread/resume":
+				if len(disabled) != 2 {
+					os.Exit(8)
+				}
+				_ = os.WriteFile("thread-observed", []byte("yes"), 0600)
 				if os.Getenv("AGENT_WORKFLOW_FAKE_APP_SERVER_NATIVE_SETTINGS") == "1" {
 					if frame.Params["model"] != "definition-model" || !strings.Contains(fmt.Sprint(frame.Params["baseInstructions"]), "Definition instructions.") {
 						os.Exit(4)
@@ -128,6 +175,10 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 				_ = os.WriteFile("interrupt-observed", []byte("yes"), 0600)
 				_ = encoder.Encode(map[string]any{"id": frame.ID, "result": map[string]any{}})
 				_ = encoder.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]string{"id": "turn-1", "status": "interrupted"}}})
+			default:
+				if frame.ID != 0 {
+					_ = encoder.Encode(map[string]any{"id": frame.ID, "error": map[string]any{"code": -32601, "message": "unsupported fixture method"}})
+				}
 			}
 		}
 		os.Exit(0)
@@ -153,7 +204,7 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"a": {Provider: "codex-app-server", Command: fake, Authentication: Authentication{Mode: "native", CredentialFile: authFile}}}}}
-	result, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "a", Prompt: "task"}}, nil)
+	result, err := runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "a", Prompt: "$repo $user $skill-creator task"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +214,37 @@ func TestCodexSessionFakeAppServer(t *testing.T) {
 	result, err = runner.RunTurn(context.Background(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "a", Prompt: "follow up"}, SessionID: result.SessionID}, nil)
 	if err != nil || result.SessionID != "thread-1" {
 		t.Fatal(result, err)
+	}
+}
+
+func TestCodexIsolationFailurePreventsThreadAndTurn(t *testing.T) {
+	for _, scenario := range []string{"malformed", "errors", "missing-state", "unknown-list", "rejected", "ineffective", "missing-confirmation"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := t.TempDir()
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake := filepath.Join(root, "fake-codex")
+			script := "#!/bin/sh\nexport AGENT_WORKFLOW_FAKE_APP_SERVER=1\nexport ISOLATION_FAILURE=" + scenario + "\nexec '" + strings.ReplaceAll(self, "'", "'\\''") + "' -test.run=^TestCodexSessionFakeAppServer$\n"
+			if err = os.WriteFile(fake, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			auth := filepath.Join(root, "auth-fixture.json")
+			if err = os.WriteFile(auth, []byte(`{"tokens":{"access_token":"FAKE","account_id":"fixture"}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"a": {Provider: "codex-app-server", Command: fake, Authentication: Authentication{Mode: "native", CredentialFile: auth}}}}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err = r.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "a", Prompt: "$repo $user"}}, nil)
+			if err == nil || !strings.Contains(err.Error(), "skill isolation") {
+				t.Fatalf("not rejected: %v", err)
+			}
+			if _, err = os.Stat(filepath.Join(root, "thread-observed")); !os.IsNotExist(err) {
+				t.Fatal("thread started before isolation")
+			}
+		})
 	}
 }
 

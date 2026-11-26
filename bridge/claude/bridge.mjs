@@ -2,6 +2,7 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
+import { isolatedSettings, assertIsolatedInitialization } from './isolation.mjs';
 
 const sdkVersion = '0.3.322';
 const sdkMetadata = JSON.parse(await readFile(new URL('./package.json', import.meta.resolve('@anthropic-ai/claude-agent-sdk')), 'utf8'));
@@ -23,6 +24,7 @@ let sessionID = '';
 let terminal = false;
 let interrupted = false;
 let partialUsage;
+let isolatedInitialization = false;
 const requestReady = new Promise((resolve, reject) => { start = { resolve, reject }; });
 
 function barrier() {
@@ -112,7 +114,7 @@ try {
   const options = {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: sessionID || undefined,
     systemPrompt: request.instructions || 'Follow the explicitly supplied task and engine policy.',
-    settingSources: [], settings: { autoMemoryEnabled: false, autoDreamEnabled: false },
+    settingSources: [], settings: isolatedSettings,
     extraArgs: { 'disable-slash-commands': null, 'strict-mcp-config': null, 'no-chrome': null },
     skills: [], plugins: [], agents: {},
     mcpServers: customTools.length ? { broker: createSdkMcpServer({ name: 'broker', version: '2.0.0', tools: customTools }) } : {},
@@ -120,6 +122,7 @@ try {
     includePartialMessages: true,
     hooks: {
       PreToolUse: [{ hooks: [async input => {
+        if (!isolatedInitialization) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Provider initialization is not verified' } };
         if (!allowed.includes(input.tool_name)) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Outside engine tool policy' } };
         if (brokerNames.has(input.tool_name)) {
           const key = input.tool_name + '\0' + canonical(input.tool_input);
@@ -149,6 +152,11 @@ try {
   if (interrupted) await running.interrupt();
   try {
     for await (const message of running) {
+      if (message.type === 'system' && message.subtype === 'init') {
+        assertIsolatedInitialization(message);
+        isolatedInitialization = true;
+        emit({ type: 'progress', data: { type: 'discovery_isolation', plugins: message.plugins, skills: message.skills } });
+      }
       if (message.session_id) { sessionID = message.session_id; emit({ type: 'session', session_id: sessionID }); }
       if (message.type === 'assistant') {
         emit({ type: 'progress', data: { type: 'assistant_batch', tool_ids: (message.message?.content ?? []).filter(item => item.type === 'tool_use').map(item => item.id), stop_reason: message.message?.stop_reason } });
@@ -164,6 +172,7 @@ try {
         if (message.event?.type === 'message_stop') { modelIdle = true; setImmediate(barrier); }
       }
       if (message.type === 'result') {
+        if (!isolatedInitialization) throw new Error('Provider omitted isolation initialization');
         const succeeded = message.subtype === 'success' && !message.is_error;
         const text = message.structured_output !== undefined ? JSON.stringify(message.structured_output) : (message.result ?? '');
         terminal = true;
