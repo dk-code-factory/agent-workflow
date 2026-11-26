@@ -408,7 +408,10 @@ func SummarizeUsage(invocations []InvocationUsage) UsageSummary {
 	for _, invocation := range invocations {
 		selected := UsageObservation{}
 		hasFinal := false
-		for _, value := range invocation.Observations {
+		for key, value := range invocation.Observations {
+			if strings.HasPrefix(key, "native-receipt:") {
+				continue
+			}
 			if value.Final {
 				selected = value
 				hasFinal = true
@@ -417,7 +420,10 @@ func SummarizeUsage(invocations []InvocationUsage) UsageSummary {
 		}
 		if !hasFinal || !selected.Complete {
 			partial := UsageObservation{Scope: "invocation"}
-			for _, value := range invocation.Observations {
+			for key, value := range invocation.Observations {
+				if strings.HasPrefix(key, "native-receipt:") {
+					continue
+				}
 				if value.Final {
 					continue
 				}
@@ -463,7 +469,10 @@ func SummarizeUsage(invocations []InvocationUsage) UsageSummary {
 		}
 		session := false
 		delta := UsageObservation{}
-		for _, value := range invocation.Observations {
+		for key, value := range invocation.Observations {
+			if strings.HasPrefix(key, "native-receipt:") {
+				continue
+			}
 			if value.Scope != "session" {
 				continue
 			}

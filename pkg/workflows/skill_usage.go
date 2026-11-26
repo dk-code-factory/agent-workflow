@@ -28,7 +28,7 @@ func observeSkillUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity
 	if err := decodeJSONWithNumbers(raw, &current); err != nil {
 		return err
 	}
-	if current.WorkerID == "" || current.SessionID != "" && current.SessionID != update.SessionID || current.Provider != "unknown" && current.Provider != update.Provider || current.Model != "unknown" && current.Model != update.Model {
+	if current.Kind != "worker" || current.WorkerID == "" || current.WorkerID != identity.WorkerID || current.Kind != identity.Kind || current.TaskAttemptID != identity.TaskAttemptID || current.SessionID != "" && current.SessionID != update.SessionID || current.Provider != "unknown" && current.Provider != update.Provider || current.Model != "unknown" && current.Model != update.Model {
 		return fmt.Errorf("native skill usage ownership changed")
 	}
 	current.Provider, current.Model, current.SessionID, current.Finished = update.Provider, update.Model, update.SessionID, true
@@ -42,6 +42,20 @@ func observeSkillUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity
 		observation.Complete = false
 	}
 	observation.ReceiptFingerprint = actionHash([]any{update.CounterBasis, update.Provider, update.Model, update.SessionID, update.Usage, update.CostUSD, update.Final, update.Incomplete})
+	receiptKey := "native-receipt:" + observation.ReceiptFingerprint
+	var recorded []byte
+	if err := tx.QueryRowContext(ctx, "SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?", identity.ID, receiptKey).Scan(&recorded); err == nil {
+		var original UsageObservation
+		if err = decodeJSONWithNumbers(recorded, &original); err != nil {
+			return err
+		}
+		if original.CounterReset {
+			return ErrUsageCounterConflict
+		}
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	var prior UsageObservation
 	var old []byte
 	err := tx.QueryRowContext(ctx, "SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key='final'", identity.ID).Scan(&old)
@@ -136,6 +150,9 @@ func observeSkillUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO usage_observations(invocation_id,observation_key,record) VALUES(?,'final',?) ON CONFLICT(invocation_id,observation_key) DO UPDATE SET record=excluded.record", identity.ID, data); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO usage_observations(invocation_id,observation_key,record) VALUES(?,?,?)", identity.ID, receiptKey, data); err != nil {
 		return err
 	}
 	raw, err = json.Marshal(current)

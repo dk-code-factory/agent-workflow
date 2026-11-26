@@ -250,7 +250,7 @@ test('quote a date entered in a concise prompt for runner admission', async ({ p
 });
 
 
-test('configure a selected skill and repair unsupported child requirements', async ({ page }) => {
+test('configure a selected skill and bounded foreground child with recovery controls', async ({ page }) => {
   const ui = await open(page, 'on: {workflow_call: {inputs: {selected: {type: skill, required: true}}}}\njobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: reviewer.yaml, prompt: Review}}]}}');
   await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
   await ui.getByRole('button', { name: '1. review', exact: true }).click();
@@ -266,5 +266,18 @@ test('configure a selected skill and repair unsupported child requirements', asy
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children).toEqual([{ name: 'child' }]);
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.evidence).toEqual({ invocation: 'required' });
+  const withChild = '{input: selected, arguments: exact, resources: [reference.txt], evidence: {invocation: required, children: [review]}, children: [{name: review, prompt: Review., description: Retained review, tools: [Read], resources: [reference.txt], model: inherit, max-turns: 2, max-calls: 1, background: false}]}';
+  await field(page, 'Skill invocation (YAML)', withChild);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'host-skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', withChild.replace('background: false', 'background: true'));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', withChild);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children[0].background).toBe(true);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children[0]).toEqual({ name: 'review', prompt: 'Review.', description: 'Retained review', tools: ['Read'], resources: ['reference.txt'], model: 'inherit', 'max-turns': 2, 'max-calls': 1, background: false });
   expect(await downloadText(page)).toContain('reference.txt');
+  expect(await downloadText(page)).toContain('max-calls: 1');
 });

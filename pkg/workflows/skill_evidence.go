@@ -23,9 +23,10 @@ type SkillObservation struct {
 }
 
 type SkillEvidence struct {
-	Children     []SkillChildObservation `json:"children,omitempty"`
-	PlanID       string                  `json:"plan_id"`
-	Observations []SkillObservation      `json:"observations"`
+	UncertainAttempts []SkillAttemptUncertainty `json:"uncertain_attempts,omitempty"`
+	Children          []SkillChildObservation   `json:"children,omitempty"`
+	PlanID            string                    `json:"plan_id"`
+	Observations      []SkillObservation        `json:"observations"`
 }
 
 func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservation) error {
@@ -66,7 +67,7 @@ func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservat
 			return nil
 		}
 	}
-	if len(e.Observations)+len(e.Children) >= MaxSkillObservations {
+	if len(e.Observations)+len(e.Children)+len(e.UncertainAttempts) >= MaxSkillObservations {
 		return fmt.Errorf("skill evidence observation limit")
 	}
 	candidate := *e
@@ -99,6 +100,9 @@ func (e *SkillEvidence) InvocationComplete(plan *SkillInvocation) error {
 	}
 	if e == nil || e.PlanID != plan.ID {
 		return fmt.Errorf("skill invocation has no observed evidence")
+	}
+	if len(e.UncertainAttempts) != 0 {
+		return fmt.Errorf("original selected-skill native retry has incomplete usage/effects")
 	}
 	calls := map[string]bool{}
 	results := map[string]bool{}
@@ -145,6 +149,11 @@ func (e *SkillEvidence) Continuation(plan *SkillInvocation, session string) erro
 	}
 	for _, observation := range e.Children {
 		if err := verified.ObserveChild(plan, observation); err != nil {
+			return err
+		}
+	}
+	for _, observation := range e.UncertainAttempts {
+		if err := verified.ObserveUncertainAttempt(plan, observation); err != nil {
 			return err
 		}
 	}

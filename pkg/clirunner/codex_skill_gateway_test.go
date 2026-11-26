@@ -20,6 +20,12 @@ import (
 // This uses the stock pinned native loader and public app-server events against
 // a loopback API. Synthetic model responses exercise controls, not adherence.
 func TestCodexSkillAgainstFakeGateway(t *testing.T) {
+	for _, scenario := range []string{"native", "socket-cut", "stream-retry-control", "request-retry-control", "websocket-control", "unbounded-control", "inherited-url-control", "project-url-control", "auth-control", "header-control", "name-control"} {
+		t.Run(scenario, func(t *testing.T) { testCodexSkillGateway(t, scenario) })
+	}
+}
+
+func testCodexSkillGateway(t *testing.T, scenario string) {
 	if os.Getenv("AGENT_WORKFLOW_CODEX_TEST") != "1" {
 		t.Skip("enable with installed pinned Codex")
 	}
@@ -66,6 +72,15 @@ func TestCodexSkillAgainstFakeGateway(t *testing.T) {
 			return
 		}
 		n := calls.Add(1)
+		if scenario == "socket-cut" {
+			conn, _, e := w.(http.Hijacker).Hijack()
+			if e != nil {
+				t.Error(e)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
 		if strings.Contains(string(body), "HOSTILE_BODY_139") || strings.Contains(string(body), "HOSTILE_CATALOG_139") {
 			t.Error("unadmitted skill loaded")
 		}
@@ -114,7 +129,49 @@ func TestCodexSkillAgainstFakeGateway(t *testing.T) {
 	defer gateway.Close()
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 	command := filepath.Join(root, "codex-loopback")
-	script := "#!/bin/sh\nexec " + quote(binary) + " \"$@\" --config 'model_provider=\"fixture\"' --config 'model_providers.fixture.name=\"fixture\"' --config " + quote("model_providers.fixture.base_url="+fmt.Sprintf("%q", gateway.URL)) + " --config 'model_providers.fixture.wire_api=\"responses\"' --config 'model_providers.fixture.requires_openai_auth=false'\n"
+	script := "#!/bin/sh\nexec " + quote(binary) + " \"$@\" --config " + quote("model_providers."+codexSkillProvider+".base_url="+fmt.Sprintf("%q", gateway.URL)) + "\n"
+	if scenario == "inherited-url-control" || scenario == "project-url-control" {
+		script = "#!/bin/sh\nexec " + quote(binary) + " \"$@\"\n"
+		config := fmt.Sprintf("[model_providers.%s]\nbase_url=%q\n", codexSkillProvider, gateway.URL)
+		location := filepath.Join(state, "config.toml")
+		if scenario == "project-url-control" {
+			for _, d := range []string{".git/objects", ".git/refs"} {
+				if err := os.MkdirAll(filepath.Join(root, d), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git/HEAD"), []byte("ref: refs/heads/fixture\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(location, []byte(fmt.Sprintf("[projects.%q]\ntrust_level=\"trusted\"\n", root)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			location = filepath.Join(root, ".codex/config.toml")
+			if err := os.MkdirAll(filepath.Dir(location), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(location, []byte(config), 0600); err != nil {
+			t.Fatal(err)
+		}
+		req.SkillRoot = filepath.Join(root, "missing-root-no-provider-fallback")
+	}
+	switch scenario {
+	case "auth-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".env_key=\"UNADMITTED_CREDENTIAL\"'\n"
+	case "header-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".http_headers.unadmitted=\"foreign\"'\n"
+	case "name-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".name=\"foreign\"'\n"
+	case "stream-retry-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".stream_max_retries=1'\n"
+	case "request-retry-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".request_max_retries=1'\n"
+	case "websocket-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'model_providers." + codexSkillProvider + ".supports_websockets=true'\n"
+	case "unbounded-control":
+		script = strings.TrimSuffix(script, "\n") + " --config 'features.unbounded_connection_retries=true'\n"
+	}
 	if err := os.WriteFile(command, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +198,37 @@ func TestCodexSkillAgainstFakeGateway(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
 	first, err := runner.RunTurn(ctx, req, observe)
+	if strings.HasSuffix(scenario, "-control") {
+		expected := "retry/transport"
+		if scenario == "inherited-url-control" {
+			expected = "endpoint was not supplied"
+		}
+		if scenario == "project-url-control" {
+			expected = "skill isolation"
+		} // Native loader leaves this project layer inactive; deliberately absent root prevents any fallback turn.
+		if scenario == "auth-control" {
+			expected = "unadmitted control env_key"
+		}
+		if scenario == "header-control" {
+			expected = "routing headers changed"
+		}
+		if err == nil || !strings.Contains(err.Error(), expected) || calls.Load() != 0 {
+			t.Fatalf("ineffective retry controls reached API: result=%+v error=%v calls=%d", first, err, calls.Load())
+		}
+		if scenario == "project-url-control" {
+			t.Log("project URL not effective in this native fixture; absent retained root blocks turn, API=0 (not proof of an active project endpoint rejection)")
+		} else {
+			t.Logf("%s: effective control mismatch rejected before API (0)", scenario)
+		}
+		return
+	}
+	if scenario == "socket-cut" {
+		if err == nil || calls.Load() != 1 || observations != 1 || first.Status == workflows.RunStatusSucceeded {
+			t.Fatalf("consumed native request replaced/settled: result=%+v error=%v calls=%d observations=%d", first, err, calls.Load(), observations)
+		}
+		t.Logf("consumed-request socket cut: attempts=%d original native consumption=%d terminal=%s error=%v", calls.Load(), observations, first.ProviderStatus, err)
+		return
+	}
 	if err != nil || first.Outputs["text"] != "NATIVE_SKILL_OK" || !sawDenied.Load() || observations != 1 || ledger.Continuation(req.Skill, first.SessionID) != nil {
 		t.Fatalf("initial result=%+v error=%v calls=%d observations=%d denied=%v", first, err, calls.Load(), observations, sawDenied.Load())
 	}

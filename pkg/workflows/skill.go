@@ -514,7 +514,9 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				}
 				manifest, _ := json.Marshal(map[string]string{"name": "aw-" + source.Name, "version": "1.0.0"})
 				entries = append(entries, AssetInput{Path: ".claude-plugin/plugin.json", Mode: 0644, Data: manifest})
-				bundle, err := store.CaptureAssetBundle(ctx, e.bundleOrigin, entries)
+				// Gate provider capabilities against the already captured bytes
+				// before materializing their persistent occurrence projection.
+				bundle, _, _, err := describeAssetInputs(ctx, e.bundleOrigin, entries)
 				if err != nil {
 					return step, err
 				}
@@ -540,6 +542,14 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if plan == nil {
 					return step, fmt.Errorf("runtime returned no admitted skill contract")
 				}
+				retained, err := store.CaptureAssetBundle(ctx, e.bundleOrigin, entries)
+				if err != nil {
+					return step, err
+				}
+				if actionHash(retained) != actionHash(plan.Binding.Assets) {
+					return step, fmt.Errorf("runtime changed admitted skill assets")
+				}
+				plan.Binding.Assets = retained
 				plan.ID = skillPlanID(plan)
 				if secret, err := containsCredential(plan, e.redactions(req.Secrets)); err != nil || secret {
 					return step, fmt.Errorf("skill admission contains credential material")

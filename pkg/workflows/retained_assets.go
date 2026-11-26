@@ -163,32 +163,30 @@ func (s *SQLiteStore) assetBundleDirectory(bundle *AssetBundle) (string, error) 
 	return s.bundleDirectory(&HelperBundle{OriginID: bundle.OriginID, ID: bundle.ID})
 }
 
-// CaptureAssetBundle writes only the supplied in-memory entries into owned
-// immutable storage. Duplicate paths, special files and file/parent collisions
-// are rejected before staging. The returned manifest must later be linked by
-// durable admission; until then, normal owned orphan cleanup may remove it.
-func (s *SQLiteStore) CaptureAssetBundle(ctx context.Context, origin string, inputs []AssetInput) (bundle *AssetBundle, returned error) {
+// describeAssetInputs validates and describes already captured bytes without
+// materializing storage. Admission and capture share exactly the same identity.
+func describeAssetInputs(ctx context.Context, origin string, inputs []AssetInput) (*AssetBundle, map[string][]byte, map[string]bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if len(origin) != 32 || !hexID(origin) || len(inputs) > MaxHelperFiles {
-		return nil, fmt.Errorf("retained asset capture requires an originating identity and at most 4096 entries")
+		return nil, nil, nil, fmt.Errorf("retained asset capture requires an originating identity and at most 4096 entries")
 	}
-	bundle = &AssetBundle{Version: AssetBundleVersion, OriginID: origin, Entries: make([]AssetEntry, 0, len(inputs))}
+	bundle := &AssetBundle{Version: AssetBundleVersion, OriginID: origin, Entries: make([]AssetEntry, 0, len(inputs))}
 	data := make(map[string][]byte, len(inputs))
 	var total int64
 	for _, input := range inputs {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		if input.Mode & ^(fs.ModeDir|0777) != 0 || int64(len(input.Data)) > MaxHelperBytes-total {
-			return nil, fmt.Errorf("unsupported source mode or retained asset byte limit: %s", input.Path)
+			return nil, nil, nil, fmt.Errorf("unsupported source mode or retained asset byte limit: %s", input.Path)
 		}
 		total += int64(len(input.Data))
 		entry := AssetEntry{Path: input.Path, Kind: "file", Mode: uint32(input.Mode.Perm()), Size: int64(len(input.Data))}
 		if input.Mode.IsDir() {
 			if len(input.Data) != 0 {
-				return nil, fmt.Errorf("retained directory has source bytes: %s", input.Path)
+				return nil, nil, nil, fmt.Errorf("retained directory has source bytes: %s", input.Path)
 			}
 			entry.Kind = "directory"
 		} else {
@@ -200,9 +198,21 @@ func (s *SQLiteStore) CaptureAssetBundle(ctx context.Context, origin string, inp
 	sort.Slice(bundle.Entries, func(i, j int) bool { return bundle.Entries[i].Path < bundle.Entries[j].Path })
 	directories, err := assetDirectories(bundle.Entries)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	bundle.ID = assetBundleID(bundle.Entries)
+	return bundle, data, directories, nil
+}
+
+// CaptureAssetBundle writes only the supplied in-memory entries into owned
+// immutable storage. Duplicate paths, special files and file/parent collisions
+// are rejected before staging. The returned manifest must later be linked by
+// durable admission; until then, normal owned orphan cleanup may remove it.
+func (s *SQLiteStore) CaptureAssetBundle(ctx context.Context, origin string, inputs []AssetInput) (bundle *AssetBundle, returned error) {
+	bundle, data, directories, err := describeAssetInputs(ctx, origin, inputs)
+	if err != nil {
+		return nil, err
+	}
 	destination, err := s.assetBundleDirectory(bundle)
 	if err != nil {
 		return nil, err

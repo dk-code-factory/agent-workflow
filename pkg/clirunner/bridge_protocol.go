@@ -304,7 +304,7 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			if emit != nil {
 				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: result.SessionID, Data: frame.Data})
 			}
-		case "skill_evidence", "skill_child_evidence":
+		case "skill_evidence", "skill_child_evidence", "skill_attempt_uncertainty":
 			if input["skill"] == nil {
 				return result, fmt.Errorf("unadmitted skill evidence")
 			}

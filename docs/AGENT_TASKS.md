@@ -160,8 +160,9 @@ Admission pins these values, resources, model and capability profile before run
 claims. Resume uses the retained assets, original session and original turn
 allowance even after source removal; it does not recapture or replenish them.
 
-The Claude profile uses the locked SDK 0.3.322 local runtime,
-with a pinned model and no reasoning-effort override. Before releasing the
+The Claude profiles use the locked SDK 0.3.322 local runtime,
+with a pinned model, no broker grants, only existing native Read authority,
+and no user reasoning-effort override. Before releasing the
 prompt, the adapter requires the initialize acknowledgement and the selected
 qualified command. The acknowledgement alone does not establish successful
 loading. The later `system/init` event must report exactly the admitted plugin;
@@ -172,8 +173,56 @@ events, linked by call and session identity, are retained separately from
 redacted progress. A terminal report without those events remains incomplete;
 observed invocation does not establish model adherence or task correctness.
 
+The constrained Claude child profile accepts one explicitly required custom
+child. The parent definition must select `claude-sonnet-4-6` and omit
+`reasoning-effort`; the profile separately pins resolved parent and child effort
+to HIGH. This resolved control is part of the retained invocation identity.
+The workspace role must already grant native Read; the skill grants no tools.
+Add the following fields inside `with.skill`:
+
+```yaml
+evidence: {invocation: required, children: [review]}
+children:
+  - name: review
+    prompt: Review the retained reference and return the full result.
+    description: Review retained reference
+    tools: [Read]
+    resources: [reference.txt]
+    model: inherit
+    max-turns: 2
+    max-calls: 1
+    background: false
+```
+
+Child resources must be literal files within the parent's selected resources.
+The SDK child receives only Read, the exact inherited model and resolved HIGH
+effort, and at most two child model turns. The model's actual Agent call must
+match the original declared subtype, prompt and description and explicitly set
+`run_in_background: false`. Original public assistant input and the permission
+hook must agree before the engine commits a dispatch permit. Unknown/builtin
+subtypes, overrides, nested delegation and access to other resources are denied.
+The SDK's init catalog can still name builtin child types; those names grant no
+dispatch authority. The pinned init event calls the model-facing Agent tool
+`Task`; that alias is accepted only for this exact selected profile.
+
+The one child allowance is consumed durably before dispatch and is shared by
+the entire original invocation, including checklist retries and fresh-process
+continuations. A lost permit acknowledgement cannot start another child.
+Completion requires the original parent/child identities, task lifecycle,
+forwarded full output, successful original tool results, SubagentStop and parent
+terminal. An exhausted child can report `status: completed` while lacking a
+final output; it remains incomplete. Summaries and parent success alone cannot
+complete required evidence. The original SDK parent usage and cumulative
+modelUsage map are retained; the verified same-session aggregate charges both
+parent and child calls without resetting or double-charging the original usage
+baseline. Missing or conflicting accounting retains known charges and prevents
+completion. The engine holds its execution lease throughout this synchronous
+profile; it makes no broker-capacity release or general quiescence claim.
+
 The stock Codex 0.167.1 local profile requires a pinned model, empty skill
-arguments and no reasoning-effort override. Each process registers the retained
+arguments, the tested default/read-only sandbox setting and no reasoning-effort
+override. The sandbox setting does not establish nonmutating native execution.
+Each process registers the retained
 root and confirms that only the admitted entry remains enabled before a turn.
 Native delegation is disabled in both tool specifications and dispatch. The
 initial public native-consumption fragment must carry the selected name, path,
@@ -185,11 +234,36 @@ retained receipt and session; it re-registers the original retained root without
 inventing another observed invocation. A new occurrence cannot borrow that
 receipt. Missing original evidence after a possible effect blocks recovery before
 claiming another turn, preserving the original uncertainty and allowance.
+Selected Claude turns set native retries to zero and disable the nonstreaming
+fallback. A public API retry, subagent retry or assistant API-error envelope
+retains an incomplete-attempt receipt and stops the session. In the pinned SDK,
+a failed child request can reach a parent follow-up before that envelope reaches
+the consumer; this is not a barrier before every subsequent API request. Known
+partial usage is retained, and the original allowance remains consumed.
+Selected Codex turns use an engine-owned OpenAI descriptor with zero request and
+stream retries, no WebSocket transport/fallback and no unbounded connection
+retries. The adapter verifies the effective descriptor and thread provider before
+a turn. It rejects inherited credential, header and endpoint overrides; an
+explicit application command may supply its endpoint only through the verified
+session-flags layer. A matching public retry notification retains uncertainty and
+cancels the original turn even if a later terminal would report success.
+These checks do not establish model adherence or reconcile unknown native effects.
 
-Required native children, containers, reusable workflow selections and
-unsupported effort or argument controls reject admission. They do
-not fall back to prompt imports or host skills. Native child evidence and the
-remaining provider profiles require separate protocol support before activation.
+For every selected provider profile, a turn's uncertainty is committed before
+provider dispatch and cleared only with its original successful terminal and
+worker-message completion. Complete initial consumption evidence, a nonwritable
+workspace label, process cleanup and an explicit uncertain-retry request cannot
+authorize replacement work after an unknown turn. A lost local completion for
+the original Claude child can be reconciled from its complete retained native
+terminal, outputs and accounting before generic tool uncertainty is evaluated.
+A failed turn or a later unknown continuation cannot borrow that older terminal.
+
+Codex native children, broader Claude child shapes, containers, reusable
+workflow selections, unproved tool/permission profiles and unsupported effort
+or argument controls reject admission. They do not fall back to prompt imports
+or host skills. These profiles establish native loading, observed consumption
+and the specified controls; deterministic fake-gateway evidence does not prove
+model adherence or task quality.
 The editor exposes skill input mappings and **Skill invocation (YAML)**;
 host admission remains responsible for source and provider capability checks.
 

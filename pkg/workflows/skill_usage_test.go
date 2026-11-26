@@ -87,7 +87,7 @@ func TestSkillUsageCounterConflictCommitsKnownChargesBeforeReturningFailure(t *t
 func TestSkillUsageMissingCostRetainsChargesAndLateCompletionFillsThem(t *testing.T) {
 	s, run := executionStore(t)
 	identity := childUsageIdentity(t, s, run.ID, "original-turn")
-	for _, update := range []UsageUpdate{childUsage(80, 15, nil), childUsage(80, 15, 0.000465), childUsage(80, 15, nil)} {
+	for _, update := range []UsageUpdate{childUsage(80, 15, nil), childUsage(80, 15, 0.000465), childUsage(96, 18, nil)} {
 		if err := s.ObserveUsage(t.Context(), identity, update); err != nil {
 			t.Fatal(err)
 		}
@@ -96,11 +96,16 @@ func TestSkillUsageMissingCostRetainsChargesAndLateCompletionFillsThem(t *testin
 	if err != nil || report.Summary.Complete || report.Summary.CostComplete || report.Summary.KnownCostUSD == nil || *report.Summary.KnownCostUSD != 0.000465 {
 		t.Fatal("missing cost erased known charges", report, err)
 	}
-	if err := s.ObserveUsage(t.Context(), identity, childUsage(80, 15, 0.000465)); err != nil {
+	if err := s.ObserveUsage(t.Context(), identity, childUsage(96, 18, 0.000558)); err != nil {
+		t.Fatal(err)
+	}
+	// Replaying an older incomplete receipt must not undo the later complete
+	// accounting or lower the original session's known highwater.
+	if err := s.ObserveUsage(t.Context(), identity, childUsage(80, 15, nil)); err != nil {
 		t.Fatal(err)
 	}
 	report, err = s.Usage(t.Context(), run.ID)
-	if err != nil || !report.Summary.Complete || !report.Summary.CostComplete || *report.Summary.InputTokens != 80 || *report.Summary.CostUSD != 0.000465 {
+	if err != nil || !report.Summary.Complete || !report.Summary.CostComplete || *report.Summary.InputTokens != 96 || *report.Summary.CostUSD != 0.000558 {
 		t.Fatal("late original accounting double charged or stayed unknown", report, err)
 	}
 }

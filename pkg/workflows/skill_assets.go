@@ -111,6 +111,13 @@ func (s *SQLiteStore) verifySkillContinuations(ctx context.Context, run string) 
 		return err
 	}
 	for _, worker := range workers {
+		if err := s.reconcileSkillChildCompletion(ctx, worker.ID); err != nil {
+			return err
+		}
+		worker, err = (&WorkerManager{Store: s}).Get(ctx, run, worker.ID)
+		if err != nil {
+			return err
+		}
 		if err := worker.validateSkillContinuation(); err != nil {
 			return fmt.Errorf("worker %s: %w", worker.ID, err)
 		}

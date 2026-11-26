@@ -127,7 +127,7 @@ func TestSkillChildMissingOrMismatchedOriginalEvidenceRemainsIncomplete(t *testi
 }
 
 func TestSkillChildForeignParentAndSessionRejected(t *testing.T) {
-	for _, variant := range []string{"parent", "session", "child", "type", "background", "override"} {
+	for _, variant := range []string{"parent", "session", "child", "type", "background", "override", "missing-parent", "missing-session", "missing-original-message", "changed-original-message", "foreign-original-model"} {
 		t.Run(variant, func(t *testing.T) {
 			plan, ledger, f := childLedgerFixture(t, "selected-child")
 			observation := f.Observations[0]
@@ -148,6 +148,26 @@ func TestSkillChildForeignParentAndSessionRejected(t *testing.T) {
 			case "override":
 				childObject(raw["tool_input"])["model"] = "haiku"
 				observation.Raw, _ = json.Marshal(raw)
+			case "missing-parent":
+				observation.ParentCallID = ""
+			case "missing-session":
+				observation.SessionID = ""
+			case "missing-original-message":
+				observation.ParentMessage = nil
+			case "changed-original-message", "foreign-original-model":
+				var parent map[string]any
+				_ = json.Unmarshal(observation.ParentMessage, &parent)
+				if variant == "foreign-original-model" {
+					childObject(parent["message"])["model"] = "foreign-model"
+				} else {
+					for _, v := range childArray(childObject(parent["message"])["content"]) {
+						item := childObject(v)
+						if item["type"] == "tool_use" {
+							childObject(item["input"])["resume"] = "foreign-child"
+						}
+					}
+				}
+				observation.ParentMessage, _ = json.Marshal(parent)
 			}
 			if ledger.ObserveChild(plan, observation) == nil {
 				t.Fatal("foreign child permission/evidence accepted", variant)

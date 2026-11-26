@@ -36,7 +36,10 @@ export function assertSelectedInitialization(message, skill) {
       message.plugins[0].name !== expectedName || message.plugins[0].path !== skill.root ||
       !Array.isArray(message.skills) || !message.skills.includes(skill.qualified) ||
       !Array.isArray(message.tools) || !message.tools.includes('Skill') ||
-      message.tools.some(name => ['agent', 'task', 'toolsearch', 'teamcreate', 'teamdelete', 'sendmessage'].includes(String(name).toLowerCase().replace(/[_-]/g, ''))) ||
+      message.tools.some(name => ['agent', ...(skill.child ? [] : ['task']), 'toolsearch', 'teamcreate', 'teamdelete', 'sendmessage'].includes(String(name).toLowerCase().replace(/[_-]/g, ''))) ||
+      // This exact CLI reports its model-facing Agent tool as Task in init.
+      // Hooks/model requests still use Agent; only that pinned alias is allowed.
+      (Boolean(skill.child) && (message.tools.length !== 3 || !['Task', 'Read', 'Skill'].every(name => message.tools.includes(name)))) ||
       (message.plugin_errors !== undefined && (!Array.isArray(message.plugin_errors) || message.plugin_errors.length))) {
     throw new Error('Provider initialization differs from admitted skill/plugin set');
   }

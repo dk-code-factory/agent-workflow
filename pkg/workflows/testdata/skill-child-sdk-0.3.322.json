@@ -36,6 +36,39 @@
               "run_in_background": false
             },
             "tool_use_id": "tool_parent_agent_139"
+          },
+          "parent_message": {
+            "type": "assistant",
+            "message": {
+              "id": "msg_main_2",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-6",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "tool_parent_agent_139",
+                  "name": "Agent",
+                  "input": {
+                    "run_in_background": false,
+                    "subagent_type": "admitted-child",
+                    "description": "Admitted deterministic child",
+                    "prompt": "Read the explicit retained reference /extra/h139-child-controls-20261126/selected-child/admitted-plugin/skills/probe/reference.txt then return the full child result."
+                  }
+                }
+              ],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 0
+              },
+              "context_management": null
+            },
+            "parent_tool_use_id": null,
+            "session_id": "4f6e63be-3528-4d3f-9e92-64ba3fc7ebce",
+            "uuid": "41a5c81c-ed91-47d3-a94d-1ac3aebf9fc8",
+            "timestamp": "2026-11-26T01:54:55.982Z"
           }
         },
         {
@@ -112,7 +145,7 @@
           "kind": "message",
           "session_id": "4f6e63be-3528-4d3f-9e92-64ba3fc7ebce",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a36cef080db2d7a48",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -166,7 +199,7 @@
           "kind": "message",
           "session_id": "4f6e63be-3528-4d3f-9e92-64ba3fc7ebce",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a36cef080db2d7a48",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -208,7 +241,7 @@
           "kind": "message",
           "session_id": "4f6e63be-3528-4d3f-9e92-64ba3fc7ebce",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a36cef080db2d7a48",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -247,7 +280,7 @@
           "kind": "message",
           "session_id": "4f6e63be-3528-4d3f-9e92-64ba3fc7ebce",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a36cef080db2d7a48",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -523,7 +556,8 @@
             }
           }
         }
-      ]
+      ],
+      "original_parent_events_sha256": "c4bb5c0b0224f9f254c7a277ecefc1edc1d6ee43decf0d0bffaffadfb6858e86"
     },
     "exhaustion": {
       "session": "59555a93-1fad-4a4d-80df-cd3960d18d69",
@@ -558,6 +592,39 @@
               "run_in_background": false
             },
             "tool_use_id": "tool_parent_agent_139"
+          },
+          "parent_message": {
+            "type": "assistant",
+            "message": {
+              "id": "msg_main_2",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-6",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "tool_parent_agent_139",
+                  "name": "Agent",
+                  "input": {
+                    "run_in_background": false,
+                    "subagent_type": "admitted-child",
+                    "description": "Admitted deterministic child",
+                    "prompt": "Read the explicit retained reference /extra/h139-child-controls-20261126/exhaustion/admitted-plugin/skills/probe/reference.txt then return the full child result."
+                  }
+                }
+              ],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 0
+              },
+              "context_management": null
+            },
+            "parent_tool_use_id": null,
+            "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
+            "uuid": "c20f5622-996d-401b-b71f-304bee40c8d1",
+            "timestamp": "2026-11-26T01:54:56.669Z"
           }
         },
         {
@@ -607,7 +674,7 @@
           "kind": "message",
           "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a703701ccbcd0ef33",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -661,7 +728,7 @@
           "kind": "message",
           "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a703701ccbcd0ef33",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -703,7 +770,7 @@
           "kind": "message",
           "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a703701ccbcd0ef33",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -768,7 +835,7 @@
           "kind": "message",
           "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a703701ccbcd0ef33",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -810,7 +877,7 @@
           "kind": "message",
           "session_id": "59555a93-1fad-4a4d-80df-cd3960d18d69",
           "parent_call_id": "tool_parent_agent_139",
-          "child_id": "",
+          "child_id": "a703701ccbcd0ef33",
           "name": "review",
           "type": "admitted-child",
           "raw": {
@@ -1087,7 +1154,8 @@
             }
           }
         }
-      ]
+      ],
+      "original_parent_events_sha256": "955d4c34ecb917bfde6c59cece249520ac32a68a9701e57b4b9c8ec439ba8818"
     }
   }
 }

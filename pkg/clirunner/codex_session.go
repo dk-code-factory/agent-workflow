@@ -2,12 +2,14 @@ package clirunner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/dk-code-factory/agent-workflow/internal/buildinfo"
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
@@ -45,6 +47,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	args := []string{"app-server", "--config", "project_doc_max_bytes=0", "--config", `cli_auth_credentials_store="file"`, "--config", "skills.bundled.enabled=false", "--config", "skills.include_instructions=false", "--config", "features.plugins=false"}
 	if req.Skill != nil {
 		args = append(args, "--config", "agents.enabled=false", "--config", "features.multi_agent=false", "--config", "features.multi_agent_v2=false")
+		args = append(args, codexSkillRetryArgs()...)
 	}
 	args = append(args, agent.Args...)
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -112,6 +115,15 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 	if err = rpc.write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return result, err
 	}
+	if req.Skill != nil {
+		raw, e := rpc.call("config/read", map[string]any{"cwd": workspace, "includeLayers": true})
+		if e != nil {
+			return result, fmt.Errorf("selected-skill retry control readback: %w", e)
+		}
+		if e = verifyCodexSkillRetryConfig(raw, agent.Command != ""); e != nil {
+			return result, e
+		}
+	}
 	if agent.Authentication.Mode == "api-key" {
 		key, ok := os.LookupEnv(agent.Authentication.CredentialEnv)
 		if !ok || key == "" {
@@ -149,6 +161,7 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		if req.SkillRoot == "" || !filepath.IsAbs(req.SkillRoot) {
 			return result, fmt.Errorf("skill requires verified retained root")
 		}
+		params["modelProvider"] = codexSkillProvider
 		selectedEntry = filepath.Join(req.SkillRoot, filepath.FromSlash(req.Skill.Binding.Entry))
 		if _, err = rpc.call("skills/extraRoots/set", map[string]any{"extraRoots": []string{req.SkillRoot}}); err != nil {
 			return result, fmt.Errorf("register retained skill: %w", err)
@@ -170,12 +183,16 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		return result, err
 	}
 	var thread struct {
-		Thread struct {
+		ModelProvider string `json:"modelProvider"`
+		Thread        struct {
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
 	if err = json.Unmarshal(raw, &thread); err != nil || thread.Thread.ID == "" {
 		return result, fmt.Errorf("app-server returned no thread ID")
+	}
+	if req.Skill != nil && thread.ModelProvider != codexSkillProvider {
+		return result, fmt.Errorf("selected-skill provider retry policy changed")
 	}
 	if req.SessionID != "" && thread.Thread.ID != req.SessionID {
 		return result, fmt.Errorf("app-server returned an unexpected resumed thread identity")
@@ -231,6 +248,22 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		}
 		if identity, ok := payload["turnId"].(string); ok && identity != started.Turn.ID {
 			continue
+		}
+		if frame.Method == "error" && req.Skill != nil && payload["willRetry"] == true {
+			if payload["threadId"] != result.SessionID || payload["turnId"] != started.Turn.ID {
+				return result, fmt.Errorf("selected-skill retry omitted original turn identity")
+			}
+			raw, _ := json.Marshal(map[string]any{"method": frame.Method, "params": payload})
+			digest := sha256.Sum256(raw)
+			result.Outputs["usage_incomplete"] = true
+			result.Outputs["native_attempt_error"] = payload
+			if emit != nil {
+				emit(workflows.ProviderEvent{Type: "skill_attempt_uncertainty", SessionID: result.SessionID, Data: map[string]any{"key": fmt.Sprintf("retry:%x", digest), "session_id": result.SessionID, "turn_id": started.Turn.ID, "provider": "codex-app-server", "raw": json.RawMessage(raw)}})
+			}
+			interruptCtx, cancelInterrupt := context.WithTimeout(context.Background(), time.Second)
+			_, _ = rpc.callContext(interruptCtx, "turn/interrupt", map[string]any{"threadId": result.SessionID, "turnId": started.Turn.ID})
+			cancelInterrupt()
+			return result, fmt.Errorf("selected-skill native retry left original usage/effects uncertain")
 		}
 		if frame.Method == "rawResponseItem/completed" && req.Skill != nil {
 			observation, skillErr := codexSkillObservation(req, result.SessionID, started.Turn.ID, frame.Params)

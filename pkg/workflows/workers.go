@@ -964,6 +964,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 
 		var skillObservation *SkillObservation
 		var childObservation *SkillChildObservation
+		var retryObservation *SkillAttemptUncertainty
 		if event.Type == "skill_evidence" {
 			var observation SkillObservation
 			if decodeSkillValue(event.Data, &observation) != nil {
@@ -997,6 +998,20 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			}
 			childObservation = &observation
 		}
+		if event.Type == "skill_attempt_uncertainty" {
+			var observation SkillAttemptUncertainty
+			if decodeSkillValue(event.Data, &observation) != nil || expectedSession == "" || observation.SessionID != expectedSession {
+				progressErr = fmt.Errorf("malformed or foreign native retry observation")
+				cancelTurn()
+				return
+			}
+			if secret, err := containsCredential(observation, secrets); err != nil || secret {
+				progressErr = fmt.Errorf("native retry evidence contains credential material")
+				cancelTurn()
+				return
+			}
+			retryObservation = &observation
+		}
 		event.Data, _ = redactValue(event.Data, secrets).(map[string]any)
 		eventCtx := context.WithoutCancel(ctx)
 		tx, err := m.Store.db.BeginTx(eventCtx, nil)
@@ -1029,7 +1044,13 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 				err = current.SkillEvidence.ObserveChild(current.Skill, *childObservation)
 			}
 		}
-		if err == nil && (event.SessionID != "" || skillObservation != nil || childObservation != nil) {
+		if err == nil && retryObservation != nil {
+			if current.SkillEvidence == nil {
+				current.SkillEvidence = &SkillEvidence{}
+			}
+			err = current.SkillEvidence.ObserveUncertainAttempt(current.Skill, *retryObservation)
+		}
+		if err == nil && (event.SessionID != "" || skillObservation != nil || childObservation != nil || retryObservation != nil) {
 			if event.SessionID != "" {
 				current.SessionID = event.SessionID
 				w.SessionID = event.SessionID
@@ -1062,6 +1083,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	// can leave no usage row, so final accounting would invent a storage failure.
 	if usageErr == nil {
 		update := usageUpdate(result.Outputs, true)
+		if w.Skill != nil && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
+			update.Incomplete = true
+		}
 		if update.SessionID == "" {
 			update.SessionID = result.SessionID
 		}
@@ -1123,6 +1147,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	current.SessionID = w.SessionID
 	if current.Skill != nil && msg.Status == RunStatusSucceeded {
+		if err = completeSkillChildTx(context.WithoutCancel(ctx), tx, current, msg.ID); err != nil {
+			return
+		}
 		current.SkillTurnUncertain = false
 		current.SkillActiveMessageID = ""
 	}

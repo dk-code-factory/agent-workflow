@@ -8,14 +8,15 @@ import (
 )
 
 type SkillChildObservation struct {
-	Key          string          `json:"key"`
-	Kind         string          `json:"kind"`
-	SessionID    string          `json:"session_id"`
-	ParentCallID string          `json:"parent_call_id"`
-	ChildID      string          `json:"child_id,omitempty"`
-	Name         string          `json:"name"`
-	Type         string          `json:"type"`
-	Raw          json.RawMessage `json:"raw"`
+	Key           string          `json:"key"`
+	Kind          string          `json:"kind"`
+	SessionID     string          `json:"session_id"`
+	ParentCallID  string          `json:"parent_call_id"`
+	ChildID       string          `json:"child_id,omitempty"`
+	Name          string          `json:"name"`
+	Type          string          `json:"type"`
+	Raw           json.RawMessage `json:"raw"`
+	ParentMessage json.RawMessage `json:"parent_message,omitempty"`
 }
 
 func childObject(value any) map[string]any { m, _ := value.(map[string]any); return m }
@@ -50,6 +51,20 @@ func (e *SkillEvidence) ObserveChild(plan *SkillInvocation, observation SkillChi
 		if len(args) != 4 || args["subagent_type"] != child.Type || args["prompt"] != child.Prompt || args["description"] != child.Description || args["run_in_background"] != false || childObject(raw["effort"])["level"] != plan.ResolvedEffort {
 			return fmt.Errorf("skill child permit differs from pinned controls")
 		}
+		var parent map[string]any
+		if json.Unmarshal(observation.ParentMessage, &parent) != nil || parent["type"] != "assistant" || parent["session_id"] != observation.SessionID || parent["parent_tool_use_id"] != nil || childObject(parent["message"])["model"] != plan.Model || childObject(parent["message"])["role"] != "assistant" || nativeString(childObject(parent["message"]), "id") == "" {
+			return fmt.Errorf("skill child permit omitted original parent assistant call")
+		}
+		matched := 0
+		for _, block := range childArray(childObject(parent["message"])["content"]) {
+			value := childObject(block)
+			if value["type"] == "tool_use" && value["id"] == observation.ParentCallID && value["name"] == "Agent" && actionHash(value["input"]) == actionHash(args) {
+				matched++
+			}
+		}
+		if matched != 1 {
+			return fmt.Errorf("original parent child call differs from normalized hook controls")
+		}
 	case "start", "stop":
 		want := "SubagentStart"
 		if observation.Kind == "stop" {
@@ -59,11 +74,17 @@ func (e *SkillEvidence) ObserveChild(plan *SkillInvocation, observation SkillChi
 			return fmt.Errorf("skill child hook identity differs")
 		}
 	case "message":
-		if raw["parent_tool_use_id"] != observation.ParentCallID || raw["type"] != "assistant" && raw["type"] != "user" {
+		if raw["parent_tool_use_id"] != observation.ParentCallID || raw["agent_id"] != observation.ChildID || raw["subagent_type"] != observation.Type || raw["type"] != "assistant" && raw["type"] != "user" {
 			return fmt.Errorf("skill child message omitted native parent edge")
 		}
 	case "task":
-		if raw["type"] != "system" || !strings.HasPrefix(nativeString(raw, "subtype"), "task_") || raw["tool_use_id"] != observation.ParentCallID || raw["task_id"] != observation.ChildID {
+		parentEdge := raw["tool_use_id"] == observation.ParentCallID
+		// The pinned task_updated envelope has only task/run IDs. It is retained
+		// and joined to the original task_started edge, never completion proof.
+		if raw["subtype"] == "task_updated" && raw["tool_use_id"] == nil {
+			parentEdge = true
+		}
+		if raw["type"] != "system" || !strings.HasPrefix(nativeString(raw, "subtype"), "task_") || !parentEdge || raw["task_id"] != observation.ChildID || nativeString(raw, "run_id") == "" {
 			return fmt.Errorf("skill child task identity differs")
 		}
 	case "result":
@@ -101,11 +122,17 @@ func (e *SkillEvidence) ObserveChild(plan *SkillInvocation, observation SkillChi
 			}
 			return nil
 		}
+		if old.Kind == observation.Kind && slices.Contains([]string{"permit", "start", "stop", "result", "parent_terminal"}, observation.Kind) {
+			return fmt.Errorf("conflicting original skill child lifecycle event")
+		}
+		if old.Kind == "task" && observation.Kind == "task" && childRaw(old)["run_id"] != raw["run_id"] {
+			return fmt.Errorf("skill child native task run identity changed")
+		}
 	}
 	candidate := *e
 	candidate.Children = append(append([]SkillChildObservation(nil), e.Children...), observation)
 	data, _ := json.Marshal(candidate)
-	if len(candidate.Children)+len(candidate.Observations) > MaxSkillObservations || len(data) > MaxSkillEvidenceBytes {
+	if len(candidate.Children)+len(candidate.Observations)+len(candidate.UncertainAttempts) > MaxSkillObservations || len(data) > MaxSkillEvidenceBytes {
 		return fmt.Errorf("skill child evidence exceeds retention limits")
 	}
 	*e = candidate
@@ -143,7 +170,7 @@ func (e *SkillEvidence) completeChildren(plan *SkillInvocation) error {
 			stopText = nativeString(raw, "last_assistant_message")
 		case "task":
 			if raw["subtype"] == "task_started" {
-				if raw["subagent_type"] != child.Type || raw["is_backgrounded"] != false || raw["spawn_depth"] != float64(1) {
+				if raw["subagent_type"] != child.Type || raw["is_backgrounded"] != false || raw["spawn_depth"] != float64(1) || raw["task_type"] != "local_agent" || raw["prompt"] != child.Prompt || raw["description"] != child.Description {
 					return fmt.Errorf("skill child was not the admitted foreground child")
 				}
 				taskStart = true
@@ -166,6 +193,9 @@ func (e *SkillEvidence) completeChildren(plan *SkillInvocation) error {
 			}
 			if raw["type"] != "assistant" {
 				continue
+			}
+			if raw["error"] != nil {
+				return fmt.Errorf("original native child returned an API error")
 			}
 			message := childObject(raw["message"])
 			id := nativeString(message, "id")

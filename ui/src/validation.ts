@@ -562,16 +562,26 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
             const skill = params.skill;
             const declared = mapping(callable?.inputs) && mapping(skill) && typeof skill.input === 'string' ? callable.inputs[skill.input] : undefined;
             const evidence = mapping(skill) ? skill.evidence : undefined;
+            const resourcePath = (value: unknown): value is string => typeof value === 'string' && !!value && value !== '.' && !value.startsWith('/') && !/[\\\x00]/.test(value) && !value.split('/').includes('..') && !value.includes('${{');
+            const admittedText = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && new TextEncoder().encode(value).length <= 65536 && !value.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{');
+            const children = mapping(skill) && skill.children === undefined ? [] : mapping(skill) ? skill.children : undefined;
+            const requiredChildren = mapping(evidence) && evidence.children === undefined ? [] : mapping(evidence) ? evidence.children : undefined;
+            const validChildren = Array.isArray(children) && Array.isArray(requiredChildren) && children.length === requiredChildren.length && children.length <= 1
+              && children.every(child => mapping(child) && Object.keys(child).every(key => ['name', 'prompt', 'description', 'tools', 'resources', 'model', 'max-turns', 'max-calls', 'background'].includes(key))
+                && typeof child.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(child.name) && child.name.length <= 48 && requiredChildren[0] === child.name
+                && admittedText(child.prompt) && admittedText(child.description) && new TextEncoder().encode(child.description).length <= 512
+                && Array.isArray(child.tools) && child.tools.length === 1 && child.tools[0] === 'Read' && child.model === 'inherit' && child.background === false && child['max-turns'] === 2 && child['max-calls'] === 1
+                && Array.isArray(child.resources) && child.resources.length > 0 && child.resources.length <= 32 && new Set(child.resources).size === child.resources.length
+                && child.resources.every(resource => resourcePath(resource) && mapping(skill) && Array.isArray(skill.resources) && skill.resources.some(parent => typeof parent === 'string' && (resource === parent || resource.startsWith(parent + '/')))));
             const valid = mapping(skill) && Object.keys(skill).every(key => ['input', 'arguments', 'resources', 'evidence', 'children'].includes(key))
               && typeof skill.input === 'string' && mapping(declared) && declared.type === 'skill'
               && (skill.arguments === undefined || typeof skill.arguments === 'string' && new TextEncoder().encode(skill.arguments).length <= 65536
                 && !skill.arguments.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{'))
-              && (skill.resources === undefined || Array.isArray(skill.resources) && skill.resources.length <= 128 && skill.resources.every(resource => typeof resource === 'string' && resource && !resource.startsWith('/') && !/[\\\x00]/.test(resource) && !resource.split('/').includes('..') && !resource.includes('${{')))
+              && (skill.resources === undefined || Array.isArray(skill.resources) && skill.resources.length <= 128 && skill.resources.every(resourcePath))
               && mapping(evidence) && evidence.invocation === 'required' && Object.keys(evidence).every(key => ['invocation', 'children'].includes(key))
-              && (evidence.children === undefined || Array.isArray(evidence.children) && evidence.children.length === 0)
-              && (skill.children === undefined || Array.isArray(skill.children) && skill.children.length === 0)
+              && validChildren
               && typeof params.agent === 'string' && !params.agent.includes('${{');
-            if (!valid) add('skill', 'Skill requires a declared type: skill input, admitted input arguments, literal resources and required invocation evidence; native children are not certified', [...sp, 'with', 'skill']);
+            if (!valid) add('skill', 'Skill requires a declared type: skill input, pinned arguments/resources and required evidence; a child requires one foreground Read declaration with inherited model, max-turns 2, max-calls 1 and resource subset', [...sp, 'with', 'skill']);
             else add('host-skill', 'Skill source bytes, pinned model and supported provider profile require host admission', [...sp, 'with', 'skill'], undefined, 'host', 'info');
           }
           if (Object.hasOwn(params, 'checklist')) {

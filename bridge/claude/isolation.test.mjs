@@ -74,4 +74,8 @@ test('selected skill requires qualified acknowledgement and exact later plugin s
   const message={plugins:[{name:'aw-probe',path:skill.root}],skills:['builtin-catalog-name',skill.qualified],tools:['Skill','Read']};
   assert.doesNotThrow(() => assertSelectedInitialization(message,skill));
   for (const changes of [{plugins:[]},{plugins:[...message.plugins,{name:'unknown',path:'builtin'}]},{plugins:[{name:'aw-probe',path:'/foreign'}]},{tools:['Skill','Agent']},{skills:['probe']},{plugin_errors:[{type:'unknown'}]}]) assert.throws(() => assertSelectedInitialization({...message,...changes},skill));
+  const childSkill={...skill,child:{type:'aw-child-review'}};
+  const childMessage={...message,tools:['Task','Read','Skill']};
+  assert.doesNotThrow(()=>assertSelectedInitialization(childMessage,childSkill));
+  for(const tools of [['Agent','Read','Skill'],['Task','Read','Skill','Bash'],['Read','Skill'],['Task','Skill']]) assert.throws(()=>assertSelectedInitialization({...childMessage,tools},childSkill));
 });
