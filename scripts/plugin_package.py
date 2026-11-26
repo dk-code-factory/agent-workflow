@@ -7,9 +7,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = Path("plugins/agent-workflow")
-# Deliberate built-in inventory. Stage 6 adds convert-agent here with its source
-# and acceptance checks; third-party packages do not inherit this profile.
-BUILTIN_SKILLS = frozenset({"setup", "build-workflow", "run-workflow", "report-bug"})
+# Deliberate built-in inventory; third-party packages do not inherit this profile.
+BUILTIN_SKILLS = frozenset({"setup", "build-workflow", "run-workflow", "report-bug", "convert-agent"})
 
 
 def plugin_files(root=ROOT):
@@ -23,21 +22,22 @@ def validate_builtin_profile(version, root=ROOT):
     plugin = root / PLUGIN
     portable = json.loads((plugin / "plugin.json").read_text())
     native = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
+    claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
     config = json.loads((plugin / "compatibility.json").read_text())
-    if portable["version"] != version or native["version"] != version or config["engine_version"] != version:
+    if portable["version"] != version or native["version"] != version or config["engine_version"] != version or claude["version"] != version:
         raise ValueError("plugin and engine release versions must match")
     if config["codex_versions"] != [json.loads((root / "images/pins.json").read_text())["codex_cli"]]:
         raise ValueError("plugin Codex compatibility must match the repository pin")
-    if portable["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" or native["skills"] != "./skills/":
+    if portable["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" or native["skills"] != "./skills/" or claude["skills"] != "./skills/":
         raise ValueError("invalid plugin manifest")
-    if portable["name"] != "agent-workflow" or native["name"] != "agent-workflow":
+    if portable["name"] != "agent-workflow" or native["name"] != "agent-workflow" or claude["name"] != "agent-workflow":
         raise ValueError("invalid plugin name")
     for name in ("LICENSE", "NOTICE"):
         if (plugin / name).read_bytes() != (root / name).read_bytes():
             raise ValueError("plugin must preserve repository licensing: " + name)
     skills = {path.parent.name for path in (plugin / "skills").glob("*/SKILL.md")}
     if skills != BUILTIN_SKILLS:
-        raise ValueError("plugin must bundle all four self-contained skills")
+        raise ValueError("plugin must bundle all five self-contained skills")
     return skills
 
 

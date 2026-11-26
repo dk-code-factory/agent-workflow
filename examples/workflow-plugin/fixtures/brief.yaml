@@ -1,0 +1,74 @@
+schema-version: 1
+cases:
+  - name: recovery-codex-app-server
+    skill: brief
+    runtime: codex-app-server
+    inputs: {task: Draft a release note}
+    operations:
+      - {uses: agent/run, prompt: Draft a release note, result: {text: Retained draft}}
+      - {uses: agent/run, prompt: Finalize the approved brief without edits or publication., result: {text: Approved brief}}
+    controls:
+      - {action: answer, step: approval, evidence: stale, value: approve, expect-error: stale, invocation-count: 1}
+      - {action: interrupt, expect-state: interrupted, invocation-count: 1}
+      - {action: reopen, invocation-count: 1}
+      - {action: configure-runtime, runtime: claude-sdk}
+      - {action: answer, step: approval, value: approve, invocation-count: 1}
+      - {action: resume, expect-state: succeeded, invocation-count: 2}
+      - {action: reopen, invocation-count: 2}
+      - {action: resume, expect-state: succeeded, invocation-count: 2}
+    expect:
+      state: succeeded
+      outputs: {draft: Retained draft}
+      invocation-count: 2
+      worker-remaining: [1]
+      sessions: 1
+  - name: recovery-claude-sdk
+    skill: brief
+    runtime: claude-sdk
+    inputs: {task: Draft a release note}
+    operations:
+      - {uses: agent/run, prompt: Draft a release note, result: {text: Retained draft}}
+      - {uses: agent/run, prompt: Finalize the approved brief without edits or publication., result: {text: Approved brief}}
+    controls:
+      - {action: answer, step: approval, evidence: stale, value: approve, expect-error: stale, invocation-count: 1}
+      - {action: interrupt, expect-state: interrupted, invocation-count: 1}
+      - {action: reopen, invocation-count: 1}
+      - {action: configure-runtime, runtime: codex-app-server}
+      - {action: answer, step: approval, value: approve, invocation-count: 1}
+      - {action: resume, expect-state: succeeded, invocation-count: 2}
+      - {action: reopen, invocation-count: 2}
+      - {action: resume, expect-state: succeeded, invocation-count: 2}
+    expect:
+      state: succeeded
+      outputs: {draft: Retained draft}
+      invocation-count: 2
+      worker-remaining: [1]
+      sessions: 1
+  - name: declined
+    skill: brief
+    inputs: {task: Draft a release note}
+    operations:
+      - {uses: agent/run, result: {text: Retained draft}}
+    controls:
+      - {action: answer, step: approval, value: decline}
+      - {action: resume, expect-state: succeeded, invocation-count: 1}
+    expect:
+      state: succeeded
+      outputs: {draft: Retained draft}
+      invocation-count: 1
+      worker-remaining: [2]
+      sessions: 1
+  - name: missing-task
+    skill: brief
+    expect:
+      error: task
+      invocation-count: 0
+  - name: draft-failure
+    skill: brief
+    inputs: {task: Draft a release note}
+    operations:
+      - {uses: agent/run, error: scripted provider failure}
+    expect:
+      state: failed
+      error: scripted provider failure
+      invocation-count: 1

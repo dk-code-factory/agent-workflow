@@ -1,0 +1,12 @@
+{
+  "name": "agent-workflow",
+  "owner": {
+    "name": "Agent Workflow contributors"
+  },
+  "plugins": [
+    {
+      "name": "agent-workflow",
+      "source": "./plugins/agent-workflow"
+    }
+  ]
+}

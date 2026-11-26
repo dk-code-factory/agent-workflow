@@ -499,11 +499,82 @@ class PackageTests(unittest.TestCase):
                 elif changed == "license":
                     (plugin / "LICENSE").write_text("changed")
                 else:
-                    skill = plugin / "skills/convert-agent"
+                    skill = plugin / "skills/unexpected"
                     skill.mkdir()
-                    (skill / "SKILL.md").write_text("future stage")
+                    (skill / "SKILL.md").write_text("unexpected skill")
                 with self.assertRaises(ValueError):
                     validate_builtin_profile(VERSION, root)
+    skills = {"setup", "build-workflow", "run-workflow", "report-bug", "convert-agent"}
+
+    def copy_source(self, destination):
+        root = Path(destination)
+        shutil.copytree(ROOT / PLUGIN, root / PLUGIN)
+        for name in ("LICENSE", "NOTICE", "images/pins.json"):
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        return root
+
+    def test_builtin_inventory_rejects_each_missing_skill_and_unexpected_skill(self):
+        for name in sorted(self.skills):
+            with self.subTest(missing=name), tempfile.TemporaryDirectory() as directory:
+                root = self.copy_source(directory)
+                (root / PLUGIN / "skills" / name / "SKILL.md").unlink()
+                with self.assertRaisesRegex(ValueError, "all five"):
+                    validate_plugin(VERSION, root)
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_source(directory)
+            extra = root / PLUGIN / "skills/unexpected/SKILL.md"
+            extra.parent.mkdir()
+            extra.write_text("---\nname: unexpected\ndescription: Unexpected skill.\n---\n")
+            with self.assertRaisesRegex(ValueError, "all five"):
+                validate_plugin(VERSION, root)
+
+    def test_conversion_metadata_and_repository_licenses_remain_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_source(directory)
+            metadata = root / PLUGIN / "skills/convert-agent/SKILL.md"
+            metadata.write_text(metadata.read_text().replace("name: convert-agent", "name: another-agent", 1))
+            with self.assertRaisesRegex(ValueError, "invalid skill metadata: convert-agent"):
+                validate_plugin(VERSION, root)
+        for name in ("LICENSE", "NOTICE"):
+            with self.subTest(license=name), tempfile.TemporaryDirectory() as directory:
+                root = self.copy_source(directory)
+                (root / PLUGIN / name).write_text("different license")
+                with self.assertRaisesRegex(ValueError, "preserve repository licensing: " + name):
+                    validate_plugin(VERSION, root)
+
+    def test_builtin_release_identity_and_pinned_compatibility_remain_required(self):
+        for name, field in (("plugin.json", "version"), (".codex-plugin/plugin.json", "version"), (".claude-plugin/plugin.json", "version"),
+                            ("compatibility.json", "engine_version"), ("compatibility.json", "codex_versions")):
+            with self.subTest(manifest=name, field=field), tempfile.TemporaryDirectory() as directory:
+                root = self.copy_source(directory)
+                path = root / PLUGIN / name
+                content = json.loads(path.read_text())
+                content[field] = ["0.0.0"] if field == "codex_versions" else "9.9.9"
+                path.write_text(json.dumps(content))
+                with self.assertRaisesRegex(ValueError, "compatibility must match|versions must match"):
+                    validate_plugin(VERSION, root)
+
+    def test_codex_catalog_discovers_all_five_builtin_skill_identities(self):
+        catalog = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text())
+        entry, = [plugin for plugin in catalog["plugins"] if plugin["name"] == "agent-workflow"]
+        self.assertEqual(entry["source"], {"source": "local", "path": "./plugins/agent-workflow"})
+        plugin = ROOT / entry["source"]["path"]
+        portable = json.loads((plugin / "plugin.json").read_text())
+        native = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
+        self.assertEqual(portable["name"], native["name"])
+        self.assertEqual(native["name"], entry["name"])
+        names = {path.read_text().splitlines()[1].removeprefix("name: ")
+                 for path in (plugin / native["skills"]).glob("*/SKILL.md")}
+        self.assertEqual(names, self.skills)
+        claude_catalog = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
+        claude_entry, = claude_catalog["plugins"]
+        self.assertEqual(claude_entry, {"name": "agent-workflow", "source": "./plugins/agent-workflow"})
+        claude = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
+        self.assertEqual(claude["name"], entry["name"])
+        self.assertEqual(claude["version"], native["version"])
+        self.assertEqual(claude["skills"], native["skills"])
 
     def test_reproducible_complete_package_modes_and_references(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -514,7 +585,10 @@ class PackageTests(unittest.TestCase):
             verify_plugin(first, VERSION)
             with zipfile.ZipFile(first) as bundle:
                 self.assertEqual(bundle.getinfo("agent-workflow/scripts/agent-workflow").external_attr >> 16, stat.S_IFREG | 0o755)
-                self.assertEqual(len([n for n in bundle.namelist() if n.endswith("SKILL.md")]), 4)
+                self.assertEqual({n for n in bundle.namelist() if n.endswith("SKILL.md")},
+                                 {"agent-workflow/skills/" + name + "/SKILL.md" for name in self.skills})
+                for name in ("LICENSE", "NOTICE"):
+                    self.assertEqual(bundle.read("agent-workflow/" + name), (ROOT / name).read_bytes())
             with zipfile.ZipFile(first, "a") as bundle:
                 bundle.writestr("agent-workflow/unexpected", "foreign")
             with self.assertRaisesRegex(ValueError, "asset set"):

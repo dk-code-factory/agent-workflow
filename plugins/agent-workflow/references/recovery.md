@@ -1,6 +1,8 @@
 # Durable run operations
 
 All commands below go through the installed launcher: `exec -- <command>`.
+On a Claude host, use `exec --host claude -- <command>` and forward the same
+`--host claude` profile to setup/check; workspace runtime selection stays separate.
 Place flags before positional arguments and supply the same workspace each time.
 
 ```sh

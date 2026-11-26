@@ -14,6 +14,7 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else "dist").resolve()
 source_root = Path(__file__).resolve().parents[1]
 plugin_assets = {
     ".agents/plugins/marketplace.json": 0o644,
+    ".claude-plugin/marketplace.json": 0o644,
     "plugins/network-runtime/.codex-plugin/plugin.json": 0o644,
     "plugins/network-runtime/hooks/hooks.json": 0o644,
     "plugins/network-runtime/hooks/pre-tool-use.sh": 0o755,

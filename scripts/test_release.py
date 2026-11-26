@@ -138,6 +138,7 @@ class NetworkPluginTests(unittest.TestCase):
 class PluginArchiveTests(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
     assets = {'.agents/plugins/marketplace.json': 0o644,
+              '.claude-plugin/marketplace.json': 0o644,
               'plugins/network-runtime/.codex-plugin/plugin.json': 0o644,
               'plugins/network-runtime/hooks/hooks.json': 0o644,
               'plugins/network-runtime/hooks/pre-tool-use.sh': 0o755,
@@ -196,6 +197,30 @@ class PluginArchiveTests(unittest.TestCase):
                 result = self.verify_fixture(directory, change)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('archive ', result.stderr)
+
+    def test_conversion_skill_is_required_unchanged_in_each_engine_distribution(self):
+        skill = 'plugins/agent-workflow/skills/convert-agent/SKILL.md'
+        changes = [lambda files: files.pop(skill),
+                   lambda files: files.__setitem__(skill, (b'changed conversion skill', 0o644)),
+                   lambda files: files.__setitem__(skill, (files[skill][0], 0o755))]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                result = self.verify_fixture(directory, change)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(skill, result.stderr)
+
+    def test_claude_catalog_and_manifest_are_required_in_engine_archives(self):
+        for name in ('.claude-plugin/marketplace.json', 'plugins/agent-workflow/.claude-plugin/plugin.json'):
+            for missing in (True, False):
+                def change(files):
+                    if missing:
+                        files.pop(name)
+                    else:
+                        files[name] = (b'{"name":"foreign-plugin"}', 0o644)
+                with self.subTest(asset=name, missing=missing), tempfile.TemporaryDirectory() as directory:
+                    result = self.verify_fixture(directory, change)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):

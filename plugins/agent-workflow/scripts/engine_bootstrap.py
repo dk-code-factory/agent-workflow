@@ -11,8 +11,11 @@ Distribution contract for generated plugins:
   This module does not infer workflows, parse workflow inputs or select roles.
 
 The built-in plugin calls main(..., builtin=True) to retain its manifest version
-coupling and Codex compatibility check. Neither mode accepts a different release
-repository/workflow, logs in or falls back to a PATH engine. Locked bridge
+coupling and default Codex compatibility check; --host claude selects the
+built-in Claude prerequisite profile without changing the workspace runtime.
+--cached-only accepts only check/exec agent convert against a verified release
+cache and never installs or discovers host tools. Neither mode accepts a different
+release repository/workflow, logs in or falls back to a PATH engine. Locked bridge
 dependencies are installed only by explicit ensure --claude-bridge.
 """
 import argparse
@@ -68,7 +71,7 @@ def configuration(package_root, *, builtin=False):
     require(config.get("repository") == REPOSITORY and config.get("release_workflow") == WORKFLOW,
             "Invalid packaged release identity.")
     if builtin:
-        for path in (package_root / "plugin.json", package_root / ".codex-plugin/plugin.json"):
+        for path in (package_root / "plugin.json", package_root / ".codex-plugin/plugin.json", package_root / ".claude-plugin/plugin.json"):
             require(json.loads(path.read_text())["version"] == version, "Plugin/engine version mismatch.")
         versions = config.get("codex_versions")
         require(isinstance(versions, list) and versions and all(isinstance(v, str) and v for v in versions),
@@ -227,6 +230,28 @@ def cached(path, version, goos, arch, mode):
     return path / "distribution"
 
 
+def verified_release_cache(path, version, goos, arch):
+    # Reuse the admission receipt from explicit provenance-verified installation.
+    # Candidate receipts can never become an offline release execution route.
+    cache = path.parents[2]
+    info = cache.stat()
+    require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
+            "Cache directory must be owned by this user with mode 0700: " + str(cache))
+    receipt_info = (path / "receipt.json").lstat()
+    require(stat.S_ISREG(receipt_info.st_mode) and receipt_info.st_uid == os.getuid(),
+            "Verified release receipt must be an owned regular file.")
+    root = cached(path, version, goos, arch, "release")
+    receipt = json.loads((path / "receipt.json").read_text())
+    manifest = receipt.get("manifest")
+    name = f"agent-workflow-{version}-{goos}-{arch}.tar.gz"
+    require(isinstance(manifest, dict) and manifest.get("repository") == REPOSITORY
+            and manifest.get("tag") == "v" + version and isinstance(manifest.get("assets"), dict)
+            and isinstance(receipt.get("archive_sha256"), str) and HEX.fullmatch(receipt["archive_sha256"])
+            and manifest["assets"].get(name) == receipt["archive_sha256"],
+            "Verified release provenance receipt unavailable or mismatched; request explicit setup.")
+    return root
+
+
 def installation_path(cache, version, goos, arch, candidate_digest=None):
     require(isinstance(version, str) and VERSION.fullmatch(version), "Invalid exact engine version.")
     require(goos in ("linux", "darwin") and arch in ("amd64", "arm64"), "Unsupported engine platform.")
@@ -354,6 +379,8 @@ def main(package_root, argv=None, *, builtin=False):
     parser.add_argument("--candidate-archive", type=Path, help="explicit local uncertified archive; never used for release fallback")
     parser.add_argument("--sha256", help="required expected digest with --candidate-archive")
     parser.add_argument("--claude-bridge", action="store_true", help="ensure only: explicitly install locked bridge dependencies into a separate writable cache")
+    parser.add_argument("--cached-only", action="store_true", help="check or exec agent convert only: require an existing verified release cache; no setup or host-tool discovery")
+    parser.add_argument("--host", choices=["codex", "claude"], default="codex", help="built-in host prerequisite profile; independent of the workspace execution provider")
     # Split at -- so engine flags are never interpreted as installer options.
     args = list(sys.argv[1:] if argv is None else argv)
     split = args.index("--") if "--" in args else len(args)
@@ -362,20 +389,35 @@ def main(package_root, argv=None, *, builtin=False):
     try:
         config = configuration(package_root, builtin=builtin)
         goos, arch = host()
-        prerequisites(config, require_codex=builtin)
         require(bool(opts.candidate_archive) == bool(opts.sha256), "Candidate mode requires both --candidate-archive and --sha256.")
         require(opts.operation == "exec" or not engine_args, "Engine arguments require exec --.")
         require(opts.operation != "exec" or bool(engine_args), "Supply exec -- <engine arguments>.")
         require(not opts.claude_bridge or opts.operation == "ensure", "Claude bridge setup requires explicit ensure --claude-bridge.")
+        require(not opts.cached_only or opts.operation in ("check", "exec") and opts.candidate_archive is None and opts.sha256 is None and not opts.claude_bridge,
+                "Cached-only mode supports check or exec agent convert against a verified release cache only.")
+        require(not opts.cached_only or opts.operation != "exec" or engine_args[:2] == ["agent", "convert"],
+                "Cached-only exec is limited to the offline agent convert command.")
+        if opts.cached_only:
+            require(sys.version_info >= (3, 11), "Python 3.11+ is required.")
+        else:
+            prerequisites(config, require_codex=builtin and opts.host == "codex")
         cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "agent-workflow"
         if opts.operation == "check":
             require(not opts.candidate_archive, "check is read-only; use ensure for candidate installation.")
             path = installation_path(cache, config["engine_version"], goos, arch)
-            installed = cached(path, config["engine_version"], goos, arch, "release") if path.exists() else None
+            installed = None
+            if path.exists():
+                installed = (verified_release_cache(path, config["engine_version"], goos, arch) if opts.cached_only
+                             else cached(path, config["engine_version"], goos, arch, "release"))
             print(json.dumps({"version": config["engine_version"], "platform": goos + "/" + arch,
-                              "installed": str(installed) if installed else None, "prerequisites": "ok"}))
+                              "installed": str(installed) if installed else None, "prerequisites": "cache-only" if opts.cached_only else "ok"}))
             return 0
-        root = ensure(cache, config["engine_version"], goos, arch, opts.candidate_archive, opts.sha256)
+        if opts.cached_only:
+            path = installation_path(cache, config["engine_version"], goos, arch)
+            require(path.exists(), "Verified release cache unavailable; request explicit setup before cached-only conversion.")
+            root = verified_release_cache(path, config["engine_version"], goos, arch)
+        else:
+            root = ensure(cache, config["engine_version"], goos, arch, opts.candidate_archive, opts.sha256)
         if opts.candidate_archive:
             print("agent-workflow: UNCERTIFIED CANDIDATE installation", file=sys.stderr)
         if opts.operation == "ensure":

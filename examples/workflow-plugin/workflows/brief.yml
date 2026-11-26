@@ -1,0 +1,29 @@
+name: Draft an approved brief
+on:
+  workflow_call:
+    inputs:
+      task: {type: string, required: true}
+    outputs:
+      draft: {value: '${{ jobs.brief.outputs.draft }}'}
+jobs:
+  brief:
+    outputs: {draft: '${{ steps.draft.outputs.text }}'}
+    steps:
+      - id: draft
+        uses: agent/run
+        with:
+          agent: agents/brief.yaml
+          turns: 3
+          prompt: ${{ inputs.task }}
+      - id: approval
+        uses: input/wait
+        with:
+          prompt: Approve finalizing this retained draft?
+          evidence-id: brief-draft-v1
+          payload: {draft: '${{ steps.draft.outputs.text }}'}
+      - id: finalize
+        if: '${{ steps.approval.outputs.answer == "approve" }}'
+        uses: agent/run
+        with:
+          agent: ${{ steps.draft.outputs.agent }}
+          prompt: Finalize the approved brief without edits or publication.

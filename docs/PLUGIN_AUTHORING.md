@@ -1,5 +1,11 @@
 # Workflow plugin authoring contract
 
+Start with the [clean-checkout walkthrough](../examples/workflow-plugin/README.md)
+for a maintained dual-host project, both workspace provider configurations and
+deterministic approval/recovery fixtures. The built-in build-workflow skill
+uses these commands only after requirements clarification and explicit approval
+of a complete implementation/test plan.
+
 `agent-workflow plugin init [--workflow FILE] NAME` creates a new directory named
 NAME. `agent-workflow plugin add-skill --plugin DIR --workflow FILE NAME` imports
 another skill into an existing project. Flags precede positional arguments. These
@@ -128,7 +134,7 @@ live host/provider acceptance. The generated compatibility file pins the officia
 engine repository/workflow and an exact X.Y.Z engine release; prerelease/build
 engine versions fail before output is created. Third-party plugin versions remain
 independent. The built-in instruction-only release plugin keeps its separate
-four-skill inventory, licensing, version coupling and certification gates.
+five-skill inventory, licensing, version coupling and certification gates.
 
 ## Packaged execution
 
@@ -375,3 +381,41 @@ For your own project, run the same `check` and `test` commands on its source
 directory before `build`. Engine tests cover legacy snapshots without rewriting
 original definition bytes/hashes or runtime bindings; new source fixtures always
 use the canonical admission contract.
+
+## Built-in rollout and acceptance boundary
+
+The built-in instruction-only plugin uses the shared bootstrap and generic
+archive functions through its dedicated release profile. It preserves setup,
+build-workflow, run-workflow and report-bug and adds convert-agent. Codex and
+Claude manifests/catalogs discover those same five identities. Repository
+LICENSE/NOTICE bytes, exact engine/plugin release coupling and the pinned Codex
+profile remain required. Unlike a workflow project, these instruction-only
+skills have no invented workflow bindings or plugin.yaml descriptor.
+
+The built-in launcher defaults to its Codex prerequisite profile. Use
+`check --host claude`, `ensure --host claude` and `exec --host claude -- ...` on a
+Claude host. Explicit `ensure --host claude --claude-bridge` prepares the writable
+locked SDK cache. Host selection is independent of workspace `agent-runtime`.
+For offline native definition conversion, `check --cached-only` and
+`exec --cached-only -- agent convert ...` reuse a verified exact-release receipt,
+manifest binding, build and tree without gh/Codex discovery or installation.
+This route rejects other engine commands, ensure, bridge setup and candidate
+caches; it never falls back to a PATH engine or provider login.
+
+Native host/model acceptance must be requested separately with explicit host,
+version, credential route, disposable workspace and bounded run allowance. Inspect
+native discovery of all five built-in skills, clarification and complete-plan
+approval before attempted edits, exact generated artifacts, local installation,
+authorized execution and same-run recovery. The existing Codex driver in
+[conformance/plugin](../conformance/plugin/README.md) remains opt-in; it does not
+certify Claude host activation. For Claude, use a separately authorized native
+session and retain discovery, tool traces, provider/runtime identity and artifacts.
+Fixture or helper results cannot substitute for those observations.
+
+Full cross-host support can be declared only after every stage of #127 meets its
+exit criteria and the applicable native acceptance is observed. Full managed
+runtime parity remains #134. Browser plugin authoring integration, current-session
+workflow interpretation and automatic publication remain outside this rollout.
+The sole release publication path remains release.yml with all automated
+prerequisites, protected pre-release provider phases, same-run signed evidence,
+release-certification and retained successful artifacts unchanged.

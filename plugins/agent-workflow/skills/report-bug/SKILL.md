@@ -5,7 +5,8 @@ description: Investigate suspected Agent Workflow engine defects, search for dup
 
 Resolve the plugin root two directories above this skill. Use its absolute
 `scripts/agent-workflow` launcher (`check`, then `exec --`) for verified engine
-inspection. Read [bug reporting](../../references/bug-reporting.md).
+inspection. For a Claude host, pass `--host claude` on every launcher invocation
+before `--`; the workspace selects its own execution runtime. Read [bug reporting](../../references/bug-reporting.md).
 
 Inspect the definition, validation errors, environment and durable run evidence.
 Distinguish invalid YAML/TOML, unsupported configuration, missing dependencies,
