@@ -299,12 +299,15 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	defer cleanup()
 	// Cancellation first requests SDK interruption. The guardian remains the
 	// five-second fallback and still observes controller owner loss directly.
+	// The supervisor's cancellation closes only its guardian lifetime pipe.
+	// Final cleanup reads ProcessState and must remain owned by the Wait caller.
+	guardianCancel := cmd.Cancel
 	var interruptTimer *time.Timer
 	var interruptMu sync.Mutex
 	cmd.Cancel = func() error {
 		interruptMu.Lock()
 		if interruptTimer == nil {
-			interruptTimer = time.AfterFunc(5*time.Second, cleanup)
+			interruptTimer = time.AfterFunc(5*time.Second, func() { _ = guardianCancel() })
 		}
 		interruptMu.Unlock()
 		go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
@@ -345,6 +348,14 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			return workflows.CheckManagedSDKAuthority(ctx, req.RunID, req.InvocationID)
 		}
 		return ctx.Err()
+	}, func(terminal workflows.SessionResult) error {
+		if req.ObserveUsage == nil {
+			return nil
+		}
+		if req.SessionID != "" && terminal.SessionID != req.SessionID {
+			return fmt.Errorf("known SDK terminal changed original resumed session")
+		}
+		return workflows.RecordManagedSDKTerminalCost(ctx, req.RunID, req.InvocationID, terminal)
 	})
 	if req.Skill != nil && len(req.Skill.Children) != 0 && result.Outputs != nil {
 		raw, _ := result.Outputs["native_child_result"].(map[string]any)

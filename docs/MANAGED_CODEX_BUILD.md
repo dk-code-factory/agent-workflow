@@ -1,7 +1,8 @@
 # Managed Codex build design for issue 134
 
-The repository enables one source-pinned local Linux amd64 broker-only Codex
-profile. Stock `codex-app-server` continues to reject managed tool subsets and
+The repository supports one source-pinned local Linux amd64 broker-only Codex
+profile. Its canonical gate is temporarily disabled while the revised source
+build completes deterministic validation. Stock `codex-app-server` continues to reject managed tool subsets and
 repair. The managed profile requires its captured build manifest, held executable
 identity and native protocol handshake; a version string or engine fake process
 is insufficient. Whole-PR validation remains a separate readiness requirement.
@@ -205,14 +206,14 @@ subsequent turn, unknown-attempt hold across restart, and actual directory write
 denial before callbacks. These are bounded diagnostics: v12 retained one stale
 unit-test expectation failure and did not implement pending-effect recovery.
 
-The current source tuple adds separate fresh permit epochs, original-seal replay
+The previously verified source tuple adds separate fresh permit epochs, original-seal replay
 and usage-before-effects control. It passed compilation, counted source tests,
 actual binary crash-cut/gateway cases and the connected production Go engine
 harness. Historical binaries and private controller tests alone do not admit it.
 
 ## Source and native conformance
 
-The current source build uses patch digest
+The preceding verified source build uses patch digest
 `bd1e1ebd4608c30eaef97a7009b383c417060a83764a8513058b958d800930d6`,
 source tree digest
 `c4cad66776ac52a7fc92a7a52dec1dd90292d4268068018c68bc38cd6ae7a790`,
@@ -232,6 +233,17 @@ focused production engine race suite. The probes include delayed stream sealing,
 empty and denied tool ceilings, partial results, invalid/repeated permits,
 cancellation, startup exclusions and retained policy mismatches. Earlier complete
 builds and failed stages remain separate historical evidence.
+
+The revised candidate changes only three source-test waits to use local
+one-second failure deadlines. It has patch digest
+`e199ca21257398300424f8cccee368fb74cf1ba97c4c3ea9e630739aa0c204fc`,
+source digest
+`a2ae12dd20ee47bab14e3545ca36159988b6acab7857d6bb54e62550c25884a5`,
+and build identity
+`4953fb670677ee6e0ae39d05ec88612c175a31a1370890366c289312ccc609fa`.
+Its recipe and offline-wrapper pins remain unchanged. This candidate is disabled
+until its counted source tests, standalone build and actual binary conformance
+complete; the preceding binary does not prove the new build identity.
 
 The production Go transport now verifies the held executable and actual guardian
 child before initialize, checks the source build handshake, uses the maintained
@@ -301,7 +313,7 @@ The branch now includes the merged supplied-skill implementation. Selected
 skills remain outside the managed Codex build profile and selected-skill output
 repair remains rejected before provider setup. Fresh managed Codex admission
 uses policy 2; historical policy 0/1 roles cannot acquire a managed build.
-The enabled source profile is restricted to its verified tuple and local runtime.
+Admission requires the enabled source profile and its verified tuple and local runtime.
 
 The locked SDK broker-only controller captures the original model response ID,
 all original tool IDs/arguments, final usage delta and completed block set.
@@ -402,3 +414,11 @@ The tests live in [managed_conversation_test.go](../pkg/clirunner/managed_conver
 [sdk_managed_terminal_test.go](../pkg/clirunner/sdk_managed_terminal_test.go),
 [sdk_broker_boundary_test.go](../pkg/clirunner/sdk_broker_boundary_test.go) and
 [managed_task_attempt_test.go](../pkg/workflows/managed_task_attempt_test.go).
+
+The SDK records a validated native terminal's known cumulative cost before
+waiting for EOF or cleanup. This incomplete original receipt retains its exact
+cost delta without advancing the session baseline, finishing usage or settling
+the attempt. Later cancellation, protocol errors and cleanup failures retain the
+hold. Successful original completion upgrades that same receipt and advances
+the baseline atomically. Returning each broker result also rechecks the original
+durable owner after capacity reacquisition; a live context alone is insufficient.

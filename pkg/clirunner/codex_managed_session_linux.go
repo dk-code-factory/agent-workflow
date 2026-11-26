@@ -29,8 +29,8 @@ func (r *Runner) codexManagedTurn(ctx context.Context, agent Agent, req workflow
 }
 
 // The public entry validates the retained canonical profile before reaching
-// this transport. Local package tests can supply a prepared immutable build to
-// exercise this identical transport while canonical admission stays disabled.
+// this transport. Local package tests supply a prepared immutable build through
+// the same verified public entry.
 // There is no public option, environment bypass or alternative agent loop.
 func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req workflows.SessionRequest, emit func(workflows.ProviderEvent), identity *ManagedCodexBuildIdentity) (result workflows.SessionResult, returnErr error) {
 	result = workflows.SessionResult{SessionID: req.SessionID, Outputs: map[string]any{"provider": "codex-app-server", "usage_incomplete": true}}

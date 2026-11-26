@@ -3584,10 +3584,10 @@ index 0000000..0d468a8
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..68f7712
+index 0000000..eced74e
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1386 @@
+@@ -0,0 +1,1392 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -4777,7 +4777,9 @@ index 0000000..68f7712
 +        assert!(!dispatch.is_admitted());
 +        drop(model);
 +        drop(dispatch);
-+        runtime.join_work().await;
++        tokio::time::timeout(std::time::Duration::from_secs(1), runtime.join_work())
++            .await
++            .expect("revoked profile-owned work did not join");
 +    }
 +
 +    #[tokio::test]
@@ -4829,7 +4831,9 @@ index 0000000..68f7712
 +        assert!(runtime.published("a").is_err());
 +        drop(first);
 +        drop(_batch);
-+        runtime.join_work().await;
++        tokio::time::timeout(std::time::Duration::from_secs(1), runtime.join_work())
++            .await
++            .expect("revoked profile-owned work did not join");
 +
 +        let (runtime, _batch) = planned();
 +        let (permit, work) = parked(&runtime);
@@ -4843,7 +4847,9 @@ index 0000000..68f7712
 +        assert!(runtime.accept_result("b", response(&permit)).is_err());
 +        drop(work);
 +        drop(_batch);
-+        runtime.join_work().await;
++        tokio::time::timeout(std::time::Duration::from_secs(1), runtime.join_work())
++            .await
++            .expect("revoked profile-owned work did not join");
 +    }
 +
 +    #[test]

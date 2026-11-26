@@ -276,6 +276,14 @@ func (b *sdkBrokerBatch) blocked(ctx context.Context, frame bridgeFrame, writer 
 			report(err)
 			return
 		}
+		// Capacity may have been unavailable while another execution acquired
+		// the durable owner. A live context alone cannot authorize SDK resume.
+		if b.authority != nil {
+			if err := b.authority(); err != nil {
+				report(err)
+				return
+			}
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if err := ctx.Err(); err != nil {

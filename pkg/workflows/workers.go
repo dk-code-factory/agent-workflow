@@ -1199,7 +1199,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			turnErr = errors.Join(turnErr, workerPersistenceError(e))
 		}
 	}
-	if usageErr == nil && !managedTerminal && !(sdkAttempt != 0 && turnErr == nil && ctx.Err() == nil && result.Status == RunStatusSucceeded) {
+	if usageErr == nil && !managedTerminal && sdkAttempt == 0 {
 		update := usageUpdate(result.Outputs, true)
 		if (w.Skill != nil || sdkAttempt != 0) && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
 			update.Incomplete = true

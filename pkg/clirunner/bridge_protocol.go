@@ -52,7 +52,7 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 	return bridgeTurnControlled(ctx, reader, writer, input, tools, emit, stop, child, nil, nil)
 }
 
-func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func(), authorizeChild func(context.Context, workflows.SkillChildObservation) error, observe func(sdkBrokerProof) error, authority func() error) (workflows.SessionResult, error) {
+func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func(), authorizeChild func(context.Context, workflows.SkillChildObservation) error, observe func(sdkBrokerProof) error, authority func() error, knownTerminal ...func(workflows.SessionResult) error) (workflows.SessionResult, error) {
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	var callbacks sync.WaitGroup
@@ -342,6 +342,13 @@ func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeW
 			}
 			if frame.Status != workflows.RunStatusSucceeded {
 				return result, fmt.Errorf("provider failed: %s", frame.Error)
+			}
+			if managed != nil && len(knownTerminal) == 1 {
+				// A real terminal's known charge survives a later EOF, cleanup or
+				// cancellation failure. This callback grants no settlement authority.
+				if err := knownTerminal[0](result); err != nil {
+					return result, err
+				}
 			}
 		case "usage":
 			if result.Outputs == nil {

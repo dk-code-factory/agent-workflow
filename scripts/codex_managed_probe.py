@@ -404,8 +404,8 @@ def main():
                 semantic_permit["batchId"] = "stale-batch"
                 send({"id": calls["original-a"]["id"], "result": result})
             elif args.case == "duplicate-permit":
-                # Both distinct RPCs falsely claim the same logical call via a
-                # changed full-batch permit; neither can authorize delivery.
+                # One RPC presents a full-batch permit with a duplicated logical
+                # call ID. This malformed call set cannot authorize delivery.
                 semantic_permit["callIds"] = ["original-a", "original-a"]
                 send({"id": calls["original-a"]["id"], "result": result})
             else:

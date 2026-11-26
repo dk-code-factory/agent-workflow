@@ -21,6 +21,12 @@ import (
 // source terminal and private engine checkpoint have already completed; this
 // exercises native-free reconciliation of a lost completion acknowledgement.
 func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
+	testSDKManagedTerminal(t, false)
+}
+func TestSDKManagedKnownTerminalCostSurvivesCancelledCleanup(t *testing.T) {
+	testSDKManagedTerminal(t, true)
+}
+func testSDKManagedTerminal(t *testing.T, cancelCleanup bool) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("locked SDK/local fake gateway only")
 	}
@@ -68,6 +74,25 @@ func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if cancelCleanup {
+		// Test-only outer Node wrapper: the production bridge and exact native
+		// SDK still produce the original terminal. Retain only the owned wrapper
+		// after forwarding that terminal to cut cancellation while awaiting EOF.
+		// The guardian retains stdout until the whole owned process group joins.
+		wrapper := filepath.Join(root, "terminal-wait.mjs")
+		source := fmt.Sprintf(`const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, ...args) => {
+  const terminal = String(chunk).includes('"type":"result"') && String(chunk).includes('"status":"succeeded"');
+  if (terminal) setInterval(() => {}, 1000);
+  return write(chunk, ...args);
+};
+await import(%q);
+`, "file://"+bridge)
+		if err = os.WriteFile(wrapper, []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+		bridge = wrapper
+	}
 	t.Setenv("SDK_TERMINAL_FIXTURE_KEY", "fake-only")
 	runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"empty": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_TERMINAL_FIXTURE_KEY"}}}}}
 	pool := &workflows.Capacity{Slots: make(chan struct{}, 1), MaxSuspended: 4}
@@ -93,15 +118,52 @@ func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	}
 	defer diagnostic.Close()
 	trigger := "CREATE TRIGGER owned_managed_completion_cut BEFORE UPDATE OF status ON messages WHEN NEW.id='" + message.ID + "' AND NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'owned terminal completion cut'); END"
-	if _, err = diagnostic.Exec(trigger); err != nil {
-		t.Fatal(err)
+	if !cancelCleanup {
+		if _, err = diagnostic.Exec(trigger); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
 	firstCtx, stopFirst := context.WithCancel(ctx)
 	firstDone := make(chan struct{})
 	go func() { manager.Serve(firstCtx); close(firstDone) }()
-	defer func() { stopFirst(); <-firstDone }()
+	defer func() { stopFirst(); awaitManagedServe(t, firstDone) }()
+	if cancelCleanup {
+		for ctx.Err() == nil {
+			var known int
+			if err = diagnostic.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='final' AND json_extract(CAST(record AS TEXT),'$.complete')=0 AND json_extract(CAST(record AS TEXT),'$.cost_incomplete')=1`, message.ID).Scan(&known); err != nil {
+				t.Fatal(err)
+			}
+			if known == 1 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if ctx.Err() != nil {
+			t.Fatal("real native terminal cost not captured before owned wrapper wait", ctx.Err())
+		}
+		stopFirst()
+		awaitManagedServe(t, firstDone)
+		messages, e := manager.Messages(ctx, run.ID, worker.ID)
+		report, usageErr := store.Usage(ctx, run.ID)
+		current, workerErr := manager.Get(ctx, run.ID, worker.ID)
+		if e != nil || usageErr != nil || workerErr != nil || len(messages) != 1 || messages[0].Status == workflows.RunStatusSucceeded || current.Remaining != 0 || report.Summary.Complete || report.Summary.KnownCostUSD == nil || *report.Summary.KnownCostUSD != 0.000123 || requests.Load() != 1 {
+			t.Fatal("cancelled native terminal lost known cost/original hold", messages, current, report, requests.Load(), e, usageErr, workerErr)
+		}
+		var settled, baselines int
+		if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_session_counters WHERE origin_id=?`, run.ID).Scan(&baselines); err != nil {
+			t.Fatal(err)
+		}
+		if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='managed-sdk-attempt' AND json_extract(CAST(record AS TEXT),'$.managed_sdk_attempt.state')='settled'`, message.ID).Scan(&settled); err != nil || settled != 0 || baselines != 0 {
+			t.Fatal("known charge settled failed native attempt", settled, baselines, err)
+		}
+		if err = manager.Resume(ctx, run.ID, worker.ID); err == nil {
+			t.Fatal("known charge authorized failed native resume")
+		}
+		t.Logf("actual SDK terminal cost .000123 preserved before cancelled owned wrapper cleanup; API1/Remaining0/incomplete/no baseline/no settled marker; test-only stdout forwarding wrapper")
+		return
+	}
 	var before workflows.WorkerMessage
 	for ctx.Err() == nil {
 		var terminals int
@@ -120,10 +182,20 @@ func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 		t.Fatal("cut was not durable terminal before mailbox acknowledgement", before, requests.Load())
 	}
 	stopFirst()
-	<-firstDone
+	awaitManagedServe(t, firstDone)
 	var finalRows int
-	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='final'`, message.ID).Scan(&finalRows); err != nil || finalRows != 0 {
-		t.Fatal("failed completion transaction partially committed accounting", finalRows, err)
+	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='final' AND (json_extract(CAST(record AS TEXT),'$.complete')=1 OR json_extract(CAST(record AS TEXT),'$.cost_incomplete')!=1)`, message.ID).Scan(&finalRows); err != nil || finalRows != 0 {
+		t.Fatal("failed completion transaction committed settled accounting", finalRows, err)
+	}
+	var known, baselines, finished int
+	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key='final' AND json_extract(CAST(record AS TEXT),'$.complete')=0 AND json_extract(CAST(record AS TEXT),'$.cost_incomplete')=1 AND json_extract(CAST(record AS TEXT),'$.delta_cost_usd')=0.000123`, message.ID).Scan(&known); err != nil || known != 1 {
+		t.Fatal("failed mailbox transaction lost original incomplete known cost", known, err)
+	}
+	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_session_counters WHERE origin_id=?`, run.ID).Scan(&baselines); err != nil {
+		t.Fatal(err)
+	}
+	if err = diagnostic.QueryRow(`SELECT count(*) FROM usage_invocations WHERE id=? AND json_extract(CAST(record AS TEXT),'$.finished')=1`, message.ID).Scan(&finished); err != nil || baselines != 0 || finished != 0 {
+		t.Fatal("failed mailbox transaction advanced accounting settlement", baselines, finished, err)
 	}
 	if _, err = diagnostic.Exec(`DROP TRIGGER owned_managed_completion_cut`); err != nil {
 		t.Fatal(err)
@@ -157,7 +229,7 @@ func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	secondCtx, stopSecond := context.WithCancel(ctx)
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
-	defer func() { stopSecond(); <-secondDone }()
+	defer func() { stopSecond(); awaitManagedServe(t, secondDone) }()
 	var after workflows.WorkerMessage
 	for ctx.Err() == nil {
 		messages, err := manager.Messages(ctx, run.ID, worker.ID)
@@ -191,4 +263,15 @@ func TestSDKManagedTerminalCheckpointReconcilesWithoutProvider(t *testing.T) {
 	}
 	t.Logf("SDK .322 original=%s owner=%s/%d->%s/%d sameStartedAt/Remaining0/API1/runtimecleaned1/usage16-5/completiontxabort/native-free", message.ID, run.Owner, run.Generation, resumed.Owner, resumed.Generation)
 
+}
+
+// A provider/cleanup regression must fail this fixture before the outer suite
+// deadline, including when a failure jumps directly to deferred cancellation.
+func awaitManagedServe(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(6 * time.Second):
+		t.Error("managed worker scheduler did not join after cancellation")
+	}
 }

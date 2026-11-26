@@ -59,8 +59,12 @@ func TestManagedCodexRetainedManifestCannotRecaptureAuthority(t *testing.T) {
 }
 
 func TestManagedCodexCanonicalTupleAndNilRoleCompatible(t *testing.T) {
-	if source, err := managedSourceDescriptor(); err != nil || source.SourceSHA256 == "" || source.Protocol != "agent-workflow-codex-managed/1" {
-		t.Fatal("canonical managed source tuple unavailable", err)
+	source, sourceErr := managedSourceDescriptor()
+	if source.Schema != 1 || source.SourceSHA256 == "" || source.Protocol != "agent-workflow-codex-managed/1" {
+		t.Fatal("canonical managed source tuple unavailable", sourceErr)
+	}
+	if source.Enabled && sourceErr != nil || !source.Enabled && sourceErr == nil {
+		t.Fatal("canonical runtime admission does not follow its verified gate", source.Enabled, sourceErr)
 	}
 	raw, err := json.Marshal(Agent{})
 	if err != nil {

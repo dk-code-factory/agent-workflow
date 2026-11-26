@@ -251,6 +251,25 @@ func validateManagedSDKResponseTotals(ctx context.Context, tx *sql.Tx, inv strin
 		if key == managedSDKAttemptKey {
 			continue
 		}
+		if key == "final" {
+			var known UsageObservation
+			if err = decodeJSONWithNumbers(raw, &known); err != nil {
+				return err
+			}
+			var identity UsageIdentity
+			// Model is checked below against the engine-owned invocation row.
+			var identityRaw []byte
+			if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, inv).Scan(&identityRaw); err != nil {
+				return err
+			}
+			if err = decodeJSONWithNumbers(identityRaw, &identity); err != nil {
+				return err
+			}
+			if known.Complete || !known.CostIncomplete || !managedSDKKnownCostMatches(known, identity, result) {
+				return fmt.Errorf("SDK known terminal cost receipt conflicts")
+			}
+			continue
+		}
 		if !strings.HasPrefix(key, "sdk-response:") || len(strings.TrimPrefix(key, "sdk-response:")) == 0 {
 			return fmt.Errorf("SDK original attempt has an unknown observation")
 		}

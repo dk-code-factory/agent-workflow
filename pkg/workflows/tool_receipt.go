@@ -81,14 +81,20 @@ func deniedToolReceipt(in ToolInvocation, record ToolCallRecord, cause error) er
 	return &ToolReceiptError{cause: cause, text: record.Error, run: in.RunID, invocation: in.InvocationID, call: record.CallID, fingerprint: record.ArgumentFingerprint, owner: in.Owner, generation: in.Generation}
 }
 
-func toolArgumentFingerprint(req ToolRequest) string {
-	var args any
-	if decodeJSONWithNumbers(req.Arguments, &args) != nil {
+// Both durable receipt production and verification use this canonical identity.
+// Invalid JSON retains its original bytes as a JSON string, as in historical rows.
+func toolArgumentIdentity(req ToolRequest) (args any, canonical []byte, fingerprint string, err error) {
+	err = decodeJSONWithNumbers(req.Arguments, &args)
+	if err != nil {
 		args = string(req.Arguments)
 	}
-	canonical, _ := json.Marshal(args)
+	canonical, _ = json.Marshal(args)
 	digest := sha256.Sum256(append([]byte(req.Server+"\x00"+req.Tool+"\x00"), canonical...))
-	return hex.EncodeToString(digest[:])
+	return args, canonical, hex.EncodeToString(digest[:]), err
+}
+func toolArgumentFingerprint(req ToolRequest) string {
+	_, _, fingerprint, _ := toolArgumentIdentity(req)
+	return fingerprint
 }
 
 // KnownToolDenial permits an ordinary failed tool response only for an exact,

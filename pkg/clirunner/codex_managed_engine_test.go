@@ -19,8 +19,8 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
-// This test-only runner reaches the production managed transport while its
-// canonical profile is disabled. It does not expose a runtime admission bypass.
+// This fixture reaches the public production managed entry with the canonical
+// verified profile. It does not expose a runtime admission bypass.
 type managedEngineFixture struct {
 	runner     *Runner
 	identity   *ManagedCodexBuildIdentity
@@ -102,7 +102,7 @@ func managedNativeFixtureIdentity(t *testing.T) *ManagedCodexBuildIdentity {
 		t.Fatal(err)
 	}
 	// Use the frozen source tuple supplied by the owned build receipt. Test
-	// selection never changes the embedded canonical disabled descriptor.
+	// selection never changes the embedded canonical descriptor.
 	source := managedCodexDescriptor{UpstreamSHA: m.Inputs.UpstreamSHA, PatchSHA256: m.Inputs.PatchSHA256, RecipeSHA256: m.Inputs.RecipeSHA256, Protocol: m.Inputs.Protocol, RustToolchain: m.Inputs.RustToolchain, OfflineWrapperSHA256: m.Inputs.OfflineWrapperSHA256, SourceSHA256: m.SourceSHA256}
 	identity, err := captureManagedBuild(path, source)
 	if err != nil {

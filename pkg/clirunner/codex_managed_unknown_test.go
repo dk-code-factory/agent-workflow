@@ -163,8 +163,9 @@ func TestManagedCodexUnknownFirstAttemptHoldsAdmissionAndMailbox(t *testing.T) {
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
 	defer func() { stopSecond(); <-secondDone }()
-	// Two ordinary scheduler sweeps exercise the later queued message without
-	// assuming that merely inspecting an env flag proves native retry behavior.
+	// Keep the scheduler available for a bounded observation interval. Elapsed
+	// time does not prove a particular sweep ran; direct Resume rejection above
+	// and the durable original/queued state below establish the hold.
 	select {
 	case <-time.After(2200 * time.Millisecond):
 	case <-ctx.Done():

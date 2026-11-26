@@ -79,8 +79,12 @@ func TestManagedSDKOriginalAttemptCannotRestartOrAcknowledgeUnknown(t *testing.T
 		t.Fatal("original known charges lost or unknown declared complete", report, err)
 	}
 	current, err := manager.Get(context.Background(), id.RunID, w.ID)
-	if err != nil || current.Remaining != 0 || !messages[0].StartedAt.Equal(msg.StartedAt) {
+	if err != nil || current.Remaining != 0 {
 		t.Fatal(current, err)
+	}
+	reloaded, err := manager.Messages(context.Background(), id.RunID, w.ID)
+	if err != nil || len(reloaded) != 1 || reloaded[0].ID != msg.ID || !reloaded[0].StartedAt.Equal(msg.StartedAt) {
+		t.Fatal("restart changed original message/deadline", reloaded, err)
 	}
 }
 func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *testing.T) {
