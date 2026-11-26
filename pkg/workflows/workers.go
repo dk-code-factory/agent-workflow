@@ -1158,10 +1158,19 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	current.SessionID = w.SessionID
 	if current.Skill != nil && msg.Status == RunStatusSucceeded {
 		if err = completeSkillChildTx(context.WithoutCancel(ctx), tx, current, msg.ID); err != nil {
-			return
+			// Accounting can retain a known usage floor while rejecting the
+			// provider's terminal aggregate. Persist that failed completion under
+			// this fence, retaining the original effects hold and child permit.
+			turnErr = fmt.Errorf("native skill completion rejected: %w", err)
+			msg.Status = RunStatusFailed
+			msg.Error = Redact(turnErr.Error(), secrets)
+			msg.FailureClass = classifyFailure(turnErr)
+			msg.UnsafeFailureClass = unsafeWorkerFailureClass(errors.Join(failureCauses, turnErr))
+			w.Error = msg.Error
+		} else {
+			current.SkillTurnUncertain = false
+			current.SkillActiveMessageID = ""
 		}
-		current.SkillTurnUncertain = false
-		current.SkillActiveMessageID = ""
 	}
 	current.Error = w.Error
 	current.FailureClass = msg.FailureClass

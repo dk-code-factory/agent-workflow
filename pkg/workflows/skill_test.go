@@ -539,6 +539,29 @@ func TestSkillEncodedInstructionRejectsBeforeClaimsOrProjection(t *testing.T) {
 	}
 }
 
+func TestSkillInvalidUTF8RejectsBeforeClaimsOrProjection(t *testing.T) {
+	directory, inputs := suppliedSkillFixture(t)
+	body := append([]byte("---\nname: probe\ndescription: Fixture.\n---\n"), 0xff)
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	e, s, f := skillExecutorFixture(t, skillWorkflow, false)
+	run, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+	if err == nil || !strings.Contains(err.Error(), "valid UTF-8") || run != nil || len(f.requests) != 0 {
+		t.Fatal("unrepresentable original bytes reached admission", run, err)
+	}
+	var n int
+	if err = s.db.QueryRow("SELECT count(*) FROM runs").Scan(&n); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	if dirs, _ := filepath.Glob(filepath.Join(s.Dir, "assets", "*")); len(dirs) != 0 {
+		t.Fatal("invalid UTF-8 projected assets", dirs)
+	}
+	if _, err = ParseSkillMetadata([]byte("---\nname: probe\ndescription: Fixture.\n---\nValid native text: \u4e16\u754c\n")); err != nil {
+		t.Fatal("valid multibyte instructions rejected", err)
+	}
+}
+
 func TestSkillRetainedEffectiveControlRejectsBeforeRecoveryClaim(t *testing.T) {
 	_, inputs := suppliedSkillFixture(t)
 	e, s, f := skillExecutorFixture(t, skillWorkflow, false)

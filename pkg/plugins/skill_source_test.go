@@ -90,3 +90,22 @@ func TestSkillPackageRejectsNestedAdditionalSkillEntry(t *testing.T) {
 		t.Fatal("nested selected skill silently filtered", source, err, string(data))
 	}
 }
+
+func TestSkillPackageRejectsInvalidUTF8Instructions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "package")
+	if err := Init(root, "demo", "0.2.2", ""); err != nil {
+		t.Fatal(err)
+	}
+	body := append([]byte("---\nname: demo\ndescription: Fixture.\n---\n"), 0xff)
+	if err := os.WriteFile(filepath.Join(root, "skills/demo/SKILL.md"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := ResolveSkillPackage(t.Context(), workflows.SkillPackageReference{Root: root, Digest: captured.Digest(), Skill: "demo"})
+	if err == nil || source != nil || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatal("unrepresentable captured package instruction admitted", source, err)
+	}
+}

@@ -154,6 +154,8 @@ content; changed captured bytes cannot retain an idempotency identity. Admission
 source modes and empty directories. Each selected occurrence receives only its
 entry and explicitly selected resources in an engine-owned plugin; independent
 siblings retain the empty skill configuration.
+Instruction bytes must also be valid UTF-8; admission rejects malformed text
+before capture or provider preflight.
 
 Arguments and model overrides can use literals and admitted `inputs` expressions.
 Admission pins these values, resources, model and capability profile before run

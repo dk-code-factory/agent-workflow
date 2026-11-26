@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -127,6 +128,9 @@ func parseSkillSelection(value any) (*SkillSelection, error) {
 // ParseSkillMetadata deliberately accepts only portable metadata. Provider
 // frontmatter that changes agents, hooks, tools or models cannot expand policy.
 func ParseSkillMetadata(data []byte) (string, error) {
+	if !utf8.Valid(data) {
+		return "", fmt.Errorf("skill instruction must be valid UTF-8 for exact native evidence")
+	}
 	encoded, err := json.Marshal(string(data))
 	if err != nil || len(encoded) > MaxSkillEncodedInstructionBytes {
 		return "", fmt.Errorf("skill instruction exceeds 64 KiB JSON evidence admission bound")
