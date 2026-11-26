@@ -101,14 +101,15 @@ try {
     const item = message.message;
     if (message.tool_use_result?.usage) retainFloor(childUsageFloor, message.tool_use_result.usage);
     if (item?.id && item.usage) {
-      const key = (message.parent_tool_use_id ?? 'parent') + ':' + item.id;
+      const isParent = message.parent_tool_use_id == null;
+      const key = JSON.stringify([message.parent_tool_use_id ?? null, item.id]);
       if (!usageMessages.has(key) && usageMessages.size >= 128) throw new Error('Native usage evidence exceeds retention bound');
-      const previous = usageMessages.get(key) ?? {};
-      retainFloor(previous, item.usage); usageMessages.set(key, previous);
+      const previous = usageMessages.get(key) ?? { isParent, usage: {} };
+      retainFloor(previous.usage, item.usage); usageMessages.set(key, previous);
     }
     const parent = {}, children = {};
-    for (const [key, usage] of usageMessages) for (const [name, value] of Object.entries(usage)) {
-      const target = key.startsWith('parent:') ? parent : children;
+    for (const { isParent, usage } of usageMessages.values()) for (const [name, value] of Object.entries(usage)) {
+      const target = isParent ? parent : children;
       const total = (target[name] ?? 0) + value;
       if (!Number.isSafeInteger(total)) throw new Error('Native usage total exceeds exact counter range');
       target[name] = total;
@@ -316,7 +317,7 @@ try {
         }
         if (parentStreamID && message.event?.type === 'message_delta' && message.event.usage) {
           rememberUsage({ message: { id: parentStreamID, usage: message.event.usage } });
-          emit({ type: 'usage', session_id: sessionID, data: { usage: usageMessages.get('parent:' + parentStreamID), observation_key: parentStreamID } });
+          emit({ type: 'usage', session_id: sessionID, data: { usage: usageMessages.get(JSON.stringify([null, parentStreamID]))?.usage, observation_key: parentStreamID } });
         }
       }
       if (message.type === 'stream_event') {

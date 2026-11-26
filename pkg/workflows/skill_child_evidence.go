@@ -153,8 +153,9 @@ func (e *SkillEvidence) ObserveChild(plan *SkillInvocation, observation SkillChi
 	return nil
 }
 
-// Completion joins native observations in any arrival order. A task summary or
-// status=completed cannot substitute for the original stopped child's output.
+// Completion joins hook/task/result observations across arrival order while
+// preserving child message stream order. A task summary or status=completed
+// cannot substitute for the original stopped child's output.
 func (e *SkillEvidence) completeChildren(plan *SkillInvocation) error {
 	if len(plan.Children) == 0 {
 		return nil
