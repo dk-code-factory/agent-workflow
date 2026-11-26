@@ -50,9 +50,9 @@ func TestMaintainedPluginAdmitsGeneratedPayloadAndDeclaredResources(t *testing.T
 	if err != nil || string(got) != string(want) {
 		t.Fatal("declared resource changed", err)
 	}
-	for _, entry := range captured.Manifest().Entries {
-		if entry.Path == "fixtures" || entry.Path == "config" {
-			t.Fatal("undeclared development sources shipped")
+	for _, name := range []string{"fixtures", "config"} {
+		if _, err := os.Lstat(filepath.Join(installed, name)); !os.IsNotExist(err) {
+			t.Fatalf("undeclared development source %s shipped (stat error: %v)", name, err)
 		}
 	}
 }
