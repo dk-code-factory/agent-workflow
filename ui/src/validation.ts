@@ -405,7 +405,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
   }
   const callable = w.on?.workflow_call as Mapping | undefined;
   if (mapping(callable?.inputs)) for (const [id, input] of Object.entries(callable.inputs)) {
-    if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
+    if (mapping(input) && input.type && !['string', 'boolean', 'number', 'object', 'array', 'skill'].includes(String(input.type))) add('input-type', 'Unsupported input type', ['on', 'workflow_call', 'inputs', id, 'type']);
   }
   const validateFiles = (files: unknown, path: Path) => {
     if (!Array.isArray(files) || files.some(value => typeof value !== 'string' || !value || value.startsWith('/') || /[\\\x00]/.test(value) || value.split('/').includes('..') || value.includes('${{'))) add('files', 'Helper files require static relative paths without traversal', path);
@@ -557,7 +557,36 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
               add('agent-definition', 'Agent selection requires select and 1–32 literal named definition paths', [...sp, 'with', 'agent']);
             }
           } else if (typeof params.agent !== 'string' || !params.agent.trim()) add('agent-definition', 'agent/run requires a definition path, agent reference or definition selection', [...sp, 'with', 'agent']);
-          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns', 'checklist'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          for (const key of Object.keys(params)) if (!['agent', 'input', 'model', 'prompt', 'message', 'workspace', 'output', 'turns', 'checklist', 'skill'].includes(key)) add('action', `Unsupported agent parameter "${key}"`, [...sp, 'with', key]);
+          if (Object.hasOwn(params, 'skill')) {
+            const skill = params.skill;
+            const declared = mapping(callable?.inputs) && mapping(skill) && typeof skill.input === 'string' ? callable.inputs[skill.input] : undefined;
+            const evidence = mapping(skill) ? skill.evidence : undefined;
+            const resourcePath = (value: unknown): value is string => typeof value === 'string' && !!value && value !== '.' && !value.startsWith('/') && !/[\\\x00]/.test(value) && !value.split('/').includes('..') && !value.includes('${{');
+            const canonicalResource = (value: string) => value.split('/').filter(part => part !== '' && part !== '.').join('/');
+            const admittedText = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && new TextEncoder().encode(value).length <= 65536 && !value.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{');
+            const children = mapping(skill) && skill.children === undefined ? [] : mapping(skill) ? skill.children : undefined;
+            const requiredChildren = mapping(evidence) && evidence.children === undefined ? [] : mapping(evidence) ? evidence.children : undefined;
+            const validChildren = Array.isArray(children) && Array.isArray(requiredChildren) && children.length === requiredChildren.length && children.length <= 1
+              && children.every(child => mapping(child) && Object.keys(child).every(key => ['name', 'prompt', 'description', 'tools', 'resources', 'model', 'max-turns', 'max-calls', 'background'].includes(key))
+                && typeof child.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(child.name) && child.name.length <= 48 && requiredChildren[0] === child.name
+                && admittedText(child.prompt) && admittedText(child.description) && new TextEncoder().encode(child.description).length <= 512
+                && Array.isArray(child.tools) && child.tools.length === 1 && child.tools[0] === 'Read' && child.model === 'inherit' && child.background === false && child['max-turns'] === 2 && child['max-calls'] === 1
+                && Array.isArray(child.resources) && child.resources.length > 0 && child.resources.length <= 32 && new Set(child.resources.map(resource => typeof resource === 'string' ? canonicalResource(resource) : resource)).size === child.resources.length
+                && child.resources.every(resource => resourcePath(resource) && mapping(skill) && Array.isArray(skill.resources) && skill.resources.some(parent => typeof parent === 'string' && (canonicalResource(resource) === canonicalResource(parent) || canonicalResource(resource).startsWith(canonicalResource(parent) + '/')))));
+            const valid = mapping(skill) && Object.keys(skill).every(key => ['input', 'arguments', 'resources', 'evidence', 'children'].includes(key))
+              && typeof skill.input === 'string' && mapping(declared) && declared.type === 'skill'
+              && (skill.arguments === undefined || typeof skill.arguments === 'string' && new TextEncoder().encode(skill.arguments).length <= 65536
+                && !skill.arguments.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{'))
+              && (skill.resources === undefined || Array.isArray(skill.resources) && skill.resources.length <= 128 && skill.resources.every(resourcePath))
+              && mapping(evidence) && evidence.invocation === 'required' && Object.keys(evidence).every(key => ['invocation', 'children'].includes(key))
+              && validChildren
+              && typeof params.agent === 'string' && !params.agent.includes('${{');
+            const selectedOutputEnabled = typeof params.output === 'string' ? !!params.output.trim() : mapping(params.output) && (typeof params.output.format === 'string' && !!params.output.format.trim() || Object.hasOwn(params.output, 'schema'));
+            if (selectedOutputEnabled && (!mapping(params.output) || params.output['repair-attempts'] !== 0)) add('skill-repair', 'Selected skills require output.repair-attempts: 0; tool-free repair is unverified', [...sp, 'with', 'output']);
+            if (!valid) add('skill', 'Skill requires a declared type: skill input, pinned arguments/resources and required evidence; a child requires one foreground Read declaration with inherited model, max-turns 2, max-calls 1 and resource subset', [...sp, 'with', 'skill']);
+            else add('host-skill', 'Skill source bytes, pinned model and supported provider profile require host admission', [...sp, 'with', 'skill'], undefined, 'host', 'info');
+          }
           if (Object.hasOwn(params, 'checklist')) {
             const normalizeBudget = (object: Mapping, path: Path) => {
               if (!Object.hasOwn(object, 'max-retries')) return;

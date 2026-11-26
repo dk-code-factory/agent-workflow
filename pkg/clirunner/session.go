@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -114,6 +115,32 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			agent.Model = req.Definition.Model
 		}
 	}
+	if req.Skill != nil {
+		workspace := req.Workspace
+		if workspace == "" {
+			workspace = r.Workspace
+		}
+		if req.Skill.Workspace != "" && workspace != req.Skill.Workspace {
+			return workflows.SessionResult{}, fmt.Errorf("selected-skill workspace changed after admission")
+		}
+		admitted, err := r.AdmitSkillTask(req.Skill)
+		if err != nil {
+			return workflows.SessionResult{}, err
+		}
+		if !reflect.DeepEqual(req.Skill, admitted) {
+			return workflows.SessionResult{}, fmt.Errorf("skill capability profile changed")
+		}
+		if req.Definition != nil && req.Definition.ReasoningEffort != req.Skill.Effort {
+			return workflows.SessionResult{}, fmt.Errorf("skill reasoning-effort changed")
+		}
+		if req.Model != "" && req.Model != req.Skill.Model {
+			return workflows.SessionResult{}, fmt.Errorf("skill model changed")
+		}
+		req.Model = req.Skill.Model
+		if err := req.SkillEvidence.Continuation(req.Skill, req.SessionID); err != nil {
+			return workflows.SessionResult{}, err
+		}
+	}
 	if req.Input != nil {
 		req.Prompt, err = workflows.AgentTaskPrompt(req.Prompt, req.Input)
 		if err != nil {
@@ -194,6 +221,17 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 		input["broker_tools"] = catalog
 	}
+	if req.Skill != nil {
+		skill, err := skillBridgeInput(req)
+		if err != nil {
+			return workflows.SessionResult{}, err
+		}
+		input["skill"] = skill
+		input["tools"] = append(append([]string(nil), agent.Tools...), "Skill")
+		if len(req.Skill.Children) != 0 {
+			input["tools"] = append(input["tools"].([]string), "Agent")
+		}
+	}
 	command := agent.Command
 	if command == "" {
 		command = "node"
@@ -252,7 +290,28 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.RepairOnly {
 		invocationTools = nil
 	}
-	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup)
+	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild)
+	if req.Skill != nil && len(req.Skill.Children) != 0 && result.Outputs != nil {
+		raw, _ := result.Outputs["native_child_result"].(map[string]any)
+		if raw == nil {
+			// Keep known parent partials without labeling them cumulative child
+			// accounting. No original terminal means this turn remains on hold.
+			result.Outputs["usage_incomplete"] = true
+			parseErr = errors.Join(parseErr, fmt.Errorf("native child original accounting terminal is missing"))
+		} else {
+			update, usageErr := workflows.SkillChildUsage(raw)
+			result.Outputs["native_parent_usage"] = raw["usage"]
+			result.Outputs["native_model_usage"] = raw["modelUsage"]
+			result.Outputs["usage"] = update.Usage
+			result.Outputs["usage_counter_basis"] = update.CounterBasis
+			result.Outputs["usage_incomplete"] = update.Incomplete || result.Outputs["native_attempt_error"] != nil
+			result.Outputs["cost_usd"] = update.CostUSD
+			result.Outputs["provider"] = update.Provider
+			result.Outputs["model"] = update.Model
+			result.Outputs["session_id"] = result.SessionID
+			parseErr = errors.Join(parseErr, usageErr)
+		}
+	}
 	if parseErr == nil && req.SessionID != "" && result.SessionID != req.SessionID {
 		parseErr = fmt.Errorf("provider returned an unexpected resumed session identity")
 	}

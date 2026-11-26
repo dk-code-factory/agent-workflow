@@ -27,6 +27,7 @@ type AgentTaskDispatch struct {
 	Input     AgentTaskInput `json:"input"`
 }
 type AgentTaskInput struct {
+	Skill      *SkillInvocation     `json:"skill,omitempty"`
 	Workspace  string               `json:"workspace,omitempty"`
 	Prompt     string               `json:"prompt"`
 	Input      any                  `json:"input,omitempty"`
@@ -77,12 +78,29 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		}
 		request.Workspace = worker.TaskWorkspace
 		request.Definition = worker.Definition
+		if request.Skill != nil && actionHash(request.Skill) != actionHash(worker.Skill) {
+			return nil, fmt.Errorf("%w: agent skill binding changed", ErrActionIntegrity)
+		}
+		request.Skill = worker.Skill
+	}
+	if request.Skill != nil && request.Skill.Workspace != "" && request.Workspace != request.Skill.Workspace {
+		return nil, fmt.Errorf("%w: admitted skill workspace changed", ErrActionIntegrity)
+	}
+	if request.Skill != nil {
+		if request.Model == "" {
+			request.Model = request.Skill.Model
+		} else if request.Model != request.Skill.Model {
+			return nil, fmt.Errorf("%w: admitted skill model changed", ErrActionIntegrity)
+		}
+		if request.Output != nil && request.Output.RepairAttempts > 0 {
+			return nil, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
+		}
 	}
 	if request.Model == "" && request.Definition != nil && request.Definition.Model != "" {
 		request.Model = request.Definition.Model
 	}
 	operation := actionHash([]any{coordinate, ec.Attempt.InputFingerprint, request.RepairOnly, ec.Attempt.RepairCount})
-	dispatch := &AgentTaskDispatch{Reference: reference, Operation: operation, Input: AgentTaskInput{Workspace: request.Workspace, Prompt: request.Prompt, Input: request.Input, Output: request.Output, Model: request.Model, Turns: request.Turns, Definition: request.Definition}}
+	dispatch := &AgentTaskDispatch{Reference: reference, Operation: operation, Input: AgentTaskInput{Skill: request.Skill, Workspace: request.Workspace, Prompt: request.Prompt, Input: request.Input, Output: request.Output, Model: request.Model, Turns: request.Turns, Definition: request.Definition}}
 	if _, err := AgentTaskPrompt(request.Prompt, request.Input); err != nil {
 		return nil, err
 	}
@@ -121,7 +139,7 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	}
 	e.Workers.registerTaskSecrets(owner, e.redactions(ec.Secrets))
 	fence, _ := ctx.Value(fenceKey{}).(executionFence)
-	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: request.AgentID, StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Definition: request.Definition, Turns: request.Turns})
+	worker, err := e.Workers.Spawn(ctx, WorkerSpec{RunID: owner, Role: request.AgentID, StableID: reference, TaskWorkspace: request.Workspace, Owner: fence.owner, Skill: request.Skill, Definition: request.Definition, Turns: request.Turns})
 	if err != nil {
 		return nil, err
 	}

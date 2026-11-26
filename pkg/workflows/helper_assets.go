@@ -470,9 +470,15 @@ func (s *SQLiteStore) linkHelperAssets(ctx context.Context, tx *sql.Tx, r *Run, 
 			return err
 		}
 	}
+	if err := s.linkSkillAssets(ctx, tx, r, snap); err != nil {
+		return err
+	}
 	return s.linkPackageAssets(ctx, tx, r, snap)
 }
 func (s *SQLiteStore) verifyRunHelperAssets(ctx context.Context, run string, snap Snapshot) error {
+	if err := s.verifySkillAssets(ctx, run, snap); err != nil {
+		return err
+	}
 	for _, bundle := range helperBundles(snap.Definitions) {
 		var raw []byte
 		if err := s.db.QueryRowContext(ctx, `SELECT a.manifest FROM helper_assets a JOIN run_helper_assets r ON r.asset_origin=a.origin_id AND r.asset_id=a.id WHERE r.run_id=? AND a.origin_id=? AND a.id=?`, run, bundle.OriginID, bundle.ID).Scan(&raw); err != nil {

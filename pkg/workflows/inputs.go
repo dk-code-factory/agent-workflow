@@ -52,7 +52,7 @@ func resolveInputs(call *WorkflowCall, supplied map[string]any, secrets map[stri
 			} else {
 				_, valid = asNumericFloat(value)
 			}
-		case "object":
+		case "object", "skill":
 			_, valid = value.(map[string]any)
 		case "array":
 			_, valid = value.([]any)

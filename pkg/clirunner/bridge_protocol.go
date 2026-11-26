@@ -45,7 +45,7 @@ type bridgeFrame struct {
 
 // bridgeTurn has exactly one reader. Broker calls run independently, while the
 // adapter's blocked barrier serializes suspension with result delivery.
-func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func()) (workflows.SessionResult, error) {
+func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, input map[string]any, tools *workflows.InvocationTools, emit func(workflows.ProviderEvent), stop func(), authorizeChild ...func(context.Context, workflows.SkillChildObservation) error) (workflows.SessionResult, error) {
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	var callbacks sync.WaitGroup
@@ -137,6 +137,16 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			}
 			if !allowed || frame.CallID == "" || len(frame.CallID) > 256 {
 				return result, fmt.Errorf("unconfigured native tool permission request")
+			}
+			if frame.Tool == "Agent" {
+				var observation workflows.SkillChildObservation
+				raw, err := json.Marshal(frame.Data)
+				if err != nil || json.Unmarshal(raw, &observation) != nil || observation.ParentCallID != frame.CallID || observation.Kind != "permit" || len(authorizeChild) != 1 || authorizeChild[0] == nil {
+					return result, fmt.Errorf("native child lacks original durable authorization")
+				}
+				if err = authorizeChild[0](ctx, observation); err != nil {
+					return result, err
+				}
 			}
 			stateMu.Lock()
 			if len(nativeWork) >= 128 {
@@ -293,6 +303,13 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			result.Outputs["usage_incomplete"] = true
 			if emit != nil {
 				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: result.SessionID, Data: frame.Data})
+			}
+		case "skill_evidence", "skill_child_evidence", "skill_attempt_uncertainty":
+			if input["skill"] == nil {
+				return result, fmt.Errorf("unadmitted skill evidence")
+			}
+			if emit != nil {
+				emit(workflows.ProviderEvent{Type: frame.Type, SessionID: frame.SessionID, Data: frame.Data})
 			}
 		case "session", "progress", "interrupted":
 			if emit != nil {

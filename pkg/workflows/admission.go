@@ -35,6 +35,9 @@ func (e *Executor) Prepare(ctx context.Context, req RunRequest) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = e.admitSkills(ctx, all, &req); err != nil {
+		return nil, err
+	}
 	if err = e.discoverExecution(ctx); err != nil {
 		return nil, err
 	}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, assertIsolatedInitialization } from './isolation.mjs';
+import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -64,4 +64,18 @@ test('reject unknown plugins, missing evidence, skills and delegation while reta
     { tools: ['Skill'] }, { tools: ['Agent'] }, { tools: ['Task'] },
     { plugin_errors: [{ type: 'unknown' }] }, { plugin_errors: {} },
   ]) assert.throws(() => assertIsolatedInitialization({ ...clean, ...changes }), /isolation/);
+});
+
+test('selected skill requires qualified acknowledgement and exact later plugin set', () => {
+  const init = {claude_code_version:'2.1.322',plugins_applied:true,hooks_applied:true,hook_on_failure_supported:true,commands:[{name:'aw-probe:probe'}]};
+  assert.doesNotThrow(() => assertSkillAcknowledgement(init,'aw-probe:probe'));
+  for (const changes of [{plugins_applied:false},{plugins_applied:undefined},{commands:[]},{claude_code_version:'2.1.319'},{hooks_applied:false},{hook_on_failure_supported:false}]) assert.throws(() => assertSkillAcknowledgement({...init,...changes},'aw-probe:probe'));
+  const skill={name:'probe',qualified:'aw-probe:probe',root:'/owned/plugin'};
+  const message={plugins:[{name:'aw-probe',path:skill.root}],skills:['builtin-catalog-name',skill.qualified],tools:['Skill','Read']};
+  assert.doesNotThrow(() => assertSelectedInitialization(message,skill));
+  for (const changes of [{plugins:[]},{plugins:[...message.plugins,{name:'unknown',path:'builtin'}]},{plugins:[{name:'aw-probe',path:'/foreign'}]},{tools:['Skill','Agent']},{skills:['probe']},{plugin_errors:[{type:'unknown'}]}]) assert.throws(() => assertSelectedInitialization({...message,...changes},skill));
+  const childSkill={...skill,child:{type:'aw-child-review'}};
+  const childMessage={...message,tools:['Task','Read','Skill']};
+  assert.doesNotThrow(()=>assertSelectedInitialization(childMessage,childSkill));
+  for(const tools of [['Agent','Read','Skill'],['Task','Read','Skill','Bash'],['Read','Skill'],['Task','Skill']]) assert.throws(()=>assertSelectedInitialization({...childMessage,tools},childSkill));
 });

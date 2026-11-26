@@ -126,7 +126,13 @@ func admittedFingerprint(all map[string]*Workflow, roles json.RawMessage, execut
 			if job.Container != nil {
 				clearOwner(job.Container.Implementation)
 			}
-			job.Steps, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) { clearOwner(step.ContainerImplementation); return step, nil })
+			job.Steps, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) {
+				clearOwner(step.ContainerImplementation)
+				if step.Skill != nil && step.Skill.Binding.Assets != nil {
+					step.Skill.Binding.Assets.OriginID = ""
+				}
+				return step, nil
+			})
 			w.Jobs[id] = job
 		}
 	}

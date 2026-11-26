@@ -26,7 +26,7 @@ func Validate(w *Workflow) error {
 	if w.On.WorkflowCall != nil {
 		for id, input := range w.On.WorkflowCall.Inputs {
 			switch input.Type {
-			case "", "string", "boolean", "number", "object", "array":
+			case "", "string", "boolean", "number", "object", "array", "skill":
 			default:
 				return fmt.Errorf("input %s: unsupported type %q", id, input.Type)
 			}
@@ -295,12 +295,15 @@ func validateStepSequence(w *Workflow, id string, steps []Step) error {
 		}
 		for key := range step.With {
 			switch key {
-			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns", "checklist":
+			case "model", "prompt", "message", "workspace", "output", "agent", "input", "turns", "checklist", "skill":
 			default:
 				return fmt.Errorf("step %s: unsupported parameter %q", sid, key)
 			}
 		}
 		if step.Uses == "agent/run" {
+			if _, err := parseSkillSelection(step.With["skill"]); err != nil {
+				return err
+			}
 			if _, err := agentDefinitionChoices(step.With["agent"]); err != nil {
 				return fmt.Errorf("step %s: %w", sid, err)
 			}

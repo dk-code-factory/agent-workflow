@@ -20,14 +20,16 @@ test('define callable inputs secrets and outputs', async ({ page }) => {
 });
 
 test('typed defaults retain literal values and offer field YAML for complex values', async ({ page }) => {
-  const ui = await open(page, 'on: {workflow_call: {inputs: {count: {type: number, required: false}, title: {type: string}, config: {type: object}}}}\njobs: {build: {steps: [{argv: [echo]}]}}');
+  const ui = await open(page, 'on: {workflow_call: {inputs: {count: {type: number, required: false}, title: {type: string}, config: {type: object}, selected: {type: skill}}}}\njobs: {build: {steps: [{argv: [echo]}]}}');
   await ui.getByText('Callable inputs', { exact: true }).click();
   await field(page, 'Default: count', '2.5');
   await field(page, 'Default: title', 'false');
   await field(page, 'Default: config (YAML)', 'items: [one, two]');
+  await field(page, 'Default: selected (YAML)', 'directory: /application/skills/review');
   const inputs = (await snapshot(page)).workflow.on.workflow_call.inputs;
   expect(inputs.count).toEqual({ type: 'number', required: false, default: 2.5 });
   expect(inputs.title.default).toBe('false');
   expect(inputs.config.default).toEqual({ items: ['one', 'two'] });
+  expect(inputs.selected.default).toEqual({ directory: '/application/skills/review' });
   await expect(ui.getByRole('button', { name: 'Use job result in Default: title', exact: true })).toHaveCount(0);
 });

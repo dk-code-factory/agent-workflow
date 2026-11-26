@@ -387,6 +387,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				}
 				req.Ref = packageSource.Binding.Workflow
 			}
+			skillSources, err := s.Executor.CaptureSkillInputs(r.Context(), req.Ref, req.Inputs, packageSource)
+			if err != nil {
+				fail(400, err)
+				return
+			}
 			if req.RequestID != "" {
 				if len(req.RequestID) > 128 {
 					fail(400, fmt.Errorf("request_id exceeds 128 bytes"))
@@ -402,7 +407,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 					if packageSource != nil {
 						packageBinding = &packageSource.Binding
 					}
-					if !workflows.SamePackage(packageBinding, snap.Package) || existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) || req.TaskGroup != group {
+					if !workflows.JSONValuesEqual(workflows.SkillInputIdentities(skillSources), snap.SkillInputs) || !workflows.SamePackage(packageBinding, snap.Package) || existing.WorkflowRef != ref || !workflows.JSONValuesEqual(req.Inputs, snap.Inputs) || string(c) != string(d) || req.TaskGroup != group {
 						fail(409, fmt.Errorf("request_id reused with different content"))
 						return
 					}
@@ -435,7 +440,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				fail(429, fmt.Errorf("queued run limit reached"))
 				return
 			}
-			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{Package: packageSource, TaskGroup: req.TaskGroup, RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
+			run, err := s.Executor.Prepare(r.Context(), workflows.RunRequest{SkillSources: skillSources, Package: packageSource, TaskGroup: req.TaskGroup, RequestID: req.RequestID, Ref: req.Ref, Inputs: req.Inputs, SecretRefs: req.SecretRefs, Secrets: secrets})
 			if err != nil {
 				fail(400, err)
 				return

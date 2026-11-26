@@ -10,6 +10,12 @@ import (
 // every discovered path in this process's private CODEX_HOME before any thread
 // starts (including resume), then verify the effective configuration.
 func isolateCodexSkills(rpc *appRPC, workspace string) error {
+	return isolateCodexSelectedSkill(rpc, workspace, "")
+}
+
+// A selected occurrence allows only its verified retained entry. Registration
+// does not imply admission: the effective list must confirm that exact path.
+func isolateCodexSelectedSkill(rpc *appRPC, workspace, selected string) error {
 	list := func() ([]string, error) {
 		raw, err := rpc.call("skills/list", map[string]any{"cwds": []string{workspace}, "forceReload": true})
 		if err != nil {
@@ -48,6 +54,9 @@ func isolateCodexSkills(rpc *appRPC, workspace string) error {
 		return err
 	}
 	for _, path := range paths {
+		if path == selected {
+			continue
+		}
 		raw, err := rpc.call("skills/config/write", map[string]any{"path": path, "enabled": false})
 		if err != nil {
 			return fmt.Errorf("skill isolation: disable skill: %w", err)
@@ -62,6 +71,12 @@ func isolateCodexSkills(rpc *appRPC, workspace string) error {
 	remaining, err := list()
 	if err != nil {
 		return err
+	}
+	if selected != "" {
+		if len(remaining) != 1 || remaining[0] != selected {
+			return fmt.Errorf("skill isolation: selected retained skill is missing or unadmitted skills remain enabled")
+		}
+		return nil
 	}
 	if len(remaining) != 0 {
 		return fmt.Errorf("skill isolation: provider still exposes enabled skills")

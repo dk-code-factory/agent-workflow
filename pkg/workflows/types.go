@@ -133,6 +133,7 @@ type Job struct {
 }
 
 type Step struct {
+	Skill                   *SkillInvocation         `json:"skill_invocation,omitempty" yaml:"-"`
 	UseDefinition           string                   `json:"use-definition,omitempty" yaml:"use-definition,omitempty"`
 	Reuse                   *StepReuse               `json:"reuse,omitempty" yaml:"-"`
 	Files                   []string                 `json:"files,omitempty" yaml:"files,omitempty"`
