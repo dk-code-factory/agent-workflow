@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,6 +43,11 @@ type suppliedSession struct {
 	reportOnly   bool
 	reject       bool
 	continuation bool
+	nonWritable  bool
+}
+
+func (f *suppliedSession) WorkerAccess(string) (WorkerAccess, error) {
+	return WorkerAccess{Writable: !f.nonWritable}, nil
 }
 
 func (f *suppliedSession) AdmitSkillTask(plan *SkillInvocation) (*SkillInvocation, error) {
@@ -338,6 +344,61 @@ func TestSkillMissingOriginalReceiptRejectsRecoveryBeforeClaim(t *testing.T) {
 	workers, err = e.Workers.List(t.Context(), run.ID)
 	if err != nil || workers[0].Remaining != remaining {
 		t.Fatal("continuation reset original budget", workers, err)
+	}
+}
+
+func TestSkillUnknownNativeExecEffectsRejectExplicitRetryBeforeClaim(t *testing.T) {
+	_, inputs := suppliedSkillFixture(t)
+	e, store, f := skillExecutorFixture(t, skillWorkflow, false)
+	f.continuation = true
+	f.nonWritable = true
+	marker := filepath.Join(t.TempDir(), "owned-native-effect")
+	f.respond = func(SessionRequest) (map[string]any, error) {
+		// The provider's sandbox label and initial native skill receipt cannot
+		// reconcile a command whose response was lost after its actual effect.
+		if err := exec.CommandContext(t.Context(), "/bin/sh", "-c", `printf 'effect\n' >> "$1"`, "fixture", marker).Run(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("lost native exec response after effect")
+	}
+	run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+	if err == nil || run == nil {
+		t.Fatal("lost response not exercised", run, err)
+	}
+	before, _, err := store.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenSQLite(store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err = reopened.verifySkillContinuations(t.Context(), run.ID); err == nil || !strings.Contains(err.Error(), "uncertain effects") {
+		t.Fatal("restart lost conservative effect hold", err)
+	}
+	workers, err := e.Workers.List(t.Context(), run.ID)
+	if err != nil || len(workers) != 1 {
+		t.Fatal(workers, err)
+	}
+	w := workers[0]
+	if !w.SkillTurnUncertain || w.Access.Writable || w.Remaining != 31 || w.SessionID == "" || w.SkillEvidence.Complete(w.Skill) != nil {
+		t.Fatal("fixture did not retain original receipt, nonwritable access, budget and unknown turn", w)
+	}
+	if _, err = e.Resume(t.Context(), run.ID, nil, true); err == nil || !strings.Contains(err.Error(), "uncertain effects") {
+		t.Fatal("explicit uncertain retry bypassed selected native effect hold", err)
+	}
+	if _, err = e.Workers.Send(t.Context(), run.ID, w.ID, "replacement", "Retry"); err == nil || !strings.Contains(err.Error(), "uncertain effects") {
+		t.Fatal("send bypassed selected native effect hold", err)
+	}
+	after, _, err := store.Load(t.Context(), run.ID)
+	if err != nil || after.Generation != before.Generation || after.Status != before.Status || len(f.requests) != 1 {
+		t.Fatal("unknown native effects reclaimed or dispatched", after, len(f.requests), err)
+	}
+	workers, err = e.Workers.List(t.Context(), run.ID)
+	data, readErr := os.ReadFile(marker)
+	if err != nil || readErr != nil || workers[0].Remaining != 31 || string(data) != "effect\n" {
+		t.Fatal("original allowance reset or effect repeated", workers, string(data), err, readErr)
 	}
 }
 

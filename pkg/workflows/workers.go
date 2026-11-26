@@ -21,8 +21,13 @@ type WorkerAccess struct {
 }
 
 type Worker struct {
-	Skill                  *SkillInvocation              `json:"skill,omitempty"`
-	SkillEvidence          *SkillEvidence                `json:"skill_evidence,omitempty"`
+	Skill         *SkillInvocation `json:"skill,omitempty"`
+	SkillEvidence *SkillEvidence   `json:"skill_evidence,omitempty"`
+	// SkillTurnUncertain is set atomically with admission, before provider work.
+	// A native consumption receipt does not reconcile an interrupted turn's effects.
+	SkillTurnUncertain     bool                          `json:"skill_turn_uncertain,omitempty"`
+	SkillActiveMessageID   string                        `json:"skill_active_message_id,omitempty"`
+	SkillChildPermits      []SkillChildPermit            `json:"skill_child_permits,omitempty"`
 	TaskWorkspace          string                        `json:"task_workspace,omitempty"`
 	Definition             *AgentDefinition              `json:"agent_definition,omitempty"`
 	SessionOwnerID         string                        `json:"session_owner_id,omitempty"`
@@ -851,6 +856,10 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	w.Remaining--
+	if w.Skill != nil {
+		w.SkillTurnUncertain = true
+		w.SkillActiveMessageID = msg.ID
+	}
 	w.Status = RunStatusRunning
 	msg.Status = RunStatusRunning
 	msg.StartedAt = time.Now().UTC()
@@ -913,6 +922,21 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		}
 		return err
 	}
+	request.AuthorizeSkillChild = func(permitCtx context.Context, observation SkillChildObservation) error {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		if callbacksClosed {
+			return fmt.Errorf("skill child authorization after original turn ended")
+		}
+		if secret, err := containsCredential(observation, secrets); err != nil || secret {
+			return fmt.Errorf("skill child permit contains credential material")
+		}
+		err := m.Store.authorizeSkillChild(permitCtx, w.ID, msg.ID, observation)
+		if err != nil {
+			journalErr = errors.Join(journalErr, err)
+		}
+		return err
+	}
 	if m.BindTools != nil {
 		binding, bindErr := m.BindTools(ctx, ToolInvocation{RunID: w.RunID, Owner: origin.Owner, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, Role: w.Role, Workspace: w.Access.Workspace, Secrets: secrets, Grants: w.ToolGrants})
 		if bindErr != nil {
@@ -939,6 +963,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		}
 
 		var skillObservation *SkillObservation
+		var childObservation *SkillChildObservation
 		if event.Type == "skill_evidence" {
 			var observation SkillObservation
 			if decodeSkillValue(event.Data, &observation) != nil {
@@ -957,6 +982,20 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 				return
 			}
 			skillObservation = &observation
+		}
+		if event.Type == "skill_child_evidence" {
+			var observation SkillChildObservation
+			if decodeSkillValue(event.Data, &observation) != nil || expectedSession == "" || observation.SessionID != expectedSession {
+				progressErr = fmt.Errorf("malformed or foreign skill child observation")
+				cancelTurn()
+				return
+			}
+			if secret, err := containsCredential(observation, secrets); err != nil || secret {
+				progressErr = fmt.Errorf("skill child evidence contains credential material")
+				cancelTurn()
+				return
+			}
+			childObservation = &observation
 		}
 		event.Data, _ = redactValue(event.Data, secrets).(map[string]any)
 		eventCtx := context.WithoutCancel(ctx)
@@ -983,7 +1022,14 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			}
 			err = current.SkillEvidence.Observe(current.Skill, *skillObservation)
 		}
-		if err == nil && (event.SessionID != "" || skillObservation != nil) {
+		if err == nil && childObservation != nil {
+			if current.SkillEvidence == nil {
+				err = fmt.Errorf("skill child event precedes original skill evidence")
+			} else {
+				err = current.SkillEvidence.ObserveChild(current.Skill, *childObservation)
+			}
+		}
+		if err == nil && (event.SessionID != "" || skillObservation != nil || childObservation != nil) {
 			if event.SessionID != "" {
 				current.SessionID = event.SessionID
 				w.SessionID = event.SessionID
@@ -1076,6 +1122,10 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	current.SessionID = w.SessionID
+	if current.Skill != nil && msg.Status == RunStatusSucceeded {
+		current.SkillTurnUncertain = false
+		current.SkillActiveMessageID = ""
+	}
 	current.Error = w.Error
 	current.FailureClass = msg.FailureClass
 	current.FailureAcknowledgement = nil

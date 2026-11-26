@@ -23,8 +23,9 @@ type SkillObservation struct {
 }
 
 type SkillEvidence struct {
-	PlanID       string             `json:"plan_id"`
-	Observations []SkillObservation `json:"observations"`
+	Children     []SkillChildObservation `json:"children,omitempty"`
+	PlanID       string                  `json:"plan_id"`
+	Observations []SkillObservation      `json:"observations"`
 }
 
 func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservation) error {
@@ -65,10 +66,12 @@ func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservat
 			return nil
 		}
 	}
-	if len(e.Observations) >= MaxSkillObservations {
+	if len(e.Observations)+len(e.Children) >= MaxSkillObservations {
 		return fmt.Errorf("skill evidence observation limit")
 	}
-	candidate := SkillEvidence{PlanID: plan.ID, Observations: append(append([]SkillObservation(nil), e.Observations...), observation)}
+	candidate := *e
+	candidate.PlanID = plan.ID
+	candidate.Observations = append(append([]SkillObservation(nil), e.Observations...), observation)
 	data, err := json.Marshal(candidate)
 	if err != nil {
 		return err
@@ -81,6 +84,16 @@ func (e *SkillEvidence) Observe(plan *SkillInvocation, observation SkillObservat
 }
 
 func (e *SkillEvidence) Complete(plan *SkillInvocation) error {
+	if err := e.InvocationComplete(plan); err != nil {
+		return err
+	}
+	if plan == nil {
+		return nil
+	}
+	return e.completeChildren(plan)
+}
+
+func (e *SkillEvidence) InvocationComplete(plan *SkillInvocation) error {
 	if plan == nil {
 		return nil
 	}
@@ -130,6 +143,11 @@ func (e *SkillEvidence) Continuation(plan *SkillInvocation, session string) erro
 			return err
 		}
 	}
+	for _, observation := range e.Children {
+		if err := verified.ObserveChild(plan, observation); err != nil {
+			return err
+		}
+	}
 	return verified.Complete(plan)
 }
 
@@ -137,5 +155,11 @@ func (w *Worker) validateSkillContinuation() error {
 	if w.Skill != nil && w.Skill.ContinuationRequiresEvidence && w.TaskTurns > 0 && w.Remaining < w.TaskTurns && w.SessionID == "" {
 		return fmt.Errorf("original skill session is uncertain after an admitted turn")
 	}
-	return w.SkillEvidence.Continuation(w.Skill, w.SessionID)
+	if err := w.SkillEvidence.Continuation(w.Skill, w.SessionID); err != nil {
+		return err
+	}
+	if w.Skill != nil && w.SkillTurnUncertain {
+		return fmt.Errorf("original selected-skill turn has uncertain effects; original terminal reconciliation is required")
+	}
+	return nil
 }

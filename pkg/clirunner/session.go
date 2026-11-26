@@ -279,7 +279,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.RepairOnly {
 		invocationTools = nil
 	}
-	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup)
+	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild)
 	if parseErr == nil && req.SessionID != "" && result.SessionID != req.SessionID {
 		parseErr = fmt.Errorf("provider returned an unexpected resumed session identity")
 	}

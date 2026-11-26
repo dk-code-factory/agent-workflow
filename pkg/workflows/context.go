@@ -79,9 +79,11 @@ type AgentRequest struct {
 	Skill         *SkillInvocation
 	SkillRoot     string
 	SkillEvidence *SkillEvidence
-	Definition    *AgentDefinition
-	Input         any
-	Turns         int
+	// AuthorizeSkillChild commits the original native child allowance before dispatch.
+	AuthorizeSkillChild func(context.Context, SkillChildObservation) error
+	Definition          *AgentDefinition
+	Input               any
+	Turns               int
 
 	// SessionOwnerID retains controller-owned provider state across conversation turns.
 	SessionOwnerID string

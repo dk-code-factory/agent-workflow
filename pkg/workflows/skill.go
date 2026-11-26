@@ -51,6 +51,9 @@ type SkillBinding struct {
 // SkillInvocation is pinned before run admission. It never grants tools,
 // credentials, publication authority or a different provider runtime.
 type SkillInvocation struct {
+	Children       []SkillChild `json:"children,omitempty"`
+	EffectiveTools []string     `json:"effective_parent_tools,omitempty"`
+	ResolvedEffort string       `json:"resolved_effort,omitempty"`
 	// ContinuationRequiresEvidence pins profiles whose resumed process cannot
 	// publish a fresh native-consumption event. Recovery must retain the original.
 	ContinuationRequiresEvidence bool         `json:"continuation_requires_evidence,omitempty"`
@@ -69,10 +72,10 @@ type SkillSelection struct {
 	Arguments string   `json:"arguments,omitempty"`
 	Resources []string `json:"resources,omitempty"`
 	Evidence  struct {
-		Invocation string            `json:"invocation"`
-		Children   []json.RawMessage `json:"children,omitempty"`
+		Invocation string   `json:"invocation"`
+		Children   []string `json:"children,omitempty"`
 	} `json:"evidence"`
-	Children []json.RawMessage `json:"children,omitempty"`
+	Children []SkillChildSelection `json:"children,omitempty"`
 }
 
 type SkillTaskRunner interface {
@@ -105,8 +108,8 @@ func parseSkillSelection(value any) (*SkillSelection, error) {
 	if selection.Input == "" || strings.Contains(selection.Input, "${{") || len(selection.Input) > 128 {
 		return nil, fmt.Errorf("skill requires an explicit declared input name")
 	}
-	if len(selection.Children) != 0 || len(selection.Evidence.Children) != 0 {
-		return nil, fmt.Errorf("native skill children are not certified")
+	if len(selection.Children) > 1 || len(selection.Evidence.Children) > 1 || len(selection.Children) != len(selection.Evidence.Children) {
+		return nil, fmt.Errorf("skill requires exactly one declared and required child")
 	}
 	if selection.Evidence.Invocation != "required" {
 		return nil, fmt.Errorf("skill evidence.invocation must be required")
@@ -522,6 +525,9 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 						return step, err
 					}
 					plan.Model = model
+				}
+				if err := admitSkillChildren(plan, selection, context); err != nil {
+					return step, err
 				}
 				runner, ok := e.Agents.(SkillTaskRunner)
 				if !ok {

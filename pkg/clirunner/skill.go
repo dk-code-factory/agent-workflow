@@ -23,6 +23,11 @@ func (r *Runner) AdmitSkillTask(plan *workflows.SkillInvocation) (*workflows.Ski
 	if role.Execution.Mode == "container" {
 		return nil, fmt.Errorf("supplied skill container projection is not certified")
 	}
+	// Remains closed until the exact child transport, durable permit and original
+	// output/usage completion ledger have passed their pinned native controls.
+	if len(plan.Children) != 0 {
+		return nil, fmt.Errorf("native skill child profile is not certified")
+	}
 
 	if plan.Model == "" {
 		return nil, fmt.Errorf("skill tasks require a pinned model")

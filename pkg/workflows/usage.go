@@ -25,6 +25,9 @@ type UsageIdentity struct {
 	Finished      bool   `json:"finished"`
 }
 type UsageUpdate struct {
+	// CounterBasis opts a proved provider surface into its own durable session
+	// highwater. Empty preserves historical provider accounting semantics.
+	CounterBasis               string
 	Key                        string
 	Provider, Model, SessionID string
 	Usage                      map[string]any
@@ -33,6 +36,10 @@ type UsageUpdate struct {
 	Incomplete                 bool
 }
 type UsageObservation struct {
+	CounterBasis           string    `json:"counter_basis,omitempty"`
+	ReceiptFingerprint     string    `json:"receipt_fingerprint,omitempty"`
+	DeltaCostUSD           *float64  `json:"delta_cost_usd,omitempty"`
+	CostIncomplete         bool      `json:"cost_incomplete,omitempty"`
 	DeltaInputTokens       *int64    `json:"delta_input_tokens,omitempty"`
 	DeltaCachedInputTokens *int64    `json:"delta_cached_input_tokens,omitempty"`
 	DeltaOutputTokens      *int64    `json:"delta_output_tokens,omitempty"`
@@ -196,11 +203,17 @@ func (s *SQLiteStore) ObserveUsage(ctx context.Context, identity UsageIdentity, 
 	}
 	defer tx.Rollback()
 	if err = observeUsageTx(ctx, tx, identity, update); err != nil {
+		if errors.Is(err, ErrUsageCounterConflict) {
+			return errors.Join(err, tx.Commit())
+		}
 		return err
 	}
 	return tx.Commit()
 }
 func observeUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity, update UsageUpdate) error {
+	if update.CounterBasis != "" {
+		return observeSkillUsageTx(ctx, tx, identity, update)
+	}
 	if update.Final {
 		update.Key = "final"
 	} else if update.Key == "" {
@@ -431,10 +444,15 @@ func SummarizeUsage(invocations []InvocationUsage) UsageSummary {
 			out.Complete = false
 			out.IncompleteInvocations++
 		}
-		if selected.CostUSD == nil {
+		cost := selected.CostUSD
+		if selected.CounterBasis != "" {
+			cost = selected.DeltaCostUSD
+		}
+		if cost == nil || selected.CostIncomplete || selected.CounterBasis != "" && selected.CounterReset {
 			out.CostComplete = false
-		} else {
-			next := knownCost + *selected.CostUSD
+		}
+		if cost != nil {
+			next := knownCost + *cost
 			if math.IsInf(next, 0) {
 				costOverflow = true
 				out.Overflow = true
@@ -489,7 +507,7 @@ func SummarizeUsage(invocations []InvocationUsage) UsageSummary {
 func usageUpdate(outputs map[string]any, final bool) UsageUpdate {
 	usage, _ := outputs["usage"].(map[string]any)
 	incomplete, _ := outputs["usage_incomplete"].(bool)
-	return UsageUpdate{Key: "final", Provider: nativeString(outputs, "provider"), Model: nativeString(outputs, "model"), SessionID: nativeString(outputs, "session_id"), Usage: usage, CostUSD: outputs["cost_usd"], Final: final, Incomplete: incomplete}
+	return UsageUpdate{CounterBasis: nativeString(outputs, "usage_counter_basis"), Key: "final", Provider: nativeString(outputs, "provider"), Model: nativeString(outputs, "model"), SessionID: nativeString(outputs, "session_id"), Usage: usage, CostUSD: outputs["cost_usd"], Final: final, Incomplete: incomplete}
 }
 
 func repairUsageID(attempt string, count int) string {
