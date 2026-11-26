@@ -484,6 +484,7 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 					if err != nil || name == "." {
 						return step, fmt.Errorf("invalid skill resource %q", resource)
 					}
+					resource = name
 					name = path.Join(path.Dir(source.Entry), name)
 					found := false
 					for _, input := range source.Entries {

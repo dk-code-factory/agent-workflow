@@ -85,6 +85,42 @@ func observeSkillUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	// Preserve already-reported invocation partials when a later cumulative
+	// receipt omits or understates a field. Derive the original session baseline
+	// by removing this invocation's prior delta from the session highwater.
+	partial, err := skillInvocationPartialFloorTx(ctx, tx, identity.ID)
+	if err != nil {
+		return err
+	}
+	retainFloor := func(now **int64, before, charged, floor *int64) {
+		if floor == nil {
+			return
+		}
+		base := int64(0)
+		if before != nil {
+			base = *before
+			if charged != nil {
+				base -= *charged
+			}
+			if base < 0 {
+				base = 0
+			}
+		}
+		if *floor > math.MaxInt64-base {
+			observation.Complete = false
+			observation.CostIncomplete = true
+			return
+		}
+		required := base + *floor
+		if *now == nil || **now < required {
+			*now = &required
+			observation.Complete = false
+			observation.CostIncomplete = true
+		}
+	}
+	retainFloor(&observation.InputTokens, previous.InputTokens, prior.DeltaInputTokens, partial.InputTokens)
+	retainFloor(&observation.CachedInputTokens, previous.CachedInputTokens, prior.DeltaCachedInputTokens, partial.CachedInputTokens)
+	retainFloor(&observation.OutputTokens, previous.OutputTokens, prior.DeltaOutputTokens, partial.OutputTokens)
 	conflict := previous.CounterReset
 	delta := func(now **int64, before, charged *int64) *int64 {
 		if *now == nil {
@@ -166,4 +202,36 @@ func observeSkillUsageTx(ctx context.Context, tx *sql.Tx, identity UsageIdentity
 		return ErrUsageCounterConflict
 	}
 	return nil
+}
+
+func skillInvocationPartialFloorTx(ctx context.Context, tx *sql.Tx, id string) (UsageObservation, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT record FROM usage_observations WHERE invocation_id=?", id)
+	if err != nil {
+		return UsageObservation{}, err
+	}
+	defer rows.Close()
+	floor := UsageObservation{}
+	for rows.Next() {
+		var raw []byte
+		var o UsageObservation
+		if err = rows.Scan(&raw); err != nil {
+			return floor, err
+		}
+		if err = decodeJSONWithNumbers(raw, &o); err != nil {
+			return floor, err
+		}
+		if o.Final {
+			continue
+		}
+		if o.Scope == "session" {
+			floor.InputTokens = maxTokens(floor.InputTokens, o.DeltaInputTokens)
+			floor.CachedInputTokens = maxTokens(floor.CachedInputTokens, o.DeltaCachedInputTokens)
+			floor.OutputTokens = maxTokens(floor.OutputTokens, o.DeltaOutputTokens)
+			continue
+		}
+		if !addTokens(&floor.InputTokens, o.InputTokens) || !addTokens(&floor.CachedInputTokens, o.CachedInputTokens) || !addTokens(&floor.OutputTokens, o.OutputTokens) {
+			return floor, fmt.Errorf("native skill partial accounting floor overflow")
+		}
+	}
+	return floor, rows.Err()
 }

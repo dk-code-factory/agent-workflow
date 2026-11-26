@@ -216,7 +216,7 @@ complete required evidence. The original SDK parent usage and cumulative
 modelUsage map are retained; the verified same-session aggregate charges both
 parent and child calls without resetting or double-charging the original usage
 baseline. Missing or conflicting accounting retains known charges and prevents
-completion. The engine holds its execution lease throughout this synchronous
+completion. A malformed cumulative receipt cannot lower already retained parent and child usage floors; those floors are added only above the original session baseline. Resource paths use the same canonical relative identity for parent and child admission. The engine holds its execution lease throughout this synchronous
 profile; it makes no broker-capacity release or general quiescence claim.
 
 The stock Codex 0.167.1 local profile requires a pinned model, empty skill

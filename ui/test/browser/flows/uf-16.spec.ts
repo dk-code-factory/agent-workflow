@@ -280,6 +280,17 @@ test('configure a selected skill and bounded foreground child with recovery cont
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children[0]).toEqual({ name: 'review', prompt: 'Review.', description: 'Retained review', tools: ['Read'], resources: ['reference.txt'], model: 'inherit', 'max-turns': 2, 'max-calls': 1, background: false });
   expect(await downloadText(page)).toContain('reference.txt');
   expect(await downloadText(page)).toContain('max-calls: 1');
+  const dotResources = withChild.replaceAll('resources: [reference.txt]', 'resources: [./reference.txt]');
+  await field(page, 'Skill invocation (YAML)', dotResources);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.resources).toEqual(['./reference.txt']);
+  await field(page, 'Skill invocation (YAML)', dotResources.replace('tools: [Read], resources: [./reference.txt]', 'tools: [Read], resources: [foreign.txt]'));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', dotResources);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children[0].resources).toEqual(['foreign.txt']);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await downloadText(page)).toContain('./reference.txt');
   await ui.getByText('Structured output', { exact: true }).click();
   await field(page, 'Structured output contract (YAML)', 'json');
   await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill-repair')).toBe(true);

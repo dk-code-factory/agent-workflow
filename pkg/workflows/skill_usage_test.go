@@ -3,6 +3,7 @@ package workflows
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -202,5 +203,78 @@ func TestSkillChildIncompleteAccountingCommitsEveryKnownFloor(t *testing.T) {
 	report, err := reopened.Usage(t.Context(), run.ID)
 	if err != nil || report.Summary.Complete || report.Summary.CostComplete || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 100 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 9 || report.Summary.KnownCostUSD == nil || math.Abs(*report.Summary.KnownCostUSD-0.000465) > 1e-12 {
 		t.Fatal("incomplete accounting discarded known floors after reopen", report, err)
+	}
+}
+
+func TestSkillIncompleteAggregateCannotLowerRetainedInvocationFloor(t *testing.T) {
+	for _, continued := range []bool{false, true} {
+		t.Run(fmt.Sprint(continued), func(t *testing.T) {
+			s, run := executionStore(t)
+			baselineInput, baselineOutput := 0, 0
+			if continued {
+				first := childUsageIdentity(t, s, run.ID, "earlier-turn")
+				if err := s.ObserveUsage(t.Context(), first, childUsage(80, 15, 0.000465)); err != nil {
+					t.Fatal(err)
+				}
+				baselineInput, baselineOutput = 80, 15
+			}
+			identity := childUsageIdentity(t, s, run.ID, "original-turn")
+			parent := UsageUpdate{Key: "parent", Usage: map[string]any{"input_tokens": 48, "output_tokens": 9}, Incomplete: true}
+			child := UsageUpdate{Key: "skill-child-partial:original", Usage: map[string]any{"input_tokens": 32, "output_tokens": 3}, Incomplete: true}
+			for _, u := range []UsageUpdate{parent, child} {
+				if err := s.ObserveUsage(t.Context(), identity, u); err != nil {
+					t.Fatal(err)
+				}
+			}
+			malformed := childUsage(baselineInput+80, baselineOutput+9, nil)
+			malformed.Incomplete = true
+			if err := s.ObserveUsage(t.Context(), identity, malformed); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenSQLite(s.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			assert := func(complete bool, input, output int) {
+				t.Helper()
+				r, e := reopened.Usage(t.Context(), run.ID)
+				if e != nil || r.Summary.Complete != complete || r.Summary.InputTokens == nil || *r.Summary.InputTokens != int64(input) || r.Summary.OutputTokens == nil || *r.Summary.OutputTokens != int64(output) {
+					t.Fatal("retained usage floor lost/doubled", r, e)
+				}
+				for _, inv := range r.Invocations {
+					if inv.ID == identity.ID {
+						o := inv.Observations["final"]
+						want := int64(output - baselineOutput)
+						if o.DeltaOutputTokens == nil || *o.DeltaOutputTokens != want || o.DeltaInputTokens == nil || *o.DeltaInputTokens != 80 {
+							t.Fatal("original invocation delta borrowed baseline", o, want)
+						}
+					}
+				}
+				if continued && (r.Summary.KnownCostUSD == nil || *r.Summary.KnownCostUSD < 0.000465) {
+					t.Fatal("known earlier cost subtotal erased", r.Summary)
+				}
+			}
+			assert(false, baselineInput+80, baselineOutput+12)
+			if err = reopened.ObserveUsage(t.Context(), identity, malformed); err != nil {
+				t.Fatal(err)
+			}
+			assert(false, baselineInput+80, baselineOutput+12)
+			cost := 0.000465
+			if continued {
+				cost *= 2
+			}
+			final := childUsage(baselineInput+80, baselineOutput+15, cost)
+			if err = reopened.ObserveUsage(t.Context(), identity, final); err != nil {
+				t.Fatal(err)
+			}
+			assert(true, baselineInput+80, baselineOutput+15)
+			for _, u := range []UsageUpdate{malformed, child, parent} {
+				if err = reopened.ObserveUsage(t.Context(), identity, u); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assert(true, baselineInput+80, baselineOutput+15)
+		})
 	}
 }

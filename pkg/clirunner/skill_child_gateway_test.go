@@ -40,7 +40,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("requires installed locked SDK; local fake API only")
 	}
-	for _, scenario := range []string{"foreground", "engine", "socket-cut-parent", "socket-cut-child", "engine-cut-child", "socket-cut-final-parent", "engine-cut-final-parent", "background-missing", "background-true", "builtin", "override", "isolation-override", "resume-override", "nested", "forbidden-read", "forbidden-tool", "child-model-mismatch", "second-call", "exhaustion", "lost-permit-ack"} {
+	for _, scenario := range []string{"foreground", "engine", "engine-dot-resources", "socket-cut-parent", "socket-cut-child", "engine-cut-child", "socket-cut-final-parent", "engine-cut-final-parent", "background-missing", "background-true", "builtin", "override", "isolation-override", "resume-override", "nested", "forbidden-read", "forbidden-tool", "child-model-mismatch", "second-call", "exhaustion", "lost-permit-ack"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			plugin := filepath.Join(root, "admitted")
@@ -216,7 +216,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 				if strings.HasPrefix(scenario, "engine-cut-") {
 					cutStage = strings.TrimPrefix(scenario, "engine-cut-")
 				}
-				runSkillChildEngineFixture(t, root, plugin, runner, child, cutStage)
+				runSkillChildEngineFixture(t, root, plugin, runner, child, cutStage, scenario == "engine-dot-resources")
 				if cutStage != "" {
 					wantChild := int32(1)
 					if cutStage == "final-parent" {
@@ -364,7 +364,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 	}
 }
 
-func runSkillChildEngineFixture(t *testing.T, root, plugin string, runner *Runner, child workflows.SkillChild, cutStage string) {
+func runSkillChildEngineFixture(t *testing.T, root, plugin string, runner *Runner, child workflows.SkillChild, cutStage string, dotResources bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
@@ -391,6 +391,9 @@ jobs:
           agent: '${{ steps.selected.outputs.agent }}'
           prompt: Continue the original task without another child.
 `, child.Prompt, child.Description)
+	if dotResources {
+		source = strings.ReplaceAll(source, "resources: [reference.txt]", "resources: [./reference.txt]")
+	}
 	for name, text := range map[string]string{"main.yml": source, "reviewer.yaml": "name: reviewer\ndescription: Review retained resources.\ninstructions: Follow the admitted task.\nmodel: claude-sonnet-4-6\n"} {
 		if err := os.WriteFile(filepath.Join(root, "workflows", name), []byte(text), 0600); err != nil {
 			t.Fatal(err)
@@ -483,6 +486,9 @@ jobs:
 	list, err := workers.List(ctx, run.ID)
 	if err != nil || len(list) != 1 || list[0].SkillTurnUncertain || list[0].Remaining != 31 || len(list[0].SkillChildPermits) != 1 || list[0].SkillEvidence.Complete(list[0].Skill) != nil {
 		t.Fatal("engine original child did not complete", list, err)
+	}
+	if dotResources && (list[0].Skill.Resources[0] != "reference.txt" || list[0].Skill.Children[0].Resources[0] != "reference.txt") {
+		t.Fatal("parent/child resource identities were not canonical", list[0].Skill)
 	}
 	rows, err := store.ToolCalls(ctx, run.ID, false)
 	if err != nil || len(rows) != 1 || rows[0].Status != "completed" || !strings.Contains(string(rows[0].Result), "FULL_ORIGINAL_CHILD_OUTPUT_139") {

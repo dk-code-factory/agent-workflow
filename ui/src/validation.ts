@@ -563,6 +563,7 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
             const declared = mapping(callable?.inputs) && mapping(skill) && typeof skill.input === 'string' ? callable.inputs[skill.input] : undefined;
             const evidence = mapping(skill) ? skill.evidence : undefined;
             const resourcePath = (value: unknown): value is string => typeof value === 'string' && !!value && value !== '.' && !value.startsWith('/') && !/[\\\x00]/.test(value) && !value.split('/').includes('..') && !value.includes('${{');
+            const canonicalResource = (value: string) => value.split('/').filter(part => part !== '' && part !== '.').join('/');
             const admittedText = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && new TextEncoder().encode(value).length <= 65536 && !value.replace(/\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}/g, '').includes('${{');
             const children = mapping(skill) && skill.children === undefined ? [] : mapping(skill) ? skill.children : undefined;
             const requiredChildren = mapping(evidence) && evidence.children === undefined ? [] : mapping(evidence) ? evidence.children : undefined;
@@ -571,8 +572,8 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
                 && typeof child.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(child.name) && child.name.length <= 48 && requiredChildren[0] === child.name
                 && admittedText(child.prompt) && admittedText(child.description) && new TextEncoder().encode(child.description).length <= 512
                 && Array.isArray(child.tools) && child.tools.length === 1 && child.tools[0] === 'Read' && child.model === 'inherit' && child.background === false && child['max-turns'] === 2 && child['max-calls'] === 1
-                && Array.isArray(child.resources) && child.resources.length > 0 && child.resources.length <= 32 && new Set(child.resources).size === child.resources.length
-                && child.resources.every(resource => resourcePath(resource) && mapping(skill) && Array.isArray(skill.resources) && skill.resources.some(parent => typeof parent === 'string' && (resource === parent || resource.startsWith(parent + '/')))));
+                && Array.isArray(child.resources) && child.resources.length > 0 && child.resources.length <= 32 && new Set(child.resources.map(resource => typeof resource === 'string' ? canonicalResource(resource) : resource)).size === child.resources.length
+                && child.resources.every(resource => resourcePath(resource) && mapping(skill) && Array.isArray(skill.resources) && skill.resources.some(parent => typeof parent === 'string' && (canonicalResource(resource) === canonicalResource(parent) || canonicalResource(resource).startsWith(canonicalResource(parent) + '/')))));
             const valid = mapping(skill) && Object.keys(skill).every(key => ['input', 'arguments', 'resources', 'evidence', 'children'].includes(key))
               && typeof skill.input === 'string' && mapping(declared) && declared.type === 'skill'
               && (skill.arguments === undefined || typeof skill.arguments === 'string' && new TextEncoder().encode(skill.arguments).length <= 65536
