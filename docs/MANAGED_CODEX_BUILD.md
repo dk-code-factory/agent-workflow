@@ -217,14 +217,21 @@ The current source build uses patch digest
 source tree digest
 `c4cad66776ac52a7fc92a7a52dec1dd90292d4268068018c68bc38cd6ae7a790`,
 and build identity
-`d95a041b77a1b3fb2993e57d85f694e8e620d267b025c8097778da58d4895387`.
+`74c02cbfee1e7713a13c90702aa80f1ef533c06cd46fbc31abd611f3d3507b0d`.
+The source recipe digest is
+`5ad28b4f3ff6dc4b8db88494fc3db4309c8309fa54224440277d7493773b8899`.
 Its actual standalone Linux amd64 executable is 509,664,312 bytes, SHA-256
-`844851f8f453ed428a93c13cc093438cfe78371b84de586ce737bc167bf9dcec`.
+`4058a428a4740700b4fdebfdf050886851a84d24924d8fd281d480770fed4648`.
 The recipe passed locked offline metadata, 11 managed runtime tests, 11 journal
 tests, one submission-ceiling test and the standalone binary build. Every stage
 retained identical before/after source digests, its inherited network filter and
 an empty owned process group after completion. These facts identify this tested
 artifact; they do not impose a universal binary whitelist.
+The new recipe tuple also passed 16 actual-executable protocol probes and the
+focused production engine race suite. The probes include delayed stream sealing,
+empty and denied tool ceilings, partial results, invalid/repeated permits,
+cancellation, startup exclusions and retained policy mismatches. Earlier complete
+builds and failed stages remain separate historical evidence.
 
 The production Go transport now verifies the held executable and actual guardian
 child before initialize, checks the source build handshake, uses the maintained
@@ -280,8 +287,10 @@ Unproven direct native execution/background work, native delegation, container a
 other platform profiles remain closed. The SQLite/native-process recovery scope
 does not establish a whole engine OS process crash claim.
 
-A final promotion must keep build preparation reproducible. The current prototype
-recipe deliberately rejects an enabled descriptor; revise that contract and freeze
-its new recipe/build tuple before final artifact conformance, rather than enabling
-a profile whose artifact cannot be rebuilt with its declared recipe. Final current
+A final promotion must keep build preparation reproducible. The recipe accepts a
+strict boolean runtime admission gate independently of its immutable build tuple.
+It checks the exact patch, recipe, offline wrapper and prepared source; an enabled
+descriptor must declare the canonical source digest. Changing runtime admission
+or descriptive status does not alter build identity. Preparing or building a
+descriptor never enables admission. Final current
 `make test`, `make check` and `make ui-pr-check` remain required after integration.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare/check the repository-owned, disabled managed Codex source profile.
+"""Prepare/check the repository-owned managed Codex source profile.
 
 No fetch, dependency installation, provider execution, image build or publication.
 Build caches must be disposable copies inside the newly prepared owned directory.
@@ -36,8 +36,13 @@ def digest(path):
 
 def manifest():
     value = json.loads(MANIFEST.read_text())
-    if value["schema"] != 1 or value["enabled"] is not False:
-        raise ValueError("prototype recipe cannot enable a managed profile")
+    if type(value.get("schema")) is not int or value["schema"] != 1 or type(value.get("enabled")) is not bool:
+        raise ValueError("managed profile schema or runtime admission gate is invalid")
+    canonical = value.get("source_sha256")
+    if canonical is not None and (not isinstance(canonical, str) or re.fullmatch("[0-9a-f]{64}", canonical) is None):
+        raise ValueError("canonical managed source digest is invalid")
+    if value["enabled"] and canonical is None:
+        raise ValueError("runtime-enabled profile requires a canonical source digest")
     patch = REPO / value["patch"]
     if digest(patch) != value["patch_sha256"]:
         raise ValueError("managed source patch digest changed")
@@ -46,6 +51,13 @@ def manifest():
     if digest(REPO / value["offline_wrapper"]) != value["offline_wrapper_sha256"]:
         raise ValueError("offline execution wrapper digest changed")
     return value, patch
+
+
+def verify_canonical_source(value, actual):
+    # enabled/status are runtime admission metadata, not build inputs. An
+    # enabled descriptor must still name the exact reviewed patched source.
+    if value.get("source_sha256") is not None and value["source_sha256"] != actual:
+        raise ValueError("patched source differs from the canonical source digest")
 
 
 def tree_digest(root):
@@ -121,7 +133,9 @@ def prepare(args):
             "offline_wrapper_sha256": value["offline_wrapper_sha256"],
         }
         build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        receipt = {"inputs": inputs, "build_id": build_id, "source_sha256": tree_digest(source), "verified_binary": False}
+        source_sha = tree_digest(source)
+        verify_canonical_source(value, source_sha)
+        receipt = {"inputs": inputs, "build_id": build_id, "source_sha256": source_sha, "verified_binary": False}
         (output / RECEIPT).write_text(json.dumps(receipt, indent=2) + "\n")
         shutil.copy2(__file__, output / "build-recipe.py")
         shutil.copy2(MANIFEST, output / "profile.json")
@@ -326,6 +340,7 @@ def check(args):
     source = root / "source"
     if tree_digest(source) != receipt["source_sha256"]:
         raise ValueError("prepared source tree changed after patch application")
+    verify_canonical_source(value, receipt["source_sha256"])
     cache, target = root / "cargo-home", root / "target"
     validate_cache(cache)
     toolchain = Path.home() / ".rustup/toolchains" / (value["rust_toolchain"] + "-" + args.host)

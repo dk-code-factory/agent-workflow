@@ -19,6 +19,35 @@ SPEC.loader.exec_module(BUILD)
 
 
 class ManagedSourceBuildTests(unittest.TestCase):
+    def test_runtime_admission_gate_does_not_change_source_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_patch, wrapper, profile = root / "source.patch", root / "offline.py", root / "profile.json"
+            source_patch.write_text("immutable source patch")
+            wrapper.write_text("immutable offline wrapper")
+            value = {"schema": 1, "enabled": False, "patch": source_patch.name, "patch_sha256": BUILD.digest(source_patch), "recipe_sha256": BUILD.digest(Path(BUILD.__file__)), "offline_wrapper": wrapper.name, "offline_wrapper_sha256": BUILD.digest(wrapper), "source_sha256": "a" * 64}
+            with patch.object(BUILD, "REPO", root), patch.object(BUILD, "MANIFEST", profile):
+                profile.write_text(json.dumps(value))
+                disabled, _ = BUILD.manifest()
+                profile.write_text(json.dumps(dict(value, enabled=True, status="ready")))
+                enabled, _ = BUILD.manifest()
+                for field in ("patch_sha256", "recipe_sha256", "offline_wrapper_sha256", "source_sha256"):
+                    self.assertEqual(disabled[field], enabled[field])
+                BUILD.verify_canonical_source(enabled, "a" * 64)
+                with self.assertRaisesRegex(ValueError, "canonical source digest"):
+                    BUILD.verify_canonical_source(enabled, "b" * 64)
+                for invalid in (None, 0, 1, "false"):
+                    profile.write_text(json.dumps(dict(value, enabled=invalid)))
+                    with self.assertRaisesRegex(ValueError, "admission gate"):
+                        BUILD.manifest()
+                profile.write_text(json.dumps({key: item for key, item in dict(value, enabled=True).items() if key != "source_sha256"}))
+                with self.assertRaisesRegex(ValueError, "requires a canonical source digest"):
+                    BUILD.manifest()
+                for invalid in (False, "", "0" * 63, "z" * 64):
+                    profile.write_text(json.dumps(dict(value, source_sha256=invalid)))
+                    with self.assertRaisesRegex(ValueError, "source digest is invalid"):
+                        BUILD.manifest()
+
     def test_wrong_patch_digest_is_rejected_before_preparation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -8,9 +8,10 @@
   "rust_toolchain": "1.95.0",
   "patch": "patches/codex/0.167.1-managed-v1.patch",
   "patch_sha256": "bd1e1ebd4608c30eaef97a7009b383c417060a83764a8513058b958d800930d6",
-  "recipe_sha256": "ddc2da810234cf04607e9fe993274edf9c311ef554f3f99322a88d3518927d53",
+  "recipe_sha256": "5ad28b4f3ff6dc4b8db88494fc3db4309c8309fa54224440277d7493773b8899",
   "offline_wrapper": "scripts/codex_offline_exec.py",
   "offline_wrapper_sha256": "0c69b92b2765567dd72bc725ce55119625128233f35d1dc8036ff5dfee47f2e4",
   "upstream_lock_sha256": "9e71c74824a7ea114d0a3a4c94e93d81a1ddd13ca8fa6f698cbd1284c2e9ff2f",
-  "source_lock_sha256": "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883"
+  "source_lock_sha256": "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883",
+  "source_sha256": "c4cad66776ac52a7fc92a7a52dec1dd90292d4268068018c68bc38cd6ae7a790"
 }
