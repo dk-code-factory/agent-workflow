@@ -1518,20 +1518,22 @@ index 2eae72d..4388c19 100644
   "anyhow",
   "assert_cmd",
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index bf2ebde..0bcac4c 100644
+index bf2ebde..125f360 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
-@@ -2005,6 +2005,8 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
+@@ -2005,6 +2005,10 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
  
  server_notification_definitions! {
      /// NEW NOTIFICATIONS
 +    #[experimental("agentWorkflow/batchParked")]
-+    AgentWorkflowBatchParked => "agentWorkflow/batchParked" (codex_protocol::protocol::AgentWorkflowParkedBatch),
++    AgentWorkflowBatchParked => "agentWorkflow/batchParked" (codex_protocol::protocol::AgentWorkflowBatchPermit),
++    #[experimental("agentWorkflow/modelCompleted")]
++    AgentWorkflowModelCompleted => "agentWorkflow/modelCompleted" (codex_protocol::protocol::AgentWorkflowModelWitness),
      Error => "error" (v2::ErrorNotification),
      ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
      ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/item.rs b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
-index 5ab9f9f..50ece07 100644
+index 5ab9f9f..64e813f 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/item.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
 @@ -1776,6 +1776,9 @@ pub struct DynamicToolCallParams {
@@ -1540,12 +1542,12 @@ index 5ab9f9f..50ece07 100644
  pub struct DynamicToolCallResponse {
 +    #[serde(default, skip_serializing_if = "Option::is_none")]
 +    #[ts(optional = nullable)]
-+    pub agent_workflow_permit: Option<codex_protocol::protocol::AgentWorkflowParkedBatch>,
++    pub agent_workflow_permit: Option<codex_protocol::protocol::AgentWorkflowBatchPermit>,
      pub content_items: Vec<DynamicToolCallOutputContentItem>,
      pub success: bool,
  }
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/tests.rs b/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
-index 049cef5..72b2266 100644
+index 049cef5..d061b02 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
 @@ -4952,6 +4952,7 @@ fn codex_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case
@@ -1564,10 +1566,11 @@ index 049cef5..72b2266 100644
          content_items: vec![
              DynamicToolCallOutputContentItem::InputText {
                  text: "dynamic-ok".to_string(),
-@@ -5149,6 +5151,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
+@@ -5149,6 +5151,8 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
      );
  
      let without_override = TurnStartParams {
++        agent_workflow_recovery: None,
 +        agent_workflow_invocation: None,
          disabled_plugin_ids: None,
          thread_id: "thread_123".to_string(),
@@ -1599,13 +1602,17 @@ index aba591b..d4ffe13 100644
  
      /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/turn.rs b/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
-index c3b3fa7..7da6058 100644
+index c3b3fa7..f9b2d3f 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
-@@ -172,6 +172,10 @@ pub struct TurnToolOutput {
+@@ -172,6 +172,14 @@ pub struct TurnToolOutput {
  #[serde(rename_all = "camelCase")]
  #[ts(export_to = "v2/")]
  pub struct TurnStartParams {
++    /// Resume only the same original engine-owned broker seal, without input.
++    #[experimental("turn/start.agentWorkflowRecovery")]
++    #[ts(optional = nullable)]
++    pub agent_workflow_recovery: Option<codex_protocol::protocol::AgentWorkflowParkedBatch>,
 +    /// Repository-owned managed engine message identity; required for each new managed turn.
 +    #[experimental("turn/start.agentWorkflowInvocation")]
 +    #[ts(optional = nullable)]
@@ -1614,7 +1621,7 @@ index c3b3fa7..7da6058 100644
      /// Replace this thread's disabled plugin IDs.
      /// Omitted/null preserves the list; [] clears it.
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index da4d0e1..49b08be 100644
+index da4d0e1..4b6e313 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
 @@ -1136,6 +1136,28 @@ pub(crate) async fn apply_bespoke_event_handling(
@@ -1646,6 +1653,42 @@ index da4d0e1..49b08be 100644
                  tokio::spawn(async move {
                      crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
                  });
+@@ -1655,7 +1677,18 @@ async fn handle_token_count_event(
+     token_count_event: TokenCountEvent,
+     outgoing: &ThreadScopedOutgoingMessageSender,
+ ) {
+-    let TokenCountEvent { info, rate_limits } = token_count_event;
++    let TokenCountEvent {
++        info,
++        rate_limits,
++        agent_workflow_witness,
++    } = token_count_event;
++    if let Some(witness) = agent_workflow_witness {
++        // The event owns the original immutable witness even if a later model
++        // response has completed before this asynchronous reader handles it.
++        outgoing
++            .send_server_notification(ServerNotification::AgentWorkflowModelCompleted(witness))
++            .await;
++    }
+     if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
+         let notification = ThreadTokenUsageUpdatedNotification {
+             thread_id: conversation_id.to_string(),
+@@ -3801,6 +3834,7 @@ mod tests {
+             conversation_id,
+             turn_id.clone(),
+             TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: Some(info),
+                 rate_limits: Some(rate_limits),
+             },
+@@ -3854,6 +3888,7 @@ mod tests {
+             conversation_id,
+             turn_id.clone(),
+             TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: None,
+                 rate_limits: None,
+             },
 diff --git a/codex-rs/app-server/src/dynamic_tools.rs b/codex-rs/app-server/src/dynamic_tools.rs
 index 0069b6d..880510e 100644
 --- a/codex-rs/app-server/src/dynamic_tools.rs
@@ -1717,17 +1760,33 @@ index 4a05a1d..e78b708 100644
              creator_user_id: None,
              creator_account_id: None,
 diff --git a/codex-rs/app-server/src/message_processor_tracing_tests.rs b/codex-rs/app-server/src/message_processor_tracing_tests.rs
-index aeff494..20e0b39 100644
+index aeff494..6bb984a 100644
 --- a/codex-rs/app-server/src/message_processor_tracing_tests.rs
 +++ b/codex-rs/app-server/src/message_processor_tracing_tests.rs
-@@ -678,6 +678,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+@@ -678,6 +678,8 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
              ClientRequest::TurnStart {
                  request_id: RequestId::Integer(3),
                  params: TurnStartParams {
++                    agent_workflow_recovery: None,
 +                    agent_workflow_invocation: None,
                      disabled_plugin_ids: None,
                      environments: None,
                      thread_id,
+diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
+index 1e3d3d9..281c7fb 100644
+--- a/codex-rs/app-server/src/notification_media.rs
++++ b/codex-rs/app-server/src/notification_media.rs
+@@ -55,7 +55,9 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
+             }
+             ServerNotification::RawResponseItemCompleted(notification)
+         }
+-        ServerNotification::Error(_)
++        ServerNotification::AgentWorkflowModelCompleted(_)
++        | ServerNotification::AgentWorkflowBatchParked(_)
++        | ServerNotification::Error(_)
+         | ServerNotification::ThreadStarted(_)
+         | ServerNotification::ThreadStatusChanged(_)
+         | ServerNotification::ThreadReadStateChanged(_)
 diff --git a/codex-rs/app-server/src/request_processors/initialize_processor.rs b/codex-rs/app-server/src/request_processors/initialize_processor.rs
 index f6b282e..fda6d99 100644
 --- a/codex-rs/app-server/src/request_processors/initialize_processor.rs
@@ -1835,11 +1894,23 @@ index 9ec1298..7e359c8 100644
              thread_id: "thread-1".to_string(),
              history: None,
              path: None,
+diff --git a/codex-rs/app-server/src/request_processors/token_usage_replay.rs b/codex-rs/app-server/src/request_processors/token_usage_replay.rs
+index 212400a..0ecb64b 100644
+--- a/codex-rs/app-server/src/request_processors/token_usage_replay.rs
++++ b/codex-rs/app-server/src/request_processors/token_usage_replay.rs
+@@ -184,6 +184,7 @@ mod tests {
+                 questions: None,
+             })),
+             RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: None,
+                 rate_limits: None,
+             })),
 diff --git a/codex-rs/app-server/src/request_processors/turn_processor.rs b/codex-rs/app-server/src/request_processors/turn_processor.rs
-index eeed287..146a23b 100644
+index eeed287..70bf3a2 100644
 --- a/codex-rs/app-server/src/request_processors/turn_processor.rs
 +++ b/codex-rs/app-server/src/request_processors/turn_processor.rs
-@@ -556,6 +556,31 @@ impl TurnRequestProcessor {
+@@ -556,6 +556,111 @@ impl TurnRequestProcessor {
                  .inspect_err(|error| {
                      self.track_error_response(&request_id, error, /*error_type*/ None);
                  })?;
@@ -1868,10 +1939,90 @@ index eeed287..146a23b 100644
 +                "managed invocation requires a managed source profile",
 +            ));
 +        }
++        if let Some(original) = &params.agent_workflow_recovery {
++            if !managed
++                || original.thread_id != params.thread_id
++                || !params.input.is_empty()
++                || params.agent_workflow_invocation.as_deref()
++                    != Some(original.invocation_id.as_str())
++            {
++                return Err(invalid_request(
++                    "managed recovery requires the same original thread/invocation and empty input",
++                ));
++            }
++            // Recovery cannot change instructions, model, settings, output
++            // schema, environment or inject additional context/new authority.
++            let encoded = serde_json::to_value(&params)
++                .map_err(|_| invalid_request("invalid managed recovery request"))?;
++            let allowed = [
++                "threadId",
++                "input",
++                "agentWorkflowInvocation",
++                "agentWorkflowRecovery",
++            ];
++            if encoded.as_object().is_none_or(|fields| {
++                fields
++                    .iter()
++                    .any(|(key, value)| !allowed.contains(&key.as_str()) && !value.is_null())
++            }) {
++                return Err(invalid_request(
++                    "managed recovery cannot override original turn settings or input",
++                ));
++            }
++            self.ensure_direct_input_allowed(&request_id, thread.as_ref())
++                .await?;
++            self.config_manager
++                .check_thread_model_provider_for_input(thread.config().await.as_ref())
++                .await
++                .map_err(|error| config_load_error(&error))?;
++            managed_turn.insert(codex_core::AgentWorkflowRecovery(original.clone()));
++            let request = codex_protocol::turn_input::RecoverTurnRequest {
++                turn_id: original.turn_id.clone(),
++                thread_settings: Default::default(),
++                trace: self.request_trace_context(&request_id).await,
++                cyber_access_program: None,
++            };
++            let recovered = thread
++                .recover_turn_if_idle(codex_core::WithTurnExtensionData::new(
++                    request,
++                    managed_turn,
++                ))
++                .await
++                .map_err(|error| {
++                    invalid_request(format!("managed original recovery rejected: {error}"))
++                })?;
++            let (turn_id, root_turn_id) = match recovered {
++                codex_core::StartIfIdleSubmission::Started {
++                    turn_id,
++                    root_turn_id,
++                } => (turn_id, root_turn_id),
++                codex_core::StartIfIdleSubmission::NotSubmitted { .. } => {
++                    return Err(invalid_request(
++                        "managed original turn is not idle for recovery",
++                    ));
++                }
++            };
++            self.outgoing
++                .record_request_turn_id(&request_id, &turn_id)
++                .await;
++            return Ok(TurnStartResponse {
++                turn: Turn {
++                    id: turn_id,
++                    root_turn_id: Some(root_turn_id),
++                    items: vec![],
++                    items_view: TurnItemsView::NotLoaded,
++                    error: None,
++                    status: TurnStatus::InProgress,
++                    started_at: None,
++                    completed_at: None,
++                    duration_ms: None,
++                },
++            });
++        }
          self.ensure_direct_input_allowed(&request_id, thread.as_ref())
              .await?;
          self.config_manager
-@@ -687,33 +712,34 @@ impl TurnRequestProcessor {
+@@ -687,33 +792,34 @@ impl TurnRequestProcessor {
              )
              .await?;
  
@@ -1934,10 +2085,18 @@ index eeed287..146a23b 100644
              TurnInputSubmission::Started {
                  turn_id,
 diff --git a/codex-rs/app-server/tests/common/rollout.rs b/codex-rs/app-server/tests/common/rollout.rs
-index 44ebcfa..29ce690 100644
+index 44ebcfa..ca4597c 100644
 --- a/codex-rs/app-server/tests/common/rollout.rs
 +++ b/codex-rs/app-server/tests/common/rollout.rs
-@@ -254,6 +254,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
+@@ -115,6 +115,7 @@ pub fn create_fake_rollout_with_token_usage(
+         /*git_info*/ None,
+     )?;
+     let payload = serde_json::to_value(EventMsg::TokenCount(TokenCountEvent {
++        agent_workflow_witness: None,
+         info: Some(TokenUsageInfo {
+             total_token_usage: TokenUsage {
+                 input_tokens: 120,
+@@ -254,6 +255,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
  
      // Build JSONL lines
      let meta = SessionMeta {
@@ -1945,7 +2104,7 @@ index 44ebcfa..29ce690 100644
          attached_thread: false,
          creator_user_id: None,
          creator_account_id: None,
-@@ -351,6 +352,7 @@ pub fn create_fake_rollout_with_text_elements(
+@@ -351,6 +353,7 @@ pub fn create_fake_rollout_with_text_elements(
  
      // Build JSONL lines
      let meta = SessionMeta {
@@ -2062,10 +2221,34 @@ index 4e35be4..40fa690 100644
              creator_user_id: None,
              creator_account_id: None,
 diff --git a/codex-rs/app-server/tests/suite/v2/thread_resume.rs b/codex-rs/app-server/tests/suite/v2/thread_resume.rs
-index 03e498f..6e99259 100644
+index 03e498f..4e0bb69 100644
 --- a/codex-rs/app-server/tests/suite/v2/thread_resume.rs
 +++ b/codex-rs/app-server/tests/suite/v2/thread_resume.rs
-@@ -4790,6 +4790,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
+@@ -4243,6 +4243,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
+     append_rollout_item_to_path(
+         &path,
+         &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
++            agent_workflow_witness: None,
+             info: Some(TokenUsageInfo {
+                 total_token_usage: TokenUsage {
+                     input_tokens: 120,
+@@ -4357,6 +4358,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
+     append_rollout_item_to_path(
+         &path,
+         &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
++            agent_workflow_witness: None,
+             info: Some(TokenUsageInfo {
+                 total_token_usage: TokenUsage {
+                     total_tokens: 150,
+@@ -4637,6 +4639,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
+             "timestamp": meta_rfc3339,
+             "type": "event_msg",
+             "payload": serde_json::to_value(EventMsg::TokenCount(TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: Some(TokenUsageInfo {
+                     total_token_usage: TokenUsage {
+                         input_tokens: 180,
+@@ -4790,6 +4793,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
      let rollout_dir = rollout_path.parent().expect("rollout parent directory");
      std::fs::create_dir_all(rollout_dir)?;
      let session_meta = SessionMeta {
@@ -2110,34 +2293,1308 @@ index f12de00..6acefd1 100644
              text: "dynamic-ok".to_string(),
          }],
 diff --git a/codex-rs/app-server/tests/suite/v2/turn_start.rs b/codex-rs/app-server/tests/suite/v2/turn_start.rs
-index 154f152..9c0bb2f 100644
+index 154f152..5aa8071 100644
 --- a/codex-rs/app-server/tests/suite/v2/turn_start.rs
 +++ b/codex-rs/app-server/tests/suite/v2/turn_start.rs
-@@ -3515,6 +3515,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
+@@ -3515,6 +3515,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
          .request(|request_id| ClientRequest::TurnStart {
              request_id,
              params: TurnStartParams {
++                agent_workflow_recovery: None,
 +                agent_workflow_invocation: None,
                  disabled_plugin_ids: None,
                  environments: None,
                  thread_id: thread.id.clone(),
-@@ -3567,6 +3568,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
+@@ -3567,6 +3569,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
          .request(|request_id| ClientRequest::TurnStart {
              request_id,
              params: TurnStartParams {
++                agent_workflow_recovery: None,
 +                agent_workflow_invocation: None,
                  disabled_plugin_ids: None,
                  environments: Some(vec![TurnEnvironmentParams {
                      environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/control_tests.rs
+index 8724766..882ef77 100644
+--- a/codex-rs/core/src/agent/control_tests.rs
++++ b/codex-rs/core/src/agent/control_tests.rs
+@@ -2721,6 +2721,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
+         ..TokenUsage::default()
+     };
+     let parent_record = TokenUsageRecord {
++        agent_workflow_witness: None,
+         thread_id: parent_thread_id,
+         turn_id: "parent-turn".to_string(),
+         session_id: parent_thread.session.session_id(),
+@@ -2845,6 +2846,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
+     assert_eq!(
+         child_record,
+         Some(&TokenUsageRecord {
++            agent_workflow_witness: None,
+             thread_id: child_thread_id,
+             turn_id: turn_context.sub_id.clone(),
+             session_id: child_thread.session.session_id(),
+diff --git a/codex-rs/core/src/agent_workflow_journal.rs b/codex-rs/core/src/agent_workflow_journal.rs
+new file mode 100644
+index 0000000..0d468a8
+--- /dev/null
++++ b/codex-rs/core/src/agent_workflow_journal.rs
+@@ -0,0 +1,1242 @@
++//! Durable broker recovery records. Native normalized history is never a receipt.
++//!
++//! All I/O stays on the already counted model task. This module deliberately
++//! rejects non-local/non-regular persistence, corrupt records and oversized data.
++//! It does not infer storage durability from the upstream buffered flush API.
++
++use codex_protocol::dynamic_tools::DynamicToolResponse;
++use codex_protocol::models::FunctionCallOutputBody;
++use codex_protocol::models::FunctionCallOutputContentItem;
++use codex_protocol::models::FunctionCallOutputPayload;
++use codex_protocol::models::ResponseItem;
++use codex_protocol::protocol::AgentWorkflowParkedBatch;
++use codex_protocol::protocol::AgentWorkflowPolicy;
++use serde::Deserialize;
++use serde::Serialize;
++use std::collections::BTreeMap;
++use std::collections::BTreeSet;
++use std::fs::File;
++use std::fs::OpenOptions;
++use std::io::Read;
++use std::io::Write;
++use std::path::Path;
++use std::path::PathBuf;
++
++const MAX_BYTES: usize = 16 * 1024 * 1024;
++
++#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
++#[serde(deny_unknown_fields, rename_all = "camelCase")]
++pub(crate) struct OriginalCall {
++    pub id: String,
++    pub tool: String,
++    /// Preserve original JSON bytes, including whitespace and key ordering.
++    pub arguments: String,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
++#[serde(rename_all = "camelCase")]
++pub(crate) enum JournalPhase {
++    Sealed,
++    ResultsAccepted,
++    Completed,
++    Cancelled,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields, rename_all = "camelCase")]
++pub(crate) struct BrokerJournal {
++    protocol: u32,
++    pub identity: AgentWorkflowParkedBatch,
++    pub calls: Vec<OriginalCall>,
++    /// Exact completed model usage observation, replayed under response_id.
++    pub usage: serde_json::Value,
++    pub phase: JournalPhase,
++    pub results: BTreeMap<String, DynamicToolResponse>,
++}
++
++fn invalid(message: &str) -> std::io::Error {
++    std::io::Error::other(format!("managed recovery hold: {message}"))
++}
++
++impl BrokerJournal {
++    pub(crate) fn sealed(
++        identity: AgentWorkflowParkedBatch,
++        calls: Vec<OriginalCall>,
++        usage: serde_json::Value,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<Self> {
++        let value = Self {
++            protocol: 1,
++            identity,
++            calls,
++            usage,
++            phase: JournalPhase::Sealed,
++            results: BTreeMap::new(),
++        };
++        value.validate(policy)?;
++        Ok(value)
++    }
++
++    pub(crate) fn validate(&self, policy: &AgentWorkflowPolicy) -> std::io::Result<()> {
++        if self.protocol != 1
++            || self.identity.policy_id != policy.policy_id
++            || self.identity.build_id != policy.build_id
++            || self.identity.response_id.is_empty()
++            || self.identity.thread_id.is_empty()
++            || self.identity.turn_id.is_empty()
++            || self.identity.invocation_id.is_empty()
++            || self.identity.batch_id.is_empty()
++            || self.calls.is_empty()
++            || self.calls.len() > 128
++        {
++            return Err(invalid("journal identity or policy differs"));
++        }
++        let mut ids = BTreeSet::new();
++        for call in &self.calls {
++            if call.id.is_empty()
++                || call.id.len() > 256
++                || !ids.insert(call.id.clone())
++                || !policy.broker_tools.contains(&call.tool)
++                || serde_json::from_str::<serde_json::Value>(&call.arguments).is_err()
++            {
++                return Err(invalid("invalid, duplicate or ungranted original call"));
++            }
++        }
++        if self.identity.call_ids != ids.iter().cloned().collect::<Vec<_>>() {
++            return Err(invalid("sealed complete call set differs"));
++        }
++        if self.results.keys().any(|id| !ids.contains(id))
++            || self
++                .results
++                .values()
++                .any(|result| result.agent_workflow_permit.is_some())
++        {
++            return Err(invalid("foreign result or retained stale permit"));
++        }
++        match self.phase {
++            JournalPhase::Sealed if !self.results.is_empty() => {
++                return Err(invalid("unsealed result set"));
++            }
++            JournalPhase::ResultsAccepted | JournalPhase::Completed
++                if self.results.len() != self.calls.len() =>
++            {
++                return Err(invalid("incomplete accepted result set"));
++            }
++            _ => {}
++        }
++        for field in ["input_tokens", "output_tokens", "total_tokens"] {
++            if self
++                .usage
++                .get(field)
++                .and_then(serde_json::Value::as_i64)
++                .is_none_or(|value| value < 0)
++            {
++                return Err(invalid("missing or invalid original usage witness"));
++            }
++        }
++        if serde_json::to_vec(self)
++            .map_err(std::io::Error::other)?
++            .len()
++            > MAX_BYTES
++        {
++            return Err(invalid("journal payload exceeds bound"));
++        }
++        Ok(())
++    }
++
++    /// Validate original raw rollout items BEFORE native history normalization.
++    /// Missing or synthetic `aborted` outputs do not establish a tool receipt.
++    pub(crate) fn validate_raw_calls(&self, history: &[ResponseItem]) -> std::io::Result<()> {
++        for call in &self.calls {
++            let matches = history
++                .iter()
++                .filter(|item| {
++                    matches!(item,
++                ResponseItem::FunctionCall { call_id, name, namespace, arguments, .. }
++                if call_id == &call.id && name == &call.tool && namespace.is_none()
++                    && arguments == &call.arguments)
++                })
++                .count();
++            let total = history
++                .iter()
++                .filter(|item| {
++                    matches!(item,
++                ResponseItem::FunctionCall { call_id, .. } if call_id == &call.id)
++                })
++                .count();
++            if matches != 1 || total != 1 {
++                return Err(invalid("missing, duplicated or changed raw original call"));
++            }
++        }
++        Ok(())
++    }
++
++    /// Merge only exact real semantic results. Missing native outputs may be
++    /// reconstructed from the already durable complete accepted receipt set;
++    /// `aborted`, changed, duplicated and foreign outputs never become receipts.
++    pub(crate) fn missing_real_outputs(
++        &self,
++        history: &[ResponseItem],
++    ) -> std::io::Result<Vec<ResponseItem>> {
++        self.validate_raw_calls(history)?;
++        if !matches!(
++            self.phase,
++            JournalPhase::ResultsAccepted | JournalPhase::Completed
++        ) {
++            return Err(invalid("no complete durable result set"));
++        }
++        let mut missing = Vec::new();
++        for (id, result) in &self.results {
++            let content = result
++                .content_items
++                .clone()
++                .into_iter()
++                .map(FunctionCallOutputContentItem::from)
++                .collect::<Vec<_>>();
++            let body = match content.as_slice() {
++                [FunctionCallOutputContentItem::InputText { text }] => {
++                    FunctionCallOutputBody::Text(text.clone())
++                }
++                _ => FunctionCallOutputBody::ContentItems(content),
++            };
++            let expected = FunctionCallOutputPayload {
++                body,
++                success: Some(result.success),
++            };
++            let existing = history
++                .iter()
++                .filter_map(|item| match item {
++                    ResponseItem::FunctionCallOutput {
++                        call_id: Some(call),
++                        output,
++                        ..
++                    } if call == id => Some(output),
++                    _ => None,
++                })
++                .collect::<Vec<_>>();
++            if existing.len() > 1
++                || existing
++                    .first() // Upstream persists only the body and restores success=None.
++                    // The accepted semantic journal remains the status authority.
++                    .is_some_and(|output| output.body != expected.body)
++            {
++                return Err(invalid("duplicated, synthetic or changed raw output"));
++            }
++            if existing.is_empty() {
++                missing.push(ResponseItem::FunctionCallOutput {
++                    id: None,
++                    call_id: Some(id.clone()),
++                    name: None,
++                    namespace: None,
++                    output: expected,
++                    internal_chat_message_metadata_passthrough: None,
++                });
++            }
++        }
++        Ok(missing)
++    }
++
++    pub(crate) fn complete(&mut self, history: &[ResponseItem]) -> std::io::Result<()> {
++        if self.phase != JournalPhase::ResultsAccepted
++            || !self.missing_real_outputs(history)?.is_empty()
++        {
++            return Err(invalid(
++                "all real outputs must be durable before completion",
++            ));
++        }
++        self.phase = JournalPhase::Completed;
++        Ok(())
++    }
++
++    /// An entire result set is accepted atomically before any callback oneshot.
++    pub(crate) fn accept_results(
++        &mut self,
++        results: BTreeMap<String, DynamicToolResponse>,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        if self.phase != JournalPhase::Sealed {
++            return Err(invalid("results already settled or journal cancelled"));
++        }
++        let previous = std::mem::replace(&mut self.results, results);
++        self.phase = JournalPhase::ResultsAccepted;
++        if let Err(error) = self.validate(policy) {
++            self.results = previous;
++            self.phase = JournalPhase::Sealed;
++            return Err(error);
++        }
++        Ok(())
++    }
++}
++
++/// Adjacent to the native generated rollout filename, never a model-supplied path.
++pub(crate) struct JournalFile {
++    path: PathBuf,
++}
++
++impl JournalFile {
++    pub(crate) fn for_rollout(path: &Path) -> std::io::Result<Self> {
++        if !path.is_absolute() || path.extension().and_then(|part| part.to_str()) != Some("jsonl") {
++            return Err(invalid("managed recovery requires a local JSONL rollout"));
++        }
++        check_parents(path)?;
++        Ok(Self {
++            path: path.with_extension("managed-broker.json"),
++        })
++    }
++
++    pub(crate) fn load(&self, policy: &AgentWorkflowPolicy) -> std::io::Result<BrokerJournal> {
++        let mut file = open_regular(&self.path, false)?;
++        if file.metadata()?.len() > MAX_BYTES as u64 {
++            return Err(invalid("journal file exceeds bound"));
++        }
++        let mut bytes = Vec::new();
++        Read::by_ref(&mut file)
++            .take((MAX_BYTES + 1) as u64)
++            .read_to_end(&mut bytes)?;
++        if bytes.len() > MAX_BYTES {
++            return Err(invalid("journal read exceeds bound"));
++        }
++        let value: BrokerJournal = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
++        value.validate(policy)?;
++        Ok(value)
++    }
++
++    /// Write -> sync data/metadata -> atomic rename -> sync directory. A caller
++    /// MUST NOT dispatch or deliver results unless this complete barrier succeeds.
++    pub(crate) fn persist(
++        &self,
++        value: &BrokerJournal,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        value.validate(policy)?;
++        atomic_record(
++            &self.path,
++            &serde_json::to_vec(value).map_err(std::io::Error::other)?,
++        )
++    }
++}
++
++fn atomic_record(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
++    check_parents(path)?;
++    match std::fs::symlink_metadata(path) {
++        Ok(metadata) if !metadata.file_type().is_file() || metadata.nlink_checked() != 1 => {
++            return Err(invalid("journal is not an exclusively owned regular file"));
++        }
++        Ok(_) => {}
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
++        Err(error) => return Err(error),
++    }
++    let parent = path
++        .parent()
++        .ok_or_else(|| invalid("journal parent absent"))?;
++    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
++    temp.write_all(bytes)?;
++    temp.as_file().sync_all()?;
++    temp.persist(path).map_err(|error| error.error)?;
++    sync_directory(parent)
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields, rename_all = "camelCase")]
++pub(crate) struct ModelRequestIntent {
++    protocol: u32,
++    pub started: AgentWorkflowParkedBatch,
++    pub completed: Option<codex_protocol::protocol::AgentWorkflowModelWitness>,
++}
++
++impl ModelRequestIntent {
++    pub(crate) fn begin(
++        started: AgentWorkflowParkedBatch,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<Self> {
++        let value = Self {
++            protocol: 1,
++            started,
++            completed: None,
++        };
++        value.validate(policy)?;
++        Ok(value)
++    }
++    pub(crate) fn validate(&self, policy: &AgentWorkflowPolicy) -> std::io::Result<()> {
++        if self.protocol != 1
++            || self.started.thread_id.is_empty()
++            || self.started.turn_id.is_empty()
++            || self.started.invocation_id.is_empty()
++            || self.started.batch_id.is_empty()
++            || !self.started.response_id.is_empty()
++            || !self.started.call_ids.is_empty()
++            || self.started.build_id != policy.build_id
++            || self.started.policy_id != policy.policy_id
++        {
++            return Err(invalid("model intent identity or policy differs"));
++        }
++        if let Some(witness) = &self.completed {
++            let mut original = witness.batch.clone();
++            if original.response_id.is_empty() || original.call_ids.len() > 128 {
++                return Err(invalid("invalid completed model intent"));
++            }
++            original.response_id.clear();
++            original.call_ids.clear();
++            if original != self.started {
++                return Err(invalid("model completion changed original invocation"));
++            }
++        }
++        if serde_json::to_vec(self)
++            .map_err(std::io::Error::other)?
++            .len()
++            > 65536
++        {
++            return Err(invalid("model intent exceeds bound"));
++        }
++        Ok(())
++    }
++}
++
++pub(crate) struct IntentFile {
++    path: PathBuf,
++}
++impl IntentFile {
++    pub(crate) fn for_rollout(rollout: &Path) -> std::io::Result<Self> {
++        let _journal = JournalFile::for_rollout(rollout)?;
++        Ok(Self {
++            path: rollout.with_extension("managed-model.json"),
++        })
++    }
++    pub(crate) fn persist(
++        &self,
++        value: &ModelRequestIntent,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        value.validate(policy)?;
++        atomic_record(
++            &self.path,
++            &serde_json::to_vec(value).map_err(std::io::Error::other)?,
++        )
++    }
++    pub(crate) fn load(&self, policy: &AgentWorkflowPolicy) -> std::io::Result<ModelRequestIntent> {
++        let mut file = open_regular(&self.path, false)?;
++        if file.metadata()?.len() > 65536 {
++            return Err(invalid("oversized model intent"));
++        }
++        let mut bytes = Vec::new();
++        Read::by_ref(&mut file)
++            .take(65537)
++            .read_to_end(&mut bytes)?;
++        if bytes.len() > 65536 {
++            return Err(invalid("oversized model intent read"));
++        }
++        let value: ModelRequestIntent =
++            serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
++        value.validate(policy)?;
++        Ok(value)
++    }
++}
++
++/// Read original persisted records directly, before the native normalizer can
++/// manufacture missing `aborted` outputs. Any partial/corrupt line is a hold.
++pub(crate) struct RawRollout {
++    pub items: Vec<codex_history::RolloutItem>,
++    pub responses: Vec<ResponseItem>,
++}
++
++impl RawRollout {
++    pub(crate) fn validate_header(
++        &self,
++        thread: &str,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        let metadata = self
++            .items
++            .iter()
++            .filter_map(|item| match item {
++                codex_history::RolloutItem::SessionMeta(meta) => Some(&meta.meta),
++                _ => None,
++            })
++            .collect::<Vec<_>>();
++        if metadata.len() != 1
++            || metadata[0].id.to_string() != thread
++            || metadata[0].agent_workflow_policy.as_ref() != Some(policy)
++            || metadata[0].forked_from_id.is_some()
++            || metadata[0].parent_thread_id.is_some()
++        {
++            return Err(invalid(
++                "foreign, duplicated or unmanaged raw session metadata",
++            ));
++        }
++        Ok(())
++    }
++
++    pub(crate) fn validate_intent_witness(
++        &self,
++        witness: &codex_protocol::protocol::AgentWorkflowModelWitness,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        let mut calls = BTreeMap::new();
++        for item in &self.responses {
++            if let ResponseItem::FunctionCall {
++                call_id,
++                name,
++                arguments,
++                namespace,
++                ..
++            } = item
++            {
++                if witness.batch.call_ids.contains(call_id) {
++                    if namespace.is_some()
++                        || !policy.broker_tools.contains(name)
++                        || calls
++                            .insert(
++                                call_id.clone(),
++                                OriginalCall {
++                                    id: call_id.clone(),
++                                    tool: name.clone(),
++                                    arguments: arguments.clone(),
++                                },
++                            )
++                            .is_some()
++                    {
++                        return Err(invalid("invalid or duplicated native intent call"));
++                    }
++                }
++            }
++        }
++        if calls.keys().cloned().collect::<Vec<_>>() != witness.batch.call_ids {
++            return Err(invalid("native intent call set differs"));
++        }
++        self.validate_completion(
++            &witness.batch,
++            &witness.usage,
++            &calls.values().cloned().collect::<Vec<_>>(),
++            policy,
++        )
++        .map(|_| ())
++    }
++
++    pub(crate) fn validate_journal(
++        &self,
++        journal: &BrokerJournal,
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<()> {
++        journal.validate(policy)?;
++        journal.validate_raw_calls(&self.responses)?;
++        self.validate_completion(&journal.identity, &journal.usage, &journal.calls, policy)
++            .map(|_| ())
++    }
++
++    pub(crate) fn validate_completion(
++        &self,
++        identity: &AgentWorkflowParkedBatch,
++        usage: &serde_json::Value,
++        calls: &[OriginalCall],
++        policy: &AgentWorkflowPolicy,
++    ) -> std::io::Result<codex_protocol::protocol::AgentWorkflowModelWitness> {
++        let metadata = self
++            .items
++            .iter()
++            .filter_map(|item| match item {
++                codex_history::RolloutItem::SessionMeta(meta) => Some(&meta.meta),
++                _ => None,
++            })
++            .collect::<Vec<_>>();
++        if metadata.len() != 1
++            || metadata[0].id.to_string() != identity.thread_id
++            || metadata[0].agent_workflow_policy.as_ref() != Some(policy)
++            || metadata[0].forked_from_id.is_some()
++            || metadata[0].parent_thread_id.is_some()
++        {
++            return Err(invalid(
++                "foreign, duplicated or unmanaged raw session metadata",
++            ));
++        }
++        let matching = self
++            .items
++            .iter()
++            .enumerate()
++            .filter_map(|(index, item)| match item {
++                codex_history::RolloutItem::TokenUsageRecord(record)
++                    if record.response_id == identity.response_id =>
++                {
++                    Some((index, record))
++                }
++                _ => None,
++            })
++            .collect::<Vec<_>>();
++        if matching.len() != 1 {
++            return Err(invalid(
++                "missing or duplicated actual native Completed witness",
++            ));
++        }
++        let (completed_index, record) = matching[0];
++        let expected = codex_protocol::protocol::AgentWorkflowModelWitness {
++            batch: identity.clone(),
++            usage: usage.clone(),
++        };
++        if record.thread_id.to_string() != identity.thread_id
++            || record.turn_id != identity.turn_id
++            || record.agent_workflow_witness.as_ref() != Some(&expected)
++        {
++            return Err(invalid(
++                "native Completed identity, invocation, callset or usage differs",
++            ));
++        }
++        let actual_usage = serde_json::to_value(&record.usage).map_err(std::io::Error::other)?;
++        let mut journal_usage = usage.clone();
++        if let Some(object) = journal_usage.as_object_mut() {
++            object.remove("codex_rollout_budget_units");
++        }
++        if actual_usage != journal_usage {
++            return Err(invalid("independent actual native usage differs"));
++        }
++        let previous_index = self.items[..completed_index]
++            .iter()
++            .rposition(|item| matches!(item, codex_history::RolloutItem::TokenUsageRecord(_)))
++            .map_or(0, |index| index + 1);
++        let mut actual_calls = BTreeMap::new();
++        for item in &self.items[previous_index..completed_index] {
++            if let codex_history::RolloutItem::ResponseItem(envelope) = item {
++                if let ResponseItem::FunctionCall {
++                    call_id,
++                    name,
++                    namespace,
++                    arguments,
++                    ..
++                } = &envelope.item
++                {
++                    if namespace.is_some()
++                        || actual_calls
++                            .insert(
++                                call_id.clone(),
++                                OriginalCall {
++                                    id: call_id.clone(),
++                                    tool: name.clone(),
++                                    arguments: arguments.clone(),
++                                },
++                            )
++                            .is_some()
++                    {
++                        return Err(invalid(
++                            "foreign namespace or duplicated actual response call",
++                        ));
++                    }
++                }
++            }
++        }
++        if actual_calls
++            .values()
++            .cloned()
++            .collect::<Vec<_>>()
++            .as_slice()
++            != calls
++        {
++            return Err(invalid(
++                "journal omitted, added or changed original response calls",
++            ));
++        }
++        if self.items[completed_index + 1..].iter().any(|item| matches!(item,
++            codex_history::RolloutItem::ResponseItem(envelope) if matches!(envelope.item, ResponseItem::FunctionCall { .. }))) {
++            return Err(invalid("later original calls lack this sealed journal"));
++        }
++        Ok(expected)
++    }
++}
++
++pub(crate) fn read_raw_rollout(path: &Path) -> std::io::Result<RawRollout> {
++    const MAX_RAW_BYTES: usize = 64 * 1024 * 1024;
++    let mut file = open_regular(path, false)?;
++    if file.metadata()?.len() > MAX_RAW_BYTES as u64 {
++        return Err(invalid("raw rollout exceeds managed recovery bound"));
++    }
++    let mut bytes = Vec::new();
++    Read::by_ref(&mut file)
++        .take((MAX_RAW_BYTES + 1) as u64)
++        .read_to_end(&mut bytes)?;
++    if bytes.len() > MAX_RAW_BYTES || bytes.last() != Some(&b'\n') {
++        return Err(invalid(
++            "oversized, missing or partial original raw rollout",
++        ));
++    }
++    let mut items = Vec::new();
++    let mut responses = Vec::new();
++    for line in bytes
++        .split(|byte| *byte == b'\n')
++        .filter(|line| !line.is_empty())
++    {
++        let decoded =
++            codex_rollout::parse_rollout_line_bytes(line).map_err(std::io::Error::other)?;
++        if let codex_history::RolloutItem::ResponseItem(envelope) = &decoded.item {
++            responses.push(envelope.item.clone());
++        }
++        items.push(decoded.item);
++    }
++    Ok(RawRollout { items, responses })
++}
++
++/// This is additional to, and ordered AFTER, upstream LiveThread.flush().
++/// No storage guarantee is inferred from that buffered writer method's name.
++pub(crate) fn sync_raw_rollout(path: &Path) -> std::io::Result<()> {
++    check_parents(path)?;
++    open_regular(path, false)?.sync_all()?;
++    sync_directory(
++        path.parent()
++            .ok_or_else(|| invalid("rollout parent absent"))?,
++    )
++}
++
++trait LinkCount {
++    fn nlink_checked(&self) -> u64;
++}
++impl LinkCount for std::fs::Metadata {
++    fn nlink_checked(&self) -> u64 {
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::MetadataExt;
++            self.nlink()
++        }
++        #[cfg(not(unix))]
++        {
++            0
++        }
++    }
++}
++
++fn check_parents(path: &Path) -> std::io::Result<()> {
++    let mut current = path.parent().ok_or_else(|| invalid("path parent absent"))?;
++    loop {
++        let metadata = std::fs::symlink_metadata(current)?;
++        if !metadata.is_dir() || metadata.file_type().is_symlink() {
++            return Err(invalid("non-directory or aliased persistence parent"));
++        }
++        match current.parent() {
++            Some(parent) => current = parent,
++            None => return Ok(()),
++        }
++    }
++}
++
++fn open_regular(path: &Path, write: bool) -> std::io::Result<File> {
++    check_parents(path)?;
++    let mut options = OpenOptions::new();
++    options.read(true).write(write);
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::OpenOptionsExt;
++        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
++    }
++    #[cfg(not(unix))]
++    {
++        return Err(invalid(
++            "managed journal requires supported Unix file barriers",
++        ));
++    }
++    let file = options.open(path)?;
++    let metadata = file.metadata()?;
++    if !metadata.file_type().is_file() || metadata.nlink_checked() != 1 {
++        return Err(invalid(
++            "persistence is not an exclusively owned regular file",
++        ));
++    }
++    Ok(file)
++}
++
++/// A first seal may follow lazy creation of several native rollout directory
++/// levels. Sync each entry's containing directory once per live thread, from
++/// inner to outer; later journal renames only need their immediate parent sync.
++pub(crate) fn sync_parent_entries_once(
++    path: &Path,
++    synced: &mut BTreeSet<PathBuf>,
++) -> std::io::Result<()> {
++    let mut parent = path
++        .parent()
++        .ok_or_else(|| invalid("rollout parent absent"))?;
++    for _ in 0..128 {
++        if !synced.contains(parent) {
++            sync_directory(parent)?;
++            synced.insert(parent.to_path_buf());
++        }
++        match parent.parent() {
++            Some(next) => parent = next,
++            None => return Ok(()),
++        }
++    }
++    Err(invalid("persistence directory ancestry exceeds bound"))
++}
++
++fn sync_directory(path: &Path) -> std::io::Result<()> {
++    let file = File::open(path)?;
++    if !file.metadata()?.is_dir() {
++        return Err(invalid("sync target is not a directory"));
++    }
++    file.sync_all()
++}
++
++#[cfg(test)]
++pub(crate) mod tests {
++    use super::*;
++    use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
++    use serde_json::json;
++
++    fn policy() -> AgentWorkflowPolicy {
++        AgentWorkflowPolicy {
++            protocol: 1,
++            build_id: "b".repeat(64),
++            policy_id: "a".repeat(64),
++            broker_tools: vec!["broker_000000000000000000000000".into()],
++        }
++    }
++    fn record() -> BrokerJournal {
++        let policy = policy();
++        BrokerJournal::sealed(
++            AgentWorkflowParkedBatch {
++                thread_id: "thread".into(),
++                turn_id: "turn".into(),
++                invocation_id: "invocation".into(),
++                policy_id: policy.policy_id.clone(),
++                build_id: policy.build_id.clone(),
++                batch_id: "original-batch".into(),
++                response_id: "original-response".into(),
++                call_ids: vec!["original-call".into()],
++            },
++            vec![OriginalCall {
++                id: "original-call".into(),
++                tool: policy.broker_tools[0].clone(),
++                arguments: "{ \"nonce\": 7 }".into(),
++            }],
++            serde_json::to_value(codex_protocol::protocol::TokenUsage {
++                input_tokens: 11,
++                output_tokens: 3,
++                total_tokens: 14,
++                ..Default::default()
++            })
++            .unwrap(),
++            &policy,
++        )
++        .unwrap()
++    }
++    fn response() -> DynamicToolResponse {
++        DynamicToolResponse {
++            agent_workflow_permit: None,
++            content_items: vec![DynamicToolCallOutputContentItem::InputText {
++                text: "original receipt bytes".into(),
++            }],
++            success: false,
++        }
++    }
++    fn raw_call() -> ResponseItem {
++        serde_json::from_value(json!({"type":"function_call", "call_id":"original-call", "name":policy().broker_tools[0], "arguments":"{ \"nonce\": 7 }"})).unwrap()
++    }
++
++    #[test]
++    fn full_results_are_atomic_semantic_receipts_without_stale_permits() {
++        let mut journal = record();
++        assert!(journal.accept_results(BTreeMap::new(), &policy()).is_err());
++        assert_eq!(journal.phase, JournalPhase::Sealed);
++        assert!(journal.results.is_empty());
++        let mut result = response();
++        result.agent_workflow_permit = Some(codex_protocol::protocol::AgentWorkflowBatchPermit {
++            batch: journal.identity.clone(),
++            permit_epoch: "stale-owner".into(),
++            usage: journal.usage.clone(),
++        });
++        assert!(
++            journal
++                .accept_results(
++                    BTreeMap::from([("original-call".into(), result)]),
++                    &policy()
++                )
++                .is_err()
++        );
++        journal
++            .accept_results(
++                BTreeMap::from([("original-call".into(), response())]),
++                &policy(),
++            )
++            .unwrap();
++        assert_eq!(journal.results["original-call"], response());
++        assert!(
++            journal
++                .accept_results(journal.results.clone(), &policy())
++                .is_err()
++        );
++        journal.phase = JournalPhase::Cancelled;
++        assert!(
++            journal
++                .accept_results(journal.results.clone(), &policy())
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn raw_calls_require_original_ids_and_exact_argument_bytes() {
++        let journal = record();
++        journal.validate_raw_calls(&[raw_call()]).unwrap();
++        assert!(journal.validate_raw_calls(&[]).is_err());
++        assert!(
++            journal
++                .validate_raw_calls(&[raw_call(), raw_call()])
++                .is_err()
++        );
++        let mut changed = raw_call();
++        if let ResponseItem::FunctionCall { arguments, .. } = &mut changed {
++            *arguments = "{\"nonce\":7}".into();
++        }
++        assert!(journal.validate_raw_calls(&[changed]).is_err());
++        // A normalized `aborted` placeholder neither replaces an original call
++        // nor advances the journal to ResultsAccepted.
++        let aborted: ResponseItem = serde_json::from_value(
++            json!({"type":"function_call_output","call_id":"original-call","output":"aborted"}),
++        )
++        .unwrap();
++        assert!(journal.validate_raw_calls(&[aborted]).is_err());
++        assert_eq!(journal.phase, JournalPhase::Sealed);
++    }
++
++    #[test]
++    fn partial_real_outputs_merge_only_original_complete_receipts() {
++        let mut journal = record();
++        journal
++            .accept_results(
++                BTreeMap::from([("original-call".into(), response())]),
++                &policy(),
++            )
++            .unwrap();
++        let mut raw = vec![raw_call()];
++        assert!(journal.complete(&raw).is_err());
++        let missing = journal.missing_real_outputs(&raw).unwrap();
++        assert_eq!(missing.len(), 1);
++        raw.extend(missing);
++        assert!(journal.missing_real_outputs(&raw).unwrap().is_empty());
++        journal.complete(&raw).unwrap();
++        assert_eq!(journal.phase, JournalPhase::Completed);
++        let mut changed = raw.clone();
++        if let ResponseItem::FunctionCallOutput { output, .. } = &mut changed[1] {
++            output.body = FunctionCallOutputBody::Text("aborted".into());
++        }
++        assert!(journal.missing_real_outputs(&changed).is_err());
++        raw.push(raw[1].clone());
++        assert!(journal.missing_real_outputs(&raw).is_err());
++    }
++
++    #[test]
++    fn persisted_json_roundtrip_keeps_exact_body_and_journal_failure_status() {
++        for content in [
++            vec![DynamicToolCallOutputContentItem::InputText {
++                text: "failed original bytes\n  ".into(),
++            }],
++            vec![
++                DynamicToolCallOutputContentItem::InputText {
++                    text: "first".into(),
++                },
++                DynamicToolCallOutputContentItem::InputText {
++                    text: "second".into(),
++                },
++            ],
++        ] {
++            let mut journal = record();
++            let result = DynamicToolResponse {
++                agent_workflow_permit: None,
++                content_items: content,
++                success: false,
++            };
++            journal
++                .accept_results(
++                    BTreeMap::from([("original-call".into(), result)]),
++                    &policy(),
++                )
++                .unwrap();
++            let missing = journal.missing_real_outputs(&[raw_call()]).unwrap();
++            let persisted: ResponseItem =
++                serde_json::from_slice(&serde_json::to_vec(&missing[0]).unwrap()).unwrap();
++            if let ResponseItem::FunctionCallOutput { output, .. } = &persisted {
++                assert_eq!(output.success, None);
++            } else {
++                panic!("missing native output");
++            }
++            let raw = vec![raw_call(), persisted.clone()];
++            assert!(journal.missing_real_outputs(&raw).unwrap().is_empty());
++            assert!(!journal.results["original-call"].success);
++            let mut changed = persisted;
++            if let ResponseItem::FunctionCallOutput { output, .. } = &mut changed {
++                output.body = match &output.body {
++                    FunctionCallOutputBody::Text(text) => {
++                        FunctionCallOutputBody::ContentItems(vec![
++                            FunctionCallOutputContentItem::InputText { text: text.clone() },
++                        ])
++                    }
++                    FunctionCallOutputBody::ContentItems(items) => {
++                        let mut items = items.clone();
++                        items.reverse();
++                        FunctionCallOutputBody::ContentItems(items)
++                    }
++                };
++            }
++            assert!(
++                journal
++                    .missing_real_outputs(&[raw_call(), changed])
++                    .is_err()
++            );
++            journal.complete(&raw).unwrap();
++        }
++    }
++
++    fn raw_witness(journal: &BrokerJournal) -> RawRollout {
++        use codex_history::{ResponseItemEnvelope, RolloutItem};
++        use codex_protocol::protocol::{
++            AgentWorkflowModelWitness, SessionMeta, SessionMetaLine, TokenUsage, TokenUsageRecord,
++        };
++        let thread = codex_protocol::ThreadId::from_string(&journal.identity.thread_id).unwrap();
++        let mut metadata = SessionMeta::default();
++        metadata.id = thread;
++        metadata.session_id = thread.into();
++        metadata.agent_workflow_policy = Some(policy());
++        let usage: TokenUsage = serde_json::from_value(journal.usage.clone()).unwrap();
++        let record = TokenUsageRecord {
++            agent_workflow_witness: Some(AgentWorkflowModelWitness {
++                batch: journal.identity.clone(),
++                usage: journal.usage.clone(),
++            }),
++            thread_id: thread,
++            turn_id: journal.identity.turn_id.clone(),
++            session_id: thread.into(),
++            root_turn_id: journal.identity.turn_id.clone(),
++            response_id: journal.identity.response_id.clone(),
++            usage: usage.clone(),
++            turn_token_usage: usage.clone(),
++            thread_token_usage: usage,
++        };
++        RawRollout {
++            items: vec![
++                RolloutItem::SessionMeta(Box::new(SessionMetaLine {
++                    meta: metadata,
++                    git: None,
++                })),
++                RolloutItem::ResponseItem(ResponseItemEnvelope::new(raw_call())),
++                RolloutItem::TokenUsageRecord(record),
++            ],
++            responses: vec![raw_call()],
++        }
++    }
++
++    pub(crate) fn recovery_fixture(
++        accepted: bool,
++    ) -> (
++        tempfile::TempDir,
++        PathBuf,
++        AgentWorkflowPolicy,
++        BrokerJournal,
++    ) {
++        let directory = tempfile::tempdir().unwrap();
++        let rollout = directory.path().join("rollout-original.jsonl");
++        let mut journal = record();
++        journal.identity.thread_id = codex_protocol::ThreadId::new().to_string();
++        if accepted {
++            journal
++                .accept_results(
++                    BTreeMap::from([("original-call".into(), response())]),
++                    &policy(),
++                )
++                .unwrap();
++        }
++        let raw = raw_witness(&journal);
++        let mut bytes = Vec::new();
++        for item in raw.items {
++            let line = codex_history::RolloutLine {
++                timestamp: "2026-11-25T00:00:00Z".into(),
++                ordinal: None,
++                item,
++            };
++            bytes.extend(serde_json::to_vec(&line).unwrap());
++            bytes.push(b'\n');
++        }
++        std::fs::write(&rollout, bytes).unwrap();
++        JournalFile::for_rollout(&rollout)
++            .unwrap()
++            .persist(&journal, &policy())
++            .unwrap();
++        let mut started = journal.identity.clone();
++        started.response_id.clear();
++        started.call_ids.clear();
++        // Simulate seal persisted before closing its original request intent.
++        IntentFile::for_rollout(&rollout)
++            .unwrap()
++            .persist(
++                &ModelRequestIntent::begin(started, &policy()).unwrap(),
++                &policy(),
++            )
++            .unwrap();
++        (directory, rollout, policy(), journal)
++    }
++
++    #[test]
++    fn actual_raw_boundary_rejects_foreign_metadata_and_omitted_original_call() {
++        let mut journal = record();
++        journal.identity.thread_id = codex_protocol::ThreadId::new().to_string();
++        let raw = raw_witness(&journal);
++        raw.validate_journal(&journal, &policy()).unwrap();
++        let mut foreign = raw_witness(&journal);
++        if let codex_history::RolloutItem::SessionMeta(meta) = &mut foreign.items[0] {
++            meta.meta.id = codex_protocol::ThreadId::new();
++        }
++        assert!(foreign.validate_journal(&journal, &policy()).is_err());
++        let mut omitted = raw_witness(&journal);
++        let mut extra = raw_call();
++        if let ResponseItem::FunctionCall { call_id, .. } = &mut extra {
++            *call_id = "omitted-original-call".into();
++        }
++        omitted.responses.push(extra.clone());
++        omitted.items.insert(
++            2,
++            codex_history::RolloutItem::ResponseItem(codex_history::ResponseItemEnvelope::new(
++                extra,
++            )),
++        );
++        assert!(omitted.validate_journal(&journal, &policy()).is_err());
++    }
++
++    #[test]
++    fn actual_native_witness_binds_usage_response_and_engine_invocation() {
++        let mut journal = record();
++        journal.identity.thread_id = codex_protocol::ThreadId::new().to_string();
++        for alteration in ["missing", "invocation", "response", "usage"] {
++            let mut raw = raw_witness(&journal);
++            if let codex_history::RolloutItem::TokenUsageRecord(record) = &mut raw.items[2] {
++                match alteration {
++                    "missing" => record.agent_workflow_witness = None,
++                    "invocation" => {
++                        record
++                            .agent_workflow_witness
++                            .as_mut()
++                            .unwrap()
++                            .batch
++                            .invocation_id = "foreign-invocation".into()
++                    }
++                    "response" => record.response_id = "foreign-response".into(),
++                    "usage" => record.usage.input_tokens += 1,
++                    _ => unreachable!(),
++                }
++            }
++            assert!(
++                raw.validate_journal(&journal, &policy()).is_err(),
++                "{alteration}"
++            );
++        }
++    }
++
++    #[test]
++    fn started_model_intent_remains_unknown_until_actual_matching_completion() {
++        let directory = tempfile::tempdir().unwrap();
++        let rollout = directory.path().join("rollout-original.jsonl");
++        std::fs::write(&rollout, "original raw bytes\n").unwrap();
++        let mut journal = record();
++        journal.identity.thread_id = codex_protocol::ThreadId::new().to_string();
++        let mut started = journal.identity.clone();
++        started.response_id.clear();
++        started.call_ids.clear();
++        let value = ModelRequestIntent::begin(started, &policy()).unwrap();
++        let file = IntentFile::for_rollout(&rollout).unwrap();
++        file.persist(&value, &policy()).unwrap();
++        let mut retained = file.load(&policy()).unwrap();
++        assert!(retained.completed.is_none());
++        let raw = raw_witness(&journal);
++        let witness = raw
++            .validate_completion(&journal.identity, &journal.usage, &journal.calls, &policy())
++            .unwrap();
++        // Merely discovering later history never rewrites an unknown intent.
++        assert!(file.load(&policy()).unwrap().completed.is_none());
++        retained.completed = Some(witness);
++        file.persist(&retained, &policy()).unwrap();
++        let completed = file.load(&policy()).unwrap();
++        raw.validate_intent_witness(completed.completed.as_ref().unwrap(), &policy())
++            .unwrap();
++        let mut changed = completed;
++        changed.completed.as_mut().unwrap().batch.invocation_id = "foreign".into();
++        assert!(file.persist(&changed, &policy()).is_err());
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn real_atomic_write_failure_preserves_original_unknown_intent() {
++        use std::os::unix::fs::PermissionsExt;
++        if unsafe { libc::geteuid() } == 0 {
++            return;
++        } // POSIX root bypasses the intended negative control.
++        let directory = tempfile::tempdir().unwrap();
++        let rollout = directory.path().join("rollout-original.jsonl");
++        std::fs::write(&rollout, "original raw bytes\n").unwrap();
++        let journal = record();
++        let mut started = journal.identity.clone();
++        started.response_id.clear();
++        started.call_ids.clear();
++        let value = ModelRequestIntent::begin(started, &policy()).unwrap();
++        let file = IntentFile::for_rollout(&rollout).unwrap();
++        file.persist(&value, &policy()).unwrap();
++        let original = std::fs::read(&file.path).unwrap();
++        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
++        let failure = file.persist(&value, &policy());
++        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
++        assert_eq!(
++            failure.unwrap_err().kind(),
++            std::io::ErrorKind::PermissionDenied
++        );
++        assert_eq!(std::fs::read(&file.path).unwrap(), original);
++        assert!(file.load(&policy()).unwrap().completed.is_none());
++    }
++
++    #[test]
++    fn durable_roundtrip_and_corruption_fail_closed() {
++        let directory = tempfile::tempdir().unwrap();
++        let rollout = directory.path().join("rollout-generated.jsonl");
++        std::fs::write(&rollout, "original raw history\n").unwrap();
++        sync_raw_rollout(&rollout).unwrap();
++        let file = JournalFile::for_rollout(&rollout).unwrap();
++        assert!(file.load(&policy()).is_err());
++        file.persist(&record(), &policy()).unwrap();
++        let loaded = file.load(&policy()).unwrap();
++        assert_eq!(loaded.calls, record().calls);
++        assert_eq!(loaded.usage, record().usage);
++        assert_eq!(loaded.phase, JournalPhase::Sealed);
++        let mut changed = policy();
++        changed.build_id = "c".repeat(64);
++        assert!(file.load(&changed).is_err());
++        std::fs::write(&file.path, "{\"truncated\":").unwrap();
++        assert!(file.load(&policy()).is_err());
++        std::fs::remove_file(&file.path).unwrap();
++        std::fs::create_dir(&file.path).unwrap();
++        assert!(file.persist(&record(), &policy()).is_err());
++    }
++
++    #[test]
++    fn bounds_and_missing_usage_precede_journal_writes() {
++        let mut journal = record();
++        journal.usage = serde_json::Value::Null;
++        assert!(journal.validate(&policy()).is_err());
++        let mut journal = record();
++        journal.calls[0].arguments = format!("\"{}\"", "a".repeat(MAX_BYTES));
++        assert!(journal.validate(&policy()).is_err());
++        let mut journal = record();
++        journal.calls.push(journal.calls[0].clone());
++        assert!(journal.validate(&policy()).is_err());
++        let mut journal = record();
++        journal.phase = JournalPhase::Completed;
++        assert!(journal.validate(&policy()).is_err());
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn aliased_paths_cannot_replace_owned_journal_or_rollout() {
++        use std::os::unix::fs::symlink;
++        let directory = tempfile::tempdir().unwrap();
++        let original = directory.path().join("rollout-original.jsonl");
++        std::fs::write(&original, "original\n").unwrap();
++        let alias = directory.path().join("rollout-alias.jsonl");
++        symlink(&original, &alias).unwrap();
++        assert!(sync_raw_rollout(&alias).is_err());
++        let file = JournalFile::for_rollout(&original).unwrap();
++        symlink(&original, &file.path).unwrap();
++        assert!(file.persist(&record(), &policy()).is_err());
++        assert_eq!(std::fs::read_to_string(&original).unwrap(), "original\n");
++        std::fs::remove_file(&file.path).unwrap();
++        std::fs::hard_link(&original, &file.path).unwrap();
++        assert!(file.load(&policy()).is_err());
++        assert!(file.persist(&record(), &policy()).is_err());
++    }
++}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..65863a4
+index 0000000..68f7712
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,806 @@
+@@ -0,0 +1,1386 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
++use crate::agent_workflow_journal::{
++    BrokerJournal, IntentFile, JournalFile, JournalPhase, ModelRequestIntent, OriginalCall,
++    read_raw_rollout, sync_raw_rollout,
++};
 +use crate::thread_manager::StartThreadOptions;
 +use codex_extension_api::SessionIsolation;
 +use codex_extension_api::ToolName;
@@ -2149,12 +3606,15 @@ index 0000000..65863a4
 +use codex_protocol::dynamic_tools::DynamicToolSpec;
 +use codex_protocol::error::CodexErr;
 +use codex_protocol::error::Result;
++use codex_protocol::protocol::AgentWorkflowBatchPermit;
 +use codex_protocol::protocol::AgentWorkflowParkedBatch;
 +use codex_protocol::protocol::AgentWorkflowPolicy;
 +use std::collections::BTreeMap;
 +use std::collections::BTreeSet;
++use std::path::{Path, PathBuf};
 +use std::sync::Arc;
 +use std::sync::Mutex;
++use std::sync::atomic::AtomicBool;
 +use std::sync::atomic::AtomicU64;
 +use std::sync::atomic::AtomicUsize;
 +use std::sync::atomic::Ordering;
@@ -2163,6 +3623,10 @@ index 0000000..65863a4
 +pub struct AgentWorkflowRuntime {
 +    policy: AgentWorkflowPolicy,
 +    batch: Mutex<Option<Batch>>,
++    journal: Mutex<Option<(JournalFile, BrokerJournal)>>,
++    intent: Mutex<Option<(IntentFile, ModelRequestIntent)>>,
++    parent_barriers: Mutex<BTreeSet<PathBuf>>,
++    recovery_hold: AtomicBool,
 +    invocation: Mutex<Option<(String, String)>>,
 +    active_work: AtomicUsize,
 +    active_tasks: AtomicUsize,
@@ -2201,9 +3665,16 @@ index 0000000..65863a4
 +#[derive(Clone, Debug)]
 +pub struct AgentWorkflowInvocation(pub String);
 +
++/// Engine-only continuation of the same original turn/invocation and seal.
++/// The exact native journal must validate before this can create callbacks.
++#[derive(Clone, Debug)]
++pub struct AgentWorkflowRecovery(pub AgentWorkflowParkedBatch);
++
 +struct Batch {
 +    identity: AgentWorkflowParkedBatch,
++    permit_epoch: String,
 +    planned: BTreeSet<String>,
++    calls: BTreeMap<String, OriginalCall>,
 +    parked: BTreeSet<String>,
 +    published: BTreeSet<String>,
 +    sealed: bool,
@@ -2220,10 +3691,32 @@ index 0000000..65863a4
 +impl Drop for BatchGuard {
 +    fn drop(&mut self) {
 +        let mut state = self.runtime.batch.lock().unwrap();
-+        if state
++        if let Some(batch) = state
 +            .as_ref()
-+            .is_some_and(|batch| batch.identity.batch_id == self.id)
++            .filter(|batch| batch.identity.batch_id == self.id)
 +        {
++            let completed =
++                self.runtime
++                    .journal
++                    .lock()
++                    .unwrap()
++                    .as_ref()
++                    .is_some_and(|(_, journal)| {
++                        journal.identity.batch_id == self.id
++                            && journal.phase == JournalPhase::Completed
++                    });
++            let unknown_attempt =
++                self.runtime
++                    .intent
++                    .lock()
++                    .unwrap()
++                    .as_ref()
++                    .is_some_and(|(_, intent)| {
++                        intent.started.batch_id == self.id && intent.completed.is_none()
++                    });
++            if unknown_attempt || (!batch.planned.is_empty() && !completed) {
++                self.runtime.recovery_hold.store(true, Ordering::Release);
++            }
 +            *state = None;
 +        }
 +    }
@@ -2234,6 +3727,37 @@ index 0000000..65863a4
 +    pub fn invalidate(&self) {
 +        let mut batch = self.batch.lock().unwrap();
 +        self.generation.fetch_add(1, Ordering::AcqRel);
++        let mut durable = self.journal.lock().unwrap();
++        let pending_journal = durable
++            .as_ref()
++            .is_some_and(|(_, journal)| journal.phase != JournalPhase::Completed);
++        let incomplete_batch = batch.as_ref().is_some_and(|batch| {
++            !batch.planned.is_empty()
++                && !durable.as_ref().is_some_and(|(_, journal)| {
++                    journal.identity.batch_id == batch.identity.batch_id
++                        && journal.phase == JournalPhase::Completed
++                })
++        });
++        let unknown_attempt = self
++            .intent
++            .lock()
++            .unwrap()
++            .as_ref()
++            .is_some_and(|(_, intent)| intent.completed.is_none());
++        if pending_journal || incomplete_batch || unknown_attempt {
++            self.recovery_hold.store(true, Ordering::Release);
++        }
++        if pending_journal {
++            if let Some((file, journal)) = durable.as_mut() {
++                let mut cancelled = journal.clone();
++                cancelled.phase = JournalPhase::Cancelled;
++                // Failure leaves a hold in memory and the engine's durable
++                // cancelled invocation fence still forbids private recovery.
++                if file.persist(&cancelled, &self.policy).is_ok() {
++                    *journal = cancelled;
++                }
++            }
++        }
 +        *batch = None;
 +    }
 +
@@ -2286,6 +3810,10 @@ index 0000000..65863a4
 +        Self {
 +            policy,
 +            batch: Mutex::new(None),
++            journal: Mutex::new(None),
++            intent: Mutex::new(None),
++            parent_barriers: Mutex::new(BTreeSet::new()),
++            recovery_hold: AtomicBool::new(false),
 +            invocation: Mutex::new(None),
 +            active_work: AtomicUsize::new(0),
 +            active_tasks: AtomicUsize::new(0),
@@ -2301,6 +3829,11 @@ index 0000000..65863a4
 +        turn: String,
 +        invocation: String,
 +    ) -> Result<BatchGuard> {
++        if self.recovery_hold.load(Ordering::Acquire) {
++            return Err(invalid(
++                "an incomplete or cancelled original batch requires recovery hold",
++            ));
++        }
 +        if invocation.is_empty()
 +            || invocation.len() > 256
 +            || !invocation
@@ -2318,6 +3851,17 @@ index 0000000..65863a4
 +        {
 +            return Err(invalid("a prior model batch is still live"));
 +        }
++        if self
++            .journal
++            .lock()
++            .unwrap()
++            .as_ref()
++            .is_some_and(|(_, journal)| journal.phase != JournalPhase::Completed)
++        {
++            return Err(invalid(
++                "an original broker batch requires explicit receipt recovery or hold",
++            ));
++        }
 +        let mut bound = self.invocation.lock().unwrap();
 +        if bound
 +            .as_ref()
@@ -2328,6 +3872,7 @@ index 0000000..65863a4
 +        *bound = Some((invocation.clone(), turn.clone()));
 +        let id = uuid::Uuid::new_v4().to_string();
 +        *state = Some(Batch {
++            permit_epoch: uuid::Uuid::new_v4().to_string(),
 +            identity: AgentWorkflowParkedBatch {
 +                thread_id: thread,
 +                turn_id: turn,
@@ -2339,6 +3884,7 @@ index 0000000..65863a4
 +                call_ids: Vec::new(),
 +            },
 +            planned: BTreeSet::new(),
++            calls: BTreeMap::new(),
 +            parked: BTreeSet::new(),
 +            published: BTreeSet::new(),
 +            sealed: false,
@@ -2352,7 +3898,102 @@ index 0000000..65863a4
 +        })
 +    }
 +
++    pub(crate) fn begin_recovery(
++        self: &Arc<Self>,
++        original: &AgentWorkflowParkedBatch,
++        rollout: &Path,
++    ) -> Result<(BatchGuard, Vec<OriginalCall>)> {
++        let mut state = self.batch.lock().unwrap();
++        if state.is_some()
++            || self.active_work.load(Ordering::Acquire) != 0
++            || self.active_tasks.load(Ordering::Acquire) != 1
++            || self.model_generation.load(Ordering::Acquire)
++                != self.generation.load(Ordering::Acquire)
++        {
++            return Err(invalid(
++                "recovery requires one exclusive counted original task",
++            ));
++        }
++        let raw = read_raw_rollout(rollout)?;
++        let durable = self.journal.lock().unwrap();
++        let (_, journal) = durable
++            .as_ref()
++            .ok_or_else(|| invalid("original seal absent"))?;
++        if &journal.identity != original
++            || !matches!(
++                journal.phase,
++                JournalPhase::Sealed | JournalPhase::ResultsAccepted
++            )
++        {
++            return Err(invalid(
++                "recovery differs from original pending seal or journal is cancelled/completed",
++            ));
++        }
++        raw.validate_journal(journal, &self.policy)?;
++        let mut intent = self.intent.lock().unwrap();
++        let (file, value) = intent
++            .as_mut()
++            .ok_or_else(|| invalid("original native request intent absent"))?;
++        let started = &value.started;
++        if started.thread_id != original.thread_id
++            || started.turn_id != original.turn_id
++            || started.invocation_id != original.invocation_id
++            || started.policy_id != original.policy_id
++            || started.build_id != original.build_id
++            || started.batch_id != original.batch_id
++        {
++            return Err(invalid(
++                "a different or unknown native request attempt remains unresolved",
++            ));
++        }
++        let witness =
++            raw.validate_completion(original, &journal.usage, &journal.calls, &self.policy)?;
++        if let Some(completed) = &value.completed {
++            if completed != &witness {
++                return Err(invalid("completed attempt witness differs"));
++            }
++        } else {
++            // Crash after durable seal but before closing its intent. Independent
++            // raw native Completed evidence settles ONLY this exact attempt.
++            let mut completed = value.clone();
++            completed.completed = Some(witness);
++            file.persist(&completed, &self.policy)?;
++            *value = completed;
++        }
++        let calls = journal.calls.clone();
++        let ids = original.call_ids.iter().cloned().collect::<BTreeSet<_>>();
++        *self.invocation.lock().unwrap() =
++            Some((original.invocation_id.clone(), original.turn_id.clone()));
++        *state = Some(Batch {
++            identity: original.clone(),
++            permit_epoch: uuid::Uuid::new_v4().to_string(),
++            planned: ids,
++            calls: calls
++                .iter()
++                .map(|call| (call.id.clone(), call.clone()))
++                .collect(),
++            parked: BTreeSet::new(),
++            published: BTreeSet::new(),
++            sealed: true,
++            attested: false,
++            delivered: false,
++            results: BTreeMap::new(),
++        });
++        Ok((
++            BatchGuard {
++                runtime: Arc::clone(self),
++                id: original.batch_id.clone(),
++            },
++            calls,
++        ))
++    }
++
++    #[cfg(test)]
 +    pub(crate) fn plan(&self, call: &str, tool: &ToolName) -> Result<()> {
++        self.plan_call(call, tool, "{}")
++    }
++
++    pub(crate) fn plan_call(&self, call: &str, tool: &ToolName, arguments: &str) -> Result<()> {
 +        if !tool.is_default_namespace() || !self.policy.broker_tools.contains(&tool.name) {
 +            return Err(invalid("ungranted tool emitted by model"));
 +        }
@@ -2366,6 +4007,26 @@ index 0000000..65863a4
 +        {
 +            return Err(invalid("late, empty or duplicate planned tool identity"));
 +        }
++        if arguments.len() > 1024 * 1024
++            || batch
++                .calls
++                .values()
++                .map(|call| call.arguments.len())
++                .sum::<usize>()
++                + arguments.len()
++                > 8 * 1024 * 1024
++            || serde_json::from_str::<serde_json::Value>(arguments).is_err()
++        {
++            return Err(invalid("invalid or oversized original broker arguments"));
++        }
++        batch.calls.insert(
++            call.to_owned(),
++            OriginalCall {
++                id: call.to_owned(),
++                tool: tool.name.clone(),
++                arguments: arguments.to_owned(),
++            },
++        );
 +        Ok(())
 +    }
 +
@@ -2381,6 +4042,200 @@ index 0000000..65863a4
 +        Ok(())
 +    }
 +
++    /// Persist before the first transport request. A started intent that has no
++    /// durable actual Completed witness is unknown usage and cannot be retried.
++    pub(crate) fn start_model_intent(&self, rollout: &Path) -> Result<()> {
++        let state = self.batch.lock().unwrap();
++        let batch = state
++            .as_ref()
++            .ok_or_else(|| invalid("model intent has no admitted batch"))?;
++        sync_raw_rollout(rollout)?;
++        crate::agent_workflow_journal::sync_parent_entries_once(
++            rollout,
++            &mut self.parent_barriers.lock().unwrap(),
++        )?;
++        let value = ModelRequestIntent::begin(batch.identity.clone(), &self.policy)?;
++        let file = IntentFile::for_rollout(rollout)?;
++        file.persist(&value, &self.policy)?;
++        *self.intent.lock().unwrap() = Some((file, value));
++        Ok(())
++    }
++
++    pub(crate) fn model_witness(
++        &self,
++        response_id: &str,
++        usage: &codex_protocol::protocol::TokenUsage,
++    ) -> Result<codex_protocol::protocol::AgentWorkflowModelWitness> {
++        let state = self.batch.lock().unwrap();
++        let batch = state
++            .as_ref()
++            .ok_or_else(|| invalid("native completed witness has no live model batch"))?;
++        if batch.sealed || response_id.is_empty() {
++            return Err(invalid("late native completed witness"));
++        }
++        let mut identity = batch.identity.clone();
++        identity.response_id = response_id.to_owned();
++        identity.call_ids = batch.planned.iter().cloned().collect();
++        let mut value = serde_json::to_value(usage).map_err(|error| invalid(&error.to_string()))?;
++        if let Some(units) = &usage.codex_rollout_budget_units {
++            value
++                .as_object_mut()
++                .ok_or_else(|| invalid("invalid native usage"))?
++                .insert(
++                    "codex_rollout_budget_units".into(),
++                    serde_json::Value::Number(units.clone()),
++                );
++        }
++        Ok(codex_protocol::protocol::AgentWorkflowModelWitness {
++            batch: identity,
++            usage: value,
++        })
++    }
++
++    /// The model task has already materialized and flushed the native writer.
++    /// Establish explicit raw-history and journal durability BEFORE polling tools.
++    pub(crate) fn seal_durable(
++        &self,
++        response_id: String,
++        rollout: &Path,
++        usage: serde_json::Value,
++    ) -> Result<()> {
++        self.seal(response_id)?;
++        let state = self.batch.lock().unwrap();
++        let batch = state
++            .as_ref()
++            .ok_or_else(|| invalid("batch disappeared before durable seal"))?;
++        sync_raw_rollout(rollout)?;
++        crate::agent_workflow_journal::sync_parent_entries_once(
++            rollout,
++            &mut self.parent_barriers.lock().unwrap(),
++        )?;
++        let raw = read_raw_rollout(rollout)?;
++        let calls = batch.calls.values().cloned().collect::<Vec<_>>();
++        let witness = raw.validate_completion(&batch.identity, &usage, &calls, &self.policy)?;
++        if !batch.planned.is_empty() {
++            let journal =
++                BrokerJournal::sealed(batch.identity.clone(), calls, usage, &self.policy)?;
++            raw.validate_journal(&journal, &self.policy)?;
++            let file = JournalFile::for_rollout(rollout)?;
++            file.persist(&journal, &self.policy)?;
++            *self.journal.lock().unwrap() = Some((file, journal));
++        }
++        let mut intent = self.intent.lock().unwrap();
++        let (file, original) = intent
++            .as_mut()
++            .ok_or_else(|| invalid("native completion lacks original model intent"))?;
++        let mut completed = original.clone();
++        completed.completed = Some(witness);
++        file.persist(&completed, &self.policy)?;
++        *original = completed;
++        Ok(())
++    }
++
++    /// Caller first flushes and syncs every native real output. The completion
++    /// marker is a second ordered durable barrier before another model request.
++    pub(crate) fn complete_durable(&self, rollout: &Path) -> Result<()> {
++        let state = self.batch.lock().unwrap();
++        let batch = state
++            .as_ref()
++            .ok_or_else(|| invalid("batch disappeared before durable completion"))?;
++        if batch.planned.is_empty() {
++            return Ok(());
++        }
++        sync_raw_rollout(rollout)?;
++        let mut journal = self.journal.lock().unwrap();
++        let (file, value) = journal
++            .as_mut()
++            .ok_or_else(|| invalid("durable result journal absent"))?;
++        let raw = read_raw_rollout(rollout)?;
++        raw.validate_journal(value, &self.policy)?;
++        let mut completed = value.clone();
++        completed.complete(&raw.responses)?;
++        file.persist(&completed, &self.policy)?;
++        *value = completed;
++        self.recovery_hold.store(false, Ordering::Release);
++        Ok(())
++    }
++
++    pub(crate) fn recovered_outputs(
++        &self,
++        rollout: &Path,
++    ) -> Result<Vec<codex_protocol::models::ResponseItem>> {
++        let state = self.batch.lock().unwrap();
++        let batch = state
++            .as_ref()
++            .ok_or_else(|| invalid("recovery batch absent"))?;
++        if !batch.delivered {
++            return Err(invalid(
++                "recovery results have not all received the fresh permit",
++            ));
++        }
++        let durable = self.journal.lock().unwrap();
++        let (_, journal) = durable
++            .as_ref()
++            .ok_or_else(|| invalid("recovery journal absent"))?;
++        if journal.identity != batch.identity {
++            return Err(invalid("recovery journal identity changed"));
++        }
++        let raw = read_raw_rollout(rollout)?;
++        raw.validate_journal(journal, &self.policy)?;
++        Ok(journal.missing_real_outputs(&raw.responses)?)
++    }
++
++    fn load_journal(&self, rollout: &Path, thread: &str) -> Result<()> {
++        let raw = read_raw_rollout(rollout)?;
++        raw.validate_header(thread, &self.policy)?;
++        let intent_file = IntentFile::for_rollout(rollout)?;
++        match intent_file.load(&self.policy) {
++            Ok(intent) => {
++                if intent.started.thread_id != thread {
++                    return Err(invalid("foreign model intent thread"));
++                }
++                if let Some(witness) = &intent.completed {
++                    raw.validate_intent_witness(witness, &self.policy)?;
++                } else {
++                    self.recovery_hold.store(true, Ordering::Release);
++                }
++                *self.intent.lock().unwrap() = Some((intent_file, intent));
++            }
++            Err(error)
++                if error.kind() == std::io::ErrorKind::NotFound
++                    && !raw.items.iter().any(|item| {
++                        matches!(
++                            item,
++                            RolloutItem::TokenUsageRecord(_)
++                                | RolloutItem::ResponseItem(codex_history::ResponseItemEnvelope {
++                                    item: codex_protocol::models::ResponseItem::FunctionCall { .. },
++                                    ..
++                                })
++                        )
++                    }) => {}
++            Err(error) => return Err(error.into()),
++        }
++        let file = JournalFile::for_rollout(rollout)?;
++        match file.load(&self.policy) {
++            Ok(journal) => {
++                raw.validate_journal(&journal, &self.policy)?;
++                if journal.phase == JournalPhase::Completed
++                    && !journal.missing_real_outputs(&raw.responses)?.is_empty()
++                {
++                    return Err(invalid("completed marker has missing real outputs"));
++                }
++                *self.journal.lock().unwrap() = Some((file, journal));
++            }
++            Err(error)
++                if error.kind() == std::io::ErrorKind::NotFound
++                    && !raw.responses.iter().any(|item| {
++                        matches!(
++                            item,
++                            codex_protocol::models::ResponseItem::FunctionCall { .. }
++                        )
++                    }) => {}
++            Err(error) => return Err(error.into()),
++        }
++        Ok(())
++    }
++
 +    pub(crate) fn park(&self, call: &str) -> Result<()> {
 +        let mut state = self.batch.lock().unwrap();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
@@ -2390,9 +4245,37 @@ index 0000000..65863a4
 +        Ok(())
 +    }
 +
++    fn batch_permit(&self, batch: &Batch) -> Result<AgentWorkflowBatchPermit> {
++        let durable = self.journal.lock().unwrap();
++        let usage = match durable.as_ref() {
++            Some((_, journal))
++                if journal.identity == batch.identity
++                    && matches!(
++                        journal.phase,
++                        JournalPhase::Sealed | JournalPhase::ResultsAccepted
++                    ) =>
++            {
++                journal.usage.clone()
++            }
++            None if cfg!(test) => {
++                serde_json::json!({"input_tokens":0,"output_tokens":0,"total_tokens":0})
++            }
++            _ => {
++                return Err(invalid(
++                    "attestation lacks its exact durable native usage witness",
++                ));
++            }
++        };
++        Ok(AgentWorkflowBatchPermit {
++            batch: batch.identity.clone(),
++            permit_epoch: batch.permit_epoch.clone(),
++            usage,
++        })
++    }
++
 +    /// Called after the app-server has queued this call's public RPC request.
 +    /// No attestation exists until every deferred future is both parked and published.
-+    pub fn published(&self, call: &str) -> Result<Option<AgentWorkflowParkedBatch>> {
++    pub fn published(&self, call: &str) -> Result<Option<AgentWorkflowBatchPermit>> {
 +        let mut state = self.batch.lock().unwrap();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
 +        if !batch.parked.contains(call) || !batch.published.insert(call.to_owned()) {
@@ -2409,7 +4292,7 @@ index 0000000..65863a4
 +                == self.generation.load(Ordering::Acquire)
 +        {
 +            batch.attested = true;
-+            return Ok(Some(batch.identity.clone()));
++            return Ok(Some(self.batch_permit(batch)?));
 +        }
 +        Ok(None)
 +    }
@@ -2426,7 +4309,7 @@ index 0000000..65863a4
 +        let permit = response.agent_workflow_permit.take();
 +        if !batch.attested
 +            || batch.delivered
-+            || permit.as_ref() != Some(&batch.identity)
++            || permit.as_ref() != Some(&self.batch_permit(batch)?)
 +            || !batch.planned.contains(call)
 +            || batch.results.contains_key(call)
 +        {
@@ -2438,6 +4321,28 @@ index 0000000..65863a4
 +        batch.results.insert(call.to_owned(), response);
 +        if batch.results.len() != batch.planned.len() {
 +            return Ok(Vec::new());
++        }
++        // Persist the entire semantic batch before delivering even one oneshot.
++        // Test-only memory runtimes have no local journal and never admit a real
++        // managed app-server callback without seal_durable's barrier.
++        if let Some((file, journal)) = self.journal.lock().unwrap().as_mut() {
++            if journal.phase == JournalPhase::ResultsAccepted {
++                // Replay must return the exact already durable semantic set;
++                // the fresh control epoch never changes original result bytes.
++                if journal.results != batch.results {
++                    *state = None;
++                    return Err(invalid(
++                        "replayed results differ from original accepted semantic receipts",
++                    ));
++                }
++            } else {
++                let mut accepted = journal.clone();
++                accepted.accept_results(batch.results.clone(), &self.policy)?;
++                file.persist(&accepted, &self.policy)?;
++                *journal = accepted;
++            }
++        } else if !cfg!(test) {
++            return Err(invalid("result delivery requires a durable original seal"));
 +        }
 +        batch.delivered = true;
 +        Ok(std::mem::take(&mut batch.results).into_iter().collect())
@@ -2568,6 +4473,14 @@ index 0000000..65863a4
 +    // Admission precedes Session::new: ambient native initialization is not
 +    // accounted broker work, even when its eventual tools would be filtered.
 +    for feature in [
++        Feature::AsyncCompaction,
++        Feature::UnboundedConnectionRetries,
++        Feature::ResponsesWebsockets,
++        Feature::ResponsesWebsocketsV2,
++        Feature::GuardianApproval,
++        Feature::GuardianV2,
++        Feature::GuardianV2DecisionsComparison,
++        Feature::GuardianV3,
 +        Feature::ShellSnapshot,
 +        Feature::ShellSnapshotV2,
 +        Feature::Apps,
@@ -2593,11 +4506,32 @@ index 0000000..65863a4
 +    options
 +        .thread_extension_init
 +        .insert(crate::McpServersDisabled);
-+    options.config.memories.generate_memories = false;
-+    options.config.memories.use_memories = false;
 +    options
 +        .thread_extension_init
-+        .insert(AgentWorkflowRuntime::new(policy.as_ref().clone()));
++        .insert(crate::compact::AutoCompactionDisabled);
++    options.config.model_provider.request_max_retries = Some(0);
++    options.config.model_provider.stream_max_retries = Some(0);
++    options.config.model_provider.supports_websockets = false;
++    options.config.memories.generate_memories = false;
++    options.config.memories.use_memories = false;
++    let runtime = AgentWorkflowRuntime::new(policy.as_ref().clone());
++    if let InitialHistory::Resumed(history) = &options.initial_history {
++        let rollout = history
++            .rollout_path
++            .as_deref()
++            .ok_or_else(|| invalid("managed cold resume requires original local raw rollout"))?;
++        if !rollout.starts_with(&options.config.codex_home)
++            || rollout
++                .components()
++                .any(|part| matches!(part, std::path::Component::ParentDir))
++        {
++            return Err(invalid(
++                "managed raw rollout must remain in its original owned Codex home",
++            ));
++        }
++        runtime.load_journal(rollout, &history.conversation_id.to_string())?;
++    }
++    options.thread_extension_init.insert(runtime);
 +    options
 +        .thread_extension_init
 +        .insert(SessionIsolation::Isolated);
@@ -2697,7 +4631,7 @@ index 0000000..65863a4
 +
 +    fn parked(
 +        runtime: &Arc<AgentWorkflowRuntime>,
-+    ) -> (AgentWorkflowParkedBatch, Vec<ManagedWorkGuard>) {
++    ) -> (AgentWorkflowBatchPermit, Vec<ManagedWorkGuard>) {
 +        runtime.seal("response".into()).unwrap();
 +        let first = runtime.scheduled("a");
 +        assert!(first.admitted);
@@ -2713,7 +4647,7 @@ index 0000000..65863a4
 +        )
 +    }
 +
-+    fn response(permit: &AgentWorkflowParkedBatch) -> DynamicToolResponse {
++    fn response(permit: &AgentWorkflowBatchPermit) -> DynamicToolResponse {
 +        DynamicToolResponse {
 +            agent_workflow_permit: Some(permit.clone()),
 +            content_items: Vec::new(),
@@ -2728,7 +4662,7 @@ index 0000000..65863a4
 +        assert!(runtime.published("a").is_err());
 +        assert!(runtime.seal(String::new()).is_err());
 +        let (attestation, _work) = parked(&runtime);
-+        assert_eq!(attestation.call_ids, vec!["a", "b"]);
++        assert_eq!(attestation.batch.call_ids, vec!["a", "b"]);
 +        assert!(runtime.plan("late", &ToolName::new(None, FIRST)).is_err());
 +        assert!(runtime.published("b").is_err());
 +    }
@@ -2755,16 +4689,17 @@ index 0000000..65863a4
 +
 +    #[test]
 +    fn invalid_or_duplicate_results_invalidate_the_entire_parked_batch() {
-+        for change in ["missing", "batch", "invocation", "duplicate"] {
++        for change in ["missing", "batch", "invocation", "epoch", "duplicate"] {
 +            let (runtime, _guard) = planned();
 +            let (permit, _work) = parked(&runtime);
 +            let mut wrong = permit.clone();
 +            match change {
 +                "missing" => {
-+                    wrong.call_ids.pop();
++                    wrong.batch.call_ids.pop();
 +                }
-+                "batch" => wrong.batch_id.push('x'),
-+                "invocation" => wrong.invocation_id.push('x'),
++                "batch" => wrong.batch.batch_id.push('x'),
++                "invocation" => wrong.batch.invocation_id.push('x'),
++                "epoch" => wrong.permit_epoch.push('x'),
 +                "duplicate" => {
 +                    assert!(
 +                        runtime
@@ -2929,20 +4864,282 @@ index 0000000..65863a4
 +                .is_err()
 +        );
 +        drop(work);
++        let _replacement_task = runtime.model_scheduled();
 +        assert!(
 +            runtime
 +                .begin("thread".into(), "new-turn".into(), "engine-message".into())
 +                .is_err()
 +        );
-+        let _replacement_task = runtime.model_scheduled();
-+        let _replacement = runtime
-+            .begin("thread".into(), "new-turn".into(), "new-message".into())
-+            .unwrap();
++        assert!(
++            runtime
++                .begin("thread".into(), "new-turn".into(), "new-message".into())
++                .is_err()
++        );
 +        assert!(runtime.accept_result("a", response(&old)).is_err());
 +    }
++
++    #[test]
++    fn durable_recovery_preserves_original_seal_and_requires_fresh_epoch() {
++        use crate::agent_workflow_journal::tests::recovery_fixture;
++        for invalid in ["invocation", "batch", "cancelled", "unknown-attempt"] {
++            let (_directory, rollout, policy, mut journal) = recovery_fixture(false);
++            let mut original = journal.identity.clone();
++            match invalid {
++                "invocation" => original.invocation_id.push('x'),
++                "batch" => original.batch_id.push('x'),
++                "cancelled" => {
++                    journal.phase = JournalPhase::Cancelled;
++                    JournalFile::for_rollout(&rollout)
++                        .unwrap()
++                        .persist(&journal, &policy)
++                        .unwrap();
++                }
++                "unknown-attempt" => {
++                    let file = IntentFile::for_rollout(&rollout).unwrap();
++                    let mut intent = file.load(&policy).unwrap();
++                    intent.started.batch_id.push('x');
++                    file.persist(&intent, &policy).unwrap();
++                }
++                _ => unreachable!(),
++            }
++            let runtime = Arc::new(AgentWorkflowRuntime::new(policy));
++            runtime
++                .load_journal(&rollout, &journal.identity.thread_id)
++                .unwrap();
++            let _task = runtime.model_scheduled();
++            assert!(
++                runtime.begin_recovery(&original, &rollout).is_err(),
++                "{invalid}"
++            );
++            assert!(runtime.batch.lock().unwrap().is_none());
++        }
++        for stale_epoch in [true, false] {
++            let (_directory, rollout, policy, journal) = recovery_fixture(true);
++            let runtime = Arc::new(AgentWorkflowRuntime::new(policy));
++            runtime
++                .load_journal(&rollout, &journal.identity.thread_id)
++                .unwrap();
++            assert!(runtime.recovery_hold.load(Ordering::Acquire));
++            let task = runtime.model_scheduled();
++            let (guard, calls) = runtime.begin_recovery(&journal.identity, &rollout).unwrap();
++            assert_eq!(calls, journal.calls);
++            let work = runtime.scheduled("original-call");
++            runtime.park("original-call").unwrap();
++            let permit = runtime.published("original-call").unwrap().unwrap();
++            assert_eq!(permit.batch, journal.identity);
++            assert_eq!(permit.usage, journal.usage);
++            assert!(!permit.permit_epoch.is_empty());
++            let mut result = journal.results["original-call"].clone();
++            let mut control = permit.clone();
++            if stale_epoch {
++                control.permit_epoch.push('x');
++            }
++            result.agent_workflow_permit = Some(control);
++            let accepted = runtime.accept_result("original-call", result);
++            if stale_epoch {
++                assert!(accepted.is_err());
++                continue;
++            }
++            assert_eq!(accepted.unwrap().len(), 1);
++            let missing = runtime.recovered_outputs(&rollout).unwrap();
++            assert_eq!(missing.len(), 1);
++            let mut raw = std::fs::OpenOptions::new()
++                .append(true)
++                .open(&rollout)
++                .unwrap();
++            for item in missing {
++                use std::io::Write;
++                let line = codex_history::RolloutLine {
++                    timestamp: "2026-11-25T00:00:00Z".into(),
++                    ordinal: None,
++                    item: RolloutItem::ResponseItem(codex_history::ResponseItemEnvelope::new(item)),
++                };
++                writeln!(raw, "{}", serde_json::to_string(&line).unwrap()).unwrap();
++            }
++            runtime.complete_durable(&rollout).unwrap();
++            assert!(!runtime.recovery_hold.load(Ordering::Acquire));
++            drop(guard);
++            drop(work);
++            drop(task);
++            let _next_task = runtime.model_scheduled();
++            assert!(
++                runtime
++                    .begin(
++                        journal.identity.thread_id.clone(),
++                        "subsequent-turn".into(),
++                        "subsequent-message".into()
++                    )
++                    .is_ok()
++            );
++        }
++    }
 +}
+diff --git a/codex-rs/core/src/agent_workflow_recovery.rs b/codex-rs/core/src/agent_workflow_recovery.rs
+new file mode 100644
+index 0000000..e7b7b18
+--- /dev/null
++++ b/codex-rs/core/src/agent_workflow_recovery.rs
+@@ -0,0 +1,110 @@
++//! Replays one original native broker seal through the existing dynamic-tool
++//! callback path before RegularTask can sample. No new user input or agent loop.
++
++use crate::AgentWorkflowInvocation;
++use crate::AgentWorkflowRecovery;
++use crate::AgentWorkflowRuntime;
++use crate::session::session::Session;
++use crate::session::turn_context::TurnContext;
++use codex_protocol::error::CodexErr;
++use codex_protocol::error::Result;
++use std::sync::Arc;
++use tokio::task::JoinSet;
++use tokio_util::sync::CancellationToken;
++
++pub(crate) async fn replay_before_sampling(
++    session: &Arc<Session>,
++    turn: &Arc<TurnContext>,
++    cancellation: &CancellationToken,
++) -> Result<()> {
++    let Some(recovery) = turn.extension_data.get::<AgentWorkflowRecovery>() else {
++        return Ok(());
++    };
++    let runtime = session
++        .services
++        .thread_extension_data
++        .get::<AgentWorkflowRuntime>()
++        .ok_or_else(|| {
++            CodexErr::InvalidRequest("managed recovery has no original policy".into())
++        })?;
++    let invocation = turn
++        .extension_data
++        .get::<AgentWorkflowInvocation>()
++        .ok_or_else(|| {
++            CodexErr::InvalidRequest("managed recovery has no original invocation".into())
++        })?;
++    if recovery.0.thread_id != session.thread_id.to_string()
++        || recovery.0.turn_id != turn.sub_id
++        || recovery.0.invocation_id != invocation.0
++        || cancellation.is_cancelled()
++    {
++        return Err(CodexErr::InvalidRequest(
++            "managed recovery ownership differs".into(),
++        ));
++    }
++    let rollout = session
++        .current_rollout_path()
++        .await
++        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
++        .ok_or_else(|| {
++            CodexErr::InvalidRequest("managed recovery requires its original local rollout".into())
++        })?;
++    // begin_recovery reads independent raw native envelopes/witnesses before
++    // any history normalization or result reconstruction.
++    let (_batch, calls) = runtime.begin_recovery(&recovery.0, &rollout)?;
++    let jobs = calls
++        .into_iter()
++        .map(|call| {
++            let work = runtime.scheduled(&call.id);
++            (call, work)
++        })
++        .collect::<Vec<_>>();
++    let mut tasks = JoinSet::new();
++    for (call, work) in jobs {
++        let session = Arc::clone(session);
++        let turn = Arc::clone(turn);
++        let cancel = cancellation.child_token();
++        tasks.spawn(async move {
++            let _work = work;
++            if !_work.is_admitted() || cancel.is_cancelled() {
++                return false;
++            }
++            let Ok(arguments) = serde_json::from_str(&call.arguments) else {
++                return false;
++            };
++            crate::tools::handlers::request_managed_dynamic_tool(
++                &session,
++                &turn,
++                call.id,
++                codex_tools::ToolName::new(None, call.tool),
++                arguments,
++                cancel,
++            )
++            .await
++            .is_some()
++        });
++    }
++    let mut settled = true;
++    while let Some(result) = tasks.join_next().await {
++        if !matches!(result, Ok(true)) {
++            settled = false;
++            tasks.abort_all();
++        }
++    }
++    if !settled || cancellation.is_cancelled() {
++        runtime.invalidate();
++        return Err(CodexErr::TurnAborted);
++    }
++    // All public callbacks received identical original semantic receipts under
++    // this fresh epoch. Append only missing real outputs, never duplicate or
++    // accept upstream synthetic aborted outputs as receipts.
++    let missing = runtime.recovered_outputs(&rollout)?;
++    if !missing.is_empty() {
++        session
++            .record_conversation_items(turn, &turn.capture_current_model_info(), &missing)
++            .await;
++    }
++    session.flush_rollout().await?;
++    runtime.complete_durable(&rollout)?;
++    Ok(())
++}
+diff --git a/codex-rs/core/src/codex_delegate.rs b/codex-rs/core/src/codex_delegate.rs
+index d4227af..9c65796 100644
+--- a/codex-rs/core/src/codex_delegate.rs
++++ b/codex-rs/core/src/codex_delegate.rs
+@@ -211,6 +211,7 @@ pub(crate) fn forward_session_io(io: Arc<SessionIo>, cancel_token: CancellationT
+ 
+     // Forward public events from the sub-agent to the consumer.
+     let caller_io = SessionIo {
++        agent_workflow_managed: io.agent_workflow_managed,
+         tx_sub: tx_ops,
+         rx_event: rx_sub,
+         agent_status: io.agent_status.clone(),
+@@ -294,6 +295,7 @@ pub(crate) async fn run_codex_thread_one_shot(
+     let ops_tx = io.tx_sub.clone();
+     let agent_status = io.agent_status.clone();
+     let session_loop_termination = io.session_loop_termination.clone();
++    let agent_workflow_managed = io.agent_workflow_managed;
+     let io_for_bridge = io;
+     tokio::spawn(async move {
+         while let Ok(event) = io_for_bridge.next_event().await {
+@@ -330,6 +332,7 @@ pub(crate) async fn run_codex_thread_one_shot(
+     Ok((
+         session,
+         SessionIo {
++            agent_workflow_managed,
+             rx_event: rx_bridge,
+             tx_sub: tx_closed,
+             agent_status,
+diff --git a/codex-rs/core/src/codex_delegate_tests.rs b/codex-rs/core/src/codex_delegate_tests.rs
+index 26e780e..428aba1 100644
+--- a/codex-rs/core/src/codex_delegate_tests.rs
++++ b/codex-rs/core/src/codex_delegate_tests.rs
+@@ -43,6 +43,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
+     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+     let io = Arc::new(SessionIo {
++        agent_workflow_managed: false,
+         tx_sub,
+         rx_event: rx_events,
+         agent_status,
+@@ -141,6 +142,7 @@ async fn forward_ops_preserves_submission_trace_context() {
+     let (_tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+     let io = Arc::new(SessionIo {
++        agent_workflow_managed: false,
+         tx_sub,
+         rx_event: rx_events,
+         agent_status,
 diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
-index a8d5865..f33671d 100644
+index a8d5865..509b018 100644
 --- a/codex-rs/core/src/codex_thread.rs
 +++ b/codex-rs/core/src/codex_thread.rs
 @@ -310,6 +310,19 @@ impl CodexThread {
@@ -2965,23 +5162,69 @@ index a8d5865..f33671d 100644
      /// Returns tools from this thread’s ready, unshared Apps MCP client.
      /// Returns an empty list if the client is absent, still starting, or uses
      /// a shared catalog. Does not start or wait for discovery.
-@@ -541,6 +554,15 @@ impl CodexThread {
+@@ -541,21 +554,57 @@ impl CodexThread {
          &self,
          request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
      ) -> CodexResult<StartIfIdleSubmission> {
++        let request = request.into();
 +        if self
 +            .thread_extension_data()
 +            .get::<crate::AgentWorkflowRuntime>()
 +            .is_some()
 +        {
-+            return Err(CodexErr::InvalidRequest(
-+                "engine owns managed recovery".into(),
-+            ));
++            let recovery = request
++                .turn_extension_init
++                .as_ref()
++                .and_then(|init| init.get::<crate::AgentWorkflowRecovery>())
++                .ok_or_else(|| CodexErr::InvalidRequest("engine owns managed recovery".into()))?;
++            let invocation = request
++                .turn_extension_init
++                .as_ref()
++                .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                .ok_or_else(|| {
++                    CodexErr::InvalidRequest("original managed invocation absent".into())
++                })?;
++            if recovery.0.thread_id != self.session.thread_id.to_string()
++                || recovery.0.turn_id != request.request.turn_id
++                || recovery.0.invocation_id != invocation.0
++            {
++                return Err(CodexErr::InvalidRequest(
++                    "managed recovery cannot replace original turn/invocation".into(),
++                ));
++            }
 +        }
          self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
              .await?;
          let WithTurnExtensionData {
-@@ -656,6 +678,35 @@ impl CodexThread {
+             request,
+             turn_extension_init,
+-        } = request.into();
++        } = request;
+         let RecoverTurnRequest {
+             turn_id,
+             thread_settings,
+             trace,
+             cyber_access_program,
+         } = request;
+-        let start_options = TurnStartOptions {
+-            cyber_access_program,
+-            ..self.session.recovered_turn_start_options(&turn_id).await
++        let recorded_options = self.session.recovered_turn_start_options(&turn_id).await;
++        let managed = self
++            .thread_extension_data()
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some();
++        let start_options = if managed {
++            recorded_options
++        } else {
++            TurnStartOptions {
++                cyber_access_program,
++                ..recorded_options
++            }
+         };
+         match self
+             .io
+@@ -656,6 +705,35 @@ impl CodexThread {
          request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
          mode: TurnInputMode,
      ) -> CodexResult<TurnInputSubmission> {
@@ -3017,21 +5260,60 @@ index a8d5865..f33671d 100644
          if !matches!(mode, TurnInputMode::Steer { .. }) {
              self.ensure_execution_capacity_for_turn_start(
                  self.session.services.agent_control.as_ref(),
+diff --git a/codex-rs/core/src/guardian/review_session_setup.rs b/codex-rs/core/src/guardian/review_session_setup.rs
+index 64955ba..e63e28a 100644
+--- a/codex-rs/core/src/guardian/review_session_setup.rs
++++ b/codex-rs/core/src/guardian/review_session_setup.rs
+@@ -160,6 +160,7 @@ impl PreparedGuardianContext {
+                 .get_or_init(|| self.parent.get_tx_event());
+         }
+         let io = SessionIo {
++            agent_workflow_managed: thread.io.agent_workflow_managed,
+             tx_sub: thread.io.tx_sub.clone(),
+             rx_event: thread.io.rx_event.clone(),
+             agent_status: thread.io.agent_status.clone(),
+diff --git a/codex-rs/core/src/guardian/review_session_tests.rs b/codex-rs/core/src/guardian/review_session_tests.rs
+index db4218b..f47e614 100644
+--- a/codex-rs/core/src/guardian/review_session_tests.rs
++++ b/codex-rs/core/src/guardian/review_session_tests.rs
+@@ -196,6 +196,7 @@ async fn test_review_session() -> (
+         GuardianReviewSession {
+             session,
+             io: SessionIo {
++                agent_workflow_managed: false,
+                 tx_sub,
+                 rx_event,
+                 agent_status,
 diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
-index 5157340..9c1d5eb 100644
+index 5157340..8c10e20 100644
 --- a/codex-rs/core/src/lib.rs
 +++ b/codex-rs/core/src/lib.rs
-@@ -265,7 +265,10 @@ pub use exec_policy::check_execpolicy_for_warnings;
+@@ -265,7 +265,13 @@ pub use exec_policy::check_execpolicy_for_warnings;
  pub use exec_policy::format_exec_policy_error_with_source;
  pub use exec_policy::load_exec_policy;
  pub use installation_id::resolve_installation_id;
++mod agent_workflow_journal;
 +mod agent_workflow_managed;
++mod agent_workflow_recovery;
  pub mod compact;
 +pub use agent_workflow_managed::AgentWorkflowInvocation;
++pub use agent_workflow_managed::AgentWorkflowRecovery;
 +pub use agent_workflow_managed::AgentWorkflowRuntime;
  mod memory_usage;
  pub mod otel_init;
  
+diff --git a/codex-rs/core/src/session/guardian_checkpoint.rs b/codex-rs/core/src/session/guardian_checkpoint.rs
+index 4ccfef8..cda7857 100644
+--- a/codex-rs/core/src/session/guardian_checkpoint.rs
++++ b/codex-rs/core/src/session/guardian_checkpoint.rs
+@@ -34,6 +34,7 @@ impl Session {
+         }
+         items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+             TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: history.token_info(),
+                 rate_limits: None,
+             },
 diff --git a/codex-rs/core/src/session/handlers.rs b/codex-rs/core/src/session/handlers.rs
 index f4f6dcc..672957e 100644
 --- a/codex-rs/core/src/session/handlers.rs
@@ -3068,10 +5350,64 @@ index 4356991..fe1f6fd 100644
          let shutdown = self.mcp_prewarm_shutdown.clone();
          let worker = self.services.runtime_handle.spawn(async move {
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index f365c4e..1bbb0bb 100644
+index f365c4e..def5c64 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
-@@ -3652,25 +3652,52 @@ impl Session {
+@@ -440,6 +440,7 @@ pub(crate) enum NetworkApprovalTurn {
+ /// completion future observes that shutdown.
+ #[derive(Clone)]
+ pub(crate) struct SessionIo {
++    pub(crate) agent_workflow_managed: bool,
+     pub(crate) tx_sub: Sender<Submission>,
+     pub(crate) rx_event: Receiver<Event>,
+     // Last known status of the agent.
+@@ -1066,6 +1067,11 @@ impl Session {
+             }
+         })));
+         let io = SessionIo {
++            agent_workflow_managed: session
++                .services
++                .thread_extension_data
++                .get::<crate::AgentWorkflowRuntime>()
++                .is_some(),
+             tx_sub,
+             rx_event,
+             agent_status: agent_status_rx,
+@@ -1123,6 +1129,33 @@ impl SessionIo {
+ 
+     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
+     pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
++        if self.agent_workflow_managed {
++            let permitted = match &sub.op {
++                Op::TurnInput {
++                    mode: TurnInputMode::StartIfIdle,
++                    ..
++                } => sub
++                    .turn_extension_init
++                    .as_ref()
++                    .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                    .is_some(),
++                Op::RecoverTurn { .. } => sub.turn_extension_init.as_ref().is_some_and(|init| {
++                    let recovery = init.get::<crate::AgentWorkflowRecovery>();
++                    let invocation = init.get::<crate::AgentWorkflowInvocation>();
++                    matches!((recovery,invocation),(Some(recovery),Some(invocation)) if recovery.0.turn_id == sub.id && recovery.0.invocation_id == invocation.0)
++                }),
++                Op::DynamicToolResponse { .. }
++                | Op::Interrupt
++                | Op::Shutdown
++                | Op::SuspendTurnAndShutdown { .. } => true,
++                _ => false,
++            };
++            if !permitted {
++                return Err(CodexErr::InvalidRequest(
++                    "operation is outside the managed broker-only profile".into(),
++                ));
++            }
++        }
+         if sub.trace.is_none() {
+             sub.trace = current_span_w3c_trace_context();
+         }
+@@ -3652,25 +3685,52 @@ impl Session {
          clippy::await_holding_invalid_type,
          reason = "active turn checks and turn state updates must remain atomic"
      )]
@@ -3139,6 +5475,100 @@ index f365c4e..1bbb0bb 100644
      }
  
      #[expect(
+@@ -5299,12 +5359,13 @@ impl Session {
+         incomplete: &ResponseIncompleteError,
+     ) {
+         if let Some(response_id) = &incomplete.response_id {
+-            self.record_response_token_usage(
+-                turn_context,
+-                response_id,
+-                incomplete.token_usage.as_ref(),
+-            )
+-            .await;
++            let _ = self
++                .record_response_token_usage(
++                    turn_context,
++                    response_id,
++                    incomplete.token_usage.as_ref(),
++                )
++                .await;
+         }
+         // Accounting may exhaust the budget; keep the original incomplete-response reason.
+         let _ = self
+@@ -5354,8 +5415,20 @@ impl Session {
+             }),
+         )
+         .await;
+-        self.record_response_token_usage(turn_context, response_id, usage)
++        let witness = self
++            .record_response_token_usage(turn_context, response_id, usage)
+             .await;
++        if let Some(witness) = witness {
++            self.send_event(
++                turn_context,
++                EventMsg::TokenCount(TokenCountEvent {
++                    agent_workflow_witness: Some(witness),
++                    info: None,
++                    rate_limits: None,
++                }),
++            )
++            .await;
++        }
+     }
+ 
+     pub(crate) async fn record_response_token_usage(
+@@ -5363,11 +5436,11 @@ impl Session {
+         turn_context: &TurnContext,
+         response_id: &str,
+         usage: Option<&TokenUsage>,
+-    ) {
++    ) -> Option<codex_protocol::protocol::AgentWorkflowModelWitness> {
+         let Some(usage) = usage else {
+-            return;
++            return None;
+         };
+-        let record = self.state.lock().await.record_token_usage(
++        let mut record = self.state.lock().await.record_token_usage(
+             self.thread_id,
+             &turn_context.sub_id,
+             self.session_id(),
+@@ -5378,8 +5451,23 @@ impl Session {
+             response_id.to_string(),
+             usage,
+         );
++        if let Some(runtime) = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++        {
++            match runtime.model_witness(response_id, usage) {
++                Ok(witness) => record.agent_workflow_witness = Some(witness),
++                Err(_) => {
++                    runtime.invalidate();
++                    return None;
++                }
++            }
++        }
++        let witness = record.agent_workflow_witness.clone();
+         self.persist_rollout_items(&[RolloutItem::TokenUsageRecord(record)])
+             .await;
++        witness
+     }
+ 
+     pub(crate) async fn record_token_usage_info(
+@@ -5539,7 +5627,11 @@ impl Session {
+             let state = self.state.lock().await;
+             state.token_info_and_rate_limits()
+         };
+-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
++        let event = EventMsg::TokenCount(TokenCountEvent {
++            agent_workflow_witness: None,
++            info,
++            rate_limits,
++        });
+         self.send_event(turn_context, event).await;
+     }
+ 
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
 index 52325c5..3096347 100644
 --- a/codex-rs/core/src/session/session.rs
@@ -3230,10 +5660,55 @@ index 5d3fa4d..cfec7c0 100644
          let mut state = self.state.lock().await;
          if state.shutting_down {
 diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
-index 9bb8aa2..5b7b32b 100644
+index 9bb8aa2..c638078 100644
 --- a/codex-rs/core/src/session/tests.rs
 +++ b/codex-rs/core/src/session/tests.rs
-@@ -5075,6 +5075,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
+@@ -3466,24 +3466,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
+ 
+     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+         TokenCountEvent {
++            agent_workflow_witness: None,
+             info: Some(info1),
+             rate_limits: None,
+         },
+     )));
+     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+         TokenCountEvent {
++            agent_workflow_witness: None,
+             info: None,
+             rate_limits: None,
+         },
+     )));
+     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+         TokenCountEvent {
++            agent_workflow_witness: None,
+             info: Some(info2.clone()),
+             rate_limits: None,
+         },
+     )));
+     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+         TokenCountEvent {
++            agent_workflow_witness: None,
+             info: None,
+             rate_limits: None,
+         },
+@@ -3506,6 +3510,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
+ fn latest_token_usage_record_stops_at_compaction_checkpoint() {
+     let thread_id = ThreadId::new();
+     let checkpoint_record = TokenUsageRecord {
++        agent_workflow_witness: None,
+         thread_id,
+         turn_id: "turn-1".to_string(),
+         session_id: SessionId::from(thread_id),
+@@ -4188,6 +4193,7 @@ async fn start_new_context_window_persists_checkpoint_state(clear_tools: bool) {
+     };
+     let thread_id = ThreadId::new();
+     let token_usage_record = TokenUsageRecord {
++        agent_workflow_witness: None,
+         thread_id,
+         turn_id: "turn-1".to_string(),
+         session_id: SessionId::from(thread_id),
+@@ -5075,6 +5081,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
      let live_thread = LiveThread::create(
          Arc::clone(&session.services.thread_store),
          CreateThreadParams {
@@ -3241,7 +5716,15 @@ index 9bb8aa2..5b7b32b 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -8843,6 +8844,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
+@@ -8285,6 +8292,7 @@ async fn submit_with_trace_captures_current_span_trace_context() {
+     let (tx_sub, rx_sub) = async_channel::bounded(1);
+     let (_tx_event, rx_event) = async_channel::unbounded();
+     let io = SessionIo {
++        agent_workflow_managed: false,
+         tx_sub,
+         rx_event,
+         agent_status: watch::channel(AgentStatus::PendingInit).1,
+@@ -8843,6 +8851,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
      let live_thread = LiveThread::create(
          Arc::clone(&thread_store),
          CreateThreadParams {
@@ -3249,7 +5732,7 @@ index 9bb8aa2..5b7b32b 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -8982,6 +8984,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() -> anyhow::Re
+@@ -8982,6 +8991,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() -> anyhow::Re
      let live_thread = LiveThread::create(
          Arc::clone(&thread_store),
          CreateThreadParams {
@@ -3257,7 +5740,31 @@ index 9bb8aa2..5b7b32b 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -11969,6 +11972,7 @@ async fn attach_in_memory_thread_store(
+@@ -9150,6 +9160,7 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
+         tokio::time::sleep(StdDuration::from_millis(50)).await;
+     });
+     let io = Arc::new(SessionIo {
++        agent_workflow_managed: false,
+         tx_sub,
+         rx_event,
+         agent_status: watch::channel(AgentStatus::PendingInit).1,
+@@ -9186,6 +9197,7 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
+         let _ = shutdown_complete_rx.await;
+     });
+     let io = Arc::new(SessionIo {
++        agent_workflow_managed: false,
+         tx_sub,
+         rx_event,
+         agent_status: watch::channel(AgentStatus::PendingInit).1,
+@@ -9607,6 +9619,7 @@ pub(super) async fn make_thread_for_session(
+     let thread = crate::CodexThread::new(
+         session,
+         SessionIo {
++            agent_workflow_managed: false,
+             tx_sub,
+             rx_event,
+             agent_status: watch::channel(AgentStatus::PendingInit).1,
+@@ -11969,6 +11982,7 @@ async fn attach_in_memory_thread_store(
      let live_thread = LiveThread::create(
          Arc::clone(&thread_store),
          CreateThreadParams {
@@ -3265,6 +5772,42 @@ index 9bb8aa2..5b7b32b 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
+@@ -13819,3 +13833,35 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+         "rejection must not permit same-name ordinary-auth replacement in this session"
+     );
+ }
++
++#[tokio::test]
++async fn managed_submission_ceiling_rejects_manual_and_unbound_work_before_queueing() {
++    let (tx_sub, rx_sub) = async_channel::bounded(1);
++    let (_tx_event, rx_event) = async_channel::unbounded();
++    let io = SessionIo {
++        agent_workflow_managed: true,
++        tx_sub,
++        rx_event,
++        agent_status: watch::channel(AgentStatus::PendingInit).1,
++        session_loop_termination: completed_session_loop_termination(),
++    };
++    for operation in [
++        Op::Compact,
++        Op::Review {
++            review_request: codex_protocol::protocol::ReviewRequest {
++                target: codex_protocol::protocol::ReviewTarget::UncommittedChanges,
++                user_facing_hint: None,
++            },
++        },
++        Op::ReloadUserConfig,
++        Op::RunUserShellCommand {
++            command: "touch forbidden-managed-effect".into(),
++            timeout_ms: Some(1),
++        },
++    ] {
++        assert!(io.submit(operation).await.is_err());
++        assert!(rx_sub.is_empty());
++    }
++    assert!(io.submit(Op::Shutdown).await.is_ok());
++    assert!(matches!(rx_sub.recv().await.unwrap().op, Op::Shutdown));
++}
 diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
 index c3a82ef..6c66411 100644
 --- a/codex-rs/core/src/session/thread_settings.rs
@@ -3287,10 +5830,41 @@ index c3a82ef..6c66411 100644
          if let Some(live_thread) = self.live_thread() {
              let config = self.get_config().await;
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index ef7db28..2b24198 100644
+index ef7db28..b0ab263 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
-@@ -2787,7 +2787,28 @@ async fn try_run_sampling_request(
+@@ -183,6 +183,12 @@ pub(crate) async fn run_turn(
+     prewarmed_client_session: Option<ModelClientSession>,
+     cancellation_token: CancellationToken,
+ ) -> CodexResult<Option<String>> {
++    crate::agent_workflow_recovery::replay_before_sampling(
++        &sess,
++        &turn_context,
++        &cancellation_token,
++    )
++    .await?;
+     if input.iter().any(turn_input_has_uploaded_audio_file) {
+         let result = run_hooks_and_record_inputs(
+             &sess,
+@@ -1915,6 +1921,17 @@ async fn run_sampling_request(
+             },
+         };
+ 
++        if sess
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            // A previous transport attempt may already have consumed tokens.
++            // Keep its durable intent unknown; never replace it via retries,
++            // websocket fallback, reconnect, or an unbounded retry feature.
++            return Err(err);
++        }
+         let retry = handle_response_stream_error(
+             &mut retry_state,
+             max_retries,
+@@ -2787,7 +2804,37 @@ async fn try_run_sampling_request(
          .await;
      let hooks = hooks_for_model_request(&sess, &step_context);
      let post_mode = hooks.execution_mode_for_event(HookEventName::PostModelRequest);
@@ -3299,28 +5873,37 @@ index ef7db28..2b24198 100644
 +        .services
 +        .thread_extension_data
 +        .get::<crate::AgentWorkflowRuntime>();
-+    let _managed_batch_guard = managed_runtime
-+        .as_ref()
-+        .map(|runtime| {
-+            let invocation = turn_context
-+                .extension_data
-+                .get::<crate::AgentWorkflowInvocation>()
-+                .ok_or_else(|| {
-+                    CodexErr::InvalidRequest("managed invocation binding absent".into())
-+                })?;
-+            runtime.begin(
-+                sess.thread_id.to_string(),
-+                turn_context.sub_id.clone(),
-+                invocation.0.clone(),
-+            )
-+        })
-+        .transpose()?;
++    let _managed_batch_guard = if let Some(runtime) = &managed_runtime {
++        let invocation = turn_context
++            .extension_data
++            .get::<crate::AgentWorkflowInvocation>()
++            .ok_or_else(|| CodexErr::InvalidRequest("managed invocation binding absent".into()))?;
++        let guard = runtime.begin(
++            sess.thread_id.to_string(),
++            turn_context.sub_id.clone(),
++            invocation.0.clone(),
++        )?;
++        sess.try_ensure_rollout_materialized(PersistContext::Standard)
++            .await?;
++        sess.flush_rollout().await?;
++        let rollout = sess
++            .current_rollout_path()
++            .await
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("managed model request requires local rollout".into())
++            })?;
++        runtime.start_model_intent(&rollout)?;
++        Some(guard)
++    } else {
++        None
++    };
 +    let defer_tool_dispatch =
 +        managed_runtime.is_some() || post_mode == Some(HookExecutionMode::Sync);
      let finish_post_request = post_mode.map(|_| {
          let (post_request, completed) = tokio::sync::oneshot::channel();
          let (hook_done, wait_for_hook) = tokio::sync::oneshot::channel();
-@@ -2824,6 +2845,7 @@ async fn try_run_sampling_request(
+@@ -2824,6 +2871,7 @@ async fn try_run_sampling_request(
      let mut response_id_for_assessment = None;
      let mut pending_assessment: Option<codex_api::GuardianAssessment> = None;
      let mut response_completed = false;
@@ -3328,7 +5911,7 @@ index ef7db28..2b24198 100644
      let mut request_token_usage = None;
      let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
      // Catalog policies can enable adaptive review independently of the legacy scorer flag.
-@@ -3335,6 +3357,7 @@ async fn try_run_sampling_request(
+@@ -3335,6 +3383,7 @@ async fn try_run_sampling_request(
                  end_turn,
              } => {
                  response_completed = true;
@@ -3336,7 +5919,16 @@ index ef7db28..2b24198 100644
                  request_token_usage = token_usage.clone();
                  sess.services
                      .analytics_events_client
-@@ -3565,6 +3588,14 @@ async fn try_run_sampling_request(
+@@ -3553,7 +3602,7 @@ async fn try_run_sampling_request(
+         finish_post_request(PostModelRequest {
+             status,
+             error,
+-            token_usage: request_token_usage,
++            token_usage: request_token_usage.clone(),
+         })
+         .await;
+     }
+@@ -3565,6 +3614,37 @@ async fn try_run_sampling_request(
      )
      .await;
  
@@ -3346,13 +5938,86 @@ index ef7db28..2b24198 100644
 +        if !response_completed || outcome.is_err() {
 +            return outcome;
 +        }
-+        runtime.seal(managed_response_id.unwrap_or_default())?;
++        sess.try_ensure_rollout_materialized(PersistContext::Standard)
++            .await?;
++        sess.flush_rollout().await?;
++        let rollout = sess
++            .current_rollout_path()
++            .await
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("managed callbacks require durable local rollout".into())
++            })?;
++        let mut usage = serde_json::to_value(&request_token_usage)
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++        if let Some(units) = request_token_usage
++            .as_ref()
++            .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
++        {
++            if let Some(object) = usage.as_object_mut() {
++                object.insert(
++                    "codex_rollout_budget_units".into(),
++                    serde_json::Value::Number(units.clone()),
++                );
++            }
++        }
++        runtime.seal_durable(managed_response_id.unwrap_or_default(), &rollout, usage)?;
 +    }
      if !in_flight.is_empty() {
          let _tool_blocking_timing_guard = turn_context
              .turn_timing_state
+@@ -3577,6 +3657,17 @@ async fn try_run_sampling_request(
+         );
+         drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+     }
++    if let Some(runtime) = &managed_runtime {
++        sess.flush_rollout().await?;
++        let rollout = sess
++            .current_rollout_path()
++            .await
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("managed completion requires local rollout".into())
++            })?;
++        runtime.complete_durable(&rollout)?;
++    }
+ 
+     if should_emit_token_count {
+         // A tool call such as request_user_input can intentionally pause the turn. Emit token
+diff --git a/codex-rs/core/src/state/session.rs b/codex-rs/core/src/state/session.rs
+index 94c8874..fa3c6df 100644
+--- a/codex-rs/core/src/state/session.rs
++++ b/codex-rs/core/src/state/session.rs
+@@ -253,6 +253,7 @@ impl SessionState {
+             });
+         thread_token_usage.add_assign(usage);
+         let record = TokenUsageRecord {
++            agent_workflow_witness: None,
+             thread_id,
+             turn_id: turn_id.to_string(),
+             session_id,
+diff --git a/codex-rs/core/src/state/session_tests.rs b/codex-rs/core/src/state/session_tests.rs
+index 5d3defe..64d173d 100644
+--- a/codex-rs/core/src/state/session_tests.rs
++++ b/codex-rs/core/src/state/session_tests.rs
+@@ -20,6 +20,7 @@ async fn record_token_usage_continues_restored_totals() {
+     };
+     let mut restored = SessionState::new(make_session_configuration_for_tests().await);
+     restored.latest_token_usage_record = Some(TokenUsageRecord {
++        agent_workflow_witness: None,
+         thread_id,
+         turn_id: "turn-b".to_string(),
+         session_id,
+@@ -40,6 +41,7 @@ async fn record_token_usage_continues_restored_totals() {
+     assert_eq!(
+         after_resume,
+         TokenUsageRecord {
++            agent_workflow_witness: None,
+             thread_id,
+             turn_id: "turn-b".to_string(),
+             session_id,
 diff --git a/codex-rs/core/src/stream_events_utils.rs b/codex-rs/core/src/stream_events_utils.rs
-index e548195..034ed50 100644
+index e548195..1f43005 100644
 --- a/codex-rs/core/src/stream_events_utils.rs
 +++ b/codex-rs/core/src/stream_events_utils.rs
 @@ -324,6 +324,25 @@ pub(crate) async fn handle_output_item_done(
@@ -3376,19 +6041,51 @@ index e548195..034ed50 100644
 +                        "managed broker arguments must be complete JSON".into(),
 +                    )
 +                })?;
-+                runtime.plan(&call.call_id, &call.tool_name)?;
++                runtime.plan_call(&call.call_id, &call.tool_name, arguments)?;
 +            }
              call_trace::received(
                  ctx.sess.thread_id,
                  &call.tool_name,
 diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
-index 77ce9b8..702a4bf 100644
+index 77ce9b8..e2baa58 100644
 --- a/codex-rs/core/src/tasks/mod.rs
 +++ b/codex-rs/core/src/tasks/mod.rs
-@@ -291,6 +291,13 @@ impl Session {
+@@ -49,7 +49,9 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
+ use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
+ use codex_otel::auth_storage::AuthStorageOriginator;
+ use codex_protocol::models::ResponseItem;
++use codex_protocol::protocol::CodexErrorInfo;
+ use codex_protocol::protocol::ErrorEvent;
++use codex_protocol::protocol::Event;
+ use codex_protocol::protocol::EventMsg;
+ use codex_protocol::protocol::MultiAgentVersion;
+ use codex_protocol::protocol::TokenUsage;
+@@ -291,6 +293,35 @@ impl Session {
          input: Vec<TurnInput>,
          task: T,
      ) {
++        if self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++            && (task.kind() != TaskKind::Regular
++                || turn_context
++                    .extension_data
++                    .get::<crate::AgentWorkflowInvocation>()
++                    .is_none())
++        {
++            self.send_event_raw(Event {
++                id: turn_context.sub_id.clone(),
++                msg: EventMsg::Error(ErrorEvent {
++                    misalignment: None,
++                    message: "managed profile requires an engine-owned regular task".into(),
++                    codex_error_info: Some(CodexErrorInfo::Other),
++                }),
++            })
++            .await;
++            return;
++        }
 +        // Register before any asynchronous setup so concurrent revocation joins
 +        // the full source-owned task lifecycle, including pre-spawn work.
 +        let managed_task = self
@@ -3399,7 +6096,7 @@ index 77ce9b8..702a4bf 100644
          // Replace the cache; in-flight acquisitions retain their previous Arc.
          self.services
              .thread_extension_data
-@@ -383,6 +390,11 @@ impl Session {
+@@ -383,6 +414,11 @@ impl Session {
          );
          let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
          let task_future = async move {
@@ -3411,7 +6108,7 @@ index 77ce9b8..702a4bf 100644
              let ctx_for_finish = Arc::clone(&ctx);
              let task_result = task_for_run
                  .run(
-@@ -471,6 +483,15 @@ impl Session {
+@@ -471,6 +507,15 @@ impl Session {
          self: &Arc<Self>,
          sub_id: String,
      ) {
@@ -3427,7 +6124,7 @@ index 77ce9b8..702a4bf 100644
          if !self.input_queue.has_pending_mailbox_items().await {
              return;
          }
-@@ -571,6 +592,13 @@ impl Session {
+@@ -571,6 +616,13 @@ impl Session {
      }
  
      pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -3441,7 +6138,7 @@ index 77ce9b8..702a4bf 100644
          let mut aborted_turn = false;
          let mut active_turn_to_clear = None;
          if let Some(mut active_turn) = self.take_active_turn(&reason).await {
-@@ -595,6 +623,9 @@ impl Session {
+@@ -595,6 +647,9 @@ impl Session {
              // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
              self.input_queue.clear_pending(&active_turn).await;
          }
@@ -3451,7 +6148,7 @@ index 77ce9b8..702a4bf 100644
          if reason == TurnAbortReason::Interrupted && aborted_turn {
              self.maybe_start_turn_for_pending_work().await;
          }
-@@ -638,11 +669,21 @@ impl Session {
+@@ -638,11 +693,21 @@ impl Session {
          reason: TurnAbortReason,
          error: Option<ErrorEvent>,
      ) {
@@ -3473,7 +6170,7 @@ index 77ce9b8..702a4bf 100644
          // Let interrupted tasks observe cancellation before dropping pending approvals, or an
          // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
          self.input_queue.clear_pending(&active_turn).await;
-@@ -980,8 +1021,15 @@ impl Session {
+@@ -980,8 +1045,15 @@ impl Session {
          turn_state: &Mutex<TurnState>,
          error: Option<ErrorEvent>,
      ) {
@@ -3490,7 +6187,7 @@ index 77ce9b8..702a4bf 100644
              self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                  .await;
              return;
-@@ -1026,6 +1074,11 @@ impl Session {
+@@ -1026,6 +1098,11 @@ impl Session {
              .abort(Arc::clone(self), Arc::clone(&task.turn_context))
              .await;
  
@@ -3530,7 +6227,7 @@ index 7bd869f..de0e0c8 100644
              .options
              .config
 diff --git a/codex-rs/core/src/tools/handlers/dynamic.rs b/codex-rs/core/src/tools/handlers/dynamic.rs
-index 0eac846..9271a7b 100644
+index 0eac846..9a1a0de 100644
 --- a/codex-rs/core/src/tools/handlers/dynamic.rs
 +++ b/codex-rs/core/src/tools/handlers/dynamic.rs
 @@ -159,6 +159,7 @@ impl DynamicToolHandler {
@@ -3541,6 +6238,15 @@ index 0eac846..9271a7b 100644
              content_items,
              success,
          } = response;
+@@ -187,7 +188,7 @@ impl CoreToolRuntime for DynamicToolHandler {
+     clippy::await_holding_invalid_type,
+     reason = "active turn checks and dynamic tool response registration must remain atomic"
+ )]
+-async fn request_dynamic_tool(
++pub(crate) async fn request_dynamic_tool(
+     session: &Session,
+     turn_context: &TurnContext,
+     call_id: String,
 @@ -219,6 +220,15 @@ async fn request_dynamic_tool(
          warn!("Overwriting existing pending dynamic tool call for call_id: {event_id}");
      }
@@ -3569,6 +6275,18 @@ index 2d926b3..24abefb 100644
          content_items: Vec::new(),
          success: true,
      };
+diff --git a/codex-rs/core/src/tools/handlers/mod.rs b/codex-rs/core/src/tools/handlers/mod.rs
+index fbba3b9..be7b362 100644
+--- a/codex-rs/core/src/tools/handlers/mod.rs
++++ b/codex-rs/core/src/tools/handlers/mod.rs
+@@ -62,6 +62,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
+ use codex_protocol::protocol::AskForApproval;
+ pub use current_time::CurrentTimeHandler;
+ pub use dynamic::DynamicToolHandler;
++pub(crate) use dynamic::request_dynamic_tool as request_managed_dynamic_tool;
+ pub use get_context_remaining::GetContextRemainingHandler;
+ pub use list_available_plugins_to_install::ListAvailablePluginsToInstallHandler;
+ pub use mcp::McpHandler;
 diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
 index 4361a91..9caa2b3 100644
 --- a/codex-rs/core/src/tools/parallel.rs
@@ -3825,19 +6543,32 @@ index 0fd928d..937407f 100644
                          success: true,
                      },
 diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
-index 0a6a5cb..5883135 100644
+index 0a6a5cb..4cbc7cb 100644
 --- a/codex-rs/exec/src/lib.rs
 +++ b/codex-rs/exec/src/lib.rs
-@@ -1242,6 +1242,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
+@@ -1242,6 +1242,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                  ClientRequest::TurnStart {
                      request_id: request_ids.next(),
                      params: TurnStartParams {
++                        agent_workflow_recovery: None,
 +                        agent_workflow_invocation: None,
                          disabled_plugin_ids: None,
                          thread_id: primary_thread_id_for_span.clone(),
                          turn_trigger: Some("exec".to_string()),
+diff --git a/codex-rs/external-agent-migration/src/sessions/export.rs b/codex-rs/external-agent-migration/src/sessions/export.rs
+index d5e7fc2..8dae014 100644
+--- a/codex-rs/external-agent-migration/src/sessions/export.rs
++++ b/codex-rs/external-agent-migration/src/sessions/export.rs
+@@ -198,6 +198,7 @@ fn token_count_item(last_model_visible_tokens: i64) -> RolloutItem {
+         ..TokenUsage::default()
+     };
+     RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
++        agent_workflow_witness: None,
+         info: Some(TokenUsageInfo {
+             total_token_usage: usage.clone(),
+             last_usage_includes_reasoning: None,
 diff --git a/codex-rs/protocol/src/dynamic_tools.rs b/codex-rs/protocol/src/dynamic_tools.rs
-index bbe92b8..d652897 100644
+index bbe92b8..f10bc65 100644
 --- a/codex-rs/protocol/src/dynamic_tools.rs
 +++ b/codex-rs/protocol/src/dynamic_tools.rs
 @@ -58,6 +58,8 @@ pub struct DynamicToolCallRequest {
@@ -3845,15 +6576,35 @@ index bbe92b8..d652897 100644
  #[serde(rename_all = "camelCase")]
  pub struct DynamicToolResponse {
 +    #[serde(default, skip_serializing_if = "Option::is_none")]
-+    pub agent_workflow_permit: Option<crate::protocol::AgentWorkflowParkedBatch>,
++    pub agent_workflow_permit: Option<crate::protocol::AgentWorkflowBatchPermit>,
      pub content_items: Vec<DynamicToolCallOutputContentItem>,
      pub success: bool,
  }
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index a0af620..4001c87 100644
+index a0af620..1b8f703 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
-@@ -3416,6 +3416,9 @@ pub struct HistoryPosition {
+@@ -2503,6 +2503,8 @@ pub struct TokenUsage {
+ /// Best-effort Responses API usage observed for one completed response.
+ #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+ pub struct TokenUsageRecord {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub agent_workflow_witness: Option<AgentWorkflowModelWitness>,
+     pub thread_id: ThreadId,
+     pub turn_id: String,
+     pub session_id: SessionId,
+@@ -2581,6 +2583,10 @@ impl TokenUsageInfo {
+ 
+ #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+ pub struct TokenCountEvent {
++    /// Captured by the source at this exact native Completed boundary; never
++    /// resolved through a later asynchronous latest-response getter.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub agent_workflow_witness: Option<AgentWorkflowModelWitness>,
+     pub info: Option<TokenUsageInfo>,
+     pub rate_limits: Option<RateLimitSnapshot>,
+ }
+@@ -3416,6 +3422,9 @@ pub struct HistoryPosition {
  /// and should be used when there is no config override.
  #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
  pub struct SessionMeta {
@@ -3863,7 +6614,7 @@ index a0af620..4001c87 100644
      /// ChatGPT user that created this thread; absent when unavailable or for older threads.
      #[serde(default, skip_serializing_if = "Option::is_none")]
      pub creator_user_id: Option<String>,
-@@ -3495,10 +3498,36 @@ pub struct SessionMeta {
+@@ -3495,10 +3504,56 @@ pub struct SessionMeta {
      pub context_window: Option<SessionContextWindow>,
  }
  
@@ -3878,7 +6629,15 @@ index a0af620..4001c87 100644
 +    pub broker_tools: Vec<String>,
 +}
 +
-+/// Source-owned complete parked batch. Echoed only after engine lease reacquisition.
++/// Independently persisted at the actual native Completed stream boundary.
++#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct AgentWorkflowModelWitness {
++    pub batch: AgentWorkflowParkedBatch,
++    pub usage: serde_json::Value,
++}
++
++/// Stable semantic identity captured from the original native response.
 +#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 +#[serde(rename_all = "camelCase", deny_unknown_fields)]
 +pub struct AgentWorkflowParkedBatch {
@@ -3890,6 +6649,18 @@ index a0af620..4001c87 100644
 +    pub batch_id: String,
 +    pub response_id: String,
 +    pub call_ids: Vec<String>,
++}
++
++/// Fresh control authority for one process/recovery owner. Original journal,
++/// model usage and tool-result content never retain this permit epoch.
++#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct AgentWorkflowBatchPermit {
++    pub batch: AgentWorkflowParkedBatch,
++    pub permit_epoch: String,
++    /// Exact source-owned native Completed observation, committed by the engine
++    /// under the original response ID before any broker effect is dispatched.
++    pub usage: serde_json::Value,
 +}
 +
  impl Default for SessionMeta {
@@ -3998,7 +6769,7 @@ index 7298c41..d751cc7 100644
                      id: conversation_id,
                      forked_from_id,
 diff --git a/codex-rs/rollout/src/recorder_tests.rs b/codex-rs/rollout/src/recorder_tests.rs
-index a2843aa..3591a16 100644
+index a2843aa..199433c 100644
 --- a/codex-rs/rollout/src/recorder_tests.rs
 +++ b/codex-rs/rollout/src/recorder_tests.rs
 @@ -214,6 +214,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
@@ -4009,6 +6780,14 @@ index a2843aa..3591a16 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
+@@ -1108,6 +1109,7 @@ async fn resumed_paginated_rollout_continues_after_decimal_token_count() -> std:
+     recorder
+         .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::TokenCount(
+             TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: None,
+                 rate_limits: Some(RateLimitSnapshot {
+                     limit_id: None,
 diff --git a/codex-rs/rollout/src/session_index_tests.rs b/codex-rs/rollout/src/session_index_tests.rs
 index 219ddf1..05d7086 100644
 --- a/codex-rs/rollout/src/session_index_tests.rs
@@ -4066,7 +6845,7 @@ index 80ce0e0..a9c4974 100644
                      attached_thread: false,
                      creator_account_id: None,
 diff --git a/codex-rs/state/src/runtime/threads.rs b/codex-rs/state/src/runtime/threads.rs
-index 222fc83..34d38d6 100644
+index 222fc83..56a1d3b 100644
 --- a/codex-rs/state/src/runtime/threads.rs
 +++ b/codex-rs/state/src/runtime/threads.rs
 @@ -2924,6 +2924,7 @@ mod tests {
@@ -4085,6 +6864,14 @@ index 222fc83..34d38d6 100644
                  attached_thread: false,
                  creator_user_id: None,
                  creator_account_id: None,
+@@ -3746,6 +3748,7 @@ mod tests {
+         );
+         let items = vec![RolloutItem::EventMsg(EventMsg::TokenCount(
+             codex_protocol::protocol::TokenCountEvent {
++                agent_workflow_witness: None,
+                 info: Some(codex_protocol::protocol::TokenUsageInfo {
+                     total_token_usage: codex_protocol::protocol::TokenUsage {
+                         input_tokens: 0,
 diff --git a/codex-rs/thread-store/src/in_memory.rs b/codex-rs/thread-store/src/in_memory.rs
 index 2df41dc..d60a02f 100644
 --- a/codex-rs/thread-store/src/in_memory.rs
@@ -4126,10 +6913,26 @@ index 8b9823e..ea53c33 100644
              roots
                  .into_iter()
 diff --git a/codex-rs/thread-store/src/local/mod.rs b/codex-rs/thread-store/src/local/mod.rs
-index 8a2506b..4f01f39 100644
+index 8a2506b..2bffb16 100644
 --- a/codex-rs/thread-store/src/local/mod.rs
 +++ b/codex-rs/thread-store/src/local/mod.rs
-@@ -2374,6 +2374,7 @@ mod tests {
+@@ -1265,6 +1265,7 @@ mod tests {
+                 ),
+                 RolloutItem::EventMsg(EventMsg::TokenCount(
+                     codex_protocol::protocol::TokenCountEvent {
++                        agent_workflow_witness: None,
+                         info: None,
+                         rate_limits: None,
+                     },
+@@ -1392,6 +1393,7 @@ mod tests {
+         live_thread
+             .append_items(&[RolloutItem::EventMsg(EventMsg::TokenCount(
+                 codex_protocol::protocol::TokenCountEvent {
++                    agent_workflow_witness: None,
+                     info: None,
+                     rate_limits: None,
+                 },
+@@ -2374,6 +2376,7 @@ mod tests {
  
      fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
          CreateThreadParams {
@@ -4174,7 +6977,7 @@ index 564c990..eaaf7ab 100644
              creator_user_id: Some("creator-user".to_string()),
              creator_account_id: Some("creator-account".to_string()),
 diff --git a/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs b/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
-index ce951ad..29ca9a1 100644
+index ce951ad..9925b67 100644
 --- a/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
 +++ b/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
 @@ -754,6 +754,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
@@ -4185,7 +6988,15 @@ index ce951ad..29ca9a1 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -3069,6 +3070,7 @@ async fn create_paginated_subagent_thread(
+@@ -1967,6 +1968,7 @@ async fn paginated_projection_accepts_float_rate_limits_and_later_final_answers(
+         .expect("rollout path");
+     let token_count = |primary: Option<f64>, secondary: Option<f64>| {
+         RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
++            agent_workflow_witness: None,
+             info: None,
+             rate_limits: Some(RateLimitSnapshot {
+                 limit_id: None,
+@@ -3069,6 +3071,7 @@ async fn create_paginated_subagent_thread(
  ) {
      store
          .create_thread(CreateThreadParams {

@@ -10,6 +10,7 @@ import configparser
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -138,7 +139,12 @@ def owned_size(root):
     for directory, _, files in os.walk(root):
         for name in files:
             path = Path(directory) / name
-            total += path.lstat().st_size
+            try:
+                total += path.lstat().st_size
+            except FileNotFoundError:
+                # Compilers atomically rename/remove temporary objects while
+                # this bounded monitor walks their exclusively owned target.
+                continue
     return total
 
 
@@ -332,12 +338,26 @@ def check(args):
         admission = json.loads((root / "metadata-admission.json").read_text())
         if admission["build_id"] != build_id or digest(root / admission["metadata_file"]) != admission["metadata_sha256"]:
             raise ValueError("compiler stage requires exact successful metadata admission")
+        if args.phase in ("runtime-tests", "submission-tests", "journal-tests"):
+            admission = admission["core_unit"]
         if admission["unprepared_native_artifacts"]:
             raise ValueError("compiler stage has an unprepared native dependency artifact")
         for script in admission["build_scripts"]:
             if digest(Path(script["path"])) != script["sha256"]:
                 raise ValueError("dependency build script changed after metadata audit")
-        command = [str(cargo), "check", "--locked", "--offline", "--target", expected["target"], "-p", "codex-app-server"]
+        common = ["--locked", "--offline", "--target", expected["target"]]
+        if args.phase == "check":
+            command = [str(cargo), "check", *common, "-p", "codex-app-server"]
+        elif args.phase == "build":
+            command = [str(cargo), "build", *common, "-p", "codex-app-server", "--bin", "codex-app-server"]
+        elif args.phase == "runtime-tests":
+            command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "agent_workflow_managed::tests::", "--", "--test-threads=2"]
+        elif args.phase == "journal-tests":
+            command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "agent_workflow_journal::tests::", "--", "--test-threads=2"]
+        elif args.phase == "submission-tests":
+            command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "session::tests::managed_submission_ceiling_rejects_manual_and_unbound_work_before_queueing", "--", "--exact", "--test-threads=2"]
+        else:
+            raise ValueError("unsupported managed source stage")
     attempt = 1
     while (root / f"{args.phase}-{attempt}.json").exists():
         attempt += 1
@@ -376,6 +396,10 @@ def check(args):
                     termination = terminate_group(process)
                     break
                 time.sleep(1)
+        except BaseException as error:
+            reason = "monitor_error"
+            report["monitor_error"] = type(error).__name__ + ": " + str(error)
+            raise
         finally:
             if process.poll() is None or group_members(process.pid):
                 if reason == "completed":
@@ -390,6 +414,27 @@ def check(args):
                 reason = "offline_filter_not_attested"
             report.update({"reason": reason, "exit_code": code, "elapsed_seconds": time.monotonic() - started, "target_bytes": owned_size(target), "free_bytes": shutil.disk_usage(root).free, "source_before_sha256": receipt["source_sha256"], "source_after_sha256": final_source, "termination": termination, "retained_group_members": group_members(process.pid), "offline_filter": offline, "phase": args.phase})
             (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
+    if code == 0 and reason == "completed" and args.phase in ("runtime-tests", "submission-tests", "journal-tests"):
+        count = selected_test_count((root / (label + ".log")).read_text(errors="replace"))
+        expected_count = {"runtime-tests": 11, "submission-tests": 1, "journal-tests": 11}[args.phase]
+        report["selected_test_count"] = count
+        if count != expected_count:
+            report["reason"] = reason = "selected_test_count_mismatch"
+        (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
+    if code == 0 and reason == "completed" and args.phase == "build":
+        binary = target / expected["target"] / "debug/codex-app-server"
+        if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
+            report["reason"] = "missing_built_executable"
+            (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
+            raise ValueError("successful build did not produce the exact Linux app-server executable")
+        with binary.open("rb") as stream:
+            header = stream.read(4)
+        if header != b"\x7fELF":
+            report["reason"] = "invalid_built_executable"
+            (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
+            raise ValueError("built app-server is not a Linux executable")
+        candidate = {"build_id": build_id, "inputs": expected, "source_sha256": final_source, "binary_path": str(binary), "binary_sha256": digest(binary), "binary_bytes": binary.stat().st_size, "startup_kind": "standalone-app-server", "startup_argv": ["--config", "project_doc_max_bytes=0", "--config", 'cli_auth_credentials_store="file"'], "build_receipt": label + ".json", "verified_executed_binary": False, "conformance_passed": False}
+        (root / "managed-binary.json").write_text(json.dumps(candidate, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if code != 0 or reason != "completed":
         raise SystemExit(1)
@@ -397,13 +442,17 @@ def check(args):
         audit_metadata(root, output_path, receipt)
 
 
-def audit_metadata(root, metadata_file, receipt):
-    metadata = json.loads(metadata_file.read_text())
+def selected_test_count(output):
+    matches = re.findall(r"test result: ok\. ([0-9]+) passed; 0 failed;", output)
+    return int(matches[0]) if len(matches) == 1 else 0
+
+
+def target_metadata(root, metadata, root_name, include_root_dev=False):
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    roots = [package["id"] for package in metadata["packages"] if package["name"] == "codex-app-server"]
+    roots = [package["id"] for package in metadata["packages"] if package["name"] == root_name]
     if len(roots) != 1:
-        raise ValueError("metadata must identify exactly one app-server package")
+        raise ValueError("metadata must identify exactly one target package")
     pending, closure = roots[:], set()
     while pending:
         identity = pending.pop()
@@ -411,7 +460,7 @@ def audit_metadata(root, metadata_file, receipt):
             continue
         closure.add(identity)
         for edge in nodes[identity]["deps"]:
-            if any(kind["kind"] in (None, "build") for kind in edge["dep_kinds"]):
+            if any(kind["kind"] in (None, "build") or include_root_dev and identity == roots[0] and kind["kind"] == "dev" for kind in edge["dep_kinds"]):
                 pending.append(edge["pkg"])
     scripts = []
     for identity in sorted(closure):
@@ -426,7 +475,13 @@ def audit_metadata(root, metadata_file, receipt):
     # No V8 native library or generated binding has been prepared. Do not let a
     # runtime feature switch masquerade as a compile-time dependency guarantee.
     native = [packages[identity]["name"] for identity in closure if packages[identity]["name"] in ("v8", "codex-code-mode-runtime")]
-    admission = {"build_id": receipt["build_id"], "metadata_file": metadata_file.name, "metadata_sha256": digest(metadata_file), "packages": sorted(packages[identity]["name"] + "@" + packages[identity]["version"] for identity in closure), "build_scripts": scripts, "unprepared_native_artifacts": sorted(native)}
+    return {"root_package": root_name, "root_dev_dependencies": include_root_dev, "packages": sorted(packages[identity]["name"] + "@" + packages[identity]["version"] for identity in closure), "build_scripts": scripts, "unprepared_native_artifacts": sorted(native)}
+
+
+def audit_metadata(root, metadata_file, receipt):
+    metadata = json.loads(metadata_file.read_text())
+    admission = {"build_id": receipt["build_id"], "metadata_file": metadata_file.name, "metadata_sha256": digest(metadata_file), **target_metadata(root, metadata, "codex-app-server")}
+    admission["core_unit"] = target_metadata(root, metadata, "codex-core", include_root_dev=True)
     (root / "metadata-admission.json").write_text(json.dumps(admission, indent=2) + "\n")
 
 
@@ -445,7 +500,7 @@ def main():
     build = commands.add_parser("check")
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--host", default="x86_64-unknown-linux-gnu", choices=["x86_64-unknown-linux-gnu"])
-    build.add_argument("--phase", choices=["metadata", "check"], default="metadata")
+    build.add_argument("--phase", choices=["metadata", "check", "runtime-tests", "submission-tests", "journal-tests", "build"], default="metadata")
     build.set_defaults(run=check)
     args = parser.parse_args()
     args.run(args)

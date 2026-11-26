@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
+import { isolatedSettings, isolatedEnvironment, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
 
 const sdkVersion = '0.3.322';
 const sdkMetadata = JSON.parse(await readFile(new URL('./package.json', import.meta.resolve('@anthropic-ai/claude-agent-sdk')), 'utf8'));
@@ -177,6 +177,7 @@ try {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: request.repair_only ? undefined : (sessionID || undefined),
     systemPrompt: request.repair_only ? 'Format the supplied repair data as JSON. Do not execute tools or perform the original task.' : (request.instructions || 'Follow the explicitly supplied task and engine policy.'),
     settingSources: [], settings: isolatedSettings,
+    env: { ...process.env, ...isolatedEnvironment },
     extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
     pluginDelivery: skill ? 'initialize' : 'argv',
     skills: skill ? [skill.qualified] : [], plugins: skill ? [{ type: 'local', path: skill.root, skipMcpDiscovery: true }] : [],

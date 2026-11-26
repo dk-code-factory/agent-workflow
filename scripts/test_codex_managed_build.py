@@ -72,6 +72,26 @@ class ManagedSourceBuildTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "external packages"):
             BUILD.verify_workspace_lock(encode(before), encode(invalid))
 
+    def test_resource_monitor_tolerates_removed_compiler_objects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "stable").write_bytes(b"1234")
+            original = Path.lstat
+
+            def stat(path):
+                if path.name == "transient.rcgu.o":
+                    raise FileNotFoundError(path)
+                return original(path)
+
+            with patch.object(BUILD.os, "walk", return_value=[(str(root), [], ["stable", "transient.rcgu.o"])]), patch.object(Path, "lstat", stat):
+                self.assertEqual(BUILD.owned_size(root), 4)
+
+    def test_test_stage_requires_actual_selected_tests(self):
+        self.assertEqual(BUILD.selected_test_count("test result: ok. 10 passed; 0 failed; 0 ignored;"), 10)
+        self.assertEqual(BUILD.selected_test_count("test result: ok. 0 passed; 0 failed; 10 filtered out"), 0)
+        self.assertEqual(BUILD.selected_test_count("test result: FAILED. 1 passed; 1 failed;"), 0)
+        self.assertEqual(BUILD.selected_test_count("test result: ok. 1 passed; 0 failed;\ntest result: ok. 1 passed; 0 failed;"), 0)
+
     def test_shared_cache_aliases_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

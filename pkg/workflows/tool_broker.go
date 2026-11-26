@@ -337,7 +337,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 			return nil, fmt.Errorf("provider call ID reused with conflicting content")
 		}
 		if previous.Status == "denied" {
-			return nil, errors.New(previous.Error)
+			return nil, deniedToolReceipt(in, previous, errors.New(previous.Error))
 		}
 		if previous.Status == "completed" {
 			return previous.Result, nil
@@ -380,7 +380,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	if denied != nil {
-		return nil, errors.New(record.Error)
+		return nil, deniedToolReceipt(in, record, redactedError{cause: denied, text: record.Error})
 	}
 	var result json.RawMessage
 	dispatch := in.Dispatch

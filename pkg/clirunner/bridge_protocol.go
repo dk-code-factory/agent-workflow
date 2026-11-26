@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -212,7 +211,7 @@ func bridgeTurn(ctx context.Context, reader io.Reader, writer *bridgeWriter, inp
 			go func(request workflows.ToolRequest) {
 				defer callbacks.Done()
 				value, err := tools.Binding.Call(ctx, request)
-				if errors.Is(err, workflows.ErrUncertainTool) {
+				if err != nil && !workflows.KnownToolDenial(ctx, tools.Binding, request, err) {
 					report(err)
 					return
 				}

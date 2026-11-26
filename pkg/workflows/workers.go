@@ -732,11 +732,28 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 		}
 		workers, err := m.eligible(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			slog.Error("worker scheduler query failed", "failure_class", "storage")
 			continue
 		}
+		recoveries, recoveryErr := m.managedCodexCandidates(ctx)
+		if recoveryErr != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Error("managed original recovery query failed", "failure_class", "storage")
+			continue
+		}
+		recoveryWorkers := map[string]bool{}
+		for _, candidate := range recoveries {
+			workers = append(workers, candidate.worker)
+			recoveryWorkers[candidate.worker.ID] = true
+		}
 		for _, w := range workers {
-			if w.Status != "idle" {
+			recovering := recoveryWorkers[w.ID]
+			if w.Status != "idle" && !recovering {
 				continue
 			}
 			m.mu.Lock()
@@ -746,7 +763,7 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 				continue
 			}
 			current, err := m.Get(ctx, w.RunID, w.ID)
-			if err != nil || current.Status != "idle" {
+			if err != nil || (!recovering && current.Status != "idle") || (recovering && current.Status != RunStatusNeedsAttention) {
 				m.mu.Unlock()
 				continue
 			}
@@ -759,7 +776,22 @@ func (m *WorkerManager) Serve(ctx context.Context) {
 			if duration <= 0 {
 				duration = m.Limits.TurnDuration
 			}
-			turnCtx, cancel := context.WithTimeout(ctx, duration)
+			var turnCtx context.Context
+			var cancel context.CancelFunc
+			if recovering {
+				candidate, recoveryErr := m.admitManagedCodexRecovery(ctx, w)
+				if recoveryErr != nil {
+					lease.Release()
+					m.mu.Unlock()
+					continue
+				}
+				w = candidate.worker
+				turnCtx, cancel = context.WithDeadline(ctx, managedOriginalDeadline(w, candidate.message))
+				turnCtx = context.WithValue(turnCtx, managedCodexResumeKey{}, managedCodexResumeContext{message: candidate.message, recovery: candidate.recovery})
+				turnCtx = context.WithValue(turnCtx, managedCodexRecoveryKey{}, managedCodexRecoveryContext{value: *candidate.recovery})
+			} else {
+				turnCtx, cancel = context.WithTimeout(ctx, duration)
+			}
 			m.active[w.ID] = cancel
 			m.activeRuns[w.ID] = w.RunID
 			m.done[w.ID] = make(chan struct{})
@@ -791,19 +823,25 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	var progressErr error
 	var msg WorkerMessage
 	var raw []byte
-	err := m.Store.db.QueryRowContext(ctx, "SELECT record FROM messages WHERE worker_id=? AND status='queued' ORDER BY sequence LIMIT 1", w.ID).Scan(&raw)
-	if err != nil {
-		return
-	}
-	if err = decodeJSONWithNumbers(raw, &msg); err != nil {
-		return
+	resume, recovering := ctx.Value(managedCodexResumeKey{}).(managedCodexResumeContext)
+	var err error
+	if recovering {
+		msg = resume.message
+	} else {
+		err = m.Store.db.QueryRowContext(ctx, "SELECT record FROM messages WHERE worker_id=? AND status='queued' ORDER BY sequence LIMIT 1", w.ID).Scan(&raw)
+		if err != nil {
+			return
+		}
+		if err = decodeJSONWithNumbers(raw, &msg); err != nil {
+			return
+		}
 	}
 	origin, _, err := m.Store.Load(ctx, w.RunID)
 	if err != nil || origin.Status != RunStatusRunning {
 		return
 	}
 	msg.Generation = origin.Generation
-	if w.Definition != nil {
+	if w.Definition != nil || recovering {
 		ctx = fenceContext(ctx, origin)
 	}
 	w.FailureAcknowledgement = nil
@@ -820,73 +858,83 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
 		return
 	}
-	tx, err := m.Store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return
-	}
+	var tx *sql.Tx
 	var b []byte
-	err = tx.QueryRowContext(ctx, "SELECT record FROM workers WHERE id=? AND status='idle'", w.ID).Scan(&b)
-	if err != nil {
-		_ = tx.Rollback()
-		return
+	if !recovering {
+		tx, err = m.Store.db.BeginTx(ctx, nil)
+		if err != nil {
+			return
+		}
+		err = tx.QueryRowContext(ctx, "SELECT record FROM workers WHERE id=? AND status='idle'", w.ID).Scan(&b)
+		if err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		if err = decodeJSONWithNumbers(b, &w); err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		if err = w.validateSkillContinuation(); err != nil {
+			_ = tx.Rollback()
+			w.Status = RunStatusNeedsAttention
+			w.Error = err.Error()
+			_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
+			return
+		}
+		if w.Remaining <= 0 {
+			_ = tx.Rollback()
+			w.Status = RunStatusNeedsAttention
+			w.FailureAcknowledgement = nil
+			w.Error = "worker turn budget exhausted"
+			_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
+			return
+		}
+		if err = checkFence(ctx, tx); err != nil {
+			tx.Rollback()
+			return
+		}
+		if err = checkEffectAdmission(ctx, tx, w.RunID); err != nil {
+			tx.Rollback()
+			return
+		}
+		var runStatus string
+		if err = tx.QueryRowContext(ctx, "SELECT r.status FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND e.finalizing=0", w.RunID).Scan(&runStatus); err != nil || runStatus != RunStatusRunning {
+			_ = tx.Rollback()
+			return
+		}
+		w.Remaining--
+		if w.Skill != nil {
+			w.SkillTurnUncertain = true
+			w.SkillActiveMessageID = msg.ID
+		}
+		w.Status = RunStatusRunning
+		msg.Status = RunStatusRunning
+		msg.StartedAt = time.Now().UTC()
+		msg.QueueTimeMS = msg.StartedAt.Sub(msg.EnqueuedAt).Milliseconds()
+		b, _ = json.Marshal(w)
+		_, err = tx.ExecContext(ctx, "UPDATE workers SET status=?,record=? WHERE id=?", w.Status, b, w.ID)
+		if err == nil {
+			b, _ = json.Marshal(msg)
+			_, err = tx.ExecContext(ctx, "UPDATE messages SET status=?,record=? WHERE id=? AND status='queued'", msg.Status, b, msg.ID)
+		}
+		if err == nil {
+			err = addEvent(ctx, tx, w.RunID, "worker.turn_admitted", map[string]string{"worker_id": w.ID, "message_id": msg.ID})
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			return
+		}
+	} else {
+		current, loadErr := m.Get(ctx, w.RunID, w.ID)
+		if loadErr != nil || current.Status != RunStatusRunning || !managedAdmissionMatches(resume.recovery, current, msg) {
+			return
+		}
+		w = current
 	}
-	if err = decodeJSONWithNumbers(b, &w); err != nil {
-		_ = tx.Rollback()
-		return
-	}
-	if err = w.validateSkillContinuation(); err != nil {
-		_ = tx.Rollback()
-		w.Status = RunStatusNeedsAttention
-		w.Error = err.Error()
-		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
-		return
-	}
-	if w.Remaining <= 0 {
-		_ = tx.Rollback()
-		w.Status = RunStatusNeedsAttention
-		w.FailureAcknowledgement = nil
-		w.Error = "worker turn budget exhausted"
-		_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
-		return
-	}
-	if err = checkFence(ctx, tx); err != nil {
-		tx.Rollback()
-		return
-	}
-	if err = checkEffectAdmission(ctx, tx, w.RunID); err != nil {
-		tx.Rollback()
-		return
-	}
-	var runStatus string
-	if err = tx.QueryRowContext(ctx, "SELECT r.status FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND e.finalizing=0", w.RunID).Scan(&runStatus); err != nil || runStatus != RunStatusRunning {
-		_ = tx.Rollback()
-		return
-	}
-	w.Remaining--
-	if w.Skill != nil {
-		w.SkillTurnUncertain = true
-		w.SkillActiveMessageID = msg.ID
-	}
-	w.Status = RunStatusRunning
-	msg.Status = RunStatusRunning
-	msg.StartedAt = time.Now().UTC()
-	msg.QueueTimeMS = msg.StartedAt.Sub(msg.EnqueuedAt).Milliseconds()
-	b, _ = json.Marshal(w)
-	_, err = tx.ExecContext(ctx, "UPDATE workers SET status=?,record=? WHERE id=?", w.Status, b, w.ID)
-	if err == nil {
-		b, _ = json.Marshal(msg)
-		_, err = tx.ExecContext(ctx, "UPDATE messages SET status=?,record=? WHERE id=? AND status='queued'", msg.Status, b, msg.ID)
-	}
-	if err == nil {
-		err = addEvent(ctx, tx, w.RunID, "worker.turn_admitted", map[string]string{"worker_id": w.ID, "message_id": msg.ID})
-	}
-	if err != nil {
-		_ = tx.Rollback()
-		return
-	}
-	if err = tx.Commit(); err != nil {
-		return
-	}
+
 	var eventMu sync.Mutex
 	callbacksClosed := false
 	var journalErr error
@@ -959,7 +1007,8 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: retainJournalError}
 	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
-	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: expectedSession}, func(event ProviderEvent) {
+	ctx = context.WithValue(ctx, managedCodexTerminalKey{}, m.managedTerminalRecorder(w, msg, secrets))
+	onProviderEvent := func(event ProviderEvent) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
 		if callbacksClosed {
@@ -1085,7 +1134,14 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			cancelTurn()
 		}
 
-	})
+	}
+	var result SessionResult
+	var turnErr error
+	if recovering && resume.recovery.State == "terminal" && resume.recovery.Terminal != nil {
+		result = *resume.recovery.Terminal
+	} else {
+		result, turnErr = runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: expectedSession}, onProviderEvent)
+	}
 	eventMu.Lock()
 	callbacksClosed = true
 	retainedJournalErr := journalErr
@@ -1094,9 +1150,29 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	if w.Skill != nil && turnErr == nil {
 		turnErr = w.SkillEvidence.Complete(w.Skill)
 	}
+	retained, retainErr := m.retainManagedCodexProcessLoss(ctx, w, msg, turnErr)
+	if retainErr != nil {
+		turnErr = errors.Join(turnErr, retainErr)
+	}
+	if retained {
+		return
+	}
 	// Failed admission never starts the provider. In particular, cancellation
 	// can leave no usage row, so final accounting would invent a storage failure.
-	if usageErr == nil {
+	managedTerminal := false
+	var checkpointErr error
+	if usageIdentity.Provider == "codex-app-server" {
+		managedTerminal, checkpointErr = managedCheckpointExists(context.WithoutCancel(ctx), m.Store, msg.ID)
+	}
+	if checkpointErr != nil {
+		turnErr = errors.Join(turnErr, checkpointErr)
+	}
+	if usageIdentity.Provider == "codex-app-server" && turnErr != nil && !managedTerminal {
+		if holdErr := holdManagedCodexAdmission(context.WithoutCancel(ctx), w.RunID, msg.ID); holdErr != nil {
+			turnErr = errors.Join(turnErr, holdErr)
+		}
+	}
+	if usageErr == nil && !managedTerminal {
 		update := usageUpdate(result.Outputs, true)
 		if w.Skill != nil && (turnErr != nil || progressErr != nil || ctx.Err() != nil) {
 			update.Incomplete = true
@@ -1191,6 +1267,14 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	b, _ = json.Marshal(w)
 	if _, err = tx.Exec("UPDATE workers SET status=?,record=? WHERE id=?", w.Status, b, w.ID); err != nil {
 		return
+	}
+	if managedTerminal {
+		if msg.Status != RunStatusSucceeded || turnErr != nil {
+			return
+		}
+		if err = finishManagedCodexCheckpoint(context.WithoutCancel(ctx), tx, usageIdentity, result); err != nil {
+			return
+		}
 	}
 	b, _ = json.Marshal(msg)
 	if _, err = tx.Exec("UPDATE messages SET status=?,record=? WHERE id=?", msg.Status, b, msg.ID); err != nil {
@@ -1302,6 +1386,15 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 	}
 
 	for _, msg := range messages {
+		if msg.Status != RunStatusSucceeded {
+			var managed int
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND (observation_key=? OR json_type(CAST(record AS TEXT),'$.managed_codex_witness')='object')`, msg.ID, managedCodexAdmissionKey).Scan(&managed); err != nil {
+				return err
+			}
+			if managed != 0 {
+				return fmt.Errorf("original managed Codex invocation must reconcile before mailbox acknowledgement")
+			}
+		}
 		if msg.Status == RunStatusRunning {
 			msg.Status = "interrupted"
 			msg.Error = "owner stopped; explicitly acknowledged without replaying this turn"

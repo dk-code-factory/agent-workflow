@@ -14,6 +14,18 @@ platform, and binary digest. Neither the version string nor a new experimental
 field is sufficient evidence. A build must identify that tuple in its initialize
 response, and the engine must verify the executable digest before sending task
 data. The executable and build identity remain fixed for that provider process.
+The workspace's optional `managed-build.manifest` captures the original manifest
+bytes and full tuple in retained Roles. Later manifest replacement or removal
+cannot recapture authority. Local launch holds an executable descriptor through
+the existing invocation guardian and verifies the actual owned child image before
+protocol input. Container, network-runtime and unverified platforms remain closed.
+The manifest is a trusted workspace provenance input. Its digest, source tuple,
+executed image and handshake do not authenticate a fabricated manifest from an
+untrusted caller or a hostile workspace owner emulating the ABI. Unadmitted
+repository content, skills and task/provider arguments cannot select or replace
+the retained manifest. Conformance receipts bind the exact tested artifact;
+there is no universal binary whitelist that excludes independent source-pinned
+builds.
 Patch and recipe digests are injected through build inputs or a verified build
 sidecar. The binary digest is computed after the build and verified against the
 executed image; no artifact embeds its own digest or the digest of its own source
@@ -46,6 +58,9 @@ boundaries before its profile can be admitted:
 | Park attestation | Start the accounted deferred futures. Emit a typed attestation only when every planned future is either terminal or parked at a correlated broker response channel, and every nonbroker work category is empty. Unpolled futures count as outstanding work. No outstanding work is inferred from an empty callback map. |
 | Reacquisition | Broker results cannot resolve their source-owned response channels until an exact batch/call-set reacquire permit is accepted. The event reader remains live while callbacks wait. The engine suspends its lease only on that attestation, buffers all correlated batch results, then reacquires once before issuing the permit and delivering the complete batch. Reacquiring on the first result can deadlock another callback requiring child capacity. A permit is single-use and cannot grant another batch or invocation. |
 | Cancellation | Cancellation or connection loss invalidates the park token and every pending permit. Before-spawn dispatch guards account for child tasks; join them after joining the model task. The upstream model-task abort has a 100 ms grace period and cannot itself prove dispatch tasks have exited. Transition/receiver/submission failures revoke and join directly, including when the submission queue is closed. A mismatched result clears its batch before returning an error; the operation handler interrupts and joins. Native pending-mail automatic turns are disabled. Engine journals retain usage and uncertain effects. |
+| Durable seal | Before the first public broker callback, materialize and flush the original local native rollout, explicitly sync its regular file and newly created directory entries, then atomically write/sync/rename/sync the full bounded broker journal. Bind independent original SessionMeta, turn/response envelopes, full original call set and native Completed usage witness. Missing, foreign, partial or ambiguous evidence holds. |
+| Usage before effects | The attestation carries the original native Completed usage. Commit its stable response-ID observation before capacity release or any broker dispatch. Budget, storage or unknown-accounting failure holds the batch while preserving known durable charges. Zero automatic request/stream retries and no fallback transport prevent one later response from hiding an earlier unknown-cost attempt. |
+| Receipt recovery | Use the same original turn, engine invocation and consumed allowance through CoreRecoverTurn/RegularTask. Validate original raw evidence before prompt normalization, replay original callbacks through the existing dynamic-tool path and original engine receipts, and require a fresh control permit epoch. Persist the entire semantic result set before resolving any callback; append only missing real outputs and sync completion before sampling. Cancelled batches and unknown native attempts cannot obtain a fresh invocation to bypass the hold. |
 
 Before native session construction, the profile inserts the existing
 `McpServersDisabled` marker, which empties configured and contributed MCP
@@ -163,12 +178,15 @@ Source checks use Rust 1.95.0, an owned physical TMPDIR and target directory, tw
 build jobs, incremental compilation disabled and debug information disabled.
 
 Each compile stage must have a 30-minute deadline and a monitor that terminates
-only its owned process group if the owned target reaches 12 GB, combined owned
-cache/target reaches 16 GB, or the physical filesystem has less than 24 GB
+only its owned process group if the owned target reaches 12 GiB, combined owned
+cache/target reaches 16 GiB, or the physical filesystem has less than 24 GiB
 available. Escalation kills the entire group even after its leader exits; receipts
 retain descendant states and before/after source hashes. Record sizes; preserve
-shared caches and foreign targets. Check protocol/core compilation first, then
-build only the app-server test executable and required local conformance cases.
+shared caches and foreign targets. Check protocol/core compilation first, run
+explicit counted core test selectors, then build only the standalone
+`cargo build -p codex-app-server --bin codex-app-server` target for local protocol
+and engine conformance. Its startup argv does not contain the CLI `app-server`
+subcommand.
 Do not build release images, all targets, or distribution artifacts at this
 stage. Source checking and helper unit tests alone do not enable the profile.
 
@@ -176,7 +194,90 @@ The repository-owned source patch is a prototype. Retained preparation evidence
 records the initial missing Git submodule, the release workspace-version lock
 mismatch, and the separate checksum-verified preparation of 53 absent archives.
 The corrected source passed locked offline app-server metadata resolution: its
-normal/build closure contains neither V8 nor the code-mode runtime. Compiler
-checking is in progress. Exact executable fake-gateway evidence and the connected
-Go adapter remain required before enabling the profile. No verified binary or
-managed Codex conformance result is claimed by this design document.
+normal/build closure contains neither V8 nor the code-mode runtime. Historical
+v12 source produced an actual standalone binary, SHA-256
+`46da679ee4cfe106564ed68a28adffde6f85e0bc1fd1b4ca08c8c5c4b1d7c565`.
+Owned local fake-gateway diagnostics verified its executed image, delayed complete
+batch barrier, full result buffering, original durable journal ordering, normal
+subsequent turn, unknown-attempt hold across restart, and actual directory write
+denial before callbacks. These are bounded diagnostics: v12 retained one stale
+unit-test expectation failure and did not implement pending-effect recovery.
+
+The current disabled prototype adds separate fresh permit epochs, original-seal
+replay, and usage-before-effects control. Its new source tuple must independently
+pass compilation, selected tests, actual binary crash-cut/gateway cases and the
+connected production Go engine harness. Existing private controller/descriptor
+tests do not establish that final native contract. No managed profile is admitted
+by the historical binary or diagnostics.
+
+## Local checkpoint and remaining gates
+
+The current source build uses patch digest
+`bd1e1ebd4608c30eaef97a7009b383c417060a83764a8513058b958d800930d6`,
+source tree digest
+`c4cad66776ac52a7fc92a7a52dec1dd90292d4268068018c68bc38cd6ae7a790`,
+and build identity
+`d95a041b77a1b3fb2993e57d85f694e8e620d267b025c8097778da58d4895387`.
+Its actual standalone Linux amd64 executable is 509,664,312 bytes, SHA-256
+`844851f8f453ed428a93c13cc093438cfe78371b84de586ce737bc167bf9dcec`.
+The recipe passed locked offline metadata, 11 managed runtime tests, 11 journal
+tests, one submission-ceiling test and the standalone binary build. Every stage
+retained identical before/after source digests, its inherited network filter and
+an empty owned process group after completion. These facts identify this tested
+artifact; they do not impose a universal binary whitelist.
+
+The production Go transport now verifies the held executable and actual guardian
+child before initialize, checks the source build handshake, uses the maintained
+skill isolation helper, and binds the full broker policy to the original worker
+invocation. Immutable `agentWorkflow/modelCompleted` notifications carry the
+witness captured at that exact native completion. They commit known charges only;
+they do not establish durable seal, quiescence or authority to resume. Broker
+effects additionally require the native full-batch attestation, official turn/start
+readback, durable original usage, current engine ownership and the original turn's
+remaining authority/deadline. Generic thread counters are not used for this profile.
+
+Private bookkeeping in existing usage observation rows distinguishes managed
+admission before thread/start can receive task data. It records no token charge.
+Only that exact validated bookkeeping record can be excluded from response totals;
+unknown observations, conflicting witnesses and uncertain attempts remain holds.
+Each completed native response is charged once under its original response ID,
+including replay in a later process. Known charges survive a later deadline,
+storage, ownership or accounting failure; no usage is invented for an unknown
+first attempt. Empty catalogs use the original engine context for accounting even
+when public tools and bindings are absent.
+
+Recovery retains the original mailbox message, start time, admitted boundary,
+provider session and consumed allowance. It requires exclusive owner-loss recovery,
+a newly admitted owner/generation, an unexpired original deadline, authoritative
+runtime cleanup receipts, and no unresolved tool receipt. Original call IDs and
+semantic results remain fixed; the source generates a fresh permit epoch. Public
+mailbox acknowledgement cannot discard a managed pending or unknown invocation.
+A private engine terminal checkpoint applies redaction, limits and fencing before
+transport return. Terminal result, final accounting, marker completion and mailbox
+acknowledgement commit together. A retained terminal checkpoint can settle a lost
+completion acknowledgement without launching a provider.
+
+| Evidence at this checkpoint | Scope and remaining work |
+| --- | --- |
+| Actual binary with capacity 1, two engine child workers, parallel spawn/wait batches, three original responses and four durable broker receipts | Original parent allowance ends at zero after one parent admission and two child reservations. Parent usage is 33 input/9 output tokens; two child fixtures add 2/2. Children use deterministic fake SessionRunners. Shared SDK execution remains separate. |
+| Verified native SIGKILL after two effects commit and before permits; SQLite reopen and new engine objects/current owner | Same original message/start time/zero allowance; each physical effect occurs once; original broker receipts retain their old generation; exactly two native API requests and 22/6 total usage. This is native process restart within one Go test OS process, not a whole engine OS process crash claim. |
+| Owned disposable SQLite trigger aborts final mailbox commit after native terminal checkpoint | New owner commits the same saved terminal result, with no second provider process or request, unchanged zero allowance, and 11/3 usage counted once. This tests a failed completion transaction, not arbitrary hardware failure. |
+| First native stream ends before Completed, despite forced retry/websocket configuration | One API request, no Completed observation, no broker callback, unknown usage retained; later queued work and public mailbox acknowledgement stay blocked across SQLite reopen/current-owner replacement. |
+| Historical native crash cuts at seal, partial result buffering, accepted semantic results and real outputs before completion marker | Original IDs, exact real output list and fresh permit epochs were verified. The precise fsync boundary used an explicitly labelled owned test-only interposer; recovery ran without it. These native proofs supplement the connected engine cases. |
+| Known-charge, conflict, overflow, deadline, ownership and bookkeeping controls | Focused race tests preserve prior charges, reject arbitrary unknown observations and charged bookkeeping, and reject replacement original results. They do not establish provider usage that was never observed. |
+| Locked SDK repair and forced automatic/reactive compaction controls | Actual fake-gateway repair and native summarization controls exist. Separate idle/precompute positive-path activation, shared broker durability/recovery, ordinary SDK retry/usage integration and final cross-adapter conformance still need proof. |
+
+The public managed profile remains disabled. Before enabling it, complete fresh
+Codex repair/original-session continuation, the remaining engine cancellation,
+uncertain-effect and malformed-protocol controls, shared SDK conformance, and
+retained admission policy integration. Preserve incoming native-skill policy and
+usage changes; this Codex build declares selected native skills unsupported.
+Unproven direct native execution/background work, native delegation, container and
+other platform profiles remain closed. Whole engine OS process crash coverage is
+additional work if the bounded fixture can establish it meaningfully.
+
+A final promotion must keep build preparation reproducible. The current prototype
+recipe deliberately rejects an enabled descriptor; revise that contract and freeze
+its new recipe/build tuple before final artifact conformance, rather than enabling
+a profile whose artifact cannot be rebuilt with its declared recipe. Final current
+`make test`, `make check` and `make ui-pr-check` remain required after integration.
