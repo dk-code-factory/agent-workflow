@@ -82,7 +82,7 @@ lines.on('close', () => {
 emit({ type: 'hello', provider_version: 'claude-agent-sdk@' + sdkVersion });
 try {
   const request = await requestReady;
-  sessionID = request.session_id ?? '';
+  sessionID = request.repair_only ? '' : (request.session_id ?? '');
   const skill = request.skill;
   const child = skill?.child;
   if (skill && (request.repair_only || !['claude-sdk@0.3.322/local-skill-v1', 'claude-sdk@0.3.322/sonnet46-one-read-child-v1'].includes(skill.profile) || Boolean(child) !== (skill.profile === 'claude-sdk@0.3.322/sonnet46-one-read-child-v1') || skill.qualified !== 'aw-' + skill.name + ':' + skill.name || typeof skill.root !== 'string' || typeof skill.arguments !== 'string')) throw new Error('Invalid admitted skill contract');
@@ -168,14 +168,14 @@ try {
   if (child && (catalog.length || nativeTools.some(tool => !['Read', 'Skill', 'Agent'].includes(tool)))) throw new Error('Admitted child exceeds parent native authority');
   const allowed = [...nativeTools, ...brokerNames];
   // The pinned SDK synthesizes this formatting-only tool for outputFormat.
-  if (request.schema) allowed.push('StructuredOutput');
+  if (request.schema && !request.repair_only) allowed.push('StructuredOutput');
   const postTool = async input => {
     if (nativeActive.delete(input.tool_use_id)) emit({ type: 'native_complete', call_id: input.tool_use_id });
     setImmediate(barrier); return {};
   };
   const options = {
-    cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: sessionID || undefined,
-    systemPrompt: request.instructions || 'Follow the explicitly supplied task and engine policy.',
+    cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: request.repair_only ? undefined : (sessionID || undefined),
+    systemPrompt: request.repair_only ? 'Format the supplied repair data as JSON. Do not execute tools or perform the original task.' : (request.instructions || 'Follow the explicitly supplied task and engine policy.'),
     settingSources: [], settings: isolatedSettings,
     extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
     pluginDelivery: skill ? 'initialize' : 'argv',
@@ -240,7 +240,7 @@ try {
     },
     canUseTool: async (name, input) => allowed.includes(name) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Tool is outside the engine role policy' },
   };
-  if (request.schema) options.outputFormat = { type: 'json_schema', schema: request.schema };
+  if (request.schema && !request.repair_only) options.outputFormat = { type: 'json_schema', schema: request.schema };
   let finishInput;
   const inputDone = new Promise(resolve => { finishInput = resolve; });
   async function* prompt() {
