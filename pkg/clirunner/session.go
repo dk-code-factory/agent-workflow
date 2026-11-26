@@ -297,7 +297,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			result.Outputs["native_model_usage"] = raw["modelUsage"]
 			result.Outputs["usage"] = update.Usage
 			result.Outputs["usage_counter_basis"] = update.CounterBasis
-			result.Outputs["usage_incomplete"] = update.Incomplete
+			result.Outputs["usage_incomplete"] = update.Incomplete || result.Outputs["native_attempt_error"] != nil
 			result.Outputs["cost_usd"] = update.CostUSD
 			result.Outputs["provider"] = update.Provider
 			result.Outputs["model"] = update.Model

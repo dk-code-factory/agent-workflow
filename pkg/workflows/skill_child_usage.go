@@ -17,6 +17,9 @@ func SkillChildUsage(raw map[string]any) (UsageUpdate, error) {
 	if raw["type"] != "result" || update.SessionID == "" || len(models) != 1 || models[update.Model] == nil {
 		problems = append(problems, fmt.Errorf("native child accounting omitted exact original model/session"))
 	}
+	if raw["is_error"] == true || raw["api_error"] != nil || raw["api_error_status"] != nil {
+		problems = append(problems, fmt.Errorf("native child original parent terminal reports an API failure"))
+	}
 	total := map[string]any{}
 	for target, source := range map[string]string{"input_tokens": "inputTokens", "output_tokens": "outputTokens", "cache_read_input_tokens": "cacheReadInputTokens", "cache_creation_input_tokens": "cacheCreationInputTokens"} {
 		var sum int64
@@ -33,12 +36,17 @@ func SkillChildUsage(raw map[string]any) (UsageUpdate, error) {
 		if known {
 			total[target] = sum
 		}
-		if floor := tokenValue(childObject(raw["usage"])[target]); floor == nil || !known || *floor > sum {
+		floor := tokenValue(childObject(raw["usage"])[target])
+		if floor == nil || !known || *floor > sum {
 			problems = append(problems, fmt.Errorf("native child session accounting conflicts with original parent %s", target))
+		}
+		if floor != nil && (!known || *floor > sum) {
+			total[target] = *floor
 		}
 	}
 	var modelCost float64
 	allCosts := len(models) > 0
+	anyCost := false
 	for name, item := range models {
 		model := childObject(item)
 		if name != update.Model || model["canonicalModel"] != update.Model || model["provider"] != "firstParty" || model["costBasis"] != "list" {
@@ -46,6 +54,7 @@ func SkillChildUsage(raw map[string]any) (UsageUpdate, error) {
 		}
 		if cost := costValue(model["costUSD"]); cost != nil {
 			modelCost += *cost
+			anyCost = true
 		} else {
 			allCosts = false
 		}
@@ -60,7 +69,7 @@ func SkillChildUsage(raw map[string]any) (UsageUpdate, error) {
 		}
 	} else {
 		problems = append(problems, fmt.Errorf("native child original total cost is missing"))
-		if allCosts && !math.IsInf(modelCost, 0) {
+		if anyCost && !math.IsInf(modelCost, 0) {
 			update.CostUSD = modelCost
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,14 +33,14 @@ func (w skillChildSDKWriter) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
-// Exercise the actual maintained bridge and locked native SDK independently of
-// public capability admission. This permits certification while admission is
-// still closed. The durable permit transaction is tested separately in workflows.
+// Exercise the maintained bridge and locked native SDK. Direct bridge cases
+// test protocol negatives; engine cases exercise public admission, durable
+// permits, original completion and recovery against the same loopback gateway.
 func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("requires installed locked SDK; local fake API only")
 	}
-	for _, scenario := range []string{"foreground", "engine", "socket-cut-parent", "socket-cut-child", "engine-cut-child", "background-missing", "background-true", "builtin", "override", "isolation-override", "resume-override", "nested", "forbidden-read", "forbidden-tool", "child-model-mismatch", "second-call", "exhaustion", "lost-permit-ack"} {
+	for _, scenario := range []string{"foreground", "engine", "socket-cut-parent", "socket-cut-child", "engine-cut-child", "socket-cut-final-parent", "engine-cut-final-parent", "background-missing", "background-true", "builtin", "override", "isolation-override", "resume-override", "nested", "forbidden-read", "forbidden-tool", "child-model-mismatch", "second-call", "exhaustion", "lost-permit-ack"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			plugin := filepath.Join(root, "admitted")
@@ -102,7 +103,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 					parentCalls.Add(-1)
 					n = childCalls.Add(1)
 				}
-				if scenario == "socket-cut-parent" && !isChild && n == 1 || (scenario == "socket-cut-child" || scenario == "engine-cut-child") && isChild && n == 1 {
+				if scenario == "socket-cut-parent" && !isChild && n == 1 || (scenario == "socket-cut-child" || scenario == "engine-cut-child") && isChild && n == 1 || (scenario == "socket-cut-final-parent" || scenario == "engine-cut-final-parent") && !isChild && n == 3 {
 					conn, _, err := w.(http.Hijacker).Hijack()
 					if err != nil {
 						t.Error(err)
@@ -124,7 +125,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 				stop := "end_turn"
 				if isChild {
 					requestedResource := resource
-					if scenario == "engine" || scenario == "engine-cut-child" {
+					if strings.HasPrefix(scenario, "engine") {
 						if blocks, ok := payload["system"].([]any); ok {
 							for _, block := range blocks {
 								if item, ok := block.(map[string]any); ok {
@@ -208,12 +209,20 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "engine" || scenario == "engine-cut-child" {
+			if strings.HasPrefix(scenario, "engine") {
 				t.Setenv("CHILD_ENGINE_FIXTURE_KEY", "synthetic-loopback-only")
 				runner := &Runner{Workspace: root, Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "claude-sdk", Bridge: bridge, Model: plan.Model, Tools: []string{"Read"}, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "CHILD_ENGINE_FIXTURE_KEY"}}}}}
-				runSkillChildEngineFixture(t, root, plugin, runner, child, scenario == "engine-cut-child")
-				if scenario == "engine-cut-child" {
-					if parentCalls.Load() != 3 || childCalls.Load() != 1 {
+				cutStage := ""
+				if strings.HasPrefix(scenario, "engine-cut-") {
+					cutStage = strings.TrimPrefix(scenario, "engine-cut-")
+				}
+				runSkillChildEngineFixture(t, root, plugin, runner, child, cutStage)
+				if cutStage != "" {
+					wantChild := int32(1)
+					if cutStage == "final-parent" {
+						wantChild = 2
+					}
+					if parentCalls.Load() < 2 || parentCalls.Load() > 3 || cutStage == "final-parent" && parentCalls.Load() != 3 || childCalls.Load() != wantChild {
 						t.Fatal("unknown child attempt retried", parentCalls.Load(), childCalls.Load())
 					}
 					return
@@ -300,7 +309,19 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 			if strings.HasPrefix(scenario, "socket-cut-") {
 				wantParent, wantChild, wantPermit := int32(1), int32(0), int32(0)
 				if scenario == "socket-cut-child" {
-					wantParent, wantChild, wantPermit = 3, 1, 1
+					wantParent, wantChild, wantPermit = parentCalls.Load(), 1, 1
+					if wantParent < 2 || wantParent > 3 {
+						t.Fatal("unknown attempt dispatched extra parent requests", wantParent)
+					}
+				}
+				if scenario == "socket-cut-final-parent" {
+					wantParent, wantChild, wantPermit = 3, 2, 1
+					raw, _ := result.Outputs["native_child_result"].(map[string]any)
+					update, err := workflows.SkillChildUsage(raw)
+					usage, _ := update.Usage["total"].(map[string]any)
+					if err == nil || !update.Incomplete || fmt.Sprint(usage["input_tokens"]) != "64" || fmt.Sprint(usage["output_tokens"]) != "20" {
+						t.Fatal("known child partials discarded", result.Outputs, update, err)
+					}
 				}
 				if protocolErr == nil || parentCalls.Load() != wantParent || childCalls.Load() != wantChild || permits.Load() != wantPermit || ledger.Complete(plan) == nil || result.Outputs["usage_incomplete"] != true {
 					t.Fatal("unknown native attempt settled or retried", result, protocolErr, parentCalls.Load(), childCalls.Load(), permits.Load())
@@ -343,7 +364,7 @@ func TestSkillChildBridgeAgainstFakeGateway(t *testing.T) {
 	}
 }
 
-func runSkillChildEngineFixture(t *testing.T, root, plugin string, runner *Runner, child workflows.SkillChild, cut bool) {
+func runSkillChildEngineFixture(t *testing.T, root, plugin string, runner *Runner, child workflows.SkillChild, cutStage string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		t.Fatal(err)
@@ -406,7 +427,7 @@ jobs:
 		t.Fatal(err)
 	}
 	defer faultDB.Close()
-	if !cut {
+	if cutStage == "" {
 		if _, err = faultDB.Exec(`CREATE TRIGGER lose_child_step_completion BEFORE UPDATE OF status ON attempts WHEN NEW.status='succeeded' BEGIN SELECT RAISE(ABORT,'lost child step completion'); END`); err != nil {
 			t.Fatal(err)
 		}
@@ -415,7 +436,7 @@ jobs:
 	if err == nil || run == nil {
 		t.Fatal("lost step completion not exercised", run, err)
 	}
-	if cut {
+	if cutStage != "" {
 		list, e := workers.List(ctx, run.ID)
 		if e != nil || len(list) != 1 || !list[0].SkillTurnUncertain || list[0].Remaining != 31 || len(list[0].SkillChildPermits) != 1 || len(list[0].SkillEvidence.UncertainAttempts) == 0 {
 			t.Fatal("unknown child attempt lost durable hold", list, e)
@@ -423,6 +444,9 @@ jobs:
 		report, e := store.Usage(ctx, run.ID)
 		if e != nil || report.Summary.Complete {
 			t.Fatal("unknown child usage settled", report, e)
+		}
+		if cutStage == "final-parent" && (report.Summary.InputTokens == nil || *report.Summary.InputTokens != 64 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 20 || report.Summary.KnownCostUSD == nil || math.Abs(*report.Summary.KnownCostUSD-0.000492) > 1e-12 || report.Summary.CostComplete) {
+			t.Fatal("late parent failure discarded known parent+child charges", report.Summary)
 		}
 		// Reopen SQLite independently to verify that the hold and charges were committed.
 		fresh, e := workflows.OpenSQLite(store.Dir)
@@ -442,6 +466,16 @@ jobs:
 		after, _, e := store.Load(ctx, run.ID)
 		if e != nil || after.Generation != beforeGeneration {
 			t.Fatal("blocked retry claimed new generation", after, e)
+		}
+		retained, e = fw.List(ctx, run.ID)
+		if e != nil || len(retained) != 1 || retained[0].Remaining != 31 || len(retained[0].SkillChildPermits) != 1 {
+			t.Fatal("blocked retry reset original allowance/permit", retained, e)
+		}
+		if cutStage == "final-parent" {
+			again, e := fresh.Usage(ctx, run.ID)
+			if e != nil || again.Summary.Complete || again.Summary.KnownCostUSD == nil || math.Abs(*again.Summary.KnownCostUSD-0.000492) > 1e-12 {
+				t.Fatal("restart/retry lost known original cost", again, e)
+			}
 		}
 		t.Logf("native consumed child socket cut: original worker=%s session=%s remaining31 permit1 usageIncomplete=true, fresh SQLite hold and explicit retry rejected before claim", list[0].ID, list[0].SessionID)
 		return

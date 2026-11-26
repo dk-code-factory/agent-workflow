@@ -174,6 +174,10 @@ func (s *SQLiteStore) reconcileSkillChildCompletion(ctx context.Context, workerI
 	if message.Status != RunStatusRunning {
 		return nil
 	}
+	identity := UsageIdentity{ID: message.ID, RunID: worker.RunID, WorkerID: worker.ID, Kind: "worker", TaskAttemptID: message.TaskAttemptID}
+	if err = retainSkillChildPartialUsageTx(ctx, tx, identity, worker); err != nil {
+		return err
+	}
 	var terminal map[string]any
 	for _, observation := range worker.SkillEvidence.Children {
 		if observation.Kind == "parent_terminal" {
@@ -181,13 +185,12 @@ func (s *SQLiteStore) reconcileSkillChildCompletion(ctx context.Context, workerI
 		}
 	}
 	if terminal == nil {
-		return nil
+		return tx.Commit()
 	}
 	update, accountingErr := SkillChildUsage(terminal)
 	if len(worker.SkillEvidence.UncertainAttempts) != 0 {
 		update.Incomplete = true
 	}
-	identity := UsageIdentity{ID: message.ID, RunID: worker.RunID, WorkerID: worker.ID, Kind: "worker", TaskAttemptID: message.TaskAttemptID}
 	if err = observeSkillUsageTx(ctx, tx, identity, update); err != nil {
 		if errors.Is(err, ErrUsageCounterConflict) {
 			return errors.Join(err, tx.Commit())

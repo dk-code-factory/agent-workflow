@@ -105,6 +105,20 @@ func (e *SkillEvidence) ObserveChild(plan *SkillInvocation, observation SkillChi
 		if !matched {
 			return fmt.Errorf("skill child result omitted original call edge")
 		}
+	case "failed_result":
+		if raw["type"] != "user" || raw["parent_tool_use_id"] != nil {
+			return fmt.Errorf("skill child failure omitted original parent result")
+		}
+		matched := false
+		for _, item := range childArray(childObject(raw["message"])["content"]) {
+			value := childObject(item)
+			if value["type"] == "tool_result" && value["tool_use_id"] == observation.ParentCallID && value["is_error"] == true {
+				matched = true
+			}
+		}
+		if !matched {
+			return fmt.Errorf("skill child failure omitted original call edge")
+		}
 	case "parent_terminal":
 		if raw["type"] != "result" {
 			return fmt.Errorf("skill child parent terminal is not a provider result")
@@ -235,7 +249,7 @@ func (e *SkillEvidence) completeChildren(plan *SkillInvocation) error {
 			if _, err := SkillChildUsage(raw); err != nil {
 				return err
 			}
-			parent = raw["subtype"] == "success" && raw["is_error"] != true
+			parent = raw["subtype"] == "success" && raw["is_error"] != true && raw["api_error"] == nil && raw["api_error_status"] == nil
 		}
 	}
 	fullOutput := false

@@ -581,6 +581,8 @@ function validateWorkflow(w: Workflow, add: Add, doc: Document) {
               && mapping(evidence) && evidence.invocation === 'required' && Object.keys(evidence).every(key => ['invocation', 'children'].includes(key))
               && validChildren
               && typeof params.agent === 'string' && !params.agent.includes('${{');
+            const selectedOutputEnabled = typeof params.output === 'string' ? !!params.output.trim() : mapping(params.output) && (typeof params.output.format === 'string' && !!params.output.format.trim() || Object.hasOwn(params.output, 'schema'));
+            if (selectedOutputEnabled && (!mapping(params.output) || params.output['repair-attempts'] !== 0)) add('skill-repair', 'Selected skills require output.repair-attempts: 0; tool-free repair is unverified', [...sp, 'with', 'output']);
             if (!valid) add('skill', 'Skill requires a declared type: skill input, pinned arguments/resources and required evidence; a child requires one foreground Read declaration with inherited model, max-turns 2, max-calls 1 and resource subset', [...sp, 'with', 'skill']);
             else add('host-skill', 'Skill source bytes, pinned model and supported provider profile require host admission', [...sp, 'with', 'skill'], undefined, 'host', 'info');
           }

@@ -280,4 +280,14 @@ test('configure a selected skill and bounded foreground child with recovery cont
   expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.children[0]).toEqual({ name: 'review', prompt: 'Review.', description: 'Retained review', tools: ['Read'], resources: ['reference.txt'], model: 'inherit', 'max-turns': 2, 'max-calls': 1, background: false });
   expect(await downloadText(page)).toContain('reference.txt');
   expect(await downloadText(page)).toContain('max-calls: 1');
+  await ui.getByText('Structured output', { exact: true }).click();
+  await field(page, 'Structured output contract (YAML)', 'json');
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill-repair')).toBe(true);
+  await field(page, 'Structured output contract (YAML)', '{format: json, repair-attempts: 0}');
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill-repair')).toBe(true);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await downloadText(page)).toContain('repair-attempts: 0');
+
 });

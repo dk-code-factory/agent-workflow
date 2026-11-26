@@ -44,6 +44,7 @@ type suppliedSession struct {
 	reject       bool
 	continuation bool
 	nonWritable  bool
+	keepModel    bool
 }
 
 func (f *suppliedSession) WorkerAccess(string) (WorkerAccess, error) {
@@ -56,7 +57,9 @@ func (f *suppliedSession) AdmitSkillTask(plan *SkillInvocation) (*SkillInvocatio
 	}
 	copy := *plan
 	copy.Profile = "fixture/skill-v1"
-	copy.Model = "fixture-model"
+	if !f.keepModel {
+		copy.Model = "fixture-model"
+	}
 	copy.ContinuationRequiresEvidence = f.continuation
 	return &copy, nil
 }
@@ -391,6 +394,18 @@ func TestSkillUnknownNativeExecEffectsRejectExplicitRetryBeforeClaim(t *testing.
 	if _, err = e.Workers.Send(t.Context(), run.ID, w.ID, "replacement", "Retry"); err == nil || !strings.Contains(err.Error(), "uncertain effects") {
 		t.Fatal("send bypassed selected native effect hold", err)
 	}
+	messages, err := e.Workers.Messages(t.Context(), run.ID, w.ID)
+	if err != nil || len(messages) != 1 {
+		t.Fatal(messages, err)
+	}
+	original := messages[0]
+	replay, err := e.Workers.sendTask(t.Context(), run.ID, w.ID, original.RequestID, AgentRequest{Prompt: original.Prompt, Input: original.Input, Output: original.Output, Model: original.Model, RepairOnly: original.RepairOnly})
+	if err != nil || replay.ID != original.ID || replay.Status != original.Status {
+		t.Fatal("identical original mailbox receipt was lost under hold", replay, err)
+	}
+	if _, err = e.Workers.sendTask(t.Context(), run.ID, w.ID, original.RequestID, AgentRequest{Prompt: "changed"}); err == nil {
+		t.Fatal("changed request reused original acknowledgement")
+	}
 	after, _, err := store.Load(t.Context(), run.ID)
 	if err != nil || after.Generation != before.Generation || after.Status != before.Status || len(f.requests) != 1 {
 		t.Fatal("unknown native effects reclaimed or dispatched", after, len(f.requests), err)
@@ -425,5 +440,70 @@ func TestSkillContinuationDoesNotBorrowAnotherInvocationReceipt(t *testing.T) {
 	worker := Worker{Skill: plan, TaskTurns: 32, Remaining: 31}
 	if worker.validateSkillContinuation() == nil {
 		t.Fatal("lost session acknowledgement permitted replacement invocation")
+	}
+}
+
+func TestSkillNullModelAndContinuationRetainAdmittedOverride(t *testing.T) {
+	for _, model := range []string{"null", "chosen-model"} {
+		t.Run(model, func(t *testing.T) {
+			_, inputs := suppliedSkillFixture(t)
+			source := strings.Replace(skillWorkflow, "          prompt: Work.", "          model: "+model+"\n          prompt: Work.", 1) + `      - id: continued
+        uses: agent/run
+        with:
+          agent: '${{ steps.selected.outputs.agent }}'
+          prompt: Continue.
+`
+			e, _, f := skillExecutorFixture(t, source, false)
+			f.keepModel = true
+			if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows/reviewer.yaml"), []byte("name: reviewer\ndescription: Review\ninstructions: Work\nmodel: definition-model\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.Run(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+			want := model
+			if model == "null" {
+				want = "definition-model"
+			}
+			if err != nil || run.Status != RunStatusSucceeded || len(f.requests) != 2 {
+				t.Fatal(run, err, f.requests)
+			}
+			for _, req := range f.requests {
+				if req.Model != want || req.Skill.Model != want {
+					t.Fatal("admitted model changed on continuation", req.Model, req.Skill.Model, want)
+				}
+			}
+		})
+	}
+}
+
+func TestSkillNestedModelAndFormattingRepairsRejectBeforeAdmission(t *testing.T) {
+	for _, variant := range []string{"nested-model", "repair-default", "repair-explicit"} {
+		t.Run(variant, func(t *testing.T) {
+			_, inputs := suppliedSkillFixture(t)
+			source := skillWorkflow
+			if variant == "nested-model" {
+				source = strings.Replace(source, "selected: {type: skill, required: true}", "selected: {type: skill, required: true}, chosen: {type: string}, actual: {type: string}", 1)
+				source = strings.Replace(source, "          prompt: Work.", "          model: '${{ inputs.chosen }}'\n          prompt: Work.", 1)
+				inputs["chosen"] = "${{ inputs.actual }}"
+				inputs["actual"] = "fixture-model"
+			} else {
+				output := "json"
+				if variant == "repair-explicit" {
+					output = "{format: json, repair-attempts: 1}"
+				}
+				source = strings.Replace(source, "          prompt: Work.", "          output: "+output+"\n          prompt: Work.", 1)
+			}
+			e, s, f := skillExecutorFixture(t, source, false)
+			run, err := e.Prepare(t.Context(), RunRequest{Ref: "workflows/main.yml", Inputs: inputs})
+			if err == nil || run != nil || len(f.requests) != 0 {
+				t.Fatal("unsupported model/repair reached work", run, err, f.requests)
+			}
+			var n int
+			if err = s.db.QueryRow("SELECT count(*) FROM runs").Scan(&n); err != nil || n != 0 {
+				t.Fatal(n, err)
+			}
+			if dirs, _ := filepath.Glob(filepath.Join(s.Dir, "assets", "*")); len(dirs) != 0 {
+				t.Fatal("unsupported controls projected assets", dirs)
+			}
+		})
 	}
 }

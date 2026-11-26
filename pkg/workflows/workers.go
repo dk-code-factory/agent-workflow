@@ -591,9 +591,6 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 	if err != nil {
 		return WorkerMessage{}, err
 	}
-	if err = w.validateSkillContinuation(); err != nil {
-		return WorkerMessage{}, err
-	}
 	_, _, secrets, err := m.Factory(ctx, run, w.Role, w.Tools)
 	if err != nil {
 		return WorkerMessage{}, err
@@ -627,6 +624,16 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 		return msg, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return WorkerMessage{}, err
+	}
+	var workerRecord []byte
+	if err = tx.QueryRowContext(ctx, "SELECT record FROM workers WHERE id=? AND run_id=?", id, run).Scan(&workerRecord); err != nil {
+		return WorkerMessage{}, err
+	}
+	if err = decodeJSONWithNumbers(workerRecord, &w); err != nil {
+		return WorkerMessage{}, err
+	}
+	if err = w.validateSkillContinuation(); err != nil {
 		return WorkerMessage{}, err
 	}
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
@@ -1043,6 +1050,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			} else {
 				err = current.SkillEvidence.ObserveChild(current.Skill, *childObservation)
 			}
+		}
+		if err == nil && childObservation != nil {
+			err = retainSkillChildPartialUsageTx(eventCtx, tx, usageIdentity, current)
 		}
 		if err == nil && retryObservation != nil {
 			if current.SkillEvidence == nil {

@@ -234,12 +234,21 @@ retained receipt and session; it re-registers the original retained root without
 inventing another observed invocation. A new occurrence cannot borrow that
 receipt. Missing original evidence after a possible effect blocks recovery before
 claiming another turn, preserving the original uncertainty and allowance.
+Selected-skill JSON output must set `output.repair-attempts: 0`. The tool-free
+repair path is not proved for retained skills, so implicit or positive repair
+allowances reject admission. Ordinary tasks retain their existing repair behavior.
+
 Selected Claude turns set native retries to zero and disable the nonstreaming
 fallback. A public API retry, subagent retry or assistant API-error envelope
 retains an incomplete-attempt receipt and stops the session. In the pinned SDK,
 a failed child request can reach a parent follow-up before that envelope reaches
 the consumer; this is not a barrier before every subsequent API request. Known
-partial usage is retained, and the original allowance remains consumed.
+child usage is committed with its original evidence before a parent terminal
+exists. After an API error the bridge interrupts and drains only the same original
+query for up to five seconds to retain any native terminal/accounting; even a
+later SDK success remains incomplete. Missing terminal data keeps the reported
+lower bounds rather than inferring unreported tokens or cost. The original
+allowance remains consumed.
 Selected Codex turns use an engine-owned OpenAI descriptor with zero request and
 stream retries, no WebSocket transport/fallback and no unbounded connection
 retries. The adapter verifies the effective descriptor and thread provider before

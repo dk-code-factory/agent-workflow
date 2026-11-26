@@ -26,6 +26,8 @@ let terminal = false;
 let interrupted = false;
 let partialUsage;
 let attemptEvidence;
+let attemptTimer;
+let knownMessageUsage;
 let isolatedInitialization = false;
 let releasePrompt;
 const promptReady = new Promise(resolve => { releasePrompt = resolve; });
@@ -85,6 +87,40 @@ try {
   const child = skill?.child;
   if (skill && (request.repair_only || !['claude-sdk@0.3.322/local-skill-v1', 'claude-sdk@0.3.322/sonnet46-one-read-child-v1'].includes(skill.profile) || Boolean(child) !== (skill.profile === 'claude-sdk@0.3.322/sonnet46-one-read-child-v1') || skill.qualified !== 'aw-' + skill.name + ':' + skill.name || typeof skill.root !== 'string' || typeof skill.arguments !== 'string')) throw new Error('Invalid admitted skill contract');
   if (child && (request.model !== 'claude-sonnet-4-6' || child.model !== request.model || child.effort !== 'high' || child.type !== 'aw-child-' + child.name || child.max_turns !== 2 || child.max_calls !== 1 || child.background !== false || typeof child.prompt !== 'string' || !child.prompt || typeof child.description !== 'string' || !child.description || !Array.isArray(child.resources) || !child.resources.length)) throw new Error('Invalid admitted child controls');
+  const usageMessages = new Map();
+  const childUsageFloor = {};
+  let parentStreamID = '';
+  const usageFields = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+  const retainFloor = (target, usage) => {
+    for (const name of usageFields) {
+      const value = usage?.[name];
+      if (Number.isSafeInteger(value) && value >= 0) target[name] = Math.max(target[name] ?? 0, value);
+    }
+  };
+  const rememberUsage = message => {
+    const item = message.message;
+    if (message.tool_use_result?.usage) retainFloor(childUsageFloor, message.tool_use_result.usage);
+    if (item?.id && item.usage) {
+      const key = (message.parent_tool_use_id ?? 'parent') + ':' + item.id;
+      if (!usageMessages.has(key) && usageMessages.size >= 128) throw new Error('Native usage evidence exceeds retention bound');
+      const previous = usageMessages.get(key) ?? {};
+      retainFloor(previous, item.usage); usageMessages.set(key, previous);
+    }
+    const parent = {}, children = {};
+    for (const [key, usage] of usageMessages) for (const [name, value] of Object.entries(usage)) {
+      const target = key.startsWith('parent:') ? parent : children;
+      const total = (target[name] ?? 0) + value;
+      if (!Number.isSafeInteger(total)) throw new Error('Native usage total exceeds exact counter range');
+      target[name] = total;
+    }
+    retainFloor(children, childUsageFloor);
+    knownMessageUsage = {};
+    for (const name of usageFields) if (parent[name] !== undefined || children[name] !== undefined) {
+      const total = (parent[name] ?? 0) + (children[name] ?? 0);
+      if (!Number.isSafeInteger(total)) throw new Error('Native usage total exceeds exact counter range');
+      knownMessageUsage[name] = total;
+    }
+  };
   const skillCalls = new Set();
   const parentAgentMessages = new Map();
   let skillSucceeded = false;
@@ -153,6 +189,7 @@ try {
     ...(child ? { effort: 'high', maxTurns: 4, includeHookEvents: true, forwardSubagentText: true } : {}),
     hooks: {
       PreToolUse: [{ ...(skill ? { onFailure: 'block' } : {}), hooks: [async input => {
+        if (attemptEvidence) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Original native attempt is uncertain' } };
         if (!isolatedInitialization) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Provider initialization is not verified' } };
         let permitEvidence;
         if (input.agent_id) {
@@ -229,11 +266,16 @@ try {
       if (skill && (message.type === 'system' && message.subtype === 'api_retry' || message.subagent_retry || message.type === 'assistant' && message.error)) {
         attemptEvidence = message;
         emit({ type: 'skill_attempt_uncertainty', session_id: sessionID, data: { key: 'retry:' + createHash('sha256').update(canonical(message)).digest('hex'), session_id: sessionID, provider: 'claude-sdk', raw: message } });
-        throw new Error('Native retry left original selected-skill usage/effects uncertain');
+        // Cancel the same query, then drain its original terminal/accounting.
+        // Never start another query or turn to recover missing usage.
+        if (!attemptTimer) attemptTimer = setTimeout(() => running?.close(), 5000);
+        void running.interrupt().catch(() => running.close());
+        continue;
       }
       if (skill && message.parent_tool_use_id) {
         if (!child || message.parent_tool_use_id !== childCall || !['assistant', 'user'].includes(message.type)) throw new Error('Unexpected native child in skill session');
         childEvidence('message', message);
+        rememberUsage(message);
         // Child model/tool batches do not participate in the parent broker
         // barrier. The original execution lease remains held throughout.
         continue;
@@ -249,10 +291,11 @@ try {
             skillSucceeded = true;
             emit({ type: 'skill_evidence', session_id: message.session_id, data: { key: 'result:' + result.tool_use_id, kind: 'result', session_id: message.session_id, call_id: result.tool_use_id, name: skill.name, arguments: skill.arguments, raw: message } });
           }
-          if (child && result.type === 'tool_result' && result.tool_use_id === childCall) childEvidence('result', message);
+          if (child && result.type === 'tool_result' && result.tool_use_id === childCall) { childEvidence(result.is_error === true ? 'failed_result' : 'result', message); rememberUsage(message); }
         }
       }
       if (message.type === 'assistant') {
+        if (child) rememberUsage(message);
         if (child) for (const item of message.message?.content ?? []) if (item.type === 'tool_use' && item.name === 'Agent') {
           if (parentAgentMessages.has(item.id) && canonical(parentAgentMessages.get(item.id)) !== canonical(message)) throw new Error('Original parent Agent call identity changed');
           if (parentAgentMessages.size >= 128) throw new Error('Parent Agent call evidence exceeds retention limit');
@@ -266,18 +309,28 @@ try {
         if (message.message?.usage) { partialUsage = message.message.usage; emit({ type: 'usage', session_id: sessionID, data: { usage: partialUsage, observation_key: message.message.id ?? 'counter' } }); }
         setImmediate(barrier);
       }
+      if (child && message.type === 'stream_event') {
+        if (message.event?.type === 'message_start') {
+          parentStreamID = message.event.message?.id ?? '';
+          rememberUsage({ message: message.event.message });
+        }
+        if (parentStreamID && message.event?.type === 'message_delta' && message.event.usage) {
+          rememberUsage({ message: { id: parentStreamID, usage: message.event.usage } });
+          emit({ type: 'usage', session_id: sessionID, data: { usage: usageMessages.get('parent:' + parentStreamID), observation_key: parentStreamID } });
+        }
+      }
       if (message.type === 'stream_event') {
         if (message.event?.type === 'message_start') modelIdle = false;
         if (message.event?.type === 'message_stop') { modelIdle = true; setImmediate(barrier); }
       }
       if (message.type === 'result') {
         if (!isolatedInitialization) throw new Error('Provider omitted isolation initialization');
-        const succeeded = message.subtype === 'success' && !message.is_error;
+        const succeeded = !attemptEvidence && message.subtype === 'success' && !message.is_error && (!skill || message.api_error == null && message.api_error_status == null);
         const text = message.structured_output !== undefined ? JSON.stringify(message.structured_output) : (message.result ?? '');
         if (child && childCall) childEvidence('parent_terminal', message);
         terminal = true;
         emit({ type: 'result', session_id: sessionID, status: succeeded ? 'succeeded' : 'failed', provider_status: message.subtype, provider_version: 'claude-agent-sdk@' + sdkVersion,
-          outputs: { text, response: text, usage: message.usage, structured: message.structured_output, cost_usd: message.total_cost_usd, ...(child ? { native_child_result: message } : {}) }, error: succeeded ? undefined : (message.errors ?? [message.subtype]).join('; ') });
+          outputs: { text, response: text, usage: message.usage, structured: message.structured_output, cost_usd: message.total_cost_usd, ...(child ? { native_child_result: message } : {}), ...(attemptEvidence ? { usage_incomplete: true, native_attempt_error: attemptEvidence } : {}) }, error: succeeded ? undefined : attemptEvidence ? 'Original native attempt has incomplete usage/effects' : (message.errors ?? [message.subtype]).join('; ') });
         break;
       }
       emit({ type: 'progress', session_id: sessionID, data: { type: message.type } });
@@ -286,8 +339,8 @@ try {
   if (!terminal) throw new Error('SDK ended without terminal result');
 } catch (error) {
   terminal = true;
-  emit({ type: 'result', session_id: sessionID, status: 'failed', outputs: { usage: partialUsage, usage_incomplete: true, ...(attemptEvidence ? { native_attempt_error: attemptEvidence } : {}) }, error: String(error) }); process.exitCode = 1;
-} finally { terminal = true; releasePrompt(false); rejectPending(new Error('provider turn ended')); running?.close(); lines.close(); }
+  emit({ type: 'result', session_id: sessionID, status: 'failed', outputs: { usage: knownMessageUsage ?? partialUsage, usage_incomplete: true, ...(attemptEvidence ? { native_attempt_error: attemptEvidence } : {}) }, error: String(error) }); process.exitCode = 1;
+} finally { terminal = true; clearTimeout(attemptTimer); releasePrompt(false); rejectPending(new Error('provider turn ended')); running?.close(); lines.close(); }
 
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';

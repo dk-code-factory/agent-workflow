@@ -521,12 +521,30 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 					return step, err
 				}
 				plan := &SkillInvocation{Version: SkillAdmissionVersion, Binding: SkillBinding{Version: SkillAdmissionVersion, Name: source.Name, Entry: source.Entry, SourceDigest: source.SourceDigest, Assets: bundle}, Arguments: arguments, Resources: resources, Model: step.Definition.Model, Effort: step.Definition.ReasoningEffort}
-				if value, ok := step.With["model"]; ok {
-					model, err := admitSkillText(value.(string), context)
+				if value, ok := step.With["model"]; ok && value != nil {
+					text, ok := value.(string)
+					if !ok {
+						return step, fmt.Errorf("skill model must be a string or null")
+					}
+					model, err := admitSkillText(text, context)
 					if err != nil {
 						return step, err
 					}
 					plan.Model = model
+				}
+				if strings.Contains(plan.Model, "${{") {
+					return step, fmt.Errorf("unresolved skill model")
+				}
+				output, err := resolveNamedOutput(w, step.With["output"])
+				if err != nil {
+					return step, err
+				}
+				contract, err := ParseAgentOutputContract(output)
+				if err != nil {
+					return step, err
+				}
+				if contract != nil && contract.RepairAttempts > 0 {
+					return step, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
 				}
 				if err := admitSkillChildren(plan, selection, context); err != nil {
 					return step, err
@@ -622,6 +640,9 @@ func admitSkillText(value string, ec expressionContext) (string, error) {
 	result, ok := rendered.(string)
 	if !ok {
 		return "", fmt.Errorf("skill control must resolve to a string")
+	}
+	if strings.Contains(result, "${{") {
+		return "", fmt.Errorf("unresolved skill control expression")
 	}
 	if len(result) > 64<<10 {
 		return "", fmt.Errorf("skill control exceeds 64 KiB")

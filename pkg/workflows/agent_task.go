@@ -83,6 +83,16 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		}
 		request.Skill = worker.Skill
 	}
+	if request.Skill != nil {
+		if request.Model == "" {
+			request.Model = request.Skill.Model
+		} else if request.Model != request.Skill.Model {
+			return nil, fmt.Errorf("%w: admitted skill model changed", ErrActionIntegrity)
+		}
+		if request.Output != nil && request.Output.RepairAttempts > 0 {
+			return nil, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
+		}
+	}
 	if request.Model == "" && request.Definition != nil && request.Definition.Model != "" {
 		request.Model = request.Definition.Model
 	}

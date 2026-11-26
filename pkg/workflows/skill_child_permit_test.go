@@ -76,7 +76,7 @@ func TestSkillChildUsageUsesOriginalAllModelTotalsAndPreservesKnownChargesOnErro
 	if err != nil || *tokenValue(total["input_tokens"]) != 80 || *tokenValue(total["output_tokens"]) != 15 || *costValue(update.CostUSD) != 0.000465 || update.Incomplete {
 		t.Fatal("parent-only 48/9 replaced complete child accounting", update, err)
 	}
-	for _, variant := range []string{"missing-cost", "unknown-model", "missing-count", "parent-floor", "cost-conflict"} {
+	for _, variant := range []string{"missing-cost", "unknown-model", "missing-count", "parent-floor", "partial-cost", "cost-conflict"} {
 		data, _ := json.Marshal(original)
 		var raw map[string]any
 		_ = json.Unmarshal(data, &raw)
@@ -90,10 +90,20 @@ func TestSkillChildUsageUsesOriginalAllModelTotalsAndPreservesKnownChargesOnErro
 			delete(model, "outputTokens")
 		case "parent-floor":
 			childObject(raw["usage"])["input_tokens"] = float64(100)
+		case "partial-cost":
+			delete(raw, "total_cost_usd")
+			childObject(raw["modelUsage"])["unexpected-model"] = nil
 		case "cost-conflict":
 			raw["total_cost_usd"] = 0.0001
 		}
 		known, err := SkillChildUsage(raw)
+		counts := childObject(known.Usage["total"])
+		if variant == "parent-floor" && (tokenValue(counts["input_tokens"]) == nil || *tokenValue(counts["input_tokens"]) != 100) {
+			t.Fatal("known parent floor discarded", known, err)
+		}
+		if variant == "missing-count" && (tokenValue(counts["output_tokens"]) == nil || *tokenValue(counts["output_tokens"]) != 9) {
+			t.Fatal("missing aggregate discarded known parent output", known, err)
+		}
 		if err == nil || !known.Incomplete || costValue(known.CostUSD) == nil || *costValue(known.CostUSD) < 0.000465 || tokenValue(childObject(known.Usage["total"])["input_tokens"]) == nil {
 			t.Fatal("invalid accounting discarded known charges or completed", variant, known, err)
 		}
@@ -101,7 +111,7 @@ func TestSkillChildUsageUsesOriginalAllModelTotalsAndPreservesKnownChargesOnErro
 }
 
 func TestSkillChildOriginalCompletionReconcilesBeforeUncertainToolHold(t *testing.T) {
-	for _, variant := range []string{"lost-completion", "uncertain-attempt", "missing-stop", "accounting-model", "failed-turn", "later-turn"} {
+	for _, variant := range []string{"lost-completion", "uncertain-attempt", "missing-stop", "missing-parent-terminal", "error-terminal", "api-error-terminal", "accounting-model", "failed-turn", "later-turn"} {
 		t.Run(variant, func(t *testing.T) {
 			store, run := executionStore(t)
 			owned, err := store.QueueResume(t.Context(), run.ID, "original", true, 128)
@@ -132,8 +142,17 @@ func TestSkillChildOriginalCompletionReconcilesBeforeUncertainToolHold(t *testin
 				t.Fatal(err)
 			}
 			for _, o := range fixture.Observations {
-				if o.Kind == "permit" || variant == "missing-stop" && o.Kind == "stop" {
+				if o.Kind == "permit" || variant == "missing-stop" && o.Kind == "stop" || variant == "missing-parent-terminal" && o.Kind == "parent_terminal" {
 					continue
+				}
+				if (variant == "error-terminal" || variant == "api-error-terminal") && o.Kind == "parent_terminal" {
+					value := childRaw(o)
+					if variant == "error-terminal" {
+						value["is_error"] = true
+					} else {
+						value["api_error"] = "connection_failed"
+					}
+					o.Raw, _ = json.Marshal(value)
 				}
 				if variant == "accounting-model" && o.Kind == "parent_terminal" {
 					r := childRaw(o)
@@ -192,9 +211,15 @@ func TestSkillChildOriginalCompletionReconcilesBeforeUncertainToolHold(t *testin
 				if readErr != nil || len(rows) != 1 || rows[0].Status != "uncertain" {
 					t.Fatal(rows, readErr)
 				}
-				if variant == "missing-stop" || variant == "accounting-model" || variant == "uncertain-attempt" {
+				if variant == "missing-parent-terminal" {
 					report, e := reopened.Usage(t.Context(), run.ID)
-					if e != nil || variant == "uncertain-attempt" && report.Summary.Complete || report.Summary.KnownCostUSD == nil || *report.Summary.KnownCostUSD < 0.000465 {
+					if e != nil || report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 32 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 3 {
+						t.Fatal("restart lost known child usage without parent terminal", report.Summary, e)
+					}
+				}
+				if variant == "missing-stop" || variant == "accounting-model" || (variant == "uncertain-attempt" || variant == "error-terminal" || variant == "api-error-terminal") {
+					report, e := reopened.Usage(t.Context(), run.ID)
+					if e != nil || (variant == "uncertain-attempt" || variant == "error-terminal" || variant == "api-error-terminal") && report.Summary.Complete || report.Summary.KnownCostUSD == nil || *report.Summary.KnownCostUSD < 0.000465 {
 						t.Fatal("incomplete original completion discarded known charges", report, e)
 					}
 				}
