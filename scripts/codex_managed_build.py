@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+"""Prepare/check the repository-owned, disabled managed Codex source profile.
+
+No fetch, dependency installation, provider execution, image build or publication.
+Build caches must be disposable copies inside the newly prepared owned directory.
+"""
+
+import argparse
+import configparser
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import tarfile
+import time
+import tomllib
+from urllib.parse import urlparse
+
+REPO = Path(__file__).resolve().parents[1]
+MANIFEST = REPO / "patches/codex/profile.json"
+RECEIPT = "managed-source.json"
+MAX_TARGET = 12 << 30
+MIN_FREE = 24 << 30
+DEADLINE = 30 * 60
+MAX_COMBINED = 16 << 30
+
+
+def digest(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def manifest():
+    value = json.loads(MANIFEST.read_text())
+    if value["schema"] != 1 or value["enabled"] is not False:
+        raise ValueError("prototype recipe cannot enable a managed profile")
+    patch = REPO / value["patch"]
+    if digest(patch) != value["patch_sha256"]:
+        raise ValueError("managed source patch digest changed")
+    if digest(Path(__file__)) != value["recipe_sha256"]:
+        raise ValueError("managed build recipe digest changed")
+    if digest(REPO / value["offline_wrapper"]) != value["offline_wrapper_sha256"]:
+        raise ValueError("offline execution wrapper digest changed")
+    return value, patch
+
+
+def tree_digest(root):
+    result = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        mode = path.lstat().st_mode & 0o777
+        if path.is_symlink():
+            kind, contents = "link", os.readlink(path)
+        elif path.is_file():
+            kind, contents = "file", digest(path)
+        elif path.is_dir():
+            continue
+        else:
+            raise ValueError("unsupported source entry: " + relative)
+        result.update(json.dumps([relative, kind, mode, contents], separators=(",", ":")).encode())
+        result.update(b"\n")
+    return result.hexdigest()
+
+
+
+def verify_workspace_lock(original, patched):
+    """Only the exact release tag's stale workspace versions may change."""
+    before, after = tomllib.loads(original.decode()), tomllib.loads(patched.decode())
+    expected = json.loads(json.dumps(before))
+    changed = 0
+    for package in expected["package"]:
+        if "source" not in package:
+            if package["version"] != "0.0.0":
+                raise ValueError("unexpected original workspace package version")
+            package["version"] = "0.167.1"
+            changed += 1
+    if expected != after or changed != 171:
+        raise ValueError("managed lock correction changes external packages or non-version data")
+
+
+def prepare(args):
+    value, patch = manifest()
+    output = args.output.absolute()
+    if output.exists() or output.is_symlink():
+        raise ValueError("source preparation requires a new owned output directory")
+    commit = subprocess.check_output(
+        ["git", "-C", str(args.upstream_git), "rev-parse", value["upstream_sha"] + "^{commit}"],
+        text=True,
+    ).strip()
+    if commit != value["upstream_sha"]:
+        raise ValueError("upstream source object differs from the immutable pin")
+    output.mkdir(mode=0o700)
+    source = output / "source"
+    source.mkdir()
+    archive = output / "upstream.tar"
+    try:
+        with archive.open("wb") as stream:
+            subprocess.run(["git", "-C", str(args.upstream_git), "archive", commit], stdout=stream, check=True)
+        with tarfile.open(archive) as stream:
+            stream.extractall(source, filter="data")
+        source_lock = source / "codex-rs/Cargo.lock"
+        original_lock = source_lock.read_bytes()
+        if hashlib.sha256(original_lock).hexdigest() != value["upstream_lock_sha256"]:
+            raise ValueError("upstream source lock differs from the reviewed release pin")
+        subprocess.run(["git", "apply", "--check", "--whitespace=error-all", str(patch)], cwd=source, check=True)
+        subprocess.run(["git", "apply", "--whitespace=error-all", str(patch)], cwd=source, check=True)
+        verify_workspace_lock(original_lock, source_lock.read_bytes())
+        if digest(source_lock) != value["source_lock_sha256"]:
+            raise ValueError("patched source lock differs from the reviewed workspace-version correction")
+        inputs = {
+            "upstream_sha": commit,
+            "patch_sha256": value["patch_sha256"],
+            "recipe_sha256": value["recipe_sha256"],
+            "protocol": value["protocol"],
+            "target": args.target,
+            "rust_toolchain": value["rust_toolchain"],
+            "offline_wrapper_sha256": value["offline_wrapper_sha256"],
+        }
+        build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        receipt = {"inputs": inputs, "build_id": build_id, "source_sha256": tree_digest(source), "verified_binary": False}
+        (output / RECEIPT).write_text(json.dumps(receipt, indent=2) + "\n")
+        shutil.copy2(__file__, output / "build-recipe.py")
+        shutil.copy2(MANIFEST, output / "profile.json")
+        shutil.copy2(patch, output / "source.patch")
+        shutil.copy2(REPO / value["offline_wrapper"], output / "offline-exec.py")
+        for name in ("cargo-home", "target", "tmp", "home"):
+            (output / name).mkdir()
+        print(json.dumps(receipt, indent=2))
+    finally:
+        archive.unlink(missing_ok=True)
+
+
+def owned_size(root):
+    total = 0
+    for directory, _, files in os.walk(root):
+        for name in files:
+            path = Path(directory) / name
+            total += path.lstat().st_size
+    return total
+
+
+def validate_cache(cache):
+    # A writable alias into a shared cache would defeat this recipe's ownership
+    # boundary. Full disposable copies are required on filesystems without reflinks.
+    if cache.is_symlink():
+        raise ValueError("Cargo cache points outside owned storage")
+    inodes = {}
+    for path in cache.rglob("*"):
+        if path.is_symlink():
+            if not path.resolve().is_relative_to(cache):
+                raise ValueError("Cargo cache points outside owned storage")
+            continue
+        if path.is_file():
+            metadata = path.stat()
+            key = metadata.st_dev, metadata.st_ino
+            count, links = inodes.get(key, (0, metadata.st_nlink))
+            inodes[key] = count + 1, links
+    # Cargo makes hard links between its owned bare repositories and checkouts.
+    # Accept those only when every link belongs to this disposable cache.
+    if any(count != links for count, links in inodes.values()):
+        raise ValueError("Cargo cache contains a shared hard link")
+
+
+def group_members(group):
+    members = []
+    for directory in Path("/proc").iterdir():
+        if not directory.name.isdecimal():
+            continue
+        try:
+            fields = (directory / "stat").read_text().rsplit(")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[2]) == group:
+            members.append({"pid": int(directory.name), "state": fields[0]})
+    return members
+
+
+def terminate_group(process, grace=5):
+    before = group_members(process.pid)
+    if before:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline and any(member["state"] != "Z" for member in group_members(process.pid)):
+        time.sleep(0.05)
+    # A leader may have exited while one of its children ignored SIGTERM.
+    # Escalation belongs to the entire owned group, independent of leader.poll().
+    if group_members(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait(timeout=5)
+    deadline = time.monotonic() + 5
+    after = group_members(process.pid)
+    while time.monotonic() < deadline and any(member["state"] != "Z" for member in after):
+        time.sleep(0.05)
+        after = group_members(process.pid)
+    return {"before": before, "after": after}
+
+
+def prepare_cache(args):
+    value, _ = manifest()
+    root = args.output.resolve(strict=True)
+    receipt = json.loads((root / RECEIPT).read_text())
+    if receipt["inputs"]["patch_sha256"] != value["patch_sha256"]:
+        raise ValueError("cache preparation requires the current source patch")
+    cache = root / "cargo-home"
+    if cache.is_symlink() or not cache.is_dir() or any(cache.iterdir()):
+        raise ValueError("cache preparation requires empty owned Cargo storage")
+    lock = tomllib.loads((root / "source/codex-rs/Cargo.lock").read_text())
+    origin = args.from_cache.resolve(strict=True)
+    registry = "index.crates.io-1949cf8c6b5b557f"
+    missing, copied = [], []
+    started = time.monotonic()
+
+    def guard():
+        if time.monotonic() - started >= DEADLINE or shutil.disk_usage(root).free < MIN_FREE or owned_size(cache) >= MAX_COMBINED:
+            raise ValueError("owned cache preparation resource limit exceeded")
+
+    def copy(source, destination):
+        guard()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        copied.append(str(source.relative_to(origin)))
+
+    source_index = origin / "registry/index" / registry
+    copy(source_index / "config.json", cache / "registry/index" / registry / "config.json")
+    for package in lock["package"]:
+        if not package.get("source", "").startswith("registry+"):
+            continue
+        name = package["name"]
+        index_name = name.lower()
+        if len(index_name) <= 2:
+            index = f"{len(index_name)}/{index_name}"
+        elif len(index_name) == 3:
+            index = f"3/{index_name[0]}/{index_name}"
+        else:
+            index = f"{index_name[:2]}/{index_name[2:4]}/{index_name}"
+        index = ".cache/" + index
+        if (source_index / index).is_file():
+            copy(source_index / index, cache / "registry/index" / registry / index)
+        else:
+            missing.append("index:" + name)
+        archive = origin / "registry/cache" / registry / (name + "-" + package["version"] + ".crate")
+        if archive.is_file():
+            if digest(archive) != package["checksum"]:
+                raise ValueError("locked registry archive checksum differs: " + name)
+            copy(archive, cache / archive.relative_to(origin))
+        else:
+            missing.append("archive:" + archive.name)
+    pending_git = [source[4:].partition("#")[::2] for source in sorted({package.get("source", "") for package in lock["package"] if package.get("source", "").startswith("git+")})]
+    seen_git, pinned_git = set(), []
+    while pending_git:
+        url, commit = pending_git.pop(0)
+        if (url, commit) in seen_git:
+            continue
+        seen_git.add((url, commit))
+        if len(seen_git) > 128:
+            raise ValueError("pinned Git/submodule graph exceeds preparation bound")
+        name = Path(urlparse(url).path).name.removesuffix(".git")
+        candidates = []
+        for candidate in (origin / "git/db").iterdir():
+            if not candidate.name.lower().startswith(name.lower() + "-"):
+                continue
+            if subprocess.run(["git", "--git-dir", str(candidate), "cat-file", "-e", commit + "^{commit}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                candidates.append(candidate)
+        if not candidates:
+            missing.append("git:" + url + "#" + commit)
+            continue
+        source_db = min(candidates, key=owned_size)
+        if (source_db / "objects/info/alternates").exists():
+            raise ValueError("shared Git alternates are not a disposable cache copy")
+        guard()
+        destination = cache / "git/db" / source_db.name
+        if not destination.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_db, destination)
+            copied.append(str(source_db.relative_to(origin)))
+        pinned_git.append({"url": url, "commit": commit, "owned_db": str(destination.relative_to(cache))})
+        modules = subprocess.run(["git", "--git-dir", str(source_db), "show", commit + ":.gitmodules"], capture_output=True, text=True)
+        if modules.returncode == 0:
+            config = configparser.ConfigParser()
+            config.read_string(modules.stdout)
+            for section in config.sections():
+                if config.get(section, "update", fallback="").strip() == "none":
+                    continue
+                module_path, module_url = config[section]["path"], config[section]["url"]
+                entry = subprocess.check_output(["git", "--git-dir", str(source_db), "ls-tree", commit, "--", module_path], text=True).split()
+                if len(entry) < 3 or entry[0] != "160000" or not module_url.startswith("https://"):
+                    raise ValueError("unsupported pinned Git submodule declaration")
+                pending_git.append((module_url, entry[2]))
+    validate_cache(cache)
+    guard()
+    report = {"build_id": receipt["build_id"], "cache_bytes": owned_size(cache), "copied": copied, "missing": missing, "pinned_git": pinned_git}
+    (root / "cache.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps({key: value for key, value in report.items() if key != "copied"}, indent=2))
+
+
+def check(args):
+    value, _ = manifest()
+    root = args.output.resolve(strict=True)
+    for name in ("source", "cargo-home", "target", "tmp", "home"):
+        path = root / name
+        if path.is_symlink() or not path.is_dir() or path.resolve().parent != root:
+            raise ValueError("prepared directory escaped owned storage: " + name)
+    receipt = json.loads((root / RECEIPT).read_text())
+    expected = receipt["inputs"]
+    for key in ("upstream_sha", "patch_sha256", "recipe_sha256", "protocol", "rust_toolchain", "offline_wrapper_sha256"):
+        if expected[key] != value[key]:
+            raise ValueError("prepared source no longer matches current build inputs")
+    build_id = hashlib.sha256(json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if build_id != receipt["build_id"]:
+        raise ValueError("prepared build identity differs from immutable inputs")
+    source = root / "source"
+    if tree_digest(source) != receipt["source_sha256"]:
+        raise ValueError("prepared source tree changed after patch application")
+    cache, target = root / "cargo-home", root / "target"
+    validate_cache(cache)
+    toolchain = Path.home() / ".rustup/toolchains" / (value["rust_toolchain"] + "-" + args.host)
+    cargo, rustc = toolchain / "bin/cargo", toolchain / "bin/rustc"
+    if not cargo.is_file() or not rustc.is_file():
+        raise ValueError("exact Rust toolchain must already be installed")
+    if args.phase == "metadata":
+        command = [str(cargo), "metadata", "--locked", "--offline", "--format-version", "1", "--filter-platform", expected["target"]]
+    else:
+        admission = json.loads((root / "metadata-admission.json").read_text())
+        if admission["build_id"] != build_id or digest(root / admission["metadata_file"]) != admission["metadata_sha256"]:
+            raise ValueError("compiler stage requires exact successful metadata admission")
+        if admission["unprepared_native_artifacts"]:
+            raise ValueError("compiler stage has an unprepared native dependency artifact")
+        for script in admission["build_scripts"]:
+            if digest(Path(script["path"])) != script["sha256"]:
+                raise ValueError("dependency build script changed after metadata audit")
+        command = [str(cargo), "check", "--locked", "--offline", "--target", expected["target"], "-p", "codex-app-server"]
+    attempt = 1
+    while (root / f"{args.phase}-{attempt}.json").exists():
+        attempt += 1
+    label = f"{args.phase}-{attempt}"
+    filter_receipt = root / (label + ".filter.json")
+    wrapper = root / "offline-exec.py"
+    if digest(wrapper) != expected["offline_wrapper_sha256"]:
+        raise ValueError("executed offline wrapper differs from prepared build input")
+    command = [os.path.realpath(os.sys.executable), str(wrapper), "--receipt", str(filter_receipt), "--", *command]
+    environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
+    environment.update({
+        "HOME": str(root / "home"), "TMPDIR": str(root / "tmp"),
+        "CARGO_HOME": str(cache), "CARGO_TARGET_DIR": str(target),
+        "RUSTC": str(rustc), "CARGO_BUILD_JOBS": "2", "CARGO_INCREMENTAL": "0",
+        "CARGO_PROFILE_DEV_DEBUG": "0", "CARGO_PROFILE_TEST_DEBUG": "0",
+        "AGENT_WORKFLOW_CODEX_BUILD_ID": receipt["build_id"],
+    })
+    if shutil.disk_usage(root).free < MIN_FREE or owned_size(target) >= MAX_TARGET or owned_size(target) + owned_size(cache) >= MAX_COMBINED:
+        raise ValueError("owned build resource limits already exceeded")
+    started, reason, termination = time.monotonic(), "completed", None
+    report = {"build_id": receipt["build_id"], "command": command, "limits": {"seconds": DEADLINE, "target_bytes": MAX_TARGET, "combined_cache_target_bytes": MAX_COMBINED, "minimum_free_bytes": MIN_FREE}}
+    output_path = root / (label + ".output.json")
+    with (root / (label + ".log")).open("wb") as log, output_path.open("wb") as output:
+        process = subprocess.Popen(command, cwd=source / "codex-rs", env=environment, stdout=output if args.phase == "metadata" else log, stderr=log, start_new_session=True)
+        try:
+            while process.poll() is None:
+                if time.monotonic() - started >= DEADLINE:
+                    reason = "deadline"
+                elif owned_size(target) >= MAX_TARGET:
+                    reason = "target_limit"
+                elif owned_size(target) + owned_size(cache) >= MAX_COMBINED:
+                    reason = "combined_cache_target_limit"
+                elif shutil.disk_usage(root).free < MIN_FREE:
+                    reason = "free_space_floor"
+                if reason != "completed":
+                    termination = terminate_group(process)
+                    break
+                time.sleep(1)
+        finally:
+            if process.poll() is None or group_members(process.pid):
+                if reason == "completed":
+                    reason = "retained_descendants"
+                termination = terminate_group(process)
+            code = process.wait()
+            final_source = tree_digest(source)
+            if final_source != receipt["source_sha256"]:
+                reason = "source_changed_during_check"
+            offline = json.loads(filter_receipt.read_text()) if filter_receipt.exists() else None
+            if offline is None or offline["pid"] != process.pid or offline["wrapper_sha256"] != expected["offline_wrapper_sha256"] or offline["installed"] is not True:
+                reason = "offline_filter_not_attested"
+            report.update({"reason": reason, "exit_code": code, "elapsed_seconds": time.monotonic() - started, "target_bytes": owned_size(target), "free_bytes": shutil.disk_usage(root).free, "source_before_sha256": receipt["source_sha256"], "source_after_sha256": final_source, "termination": termination, "retained_group_members": group_members(process.pid), "offline_filter": offline, "phase": args.phase})
+            (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report, indent=2))
+    if code != 0 or reason != "completed":
+        raise SystemExit(1)
+    if args.phase == "metadata":
+        audit_metadata(root, output_path, receipt)
+
+
+def audit_metadata(root, metadata_file, receipt):
+    metadata = json.loads(metadata_file.read_text())
+    packages = {package["id"]: package for package in metadata["packages"]}
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    roots = [package["id"] for package in metadata["packages"] if package["name"] == "codex-app-server"]
+    if len(roots) != 1:
+        raise ValueError("metadata must identify exactly one app-server package")
+    pending, closure = roots[:], set()
+    while pending:
+        identity = pending.pop()
+        if identity in closure:
+            continue
+        closure.add(identity)
+        for edge in nodes[identity]["deps"]:
+            if any(kind["kind"] in (None, "build") for kind in edge["dep_kinds"]):
+                pending.append(edge["pkg"])
+    scripts = []
+    for identity in sorted(closure):
+        package = packages[identity]
+        for target in package["targets"]:
+            if "custom-build" not in target["kind"]:
+                continue
+            path = Path(target["src_path"]).resolve(strict=True)
+            if not path.is_relative_to(root / "source") and not path.is_relative_to(root / "cargo-home"):
+                raise ValueError("dependency build script escapes owned source/cache")
+            scripts.append({"package": package["name"], "version": package["version"], "path": str(path), "sha256": digest(path)})
+    # No V8 native library or generated binding has been prepared. Do not let a
+    # runtime feature switch masquerade as a compile-time dependency guarantee.
+    native = [packages[identity]["name"] for identity in closure if packages[identity]["name"] in ("v8", "codex-code-mode-runtime")]
+    admission = {"build_id": receipt["build_id"], "metadata_file": metadata_file.name, "metadata_sha256": digest(metadata_file), "packages": sorted(packages[identity]["name"] + "@" + packages[identity]["version"] for identity in closure), "build_scripts": scripts, "unprepared_native_artifacts": sorted(native)}
+    (root / "metadata-admission.json").write_text(json.dumps(admission, indent=2) + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="action", required=True)
+    initial = commands.add_parser("prepare")
+    initial.add_argument("--upstream-git", type=Path, required=True)
+    initial.add_argument("--output", type=Path, required=True)
+    initial.add_argument("--target", default="x86_64-unknown-linux-gnu", choices=["x86_64-unknown-linux-gnu"])
+    initial.set_defaults(run=prepare)
+    cache = commands.add_parser("cache")
+    cache.add_argument("--output", type=Path, required=True)
+    cache.add_argument("--from-cache", type=Path, required=True)
+    cache.set_defaults(run=prepare_cache)
+    build = commands.add_parser("check")
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--host", default="x86_64-unknown-linux-gnu", choices=["x86_64-unknown-linux-gnu"])
+    build.add_argument("--phase", choices=["metadata", "check"], default="metadata")
+    build.set_defaults(run=check)
+    args = parser.parse_args()
+    args.run(args)
+
+
+if __name__ == "__main__":
+    main()

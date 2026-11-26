@@ -1,0 +1,4252 @@
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index 2eae72d..4388c19 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -287,7 +287,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
+ 
+ [[package]]
+ name = "app_test_support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1888,7 +1888,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-core",
+@@ -1900,7 +1900,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-graph-store"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-state",
+@@ -1915,7 +1915,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-identity"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1935,7 +1935,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-message-board-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -1958,7 +1958,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-message-board-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-extension-api",
+  "codex-message-board",
+@@ -1972,7 +1972,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-roles"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-config",
+  "codex-file-system",
+@@ -1985,7 +1985,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-analytics"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-app-server-protocol",
+  "codex-git-utils",
+@@ -2008,7 +2008,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ansi-escape"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "ansi-to-tui",
+  "pretty_assertions",
+@@ -2019,7 +2019,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-api"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "assert_matches",
+@@ -2057,7 +2057,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2174,7 +2174,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-app-server",
+  "codex-app-server-protocol",
+@@ -2202,7 +2202,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-daemon"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "blake3",
+@@ -2232,7 +2232,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-app-server-protocol-noop-macros",
+@@ -2266,11 +2266,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol-noop-macros"
+-version = "0.0.0"
++version = "0.167.1"
+ 
+ [[package]]
+ name = "codex-app-server-test-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2292,7 +2292,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-transport"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "axum",
+  "base64 0.22.1",
+@@ -2335,7 +2335,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-apply-patch"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2355,7 +2355,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-arg0"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-apply-patch",
+@@ -2378,7 +2378,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-async-utils"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "rand 0.9.3",
+@@ -2388,7 +2388,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-attachment-store"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "serde",
+@@ -2398,7 +2398,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-aws-auth"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "aws-config",
+  "aws-credential-types",
+@@ -2424,7 +2424,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-api",
+@@ -2444,7 +2444,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-openapi-models"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -2453,7 +2453,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-build-info"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-install-context",
+  "pretty_assertions",
+@@ -2466,7 +2466,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-bwrap"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -2475,7 +2475,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-chatgpt"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2497,7 +2497,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cli"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2601,7 +2601,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-http-client",
+  "eventsource-stream",
+@@ -2615,7 +2615,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "async-stream",
+@@ -2639,7 +2639,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-config"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -2667,7 +2667,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2700,7 +2700,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2715,7 +2715,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-mock-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "chrono",
+  "codex-cloud-tasks-client",
+@@ -2724,7 +2724,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-code-mode-protocol",
+  "codex-http-client",
+@@ -2748,7 +2748,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-host"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -2779,7 +2779,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-protocol"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "glob",
+@@ -2797,7 +2797,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-runtime"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-code-mode-protocol",
+@@ -2819,11 +2819,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-collaboration-mode-templates"
+-version = "0.0.0"
++version = "0.167.1"
+ 
+ [[package]]
+ name = "codex-config"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -2877,7 +2877,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-config-schema"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2886,7 +2886,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2908,7 +2908,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-connectors",
+  "codex-core-plugins",
+@@ -2922,7 +2922,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-context-fragments"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-protocol-test-support",
+@@ -2933,7 +2933,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3083,7 +3083,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-api"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-analytics",
+  "codex-app-server-protocol",
+@@ -3106,7 +3106,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugin-common"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "semver",
+@@ -3117,7 +3117,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugins"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3174,7 +3174,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-diagnostics"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -3182,7 +3182,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-direct-tool-timing"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-critical-path",
+  "pretty_assertions",
+@@ -3193,7 +3193,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -3246,7 +3246,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3319,7 +3319,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-cli"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "assert_matches",
+@@ -3363,7 +3363,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-protocol"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-file-system",
+@@ -3381,7 +3381,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-test-support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-exec-server",
+@@ -3396,7 +3396,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "caseless",
+@@ -3416,7 +3416,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-experimental-api-macros"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -3425,7 +3425,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-api"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-api",
+  "codex-config",
+@@ -3448,7 +3448,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-items"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "pretty_assertions",
+@@ -3460,7 +3460,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-migration"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "chrono",
+  "codex-analytics",
+@@ -3491,7 +3491,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-features"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-network-proxy",
+  "codex-protocol",
+@@ -3505,7 +3505,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-feedback"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "bytes",
+@@ -3533,7 +3533,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-search"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3549,7 +3549,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-system"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "bytes",
+  "codex-protocol",
+@@ -3563,7 +3563,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-watcher"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "notify",
+  "pretty_assertions",
+@@ -3574,7 +3574,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-attribution"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-backend-client",
+  "codex-extension-api",
+@@ -3587,7 +3587,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-utils"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3615,7 +3615,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-goal-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3640,7 +3640,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-context"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-context-fragments",
+  "codex-history",
+@@ -3654,7 +3654,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-reviewer"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -3690,7 +3690,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-v2"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -3729,7 +3729,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-v3"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-message-board",
+  "codex-protocol",
+@@ -3738,7 +3738,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-history"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-protocol",
+@@ -3750,7 +3750,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-history-notes-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-analytics",
+  "codex-client",
+@@ -3776,7 +3776,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-home"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-extension-api",
+  "codex-utils-absolute-path",
+@@ -3788,7 +3788,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-hooks"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "async-channel",
+@@ -3817,7 +3817,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-http-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "bytes",
+  "codex-utils-cargo-bin",
+@@ -3857,7 +3857,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-image-generation-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3889,7 +3889,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-install-context"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "codex-utils-home-dir",
+@@ -3902,7 +3902,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-keyring-store"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "keyring",
+  "pretty_assertions",
+@@ -3913,7 +3913,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-linux-sandbox"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "clap",
+  "codex-core",
+@@ -3942,7 +3942,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-lmstudio"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-core",
+  "codex-http-client",
+@@ -3956,7 +3956,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-login"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4004,7 +4004,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -4049,7 +4049,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -4082,7 +4082,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -4104,7 +4104,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-read"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -4114,7 +4114,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-write"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4151,7 +4151,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mermaid"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "insta",
+  "pretty_assertions",
+@@ -4160,7 +4160,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-board"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "caseless",
+@@ -4185,7 +4185,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-board-mcp"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-attachment-store",
+  "codex-message-board",
+@@ -4199,7 +4199,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-history"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-config",
+  "memchr",
+@@ -4213,7 +4213,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -4252,7 +4252,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider-info"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-client",
+  "codex-http-client",
+@@ -4270,7 +4270,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-models-manager"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "chrono",
+  "codex-http-client",
+@@ -4289,7 +4289,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-multi-env-copy-file"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-config",
+@@ -4315,7 +4315,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mxc-sandbox"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-network-proxy",
+@@ -4336,7 +4336,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-network-proxy"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "aws-credential-types",
+@@ -4387,7 +4387,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ollama"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "assert_matches",
+  "async-stream",
+@@ -4407,7 +4407,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "bytes",
+  "chrono",
+@@ -4446,7 +4446,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel-trace-websocket"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -4457,7 +4457,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-plugin"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-config",
+  "codex-core-plugin-common",
+@@ -4472,7 +4472,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-plugin-host"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-cargo-bin",
+  "codex-utils-process",
+@@ -4489,7 +4489,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-process-hardening"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -4497,7 +4497,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-prompts"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-collaboration-mode-templates",
+@@ -4515,7 +4515,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-protocol"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chardetng",
+@@ -4561,14 +4561,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-protocol-test-support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+ ]
+ 
+ [[package]]
+ name = "codex-queue-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-core",
+@@ -4589,7 +4589,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-realtime-webrtc"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-build-info",
+@@ -4608,7 +4608,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-response-debug-context"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -4619,7 +4619,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-responses-api-proxy"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "bytes",
+@@ -4643,7 +4643,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rmcp-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -4694,7 +4694,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4727,7 +4727,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout-trace"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -4744,7 +4744,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-runtime-agent-instance"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-agent-identity",
+@@ -4770,7 +4770,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-sandboxing"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-mxc-sandbox",
+@@ -4798,7 +4798,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-secrets"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "age",
+  "anyhow",
+@@ -4819,7 +4819,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-command"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4842,7 +4842,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -4859,7 +4859,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "assert_matches",
+  "blake3",
+@@ -4899,7 +4899,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-state"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4928,7 +4928,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-stdio-to-uds"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-uds",
+@@ -4940,7 +4940,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tcp-tunnel"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "bytes",
+@@ -4961,7 +4961,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-terminal-detection"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "tracing",
+@@ -4969,7 +4969,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-test-binary-support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-arg0",
+  "tempfile",
+@@ -4977,7 +4977,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-manager-sample"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4988,7 +4988,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-store"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "chrono",
+  "codex-app-server-protocol",
+@@ -5019,7 +5019,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tools"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "bitflags 2.13.1",
+  "codex-attachment-store",
+@@ -5045,7 +5045,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tui"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -5173,7 +5173,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-uds"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "async-io",
+  "libc",
+@@ -5187,7 +5187,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-user-verification"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "block2",
+@@ -5208,7 +5208,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-absolute-path"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "dirs",
+  "dunce",
+@@ -5222,14 +5222,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-approval-presets"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-audio"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-protocol",
+@@ -5243,7 +5243,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cache"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "lru",
+  "sha1 0.10.6",
+@@ -5252,7 +5252,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cargo-bin"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "assert_cmd",
+  "runfiles",
+@@ -5261,7 +5261,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cli"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "clap",
+  "codex-protocol",
+@@ -5273,22 +5273,22 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-critical-path"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-elapsed"
+-version = "0.0.0"
++version = "0.167.1"
+ 
+ [[package]]
+ name = "codex-utils-fuzzy-match"
+-version = "0.0.0"
++version = "0.167.1"
+ 
+ [[package]]
+ name = "codex-utils-git-discovery"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-git-utils",
+  "codex-utils-absolute-path",
+@@ -5301,14 +5301,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-head-tail-buffer"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-home-dir"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dirs",
+@@ -5318,7 +5318,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-image"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-cache",
+@@ -5332,7 +5332,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-json-to-toml"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "serde_json",
+@@ -5341,7 +5341,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-oss"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-core",
+  "codex-lmstudio",
+@@ -5351,7 +5351,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-output-truncation"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -5361,7 +5361,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dunce",
+@@ -5372,7 +5372,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path-uri"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-absolute-path",
+@@ -5388,7 +5388,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-plugins"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-exec-server",
+  "codex-exec-server-protocol",
+@@ -5402,7 +5402,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-process"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "tokio",
+@@ -5410,7 +5410,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-pty"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-utils-cargo-bin",
+@@ -5429,7 +5429,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-readiness"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "assert_matches",
+  "thiserror 2.0.18",
+@@ -5439,7 +5439,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-redacted-string"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "schemars 0.8.22",
+  "serde",
+@@ -5447,14 +5447,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-rustls-provider"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "rustls",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-sandbox-summary"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-absolute-path",
+@@ -5464,7 +5464,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-sleep-inhibitor"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "core-foundation 0.9.4",
+  "libc",
+@@ -5474,14 +5474,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-stream-parser"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-string"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "regex-lite",
+@@ -5491,14 +5491,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-template"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-v8-poc"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "pretty_assertions",
+  "v8",
+@@ -5506,7 +5506,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-voice-host"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-install-context",
+@@ -5533,7 +5533,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-web-search-extension"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-api",
+  "codex-core",
+@@ -5557,7 +5557,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-websocket-auth"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5576,7 +5576,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-websocket-client"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-http-client",
+  "codex-utils-rustls-provider",
+@@ -5592,7 +5592,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5622,7 +5622,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox-service"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-cloud-config",
+@@ -5640,14 +5640,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox-test-support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "dirs",
+ ]
+ 
+ [[package]]
+ name = "codex-workload-identity"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "codex-http-client",
+  "pretty_assertions",
+@@ -5662,7 +5662,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-worktree"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "codex-git-utils",
+@@ -5915,7 +5915,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "core_test_support"
+-version = "0.0.0"
++version = "0.167.1"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
+index bf2ebde..0bcac4c 100644
+--- a/codex-rs/app-server-protocol/src/protocol/common.rs
++++ b/codex-rs/app-server-protocol/src/protocol/common.rs
+@@ -2005,6 +2005,8 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
+ 
+ server_notification_definitions! {
+     /// NEW NOTIFICATIONS
++    #[experimental("agentWorkflow/batchParked")]
++    AgentWorkflowBatchParked => "agentWorkflow/batchParked" (codex_protocol::protocol::AgentWorkflowParkedBatch),
+     Error => "error" (v2::ErrorNotification),
+     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/item.rs b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
+index 5ab9f9f..50ece07 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/item.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
+@@ -1776,6 +1776,9 @@ pub struct DynamicToolCallParams {
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+ pub struct DynamicToolCallResponse {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[ts(optional = nullable)]
++    pub agent_workflow_permit: Option<codex_protocol::protocol::AgentWorkflowParkedBatch>,
+     pub content_items: Vec<DynamicToolCallOutputContentItem>,
+     pub success: bool,
+ }
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/tests.rs b/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
+index 049cef5..72b2266 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/tests.rs
+@@ -4952,6 +4952,7 @@ fn codex_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case
+ #[test]
+ fn dynamic_tool_response_serializes_content_items() {
+     let value = serde_json::to_value(DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+             text: "dynamic-ok".to_string(),
+         }],
+@@ -4976,6 +4977,7 @@ fn dynamic_tool_response_serializes_content_items() {
+ #[test]
+ fn dynamic_tool_response_serializes_text_image_and_audio_content_items() {
+     let value = serde_json::to_value(DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![
+             DynamicToolCallOutputContentItem::InputText {
+                 text: "dynamic-ok".to_string(),
+@@ -5149,6 +5151,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
+     );
+ 
+     let without_override = TurnStartParams {
++        agent_workflow_invocation: None,
+         disabled_plugin_ids: None,
+         thread_id: "thread_123".to_string(),
+         client_user_message_id: None,
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+index aba591b..d4ffe13 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+@@ -60,6 +60,10 @@ pub enum ThreadStartSource {
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+ pub struct ThreadStartParams {
++    /// Repository-owned managed runtime contract; requires the exact patched build.
++    #[experimental("thread/start.agentWorkflowPolicy")]
++    #[ts(optional = nullable)]
++    pub agent_workflow_policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
+     #[ts(optional = nullable)]
+     pub model: Option<String>,
+     #[ts(optional = nullable)]
+@@ -352,6 +356,10 @@ pub struct ThreadSettingsUpdatedNotification {
+ ///
+ /// Prefer using thread_id whenever possible.
+ pub struct ThreadResumeParams {
++    /// Must exactly match immutable managed creation metadata, including build identity.
++    #[experimental("thread/resume.agentWorkflowPolicy")]
++    #[ts(optional = nullable)]
++    pub agent_workflow_policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
+     pub thread_id: String,
+ 
+     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/turn.rs b/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
+index c3b3fa7..7da6058 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
+@@ -172,6 +172,10 @@ pub struct TurnToolOutput {
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+ pub struct TurnStartParams {
++    /// Repository-owned managed engine message identity; required for each new managed turn.
++    #[experimental("turn/start.agentWorkflowInvocation")]
++    #[ts(optional = nullable)]
++    pub agent_workflow_invocation: Option<String>,
+     pub thread_id: String,
+     /// Replace this thread's disabled plugin IDs.
+     /// Omitted/null preserves the list; [] clears it.
+diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
+index da4d0e1..49b08be 100644
+--- a/codex-rs/app-server/src/bespoke_event_handling.rs
++++ b/codex-rs/app-server/src/bespoke_event_handling.rs
+@@ -1136,6 +1136,28 @@ pub(crate) async fn apply_bespoke_event_handling(
+                 let (_pending_request_id, rx) = outgoing
+                     .send_request(ServerRequestPayload::DynamicToolCall(params))
+                     .await;
++                if let Some(runtime) = conversation
++                    .thread_extension_data()
++                    .get::<codex_core::AgentWorkflowRuntime>()
++                {
++                    match runtime.published(&call_id) {
++                        Ok(Some(batch)) => {
++                            outgoing
++                                .send_server_notification(
++                                    ServerNotification::AgentWorkflowBatchParked(batch),
++                                )
++                                .await
++                        }
++                        Ok(None) => {}
++                        Err(_) => {
++                            runtime.invalidate();
++                            let interrupted = Arc::clone(&conversation);
++                            tokio::spawn(async move {
++                                interrupted.invalidate_agent_workflow_turn().await;
++                            });
++                        }
++                    }
++                }
+                 tokio::spawn(async move {
+                     crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                 });
+diff --git a/codex-rs/app-server/src/dynamic_tools.rs b/codex-rs/app-server/src/dynamic_tools.rs
+index 0069b6d..880510e 100644
+--- a/codex-rs/app-server/src/dynamic_tools.rs
++++ b/codex-rs/app-server/src/dynamic_tools.rs
+@@ -21,6 +21,16 @@ pub(crate) async fn on_call_response(
+     conversation: Arc<CodexThread>,
+ ) {
+     let response = receiver.await;
++    let managed = conversation
++        .thread_extension_data()
++        .get::<codex_core::AgentWorkflowRuntime>()
++        .is_some();
++    if managed && !matches!(response, Ok(Ok(_))) {
++        // Turn-transition errors, receiver loss, and explicit client failures
++        // must revoke/join a managed wait even when the submission queue closed.
++        conversation.invalidate_agent_workflow_turn().await;
++        return;
++    }
+     let (response, _error) = match response {
+         Ok(Ok(value)) => decode_response(value),
+         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+@@ -33,12 +43,18 @@ pub(crate) async fn on_call_response(
+             fallback_response("dynamic tool request failed")
+         }
+     };
++    if managed && _error.is_some() {
++        conversation.invalidate_agent_workflow_turn().await;
++        return;
++    }
+ 
+     let DynamicToolCallResponse {
++        agent_workflow_permit,
+         content_items,
+         success,
+     } = response.clone();
+     let core_response = CoreDynamicToolResponse {
++        agent_workflow_permit,
+         content_items: content_items
+             .into_iter()
+             .map(CoreDynamicToolCallOutputContentItem::from)
+@@ -53,6 +69,9 @@ pub(crate) async fn on_call_response(
+         .await
+     {
+         error!("failed to submit DynamicToolResponse: {err}");
++        if managed {
++            conversation.invalidate_agent_workflow_turn().await;
++        }
+     }
+ }
+ 
+@@ -101,6 +120,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
+ fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
+     (
+         DynamicToolCallResponse {
++            agent_workflow_permit: None,
+             content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                 text: message.to_string(),
+             }],
+diff --git a/codex-rs/app-server/src/external_agent_migration/session_importer.rs b/codex-rs/app-server/src/external_agent_migration/session_importer.rs
+index 4a05a1d..e78b708 100644
+--- a/codex-rs/app-server/src/external_agent_migration/session_importer.rs
++++ b/codex-rs/app-server/src/external_agent_migration/session_importer.rs
+@@ -455,6 +455,7 @@ impl ExternalAgentSessionImporter {
+         };
+         let now = Utc::now();
+         let create_params = CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/src/message_processor_tracing_tests.rs b/codex-rs/app-server/src/message_processor_tracing_tests.rs
+index aeff494..20e0b39 100644
+--- a/codex-rs/app-server/src/message_processor_tracing_tests.rs
++++ b/codex-rs/app-server/src/message_processor_tracing_tests.rs
+@@ -678,6 +678,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+             ClientRequest::TurnStart {
+                 request_id: RequestId::Integer(3),
+                 params: TurnStartParams {
++                    agent_workflow_invocation: None,
+                     disabled_plugin_ids: None,
+                     environments: None,
+                     thread_id,
+diff --git a/codex-rs/app-server/src/request_processors/initialize_processor.rs b/codex-rs/app-server/src/request_processors/initialize_processor.rs
+index f6b282e..fda6d99 100644
+--- a/codex-rs/app-server/src/request_processors/initialize_processor.rs
++++ b/codex-rs/app-server/src/request_processors/initialize_processor.rs
+@@ -211,7 +211,11 @@ impl InitializeRequestProcessor {
+             }
+         }
+ 
+-        let user_agent = get_codex_user_agent();
++        let mut user_agent = get_codex_user_agent();
++        if let Some(build_id) = option_env!("AGENT_WORKFLOW_CODEX_BUILD_ID") {
++            user_agent.push_str(" agent-workflow-managed-v1/");
++            user_agent.push_str(build_id);
++        }
+         let response = InitializeResponse {
+             user_agent,
+             codex_home,
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
+index 36d9f43..91743b4 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
+@@ -1251,6 +1251,7 @@ impl ThreadRequestProcessor {
+         request_context: RequestContext,
+     ) -> Result<(), JSONRPCErrorError> {
+         let ThreadStartParams {
++            agent_workflow_policy,
+             model,
+             model_provider,
+             allow_provider_model_fallback,
+@@ -1358,6 +1359,7 @@ impl ThreadRequestProcessor {
+                 typesafe_overrides,
+                 dynamic_tools,
+                 selected_capability_roots.unwrap_or_default(),
++                agent_workflow_policy,
+                 history_mode.map(Into::into),
+                 session_start_source,
+                 thread_source.map(Into::into),
+@@ -1440,6 +1442,7 @@ impl ThreadRequestProcessor {
+         typesafe_overrides: ConfigOverrides,
+         dynamic_tools: Option<Vec<DynamicToolSpec>>,
+         selected_capability_roots: Vec<SelectedCapabilityRoot>,
++        agent_workflow_policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
+         history_mode: Option<ThreadHistoryMode>,
+         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+         thread_source: Option<codex_protocol::protocol::ThreadSource>,
+@@ -1580,6 +1583,9 @@ impl ThreadRequestProcessor {
+                 .then_some(ThreadHistoryMode::Paginated)
+         });
+         let mut thread_extension_init = ExtensionDataInit::new();
++        if let Some(policy) = agent_workflow_policy {
++            thread_extension_init.insert(policy);
++        }
+         if !selected_capability_roots.is_empty() {
+             thread_extension_init.insert(selected_capability_roots);
+         }
+@@ -3988,6 +3994,7 @@ impl ThreadRequestProcessor {
+         };
+ 
+         let ThreadResumeParams {
++            agent_workflow_policy,
+             thread_id,
+             history,
+             path,
+@@ -4330,11 +4337,16 @@ impl ThreadRequestProcessor {
+             }
+         }
+         let response_history = thread_history.clone();
++        let mut thread_extension_init = ExtensionDataInit::new();
++        if let Some(policy) = agent_workflow_policy {
++            thread_extension_init.insert(policy);
++        }
+ 
+         match self
+             .thread_manager
+             .start_thread(StartThreadOptions {
+                 initial_history: thread_history,
++                thread_extension_init,
+                 parent_trace: match target {
+                     ThreadResumeTarget::Client(request_id) => {
+                         self.request_trace_context(request_id).await
+@@ -4684,6 +4696,14 @@ impl ThreadRequestProcessor {
+         };
+ 
+         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
++            let retained = existing_thread
++                .thread_extension_data()
++                .get::<codex_protocol::protocol::AgentWorkflowPolicy>();
++            if retained.as_deref() != params.agent_workflow_policy.as_ref() {
++                return Err(invalid_request(
++                    "managed policy identity cannot change on warm resume",
++                ));
++            }
+             let paginated_resume =
+                 matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+             let existing_thread_rollout_path = existing_thread.rollout_path();
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor_tests.rs b/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
+index 9ec1298..7e359c8 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
+@@ -709,6 +709,7 @@ mod thread_processor_behavior_tests {
+     fn collect_resume_override_mismatches_includes_service_tier() {
+         let cwd = test_path_buf("/tmp").abs();
+         let request = ThreadResumeParams {
++            agent_workflow_policy: None,
+             thread_id: "thread-1".to_string(),
+             history: None,
+             path: None,
+diff --git a/codex-rs/app-server/src/request_processors/turn_processor.rs b/codex-rs/app-server/src/request_processors/turn_processor.rs
+index eeed287..146a23b 100644
+--- a/codex-rs/app-server/src/request_processors/turn_processor.rs
++++ b/codex-rs/app-server/src/request_processors/turn_processor.rs
+@@ -556,6 +556,31 @@ impl TurnRequestProcessor {
+                 .inspect_err(|error| {
+                     self.track_error_response(&request_id, error, /*error_type*/ None);
+                 })?;
++        let managed = thread
++            .thread_extension_data()
++            .get::<codex_core::AgentWorkflowRuntime>()
++            .is_some();
++        let mut managed_turn = codex_extension_api::ExtensionDataInit::new();
++        if managed {
++            let id = params
++                .agent_workflow_invocation
++                .as_ref()
++                .filter(|id| {
++                    !id.is_empty()
++                        && id.len() <= 256
++                        && id
++                            .bytes()
++                            .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
++                })
++                .ok_or_else(|| {
++                    invalid_request("managed turn requires engine invocation identity")
++                })?;
++            managed_turn.insert(codex_core::AgentWorkflowInvocation(id.clone()));
++        } else if params.agent_workflow_invocation.is_some() {
++            return Err(invalid_request(
++                "managed invocation requires a managed source profile",
++            ));
++        }
+         self.ensure_direct_input_allowed(&request_id, thread.as_ref())
+             .await?;
+         self.config_manager
+@@ -687,33 +712,34 @@ impl TurnRequestProcessor {
+             )
+             .await?;
+ 
+-        let submission = thread
+-            .start_or_steer_turn(
+-                TurnInputRequest::new(input)
+-                    .with_thread_settings(thread_settings)
+-                    .on_start(TurnStartOptions {
+-                        turn_trigger: params.turn_trigger,
+-                        parent_turn_id: params.parent_turn_id,
+-                        initiating_agent_path: None,
+-                        root_turn_id: params.root_turn_id,
+-                        final_output_json_schema: params.output_schema,
+-                        service_tier: params.service_tier_for_turn,
+-                        cyber_access_program: params.cyber_access_program.map(Into::into),
+-                    })
+-                    .with_additional_context(additional_context)
+-                    .with_responses_metadata(params.responsesapi_client_metadata)
+-                    .with_responses_metadata_patch(params.responsesapi_client_metadata_patch)
+-                    .with_trace(self.request_trace_context(&request_id).await),
+-            )
+-            .await
+-            .map_err(|err| {
+-                let error = match err.details() {
+-                    CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+-                    _ => internal_error(format!("failed to submit turn input: {err}")),
+-                };
+-                self.track_error_response(&request_id, &error, /*error_type*/ None);
+-                error
+-            })?;
++        let request = TurnInputRequest::new(input)
++            .with_thread_settings(thread_settings)
++            .on_start(TurnStartOptions {
++                turn_trigger: params.turn_trigger,
++                parent_turn_id: params.parent_turn_id,
++                initiating_agent_path: None,
++                root_turn_id: params.root_turn_id,
++                final_output_json_schema: params.output_schema,
++                service_tier: params.service_tier_for_turn,
++                cyber_access_program: params.cyber_access_program.map(Into::into),
++            })
++            .with_additional_context(additional_context)
++            .with_responses_metadata(params.responsesapi_client_metadata)
++            .with_responses_metadata_patch(params.responsesapi_client_metadata_patch)
++            .with_trace(self.request_trace_context(&request_id).await);
++        let request = if managed {
++            codex_core::WithTurnExtensionData::new(request, managed_turn)
++        } else {
++            request.into()
++        };
++        let submission = thread.start_or_steer_turn(request).await.map_err(|err| {
++            let error = match err.details() {
++                CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
++                _ => internal_error(format!("failed to submit turn input: {err}")),
++            };
++            self.track_error_response(&request_id, &error, /*error_type*/ None);
++            error
++        })?;
+         let (turn_id, root_turn_id, started) = match submission {
+             TurnInputSubmission::Started {
+                 turn_id,
+diff --git a/codex-rs/app-server/tests/common/rollout.rs b/codex-rs/app-server/tests/common/rollout.rs
+index 44ebcfa..29ce690 100644
+--- a/codex-rs/app-server/tests/common/rollout.rs
++++ b/codex-rs/app-server/tests/common/rollout.rs
+@@ -254,6 +254,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
+ 
+     // Build JSONL lines
+     let meta = SessionMeta {
++        agent_workflow_policy: None,
+         attached_thread: false,
+         creator_user_id: None,
+         creator_account_id: None,
+@@ -351,6 +352,7 @@ pub fn create_fake_rollout_with_text_elements(
+ 
+     // Build JSONL lines
+     let meta = SessionMeta {
++        agent_workflow_policy: None,
+         attached_thread: false,
+         creator_user_id: None,
+         creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/conversation_summary.rs b/codex-rs/app-server/tests/suite/conversation_summary.rs
+index aaeed4e..4455cfb 100644
+--- a/codex-rs/app-server/tests/suite/conversation_summary.rs
++++ b/codex-rs/app-server/tests/suite/conversation_summary.rs
+@@ -122,6 +122,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() ->
+     let thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000125")?;
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/dynamic_tools.rs b/codex-rs/app-server/tests/suite/v2/dynamic_tools.rs
+index 0875bed..d32bc91 100644
+--- a/codex-rs/app-server/tests/suite/v2/dynamic_tools.rs
++++ b/codex-rs/app-server/tests/suite/v2/dynamic_tools.rs
+@@ -493,6 +493,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
+ 
+     // Respond to the tool call so the model receives a function_call_output.
+     let response = DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+             text: "dynamic-ok".to_string(),
+         }],
+@@ -726,6 +727,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
+         },
+     ];
+     let response = DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: response_content_items,
+         success: true,
+     };
+@@ -819,6 +821,7 @@ async fn dynamic_tool_remote_image_response_becomes_model_visible_error() -> Res
+     } = start_function_dynamic_tool_call(call_id).await?;
+ 
+     let response = DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputImage {
+             image_url: "https://example.com/tool.png".to_string(),
+         }],
+@@ -875,6 +878,7 @@ async fn dynamic_tool_remote_audio_response_becomes_model_visible_error() -> Res
+     } = start_function_dynamic_tool_call(call_id).await?;
+ 
+     let response = DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputAudio {
+             audio_url: "https://example.com/tool.wav".to_string(),
+         }],
+diff --git a/codex-rs/app-server/tests/suite/v2/remote_thread_store.rs b/codex-rs/app-server/tests/suite/v2/remote_thread_store.rs
+index 90a6e7f..9857f98 100644
+--- a/codex-rs/app-server/tests/suite/v2/remote_thread_store.rs
++++ b/codex-rs/app-server/tests/suite/v2/remote_thread_store.rs
+@@ -281,6 +281,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
+     let thread_id = ThreadId::new();
+     thread_store
+         .create_thread(StoreCreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -527,6 +528,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
+     let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
+     thread_store
+         .create_thread(StoreCreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/skills_list.rs b/codex-rs/app-server/tests/suite/v2/skills_list.rs
+index a72104a..b934369 100644
+--- a/codex-rs/app-server/tests/suite/v2/skills_list.rs
++++ b/codex-rs/app-server/tests/suite/v2/skills_list.rs
+@@ -1375,6 +1375,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
+ 
+     let thread_start_request_id = mcp
+         .send_thread_start_request_with_auto_env(ThreadStartParams {
++            agent_workflow_policy: None,
+             model: None,
+             model_provider: None,
+             allow_provider_model_fallback: false,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_read.rs b/codex-rs/app-server/tests/suite/v2/thread_read.rs
+index 4e35be4..40fa690 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_read.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_read.rs
+@@ -634,6 +634,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
+     );
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -1744,6 +1745,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
+     );
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -2712,6 +2714,7 @@ async fn seed_pathless_store_thread(
+ ) -> Result<()> {
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_resume.rs b/codex-rs/app-server/tests/suite/v2/thread_resume.rs
+index 03e498f..6e99259 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_resume.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_resume.rs
+@@ -4790,6 +4790,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
+     let rollout_dir = rollout_path.parent().expect("rollout parent directory");
+     std::fs::create_dir_all(rollout_dir)?;
+     let session_meta = SessionMeta {
++        agent_workflow_policy: None,
+         attached_thread: false,
+         creator_user_id: None,
+         creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_timeline.rs b/codex-rs/app-server/tests/suite/v2/thread_timeline.rs
+index 732f546..50e7839 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_timeline.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_timeline.rs
+@@ -59,6 +59,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() ->
+     );
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_unarchive.rs b/codex-rs/app-server/tests/suite/v2/thread_unarchive.rs
+index 2a18e91..2ab70bb 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_unarchive.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_unarchive.rs
+@@ -247,6 +247,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
+     let parent_thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000127")?;
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_unsubscribe.rs b/codex-rs/app-server/tests/suite/v2/thread_unsubscribe.rs
+index f12de00..6acefd1 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_unsubscribe.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_unsubscribe.rs
+@@ -374,6 +374,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running(
+     assert!(closed_while_tool_call_blocked.is_err());
+ 
+     let response = DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+             text: "dynamic-ok".to_string(),
+         }],
+diff --git a/codex-rs/app-server/tests/suite/v2/turn_start.rs b/codex-rs/app-server/tests/suite/v2/turn_start.rs
+index 154f152..9c0bb2f 100644
+--- a/codex-rs/app-server/tests/suite/v2/turn_start.rs
++++ b/codex-rs/app-server/tests/suite/v2/turn_start.rs
+@@ -3515,6 +3515,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
+         .request(|request_id| ClientRequest::TurnStart {
+             request_id,
+             params: TurnStartParams {
++                agent_workflow_invocation: None,
+                 disabled_plugin_ids: None,
+                 environments: None,
+                 thread_id: thread.id.clone(),
+@@ -3567,6 +3568,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
+         .request(|request_id| ClientRequest::TurnStart {
+             request_id,
+             params: TurnStartParams {
++                agent_workflow_invocation: None,
+                 disabled_plugin_ids: None,
+                 environments: Some(vec![TurnEnvironmentParams {
+                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
+new file mode 100644
+index 0000000..65863a4
+--- /dev/null
++++ b/codex-rs/core/src/agent_workflow_managed.rs
+@@ -0,0 +1,806 @@
++//! Repository-owned managed profile. Stock sessions retain their native policy.
++//! All checks run before spawning session work; unknown history cannot acquire it.
++
++use crate::thread_manager::StartThreadOptions;
++use codex_extension_api::SessionIsolation;
++use codex_extension_api::ToolName;
++use codex_extension_api::ToolPolicy;
++use codex_features::Feature;
++use codex_history::InitialHistory;
++use codex_history::RolloutItem;
++use codex_protocol::dynamic_tools::DynamicToolResponse;
++use codex_protocol::dynamic_tools::DynamicToolSpec;
++use codex_protocol::error::CodexErr;
++use codex_protocol::error::Result;
++use codex_protocol::protocol::AgentWorkflowParkedBatch;
++use codex_protocol::protocol::AgentWorkflowPolicy;
++use std::collections::BTreeMap;
++use std::collections::BTreeSet;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::atomic::AtomicU64;
++use std::sync::atomic::AtomicUsize;
++use std::sync::atomic::Ordering;
++
++/// Source-owned accounting for the deliberately broker-only execution profile.
++pub struct AgentWorkflowRuntime {
++    policy: AgentWorkflowPolicy,
++    batch: Mutex<Option<Batch>>,
++    invocation: Mutex<Option<(String, String)>>,
++    active_work: AtomicUsize,
++    active_tasks: AtomicUsize,
++    generation: AtomicU64,
++    model_generation: AtomicU64,
++    work_finished: tokio::sync::Notify,
++}
++
++pub(crate) struct ManagedWorkGuard {
++    runtime: Arc<AgentWorkflowRuntime>,
++    pub(crate) admitted: bool,
++    model: bool,
++    generation: u64,
++}
++
++impl ManagedWorkGuard {
++    pub(crate) fn is_admitted(&self) -> bool {
++        self.admitted && self.runtime.generation.load(Ordering::Acquire) == self.generation
++    }
++}
++
++impl Drop for ManagedWorkGuard {
++    fn drop(&mut self) {
++        let counter = if self.model {
++            &self.runtime.active_tasks
++        } else {
++            &self.runtime.active_work
++        };
++        if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
++            self.runtime.work_finished.notify_waiters();
++        }
++    }
++}
++
++/// Required for each engine-owned turn; not restored from thread history.
++#[derive(Clone, Debug)]
++pub struct AgentWorkflowInvocation(pub String);
++
++struct Batch {
++    identity: AgentWorkflowParkedBatch,
++    planned: BTreeSet<String>,
++    parked: BTreeSet<String>,
++    published: BTreeSet<String>,
++    sealed: bool,
++    attested: bool,
++    delivered: bool,
++    results: BTreeMap<String, DynamicToolResponse>,
++}
++
++pub(crate) struct BatchGuard {
++    runtime: Arc<AgentWorkflowRuntime>,
++    id: String,
++}
++
++impl Drop for BatchGuard {
++    fn drop(&mut self) {
++        let mut state = self.runtime.batch.lock().unwrap();
++        if state
++            .as_ref()
++            .is_some_and(|batch| batch.identity.batch_id == self.id)
++        {
++            *state = None;
++        }
++    }
++}
++
++impl AgentWorkflowRuntime {
++    /// Synchronously revoke every outstanding permit before joining turn work.
++    pub fn invalidate(&self) {
++        let mut batch = self.batch.lock().unwrap();
++        self.generation.fetch_add(1, Ordering::AcqRel);
++        *batch = None;
++    }
++
++    /// Register before spawning, including a task that will reject invalid work.
++    pub(crate) fn scheduled(self: &Arc<Self>, call: &str) -> ManagedWorkGuard {
++        let batch = self.batch.lock().unwrap();
++        let admitted = batch
++            .as_ref()
++            .is_some_and(|batch| batch.sealed && batch.planned.contains(call));
++        let generation = self.generation.load(Ordering::Acquire);
++        self.active_work.fetch_add(1, Ordering::AcqRel);
++        ManagedWorkGuard {
++            runtime: Arc::clone(self),
++            admitted,
++            model: false,
++            generation,
++        }
++    }
++
++    pub(crate) fn model_scheduled(self: &Arc<Self>) -> ManagedWorkGuard {
++        let _batch = self.batch.lock().unwrap();
++        let generation = self.generation.load(Ordering::Acquire);
++        self.model_generation.store(generation, Ordering::Release);
++        self.active_tasks.fetch_add(1, Ordering::AcqRel);
++        ManagedWorkGuard {
++            runtime: Arc::clone(self),
++            admitted: true,
++            model: true,
++            generation,
++        }
++    }
++
++    /// The caller first joins the model task so no new deferred dispatch can
++    /// schedule work; then independently spawned dispatch tasks must all exit.
++    pub async fn join_work(&self) {
++        loop {
++            let notified = self.work_finished.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            if self.active_work.load(Ordering::Acquire) == 0
++                && self.active_tasks.load(Ordering::Acquire) == 0
++            {
++                return;
++            }
++            notified.await;
++        }
++    }
++
++    fn new(policy: AgentWorkflowPolicy) -> Self {
++        Self {
++            policy,
++            batch: Mutex::new(None),
++            invocation: Mutex::new(None),
++            active_work: AtomicUsize::new(0),
++            active_tasks: AtomicUsize::new(0),
++            generation: AtomicU64::new(0),
++            model_generation: AtomicU64::new(0),
++            work_finished: tokio::sync::Notify::new(),
++        }
++    }
++
++    pub(crate) fn begin(
++        self: &Arc<Self>,
++        thread: String,
++        turn: String,
++        invocation: String,
++    ) -> Result<BatchGuard> {
++        if invocation.is_empty()
++            || invocation.len() > 256
++            || !invocation
++                .bytes()
++                .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
++        {
++            return Err(invalid("missing or invalid engine invocation identity"));
++        }
++        let mut state = self.batch.lock().unwrap();
++        if state.is_some()
++            || self.active_work.load(Ordering::Acquire) != 0
++            || self.active_tasks.load(Ordering::Acquire) != 1
++            || self.model_generation.load(Ordering::Acquire)
++                != self.generation.load(Ordering::Acquire)
++        {
++            return Err(invalid("a prior model batch is still live"));
++        }
++        let mut bound = self.invocation.lock().unwrap();
++        if bound
++            .as_ref()
++            .is_some_and(|(id, previous)| *id == invocation && *previous != turn)
++        {
++            return Err(invalid("a new turn cannot inherit an earlier invocation"));
++        }
++        *bound = Some((invocation.clone(), turn.clone()));
++        let id = uuid::Uuid::new_v4().to_string();
++        *state = Some(Batch {
++            identity: AgentWorkflowParkedBatch {
++                thread_id: thread,
++                turn_id: turn,
++                invocation_id: invocation,
++                policy_id: self.policy.policy_id.clone(),
++                build_id: self.policy.build_id.clone(),
++                batch_id: id.clone(),
++                response_id: String::new(),
++                call_ids: Vec::new(),
++            },
++            planned: BTreeSet::new(),
++            parked: BTreeSet::new(),
++            published: BTreeSet::new(),
++            sealed: false,
++            attested: false,
++            delivered: false,
++            results: BTreeMap::new(),
++        });
++        Ok(BatchGuard {
++            runtime: Arc::clone(self),
++            id,
++        })
++    }
++
++    pub(crate) fn plan(&self, call: &str, tool: &ToolName) -> Result<()> {
++        if !tool.is_default_namespace() || !self.policy.broker_tools.contains(&tool.name) {
++            return Err(invalid("ungranted tool emitted by model"));
++        }
++        let mut state = self.batch.lock().unwrap();
++        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
++        if batch.planned.len() >= 128
++            || batch.sealed
++            || call.is_empty()
++            || call.len() > 256
++            || !batch.planned.insert(call.to_owned())
++        {
++            return Err(invalid("late, empty or duplicate planned tool identity"));
++        }
++        Ok(())
++    }
++
++    pub(crate) fn seal(&self, response_id: String) -> Result<()> {
++        let mut state = self.batch.lock().unwrap();
++        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
++        if batch.sealed || response_id.is_empty() {
++            return Err(invalid("incomplete or duplicate model batch seal"));
++        }
++        batch.identity.response_id = response_id;
++        batch.identity.call_ids = batch.planned.iter().cloned().collect();
++        batch.sealed = true;
++        Ok(())
++    }
++
++    pub(crate) fn park(&self, call: &str) -> Result<()> {
++        let mut state = self.batch.lock().unwrap();
++        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
++        if !batch.sealed || !batch.planned.contains(call) || !batch.parked.insert(call.to_owned()) {
++            return Err(invalid("unsealed, unknown or duplicate parked callback"));
++        }
++        Ok(())
++    }
++
++    /// Called after the app-server has queued this call's public RPC request.
++    /// No attestation exists until every deferred future is both parked and published.
++    pub fn published(&self, call: &str) -> Result<Option<AgentWorkflowParkedBatch>> {
++        let mut state = self.batch.lock().unwrap();
++        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
++        if !batch.parked.contains(call) || !batch.published.insert(call.to_owned()) {
++            return Err(invalid("unknown or duplicate published callback"));
++        }
++        if batch.sealed
++            && !batch.attested
++            && !batch.planned.is_empty()
++            && batch.planned == batch.parked
++            && batch.planned == batch.published
++            && self.active_work.load(Ordering::Acquire) == batch.planned.len()
++            && self.active_tasks.load(Ordering::Acquire) == 1
++            && self.model_generation.load(Ordering::Acquire)
++                == self.generation.load(Ordering::Acquire)
++        {
++            batch.attested = true;
++            return Ok(Some(batch.identity.clone()));
++        }
++        Ok(None)
++    }
++
++    pub(crate) fn accept_result(
++        &self,
++        call: &str,
++        mut response: DynamicToolResponse,
++    ) -> Result<Vec<(String, DynamicToolResponse)>> {
++        let mut state = self.batch.lock().unwrap();
++        let batch = state
++            .as_mut()
++            .ok_or_else(|| invalid("no live parked batch"))?;
++        let permit = response.agent_workflow_permit.take();
++        if !batch.attested
++            || batch.delivered
++            || permit.as_ref() != Some(&batch.identity)
++            || !batch.planned.contains(call)
++            || batch.results.contains_key(call)
++        {
++            *state = None;
++            return Err(invalid(
++                "early, changed, duplicate or stale batch permit/result",
++            ));
++        }
++        batch.results.insert(call.to_owned(), response);
++        if batch.results.len() != batch.planned.len() {
++            return Ok(Vec::new());
++        }
++        batch.delivered = true;
++        Ok(std::mem::take(&mut batch.results).into_iter().collect())
++    }
++}
++
++fn invalid(message: &str) -> CodexErr {
++    CodexErr::InvalidRequest(format!("agent-workflow managed policy: {message}"))
++}
++
++fn hex(value: &str, length: usize) -> bool {
++    value.len() == length
++        && value
++            .bytes()
++            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
++}
++
++fn validate_catalog(policy: &AgentWorkflowPolicy, tools: &[DynamicToolSpec]) -> Result<()> {
++    if policy.broker_tools.len() > 128 || tools.len() > 128 {
++        return Err(invalid("managed catalog exceeds 128 tools"));
++    }
++    let mut names = BTreeSet::new();
++    for name in &policy.broker_tools {
++        let Some(suffix) = name.strip_prefix("broker_") else {
++            return Err(invalid("only engine broker wire names are permitted"));
++        };
++        if !hex(suffix, 24) || !names.insert(name.as_str()) {
++            return Err(invalid("invalid or duplicate broker tool name"));
++        }
++    }
++    if !policy.broker_tools.windows(2).all(|pair| pair[0] < pair[1]) {
++        return Err(invalid("broker tool ceiling must use canonical ordering"));
++    }
++    let mut actual = BTreeSet::new();
++    for tool in tools {
++        let DynamicToolSpec::Function(tool) = tool else {
++            return Err(invalid("broker namespace containers are unsupported"));
++        };
++        if tool.defer_loading || !actual.insert(tool.name.as_str()) {
++            return Err(invalid("duplicate or deferred broker definition"));
++        }
++    }
++    if actual != names {
++        return Err(invalid(
++            "dynamic tool catalog differs from the exact ceiling",
++        ));
++    }
++    Ok(())
++}
++
++pub(crate) fn configure_start(options: &mut StartThreadOptions) -> Result<()> {
++    let supplied = options.thread_extension_init.get::<AgentWorkflowPolicy>();
++    let retained = options
++        .initial_history
++        .get_rollout_items()
++        .iter()
++        .find_map(|item| {
++            let RolloutItem::SessionMeta(meta) = item else {
++                return None;
++            };
++            Some(&meta.meta)
++        });
++    let retained_policy = retained.and_then(|meta| meta.agent_workflow_policy.as_ref());
++    if matches!(options.initial_history, InitialHistory::Forked(_))
++        && (supplied.is_some() || retained_policy.is_some())
++    {
++        return Err(invalid(
++            "managed forks and native children are not supported",
++        ));
++    }
++    match &options.initial_history {
++        InitialHistory::Resumed(_) if supplied.as_deref() != retained_policy => {
++            return Err(invalid("cold resume must retain the exact creation policy"));
++        }
++        _ => {}
++    }
++    let Some(policy) = supplied else {
++        return Ok(());
++    };
++    if options
++        .initial_history
++        .get_resumed_parent_thread_id()
++        .is_some()
++        || matches!(
++            options.session_source,
++            Some(codex_protocol::protocol::SessionSource::SubAgent(_))
++        )
++    {
++        return Err(invalid("native managed descendants are not supported"));
++    }
++    if !matches!(policy.protocol, 1) || !hex(&policy.policy_id, 64) {
++        return Err(invalid("unsupported policy protocol or identity"));
++    }
++    let expected_build = option_env!("AGENT_WORKFLOW_CODEX_BUILD_ID");
++    if !hex(&policy.build_id, 64) || expected_build != Some(policy.build_id.as_str()) {
++        return Err(invalid("policy requires its exact verified source build"));
++    }
++    if options
++        .initial_history
++        .get_selected_capability_roots()
++        .len()
++        > 0
++        || options
++            .thread_extension_init
++            .get::<Vec<codex_protocol::capabilities::SelectedCapabilityRoot>>()
++            .is_some_and(|roots| !roots.is_empty())
++    {
++        return Err(invalid(
++            "this profile has no selected-skill capability proof",
++        ));
++    }
++    let tools = if matches!(options.initial_history, InitialHistory::Resumed(_)) {
++        let original = retained
++            .and_then(|meta| meta.dynamic_tools.clone())
++            .unwrap_or_default();
++        let latest = options
++            .initial_history
++            .get_dynamic_tools()
++            .unwrap_or_default();
++        if latest != original || !options.dynamic_tools.is_empty() {
++            return Err(invalid("managed dynamic catalog cannot change on resume"));
++        }
++        original
++    } else {
++        options.dynamic_tools.clone()
++    };
++    validate_catalog(&policy, &tools)?;
++    // Admission precedes Session::new: ambient native initialization is not
++    // accounted broker work, even when its eventual tools would be filtered.
++    for feature in [
++        Feature::ShellSnapshot,
++        Feature::ShellSnapshotV2,
++        Feature::Apps,
++        Feature::Plugins,
++        Feature::RecommendedPlugins,
++        Feature::ToolSuggest,
++        Feature::ExecutorCapabilityDiscovery,
++        Feature::ExecutorCapabilityDiscoveryV2,
++        Feature::CodeMode,
++        Feature::CodeModeHost,
++        Feature::CodeModePrewarm,
++        Feature::CodeModeOnly,
++    ] {
++        options
++            .config
++            .features
++            .set_enabled(feature, false)
++            .map_err(|_| invalid("managed startup conflicts with required native feature"))?;
++        if options.config.features.enabled(feature) {
++            return Err(invalid("managed startup cannot retain a native feature"));
++        }
++    }
++    options
++        .thread_extension_init
++        .insert(crate::McpServersDisabled);
++    options.config.memories.generate_memories = false;
++    options.config.memories.use_memories = false;
++    options
++        .thread_extension_init
++        .insert(AgentWorkflowRuntime::new(policy.as_ref().clone()));
++    options
++        .thread_extension_init
++        .insert(SessionIsolation::Isolated);
++    options.thread_extension_init.insert(ToolPolicy {
++        allowed_tools: Some(
++            policy
++                .broker_tools
++                .iter()
++                .map(|name| ToolName::new(None, name.as_str()))
++                .collect(),
++        ),
++        require_managed_sandbox: false,
++        require_unified_exec: true,
++        expose_additional_permissions: false,
++    });
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
++
++    fn policy(names: &[&str]) -> AgentWorkflowPolicy {
++        AgentWorkflowPolicy {
++            protocol: 1,
++            build_id: "a".repeat(64),
++            policy_id: "b".repeat(64),
++            broker_tools: names.iter().map(|name| (*name).to_owned()).collect(),
++        }
++    }
++
++    fn tool(name: &str) -> DynamicToolSpec {
++        DynamicToolSpec::Function(DynamicToolFunctionSpec {
++            name: name.to_owned(),
++            description: "fixture".to_owned(),
++            input_schema: serde_json::json!({"type": "object"}),
++            defer_loading: false,
++        })
++    }
++
++    #[test]
++    fn exact_broker_catalog_and_empty_ceiling() {
++        let name = "broker_0123456789abcdef01234567";
++        assert!(validate_catalog(&policy(&[]), &[]).is_ok());
++        assert!(validate_catalog(&policy(&[name]), &[tool(name)]).is_ok());
++        assert!(validate_catalog(&policy(&[]), &[tool(name)]).is_err());
++        assert!(validate_catalog(&policy(&[name]), &[]).is_err());
++    }
++
++    #[test]
++    fn native_unknown_duplicate_and_deferred_tools_are_denied() {
++        for name in [
++            "exec_command",
++            "spawn_agent",
++            "functions.exec",
++            "mcp__host__tool",
++            "broker_bad",
++        ] {
++            assert!(validate_catalog(&policy(&[name]), &[tool(name)]).is_err());
++        }
++        let name = "broker_0123456789abcdef01234567";
++        assert!(validate_catalog(&policy(&[name, name]), &[tool(name)]).is_err());
++        assert!(validate_catalog(&policy(&[name]), &[tool(name), tool(name)]).is_err());
++        let mut deferred = tool(name);
++        let DynamicToolSpec::Function(value) = &mut deferred else {
++            unreachable!()
++        };
++        value.defer_loading = true;
++        assert!(validate_catalog(&policy(&[name]), &[deferred]).is_err());
++    }
++
++    const FIRST: &str = "broker_0123456789abcdef01234567";
++    const SECOND: &str = "broker_1123456789abcdef01234567";
++
++    struct TestTurnGuard {
++        _batch: BatchGuard,
++        _task: ManagedWorkGuard,
++    }
++
++    fn planned() -> (Arc<AgentWorkflowRuntime>, TestTurnGuard) {
++        let runtime = Arc::new(AgentWorkflowRuntime::new(policy(&[FIRST, SECOND])));
++        let task = runtime.model_scheduled();
++        let guard = runtime
++            .begin("thread".into(), "turn".into(), "engine-message".into())
++            .unwrap();
++        runtime.plan("a", &ToolName::new(None, FIRST)).unwrap();
++        runtime.plan("b", &ToolName::new(None, SECOND)).unwrap();
++        (
++            runtime,
++            TestTurnGuard {
++                _batch: guard,
++                _task: task,
++            },
++        )
++    }
++
++    fn parked(
++        runtime: &Arc<AgentWorkflowRuntime>,
++    ) -> (AgentWorkflowParkedBatch, Vec<ManagedWorkGuard>) {
++        runtime.seal("response".into()).unwrap();
++        let first = runtime.scheduled("a");
++        assert!(first.admitted);
++        runtime.park("a").unwrap();
++        assert!(runtime.published("a").unwrap().is_none());
++        // An unpolled planned future remains outstanding, even with an idle stream.
++        let second = runtime.scheduled("b");
++        assert!(second.admitted);
++        runtime.park("b").unwrap();
++        (
++            runtime.published("b").unwrap().unwrap(),
++            vec![first, second],
++        )
++    }
++
++    fn response(permit: &AgentWorkflowParkedBatch) -> DynamicToolResponse {
++        DynamicToolResponse {
++            agent_workflow_permit: Some(permit.clone()),
++            content_items: Vec::new(),
++            success: true,
++        }
++    }
++
++    #[test]
++    fn delayed_stream_and_planned_future_cannot_attest() {
++        let (runtime, _guard) = planned();
++        assert!(runtime.park("a").is_err());
++        assert!(runtime.published("a").is_err());
++        assert!(runtime.seal(String::new()).is_err());
++        let (attestation, _work) = parked(&runtime);
++        assert_eq!(attestation.call_ids, vec!["a", "b"]);
++        assert!(runtime.plan("late", &ToolName::new(None, FIRST)).is_err());
++        assert!(runtime.published("b").is_err());
++    }
++
++    #[test]
++    fn entire_batch_permit_and_results_precede_any_source_delivery() {
++        let (runtime, _guard) = planned();
++        let (permit, _work) = parked(&runtime);
++        // Reordered results are buffered. Neither first result nor a duplicate
++        // can resolve a single callback channel before the complete batch.
++        assert!(
++            runtime
++                .accept_result("b", response(&permit))
++                .unwrap()
++                .is_empty()
++        );
++        let ready = runtime.accept_result("a", response(&permit)).unwrap();
++        assert_eq!(
++            ready.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
++            vec!["a", "b"]
++        );
++        assert!(runtime.accept_result("a", response(&permit)).is_err());
++    }
++
++    #[test]
++    fn invalid_or_duplicate_results_invalidate_the_entire_parked_batch() {
++        for change in ["missing", "batch", "invocation", "duplicate"] {
++            let (runtime, _guard) = planned();
++            let (permit, _work) = parked(&runtime);
++            let mut wrong = permit.clone();
++            match change {
++                "missing" => {
++                    wrong.call_ids.pop();
++                }
++                "batch" => wrong.batch_id.push('x'),
++                "invocation" => wrong.invocation_id.push('x'),
++                "duplicate" => {
++                    assert!(
++                        runtime
++                            .accept_result("a", response(&permit))
++                            .unwrap()
++                            .is_empty()
++                    );
++                }
++                _ => unreachable!(),
++            }
++            assert!(runtime.accept_result("a", response(&wrong)).is_err());
++            // There is no valid retry on the same batch after rejection. The
++            // source session handler interrupts on every such returned error.
++            assert!(runtime.accept_result("b", response(&permit)).is_err());
++        }
++    }
++
++    #[test]
++    fn catalog_and_planned_work_have_explicit_bounds() {
++        let names = (0..129)
++            .map(|i| format!("broker_{i:024x}"))
++            .collect::<Vec<_>>();
++        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
++        let tools = names.iter().map(|name| tool(name)).collect::<Vec<_>>();
++        assert!(validate_catalog(&policy(&refs), &tools).is_err());
++        let (runtime, _guard) = planned();
++        for i in 2..128 {
++            runtime
++                .plan(&format!("call-{i}"), &ToolName::new(None, FIRST))
++                .unwrap();
++        }
++        assert!(
++            runtime
++                .plan("overflow", &ToolName::new(None, FIRST))
++                .is_err()
++        );
++    }
++
++    #[tokio::test]
++    async fn revocation_before_model_or_dispatch_poll_cannot_start_new_work() {
++        let runtime = Arc::new(AgentWorkflowRuntime::new(policy(&[FIRST])));
++        let model = runtime.model_scheduled();
++        runtime.invalidate();
++        assert!(!model.is_admitted());
++        assert!(
++            runtime
++                .begin("t".into(), "turn".into(), "invocation".into())
++                .is_err()
++        );
++        let joining = Arc::clone(&runtime);
++        let mut joined = tokio::spawn(async move { joining.join_work().await });
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(10), &mut joined)
++                .await
++                .is_err()
++        );
++        // Repeated revocation cannot turn an outstanding source task into joined work.
++        runtime.invalidate();
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(10), &mut joined)
++                .await
++                .is_err()
++        );
++        drop(model);
++        tokio::time::timeout(std::time::Duration::from_secs(1), joined)
++            .await
++            .unwrap()
++            .unwrap();
++
++        let (runtime, model) = planned();
++        runtime.seal("response".into()).unwrap();
++        let dispatch = runtime.scheduled("a");
++        assert!(dispatch.is_admitted());
++        runtime.invalidate();
++        assert!(!dispatch.is_admitted());
++        drop(model);
++        drop(dispatch);
++        runtime.join_work().await;
++    }
++
++    #[tokio::test]
++    async fn revocation_waits_for_unpolled_and_independently_spawned_work() {
++        let (runtime, _batch) = planned();
++        runtime.seal("response".into()).unwrap();
++        let queued_guard = runtime.scheduled("a");
++        let queued = async move {
++            let _work = queued_guard;
++            std::future::pending::<()>().await;
++        };
++        let child_guard = runtime.scheduled("b");
++        let (release, wait) = tokio::sync::oneshot::channel::<()>();
++        let child = tokio::spawn(async move {
++            let _work = child_guard;
++            let _ = wait.await;
++        });
++        runtime.invalidate();
++        drop(_batch);
++        let joining = Arc::clone(&runtime);
++        let mut joined = tokio::spawn(async move { joining.join_work().await });
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(10), &mut joined)
++                .await
++                .is_err()
++        );
++        drop(queued);
++        // Destroying parent work cannot claim the independent child joined.
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(10), &mut joined)
++                .await
++                .is_err()
++        );
++        release.send(()).unwrap();
++        child.await.unwrap();
++        tokio::time::timeout(std::time::Duration::from_secs(1), joined)
++            .await
++            .unwrap()
++            .unwrap();
++    }
++
++    #[tokio::test]
++    async fn cancellation_between_park_publish_and_partial_results_revokes_permits() {
++        let (runtime, _batch) = planned();
++        runtime.seal("response".into()).unwrap();
++        let first = runtime.scheduled("a");
++        runtime.park("a").unwrap();
++        runtime.invalidate();
++        assert!(runtime.published("a").is_err());
++        drop(first);
++        drop(_batch);
++        runtime.join_work().await;
++
++        let (runtime, _batch) = planned();
++        let (permit, work) = parked(&runtime);
++        assert!(
++            runtime
++                .accept_result("a", response(&permit))
++                .unwrap()
++                .is_empty()
++        );
++        runtime.invalidate();
++        assert!(runtime.accept_result("b", response(&permit)).is_err());
++        drop(work);
++        drop(_batch);
++        runtime.join_work().await;
++    }
++
++    #[test]
++    fn cancellation_invalidates_the_old_batch_and_ungranted_plans_fail() {
++        let (runtime, guard) = planned();
++        assert!(
++            runtime
++                .plan("native", &ToolName::new(None, "exec_command"))
++                .is_err()
++        );
++        assert!(runtime.plan("a", &ToolName::new(None, FIRST)).is_err());
++        let (old, work) = parked(&runtime);
++        drop(guard);
++        assert!(runtime.accept_result("a", response(&old)).is_err());
++        assert!(
++            runtime
++                .begin("thread".into(), "new-turn".into(), "new-message".into())
++                .is_err()
++        );
++        drop(work);
++        assert!(
++            runtime
++                .begin("thread".into(), "new-turn".into(), "engine-message".into())
++                .is_err()
++        );
++        let _replacement_task = runtime.model_scheduled();
++        let _replacement = runtime
++            .begin("thread".into(), "new-turn".into(), "new-message".into())
++            .unwrap();
++        assert!(runtime.accept_result("a", response(&old)).is_err());
++    }
++}
+diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
+index a8d5865..f33671d 100644
+--- a/codex-rs/core/src/codex_thread.rs
++++ b/codex-rs/core/src/codex_thread.rs
+@@ -310,6 +310,19 @@ impl CodexThread {
+         &self.session.services.thread_extension_data
+     }
+ 
++    /// Revoke the source-owned managed park and join the actual active turn.
++    /// This bypasses a possibly closed submission queue during disconnect.
++    pub async fn invalidate_agent_workflow_turn(&self) {
++        if let Some(runtime) = self
++            .thread_extension_data()
++            .get::<crate::AgentWorkflowRuntime>()
++        {
++            runtime.invalidate();
++            self.session.interrupt_task().await;
++            runtime.join_work().await;
++        }
++    }
++
+     /// Returns tools from this thread’s ready, unshared Apps MCP client.
+     /// Returns an empty list if the client is absent, still starting, or uses
+     /// a shared catalog. Does not start or wait for discovery.
+@@ -541,6 +554,15 @@ impl CodexThread {
+         &self,
+         request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
+     ) -> CodexResult<StartIfIdleSubmission> {
++        if self
++            .thread_extension_data()
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            return Err(CodexErr::InvalidRequest(
++                "engine owns managed recovery".into(),
++            ));
++        }
+         self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
+             .await?;
+         let WithTurnExtensionData {
+@@ -656,6 +678,35 @@ impl CodexThread {
+         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
+         mode: TurnInputMode,
+     ) -> CodexResult<TurnInputSubmission> {
++        let request: WithTurnExtensionData<TurnInputRequest> = request.into();
++        let mode = if self
++            .thread_extension_data()
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            if request
++                .turn_extension_init
++                .as_ref()
++                .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                .is_none()
++            {
++                return Err(CodexErr::InvalidRequest(
++                    "managed turns require fresh invocation binding".into(),
++                ));
++            }
++            match mode {
++                TurnInputMode::StartOrSteer | TurnInputMode::StartIfIdle => {
++                    TurnInputMode::StartIfIdle
++                }
++                _ => {
++                    return Err(CodexErr::InvalidRequest(
++                        "engine owns managed turn continuation".into(),
++                    ));
++                }
++            }
++        } else {
++            mode
++        };
+         if !matches!(mode, TurnInputMode::Steer { .. }) {
+             self.ensure_execution_capacity_for_turn_start(
+                 self.session.services.agent_control.as_ref(),
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index 5157340..9c1d5eb 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -265,7 +265,10 @@ pub use exec_policy::check_execpolicy_for_warnings;
+ pub use exec_policy::format_exec_policy_error_with_source;
+ pub use exec_policy::load_exec_policy;
+ pub use installation_id::resolve_installation_id;
++mod agent_workflow_managed;
+ pub mod compact;
++pub use agent_workflow_managed::AgentWorkflowInvocation;
++pub use agent_workflow_managed::AgentWorkflowRuntime;
+ mod memory_usage;
+ pub mod otel_init;
+ 
+diff --git a/codex-rs/core/src/session/handlers.rs b/codex-rs/core/src/session/handlers.rs
+index f4f6dcc..672957e 100644
+--- a/codex-rs/core/src/session/handlers.rs
++++ b/codex-rs/core/src/session/handlers.rs
+@@ -251,7 +251,10 @@ pub async fn request_permissions_response(
+ }
+ 
+ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
+-    sess.notify_dynamic_tool_response(&id, response).await;
++    if let Err(error) = sess.notify_dynamic_tool_response(&id, response).await {
++        tracing::warn!(%error, "dynamic response rejected before source continuation");
++        sess.interrupt_task().await;
++    }
+ }
+ 
+ pub fn refresh_mcp_servers(sess: &Session) {
+diff --git a/codex-rs/core/src/session/mcp_prewarm.rs b/codex-rs/core/src/session/mcp_prewarm.rs
+index 4356991..fe1f6fd 100644
+--- a/codex-rs/core/src/session/mcp_prewarm.rs
++++ b/codex-rs/core/src/session/mcp_prewarm.rs
+@@ -23,6 +23,14 @@ impl Session {
+         requests: async_channel::Receiver<()>,
+         mut auth_changes: tokio::sync::watch::Receiver<u64>,
+     ) {
++        if self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            return;
++        }
+         let session = Arc::downgrade(self);
+         let shutdown = self.mcp_prewarm_shutdown.clone();
+         let worker = self.services.runtime_handle.spawn(async move {
+diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
+index f365c4e..1bbb0bb 100644
+--- a/codex-rs/core/src/session/mod.rs
++++ b/codex-rs/core/src/session/mod.rs
+@@ -3652,25 +3652,52 @@ impl Session {
+         clippy::await_holding_invalid_type,
+         reason = "active turn checks and turn state updates must remain atomic"
+     )]
+-    pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
+-        let entry = {
++    pub async fn notify_dynamic_tool_response(
++        &self,
++        call_id: &str,
++        response: DynamicToolResponse,
++    ) -> codex_protocol::error::Result<()> {
++        let runtime = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>();
++        let responses = if let Some(runtime) = &runtime {
++            runtime.accept_result(call_id, response)?
++        } else {
++            vec![(call_id.to_owned(), response)]
++        };
++        let mut deliveries = Vec::new();
++        {
+             let mut active = self.active_turn.lock().await;
+-            match active.as_mut() {
+-                Some(at) => {
+-                    let mut ts = at.turn_state.lock().await;
+-                    ts.remove_pending_dynamic_tool(call_id)
++            let Some(at) = active.as_mut() else {
++                if runtime.is_none() {
++                    warn!("No pending dynamic tool call found for call_id: {call_id}");
++                    return Ok(());
+                 }
+-                None => None,
+-            }
+-        };
+-        match entry {
+-            Some(tx_response) => {
+-                tx_response.send(response).ok();
+-            }
+-            None => {
+-                warn!("No pending dynamic tool call found for call_id: {call_id}");
++                return Err(CodexErr::InvalidRequest(
++                    "no active dynamic-tool turn".into(),
++                ));
++            };
++            let mut ts = at.turn_state.lock().await;
++            for (id, value) in responses {
++                let Some(sender) = ts.remove_pending_dynamic_tool(&id) else {
++                    if runtime.is_none() {
++                        warn!("No pending dynamic tool call found for call_id: {id}");
++                        return Ok(());
++                    }
++                    return Err(CodexErr::InvalidRequest(
++                        "no pending dynamic-tool call".into(),
++                    ));
++                };
++                deliveries.push((sender, value));
+             }
+         }
++        // No source channel can resume before every matching result and the
++        // same complete batch permit have been validated under the runtime lock.
++        for (sender, value) in deliveries {
++            sender.send(value).ok();
++        }
++        Ok(())
+     }
+ 
+     #[expect(
+diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
+index 52325c5..3096347 100644
+--- a/codex-rs/core/src/session/session.rs
++++ b/codex-rs/core/src/session/session.rs
+@@ -1049,6 +1049,8 @@ impl Session {
+             config.current_time_reminder.as_ref(),
+             external_time_provider,
+         )?;
++        let agent_workflow_policy =
++            thread_extension_init.get::<codex_protocol::protocol::AgentWorkflowPolicy>();
+         let selected_capability_roots = thread_extension_init
+             .get::<Vec<SelectedCapabilityRoot>>()
+             .map(|roots| roots.as_ref().clone())
+@@ -1097,6 +1099,7 @@ impl Session {
+                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                         let auth = persistence_auth.await;
+                         let params = CreateThreadParams {
++                            agent_workflow_policy: agent_workflow_policy.as_deref().cloned(),
+                             attached_thread,
+                             creator_user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
+                             creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
+@@ -1229,7 +1232,11 @@ impl Session {
+         let mcp_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
+         let auth_and_mcp_fut = async move {
+             let auth = mcp_auth.await;
+-            if config_for_mcp.features.plugin_recommendations_enabled() {
++            if thread_extension_data_for_mcp
++                .get::<crate::AgentWorkflowRuntime>()
++                .is_none()
++                && config_for_mcp.features.plugin_recommendations_enabled()
++            {
+                 let plugins_config = config_for_mcp.plugins_config_input();
+                 let auth_for_prewarm = auth.clone();
+                 // Fetch the catalog while MCP and plugin/skill initialization continue.
+@@ -1482,7 +1489,10 @@ impl Session {
+                 && config.features.enabled(Feature::UnifiedExec);
+             let use_executor_shell_snapshots =
+                 prefer_executor_shell_snapshots && !credential_broker_active;
+-            let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot)
++            let shell_snapshot = if thread_extension_data
++                .get::<crate::AgentWorkflowRuntime>()
++                .is_none()
++                && config.features.enabled(Feature::ShellSnapshot)
+                 && (!use_executor_shell_snapshots || credential_broker_available)
+             {
+                 let snapshot_credential_broker = credential_broker_available.then(|| {
+@@ -1665,13 +1675,17 @@ impl Session {
+             let mcp_runtime = Arc::new(McpRuntime::empty(
+                 mcp_projection.config.prefix_mcp_tool_names,
+             ));
+-            let hooks_config = build_hooks_config(
+-                &config,
+-                plugins_manager.as_ref(),
+-                resolved_environments.single_local_environment(),
+-                &session_configuration.disabled_plugin_ids,
+-            )
+-            .await;
++            let hooks_config = if agent_workflow_policy.is_some() {
++                codex_hooks::HooksConfig::default()
++            } else {
++                build_hooks_config(
++                    &config,
++                    plugins_manager.as_ref(),
++                    resolved_environments.single_local_environment(),
++                    &session_configuration.disabled_plugin_ids,
++                )
++                .await
++            };
+             let (hooks, async_hook_results) = Hooks::new(
+                 hooks_config,
+                 thread_id,
+diff --git a/codex-rs/core/src/session/startup_prewarm.rs b/codex-rs/core/src/session/startup_prewarm.rs
+index 5d3fa4d..cfec7c0 100644
+--- a/codex-rs/core/src/session/startup_prewarm.rs
++++ b/codex-rs/core/src/session/startup_prewarm.rs
+@@ -207,6 +207,14 @@ impl SessionStartupPrewarmHandle {
+ 
+ impl Session {
+     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, input: PrewarmInput) {
++        if self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            return;
++        }
+         let websocket_connect_timeout = self.provider().await.websocket_connect_timeout();
+         let mut state = self.state.lock().await;
+         if state.shutting_down {
+diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
+index 9bb8aa2..5b7b32b 100644
+--- a/codex-rs/core/src/session/tests.rs
++++ b/codex-rs/core/src/session/tests.rs
+@@ -5075,6 +5075,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
+     let live_thread = LiveThread::create(
+         Arc::clone(&session.services.thread_store),
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -8843,6 +8844,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
+     let live_thread = LiveThread::create(
+         Arc::clone(&thread_store),
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -8982,6 +8984,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() -> anyhow::Re
+     let live_thread = LiveThread::create(
+         Arc::clone(&thread_store),
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -11969,6 +11972,7 @@ async fn attach_in_memory_thread_store(
+     let live_thread = LiveThread::create(
+         Arc::clone(&thread_store),
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
+index c3a82ef..6c66411 100644
+--- a/codex-rs/core/src/session/thread_settings.rs
++++ b/codex-rs/core/src/session/thread_settings.rs
+@@ -26,6 +26,16 @@ impl Session {
+         &self,
+         tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+     ) -> CodexResult<()> {
++        if self
++            .services
++            .thread_extension_data
++            .get::<codex_protocol::protocol::AgentWorkflowPolicy>()
++            .is_some()
++        {
++            return Err(CodexErr::InvalidRequest(
++                "managed dynamic tool catalog is immutable".into(),
++            ));
++        }
+         let _settings_guard = acquire_persistence_lock(self).await;
+         if let Some(live_thread) = self.live_thread() {
+             let config = self.get_config().await;
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index ef7db28..2b24198 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -2787,7 +2787,28 @@ async fn try_run_sampling_request(
+         .await;
+     let hooks = hooks_for_model_request(&sess, &step_context);
+     let post_mode = hooks.execution_mode_for_event(HookEventName::PostModelRequest);
+-    let defer_tool_dispatch = post_mode == Some(HookExecutionMode::Sync);
++    let managed_runtime = sess
++        .services
++        .thread_extension_data
++        .get::<crate::AgentWorkflowRuntime>();
++    let _managed_batch_guard = managed_runtime
++        .as_ref()
++        .map(|runtime| {
++            let invocation = turn_context
++                .extension_data
++                .get::<crate::AgentWorkflowInvocation>()
++                .ok_or_else(|| {
++                    CodexErr::InvalidRequest("managed invocation binding absent".into())
++                })?;
++            runtime.begin(
++                sess.thread_id.to_string(),
++                turn_context.sub_id.clone(),
++                invocation.0.clone(),
++            )
++        })
++        .transpose()?;
++    let defer_tool_dispatch =
++        managed_runtime.is_some() || post_mode == Some(HookExecutionMode::Sync);
+     let finish_post_request = post_mode.map(|_| {
+         let (post_request, completed) = tokio::sync::oneshot::channel();
+         let (hook_done, wait_for_hook) = tokio::sync::oneshot::channel();
+@@ -2824,6 +2845,7 @@ async fn try_run_sampling_request(
+     let mut response_id_for_assessment = None;
+     let mut pending_assessment: Option<codex_api::GuardianAssessment> = None;
+     let mut response_completed = false;
++    let mut managed_response_id = None;
+     let mut request_token_usage = None;
+     let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
+     // Catalog policies can enable adaptive review independently of the legacy scorer flag.
+@@ -3335,6 +3357,7 @@ async fn try_run_sampling_request(
+                 end_turn,
+             } => {
+                 response_completed = true;
++                managed_response_id = Some(response_id.clone());
+                 request_token_usage = token_usage.clone();
+                 sess.services
+                     .analytics_events_client
+@@ -3565,6 +3588,14 @@ async fn try_run_sampling_request(
+     )
+     .await;
+ 
++    if let Some(runtime) = &managed_runtime {
++        // Deferred broker futures have not dispatched. The complete model stream
++        // and allowed post-request work have ended before the plan is sealed.
++        if !response_completed || outcome.is_err() {
++            return outcome;
++        }
++        runtime.seal(managed_response_id.unwrap_or_default())?;
++    }
+     if !in_flight.is_empty() {
+         let _tool_blocking_timing_guard = turn_context
+             .turn_timing_state
+diff --git a/codex-rs/core/src/stream_events_utils.rs b/codex-rs/core/src/stream_events_utils.rs
+index e548195..034ed50 100644
+--- a/codex-rs/core/src/stream_events_utils.rs
++++ b/codex-rs/core/src/stream_events_utils.rs
+@@ -324,6 +324,25 @@ pub(crate) async fn handle_output_item_done(
+     match ctx.step_context.tool_router.build_tool_call(item.clone()) {
+         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
+         Ok(Some(call)) => {
++            if let Some(runtime) = ctx
++                .sess
++                .services
++                .thread_extension_data
++                .get::<crate::AgentWorkflowRuntime>()
++            {
++                let crate::tools::context::ToolPayload::Function { arguments } = &call.payload
++                else {
++                    return Err(CodexErr::InvalidRequest(
++                        "managed broker requires function arguments".into(),
++                    ));
++                };
++                serde_json::from_str::<serde_json::Value>(arguments).map_err(|_| {
++                    CodexErr::InvalidRequest(
++                        "managed broker arguments must be complete JSON".into(),
++                    )
++                })?;
++                runtime.plan(&call.call_id, &call.tool_name)?;
++            }
+             call_trace::received(
+                 ctx.sess.thread_id,
+                 &call.tool_name,
+diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
+index 77ce9b8..702a4bf 100644
+--- a/codex-rs/core/src/tasks/mod.rs
++++ b/codex-rs/core/src/tasks/mod.rs
+@@ -291,6 +291,13 @@ impl Session {
+         input: Vec<TurnInput>,
+         task: T,
+     ) {
++        // Register before any asynchronous setup so concurrent revocation joins
++        // the full source-owned task lifecycle, including pre-spawn work.
++        let managed_task = self
++            .services
++            .thread_extension_data
++            .get::<crate::agent_workflow_managed::AgentWorkflowRuntime>()
++            .map(|runtime| runtime.model_scheduled());
+         // Replace the cache; in-flight acquisitions retain their previous Arc.
+         self.services
+             .thread_extension_data
+@@ -383,6 +390,11 @@ impl Session {
+         );
+         let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
+         let task_future = async move {
++            let _managed_task = managed_task;
++            if _managed_task.as_ref().is_some_and(|guard| !guard.is_admitted()) {
++                done_clone.notify_waiters();
++                return;
++            }
+             let ctx_for_finish = Arc::clone(&ctx);
+             let task_result = task_for_run
+                 .run(
+@@ -471,6 +483,15 @@ impl Session {
+         self: &Arc<Self>,
+         sub_id: String,
+     ) {
++        if self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            // Engine mailboxes and retained turn allowances own managed follow-ups.
++            return;
++        }
+         if !self.input_queue.has_pending_mailbox_items().await {
+             return;
+         }
+@@ -571,6 +592,13 @@ impl Session {
+     }
+ 
+     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
++        let managed = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>();
++        if let Some(runtime) = &managed {
++            runtime.invalidate();
++        }
+         let mut aborted_turn = false;
+         let mut active_turn_to_clear = None;
+         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
+@@ -595,6 +623,9 @@ impl Session {
+             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+             self.input_queue.clear_pending(&active_turn).await;
+         }
++        if let Some(runtime) = &managed {
++            runtime.join_work().await;
++        }
+         if reason == TurnAbortReason::Interrupted && aborted_turn {
+             self.maybe_start_turn_for_pending_work().await;
+         }
+@@ -638,11 +669,21 @@ impl Session {
+         reason: TurnAbortReason,
+         error: Option<ErrorEvent>,
+     ) {
++        let managed = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>();
++        if let Some(runtime) = &managed {
++            runtime.invalidate();
++        }
+         let task = active_turn.task.take();
+         if let Some(task) = task {
+             self.handle_task_abort(task, reason.clone(), &active_turn.turn_state, error)
+                 .await;
+         }
++        if let Some(runtime) = &managed {
++            runtime.join_work().await;
++        }
+         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+         self.input_queue.clear_pending(&active_turn).await;
+@@ -980,8 +1021,15 @@ impl Session {
+         turn_state: &Mutex<TurnState>,
+         error: Option<ErrorEvent>,
+     ) {
++        let managed = self
++            .services
++            .thread_extension_data
++            .get::<crate::agent_workflow_managed::AgentWorkflowRuntime>();
++        if let Some(runtime) = managed.as_ref() {
++            runtime.invalidate();
++        }
+         let sub_id = task.turn_context.sub_id.clone();
+-        if task.cancellation_token.is_cancelled() {
++        if task.cancellation_token.is_cancelled() && managed.is_none() {
+             self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
+                 .await;
+             return;
+@@ -1026,6 +1074,11 @@ impl Session {
+             .abort(Arc::clone(self), Arc::clone(&task.turn_context))
+             .await;
+ 
++        if let Some(runtime) = managed {
++            // Joining the model task alone does not join independent dispatches.
++            runtime.join_work().await;
++        }
++
+         if reason == TurnAbortReason::Interrupted
+             && let Some(marker) = interrupted_turn_history_marker(
+                 InterruptedTurnHistoryMarker::from_config_and_version(
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index 7bd869f..de0e0c8 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -2265,6 +2265,22 @@ impl ThreadManagerState {
+ 
+     /// Spawn a new thread with optional history and register it with the manager.
+     async fn spawn_thread(&self, mut request: ThreadSpawnRequest) -> CodexResult<NewThread> {
++        for parent_id in [request.parent_thread_id, request.forked_from_thread_id]
++            .into_iter()
++            .flatten()
++        {
++            if let Ok(parent) = self.get_thread(parent_id).await
++                && parent
++                    .thread_extension_data()
++                    .get::<crate::AgentWorkflowRuntime>()
++                    .is_some()
++            {
++                return Err(CodexErr::InvalidRequest(
++                    "native managed descendants are disabled".into(),
++                ));
++            }
++        }
++        crate::agent_workflow_managed::configure_start(&mut request.options)?;
+         let cancellation = request
+             .options
+             .config
+diff --git a/codex-rs/core/src/tools/handlers/dynamic.rs b/codex-rs/core/src/tools/handlers/dynamic.rs
+index 0eac846..9271a7b 100644
+--- a/codex-rs/core/src/tools/handlers/dynamic.rs
++++ b/codex-rs/core/src/tools/handlers/dynamic.rs
+@@ -159,6 +159,7 @@ impl DynamicToolHandler {
+         })?;
+ 
+         let DynamicToolResponse {
++            agent_workflow_permit: _,
+             content_items,
+             success,
+         } = response;
+@@ -219,6 +220,15 @@ async fn request_dynamic_tool(
+         warn!("Overwriting existing pending dynamic tool call for call_id: {event_id}");
+     }
+ 
++    if let Some(runtime) = session
++        .services
++        .thread_extension_data
++        .get::<crate::AgentWorkflowRuntime>()
++    {
++        if runtime.park(&call_id).is_err() {
++            return None;
++        }
++    }
+     let started_at = Instant::now();
+     session
+         .emit_turn_item_started(
+diff --git a/codex-rs/core/src/tools/handlers/dynamic_tests.rs b/codex-rs/core/src/tools/handlers/dynamic_tests.rs
+index 2d926b3..24abefb 100644
+--- a/codex-rs/core/src/tools/handlers/dynamic_tests.rs
++++ b/codex-rs/core/src/tools/handlers/dynamic_tests.rs
+@@ -48,6 +48,7 @@ async fn response_cancel_race_completes_once() {
+     });
+     next_item(&receiver).await;
+     let response = DynamicToolResponse {
++        agent_workflow_permit: None,
+         content_items: Vec::new(),
+         success: true,
+     };
+diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
+index 4361a91..9caa2b3 100644
+--- a/codex-rs/core/src/tools/parallel.rs
++++ b/codex-rs/core/src/tools/parallel.rs
+@@ -269,8 +269,22 @@ impl ToolCallRuntime {
+         );
+         let abort_dispatch_span = dispatch_span.clone();
+ 
++        let managed_work = session
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .map(|runtime| runtime.scheduled(&dispatch_call_id));
+         let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
+             async move {
++                let _managed_work = managed_work;
++                if _managed_work
++                    .as_ref()
++                    .is_some_and(|guard| !guard.is_admitted())
++                {
++                    return Err(FunctionCallError::Fatal(
++                        "managed dispatch was revoked".into(),
++                    ));
++                }
+                 let _message_admission = message_admission?;
+                 // Readiness and admission remain cancellable even when the handler must finish.
+                 let (guard, admission_started) = async {
+diff --git a/codex-rs/core/tests/suite/audio_truncation.rs b/codex-rs/core/tests/suite/audio_truncation.rs
+index 3e24f59..21ee85d 100644
+--- a/codex-rs/core/tests/suite/audio_truncation.rs
++++ b/codex-rs/core/tests/suite/audio_truncation.rs
+@@ -122,6 +122,7 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
+         .submit(Op::DynamicToolResponse {
+             id: request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputAudio {
+                     audio_url: pcm_wav_data_url(/*sample_count*/ 80_000),
+                 }],
+diff --git a/codex-rs/core/tests/suite/code_mode.rs b/codex-rs/core/tests/suite/code_mode.rs
+index 57499b1..ce118b3 100644
+--- a/codex-rs/core/tests/suite/code_mode.rs
++++ b/codex-rs/core/tests/suite/code_mode.rs
+@@ -8439,6 +8439,7 @@ text(JSON.stringify({
+                 .submit(Op::DynamicToolResponse {
+                     id: request.call_id,
+                     response: DynamicToolResponse {
++                        agent_workflow_permit: None,
+                         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                             text: "first-winner".to_string(),
+                         }],
+@@ -8800,6 +8801,7 @@ text(
+         .submit(Op::DynamicToolResponse {
+             id: request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "hidden-ok".to_string(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/code_mode_dynamic_tools_tests.rs b/codex-rs/core/tests/suite/code_mode_dynamic_tools_tests.rs
+index cc7d9cb..fe27976 100644
+--- a/codex-rs/core/tests/suite/code_mode_dynamic_tools_tests.rs
++++ b/codex-rs/core/tests/suite/code_mode_dynamic_tools_tests.rs
+@@ -91,6 +91,7 @@ text(JSON.stringify(results));
+             .submit(Op::DynamicToolResponse {
+                 id: request.call_id,
+                 response: DynamicToolResponse {
++                    agent_workflow_permit: None,
+                     content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                         text: format!("value-{key}"),
+                     }],
+diff --git a/codex-rs/core/tests/suite/dynamic_tool_cancellation.rs b/codex-rs/core/tests/suite/dynamic_tool_cancellation.rs
+index f187b8a..3af933d 100644
+--- a/codex-rs/core/tests/suite/dynamic_tool_cancellation.rs
++++ b/codex-rs/core/tests/suite/dynamic_tool_cancellation.rs
+@@ -127,6 +127,7 @@ async fn interrupt_completes_cancelled_dynamic_call(hook: Option<HookEventName>)
+             .submit(Op::DynamicToolResponse {
+                 id: "gate-call".to_string(),
+                 response: DynamicToolResponse {
++                    agent_workflow_permit: None,
+                     content_items: Vec::new(),
+                     success: true,
+                 },
+@@ -266,6 +267,7 @@ async fn terminated_cell_persists_failure_and_excludes_late_reply_from_context()
+     )
+     .await;
+     let barrier_reply = DynamicToolResponse {
++        agent_workflow_permit: None,
+         content_items: Vec::new(),
+         success: true,
+     };
+@@ -305,6 +307,7 @@ async fn terminated_cell_persists_failure_and_excludes_late_reply_from_context()
+         .submit(Op::DynamicToolResponse {
+             id: original.clone(),
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "LATE_RESULT_MUST_NOT_REACH_MODEL".into(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/pending_input.rs b/codex-rs/core/tests/suite/pending_input.rs
+index 3217c5b..ec9bbe4 100644
+--- a/codex-rs/core/tests/suite/pending_input.rs
++++ b/codex-rs/core/tests/suite/pending_input.rs
+@@ -920,6 +920,7 @@ async fn plugin_wait_wakes_on_turn_input(
+             .submit(Op::DynamicToolResponse {
+                 id: call_id.to_string(),
+                 response: DynamicToolResponse {
++                    agent_workflow_permit: None,
+                     content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                         text: message.to_string(),
+                     }],
+@@ -1929,6 +1930,7 @@ async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
+         .submit(Op::DynamicToolResponse {
+             id: tool_request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "held tool result".to_string(),
+                 }],
+@@ -2100,6 +2102,7 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
+             .submit(Op::DynamicToolResponse {
+                 id: tool_request.call_id,
+                 response: DynamicToolResponse {
++                    agent_workflow_permit: None,
+                     content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                         text: "released".into(),
+                     }],
+@@ -2135,6 +2138,7 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
+         .submit(Op::DynamicToolResponse {
+             id: tool_request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "released".into(),
+                 }],
+@@ -2376,6 +2380,7 @@ async fn input_preempts_response_and_yields_running_code_mode_call() {
+         .submit(Op::DynamicToolResponse {
+             id: held_tool.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "released".into(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/scenarios.rs b/codex-rs/core/tests/suite/scenarios.rs
+index 768c5aa..034c043 100644
+--- a/codex-rs/core/tests/suite/scenarios.rs
++++ b/codex-rs/core/tests/suite/scenarios.rs
+@@ -1698,6 +1698,7 @@ async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
+         .submit(Op::DynamicToolResponse {
+             id: call.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "All release checks passed.".to_string(),
+                 }],
+@@ -2503,6 +2504,7 @@ async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
+         .submit(Op::DynamicToolResponse {
+             id: tool_request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "Release ready".into(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/scenarios_agent_eviction_tests.rs b/codex-rs/core/tests/suite/scenarios_agent_eviction_tests.rs
+index dc525f8..f3c1702 100644
+--- a/codex-rs/core/tests/suite/scenarios_agent_eviction_tests.rs
++++ b/codex-rs/core/tests/suite/scenarios_agent_eviction_tests.rs
+@@ -219,6 +219,7 @@ async fn idle_eviction_preserves_worker_context_for_followup() -> Result<()> {
+                 .submit(Op::DynamicToolResponse {
+                     id: call.call_id,
+                     response: DynamicToolResponse {
++                        agent_workflow_permit: None,
+                         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                             text: answer.to_string(),
+                         }],
+diff --git a/codex-rs/core/tests/suite/scenarios_dynamic_tools.rs b/codex-rs/core/tests/suite/scenarios_dynamic_tools.rs
+index 38ececc..8148433 100644
+--- a/codex-rs/core/tests/suite/scenarios_dynamic_tools.rs
++++ b/codex-rs/core/tests/suite/scenarios_dynamic_tools.rs
+@@ -92,6 +92,7 @@ async fn dynamic_tools_update_preserves_pending_calls_and_survives_resume() -> R
+         .submit(Op::DynamicToolResponse {
+             id: call.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "Release ready.".into(),
+                 }],
+@@ -117,6 +118,7 @@ async fn dynamic_tools_update_preserves_pending_calls_and_survives_resume() -> R
+         .submit(Op::DynamicToolResponse {
+             id: call.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "Deployment ready.".into(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/scenarios_reserved_spawn.rs b/codex-rs/core/tests/suite/scenarios_reserved_spawn.rs
+index f44198d..b97fe51 100644
+--- a/codex-rs/core/tests/suite/scenarios_reserved_spawn.rs
++++ b/codex-rs/core/tests/suite/scenarios_reserved_spawn.rs
+@@ -138,6 +138,7 @@ async fn finish_spawn_tool(
+         .submit(Op::DynamicToolResponse {
+             id: invocation.call_id.clone(),
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "Done.".into(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/search_tool.rs b/codex-rs/core/tests/suite/search_tool.rs
+index a917925..70bda97 100644
+--- a/codex-rs/core/tests/suite/search_tool.rs
++++ b/codex-rs/core/tests/suite/search_tool.rs
+@@ -1188,6 +1188,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
+         .submit(Op::DynamicToolResponse {
+             id: request.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: "dynamic-search-ok".to_string(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/sqlite_state.rs b/codex-rs/core/tests/suite/sqlite_state.rs
+index db37580..5566872 100644
+--- a/codex-rs/core/tests/suite/sqlite_state.rs
++++ b/codex-rs/core/tests/suite/sqlite_state.rs
+@@ -557,6 +557,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
+             fs::create_dir_all(parent).expect("should create rollout directory");
+             let session_meta_line = SessionMetaLine {
+                 meta: SessionMeta {
++                    agent_workflow_policy: None,
+                     attached_thread: false,
+                     creator_user_id: None,
+                     creator_account_id: None,
+diff --git a/codex-rs/core/tests/suite/subagent_dynamic_tools.rs b/codex-rs/core/tests/suite/subagent_dynamic_tools.rs
+index 3e71229..ce13b0b 100644
+--- a/codex-rs/core/tests/suite/subagent_dynamic_tools.rs
++++ b/codex-rs/core/tests/suite/subagent_dynamic_tools.rs
+@@ -191,6 +191,7 @@ async fn fresh_v2_subagent_can_call_parent_dynamic_tool_when_enabled() -> Result
+         .submit(Op::DynamicToolResponse {
+             id: call.call_id,
+             response: DynamicToolResponse {
++                agent_workflow_permit: None,
+                 content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                     text: ECHO_RESULT.to_string(),
+                 }],
+diff --git a/codex-rs/core/tests/suite/turn_phase_trace.rs b/codex-rs/core/tests/suite/turn_phase_trace.rs
+index 0fd928d..937407f 100644
+--- a/codex-rs/core/tests/suite/turn_phase_trace.rs
++++ b/codex-rs/core/tests/suite/turn_phase_trace.rs
+@@ -210,6 +210,7 @@ async fn steer_joins_existing_turn_without_extending_sampling(
+                 .submit(Op::DynamicToolResponse {
+                     id: call.call_id.clone(),
+                     response: DynamicToolResponse {
++                        agent_workflow_permit: None,
+                         content_items: Vec::new(),
+                         success: true,
+                     },
+diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
+index 0a6a5cb..5883135 100644
+--- a/codex-rs/exec/src/lib.rs
++++ b/codex-rs/exec/src/lib.rs
+@@ -1242,6 +1242,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
+                 ClientRequest::TurnStart {
+                     request_id: request_ids.next(),
+                     params: TurnStartParams {
++                        agent_workflow_invocation: None,
+                         disabled_plugin_ids: None,
+                         thread_id: primary_thread_id_for_span.clone(),
+                         turn_trigger: Some("exec".to_string()),
+diff --git a/codex-rs/protocol/src/dynamic_tools.rs b/codex-rs/protocol/src/dynamic_tools.rs
+index bbe92b8..d652897 100644
+--- a/codex-rs/protocol/src/dynamic_tools.rs
++++ b/codex-rs/protocol/src/dynamic_tools.rs
+@@ -58,6 +58,8 @@ pub struct DynamicToolCallRequest {
+ #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+ pub struct DynamicToolResponse {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub agent_workflow_permit: Option<crate::protocol::AgentWorkflowParkedBatch>,
+     pub content_items: Vec<DynamicToolCallOutputContentItem>,
+     pub success: bool,
+ }
+diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
+index a0af620..4001c87 100644
+--- a/codex-rs/protocol/src/protocol.rs
++++ b/codex-rs/protocol/src/protocol.rs
+@@ -3416,6 +3416,9 @@ pub struct HistoryPosition {
+ /// and should be used when there is no config override.
+ #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+ pub struct SessionMeta {
++    /// Immutable repository-owned managed runtime contract, absent for native history.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub agent_workflow_policy: Option<AgentWorkflowPolicy>,
+     /// ChatGPT user that created this thread; absent when unavailable or for older threads.
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub creator_user_id: Option<String>,
+@@ -3495,10 +3498,36 @@ pub struct SessionMeta {
+     pub context_window: Option<SessionContextWindow>,
+ }
+ 
++/// Experimental repository-owned app-server profile. This is not an upstream API.
++#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct AgentWorkflowPolicy {
++    pub protocol: u32,
++    pub build_id: String,
++    pub policy_id: String,
++    /// Exact engine-owned dynamic tool names; native/hosted tools are excluded.
++    pub broker_tools: Vec<String>,
++}
++
++/// Source-owned complete parked batch. Echoed only after engine lease reacquisition.
++#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct AgentWorkflowParkedBatch {
++    pub thread_id: String,
++    pub turn_id: String,
++    pub invocation_id: String,
++    pub policy_id: String,
++    pub build_id: String,
++    pub batch_id: String,
++    pub response_id: String,
++    pub call_ids: Vec<String>,
++}
++
+ impl Default for SessionMeta {
+     fn default() -> Self {
+         let id = ThreadId::default();
+         SessionMeta {
++            agent_workflow_policy: None,
+             creator_user_id: None,
+             creator_account_id: None,
+             session_id: id.into(),
+diff --git a/codex-rs/rollout/src/compression_tests.rs b/codex-rs/rollout/src/compression_tests.rs
+index 59143ce..e7b46eb 100644
+--- a/codex-rs/rollout/src/compression_tests.rs
++++ b/codex-rs/rollout/src/compression_tests.rs
+@@ -1121,6 +1121,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) ->
+     fs::create_dir_all(parent)?;
+     let session_meta_line = SessionMetaLine {
+         meta: SessionMeta {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/rollout/src/metadata_tests.rs b/codex-rs/rollout/src/metadata_tests.rs
+index e7a00e1..d332c12 100644
+--- a/codex-rs/rollout/src/metadata_tests.rs
++++ b/codex-rs/rollout/src/metadata_tests.rs
+@@ -117,6 +117,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
+         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+ 
+     let session_meta = SessionMeta {
++        agent_workflow_policy: None,
+         creator_user_id: Some("creator-user".to_string()),
+         attached_thread: false,
+         creator_account_id: Some("creator-account".to_string()),
+@@ -242,6 +243,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
+         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+ 
+     let session_meta = SessionMeta {
++        agent_workflow_policy: None,
+         creator_user_id: None,
+         attached_thread: false,
+         creator_account_id: None,
+@@ -592,6 +594,7 @@ fn write_rollout_in_sessions_with_cwd(
+     std::fs::create_dir_all(sessions_dir.as_path()).expect("create sessions dir");
+     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
+     let session_meta = SessionMeta {
++        agent_workflow_policy: None,
+         creator_user_id: None,
+         attached_thread: false,
+         creator_account_id: None,
+diff --git a/codex-rs/rollout/src/recorder.rs b/codex-rs/rollout/src/recorder.rs
+index 7298c41..d751cc7 100644
+--- a/codex-rs/rollout/src/recorder.rs
++++ b/codex-rs/rollout/src/recorder.rs
+@@ -113,6 +113,7 @@ pub enum RolloutRecorderParams {
+         creator_account_id: Option<String>,
+         base_instructions: BaseInstructions,
+         dynamic_tools: Vec<DynamicToolSpec>,
++        agent_workflow_policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
+         selected_capability_roots: Vec<SelectedCapabilityRoot>,
+         runtime_workspace_roots: Option<Vec<PathBuf>>,
+         multi_agent_version: Option<MultiAgentVersion>,
+@@ -234,6 +235,7 @@ impl RolloutRecorderParams {
+             creator_account_id: None,
+             base_instructions,
+             dynamic_tools,
++            agent_workflow_policy: None,
+             selected_capability_roots: Vec::new(),
+             runtime_workspace_roots: None,
+             multi_agent_version: None,
+@@ -279,6 +281,20 @@ impl RolloutRecorderParams {
+         self
+     }
+ 
++    pub fn with_agent_workflow_policy(
++        mut self,
++        policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
++    ) -> Self {
++        if let Self::Create {
++            agent_workflow_policy,
++            ..
++        } = &mut self
++        {
++            *agent_workflow_policy = policy;
++        }
++        self
++    }
++
+     pub fn with_selected_capability_roots(
+         mut self,
+         selected_capability_roots: Vec<SelectedCapabilityRoot>,
+@@ -941,6 +957,7 @@ impl RolloutRecorder {
+                 creator_account_id,
+                 base_instructions,
+                 dynamic_tools,
++                agent_workflow_policy,
+                 selected_capability_roots,
+                 runtime_workspace_roots,
+                 multi_agent_version,
+@@ -963,6 +980,7 @@ impl RolloutRecorder {
+                     .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+ 
+                 let session_meta = SessionMeta {
++                    agent_workflow_policy,
+                     session_id,
+                     id: conversation_id,
+                     forked_from_id,
+diff --git a/codex-rs/rollout/src/recorder_tests.rs b/codex-rs/rollout/src/recorder_tests.rs
+index a2843aa..3591a16 100644
+--- a/codex-rs/rollout/src/recorder_tests.rs
++++ b/codex-rs/rollout/src/recorder_tests.rs
+@@ -214,6 +214,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
+ 
+     let session_meta_line = SessionMetaLine {
+         meta: SessionMeta {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/rollout/src/session_index_tests.rs b/codex-rs/rollout/src/session_index_tests.rs
+index 219ddf1..05d7086 100644
+--- a/codex-rs/rollout/src/session_index_tests.rs
++++ b/codex-rs/rollout/src/session_index_tests.rs
+@@ -35,6 +35,7 @@ fn write_rollout_with_source_and_provider(
+         ordinal: None,
+         item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+             meta: SessionMeta {
++                agent_workflow_policy: None,
+                 attached_thread: false,
+                 creator_user_id: None,
+                 creator_account_id: None,
+diff --git a/codex-rs/rollout/src/state_db_tests.rs b/codex-rs/rollout/src/state_db_tests.rs
+index b2afea4..be01b6f 100644
+--- a/codex-rs/rollout/src/state_db_tests.rs
++++ b/codex-rs/rollout/src/state_db_tests.rs
+@@ -325,6 +325,7 @@ fn write_rollout_with_user_message(
+             ordinal: None,
+             item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+                 meta: SessionMeta {
++                    agent_workflow_policy: None,
+                     attached_thread: false,
+                     creator_user_id: None,
+                     creator_account_id: None,
+diff --git a/codex-rs/rollout/src/tests.rs b/codex-rs/rollout/src/tests.rs
+index 4db5a84..d73c8fc 100644
+--- a/codex-rs/rollout/src/tests.rs
++++ b/codex-rs/rollout/src/tests.rs
+@@ -1593,6 +1593,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
+         ordinal: None,
+         item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+             meta: SessionMeta {
++                agent_workflow_policy: None,
+                 attached_thread: false,
+                 creator_user_id: None,
+                 creator_account_id: None,
+diff --git a/codex-rs/state/src/extract.rs b/codex-rs/state/src/extract.rs
+index 80ce0e0..a9c4974 100644
+--- a/codex-rs/state/src/extract.rs
++++ b/codex-rs/state/src/extract.rs
+@@ -534,6 +534,7 @@ mod tests {
+             &mut metadata,
+             &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+                 meta: SessionMeta {
++                    agent_workflow_policy: None,
+                     creator_user_id: None,
+                     attached_thread: false,
+                     creator_account_id: None,
+@@ -785,6 +786,7 @@ mod tests {
+             &mut metadata,
+             &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+                 meta: SessionMeta {
++                    agent_workflow_policy: None,
+                     creator_user_id: None,
+                     attached_thread: false,
+                     creator_account_id: None,
+diff --git a/codex-rs/state/src/runtime/threads.rs b/codex-rs/state/src/runtime/threads.rs
+index 222fc83..34d38d6 100644
+--- a/codex-rs/state/src/runtime/threads.rs
++++ b/codex-rs/state/src/runtime/threads.rs
+@@ -2924,6 +2924,7 @@ mod tests {
+         );
+         let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+             meta: SessionMeta {
++                agent_workflow_policy: None,
+                 attached_thread: false,
+                 creator_user_id: None,
+                 creator_account_id: None,
+@@ -2999,6 +3000,7 @@ mod tests {
+         );
+         let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
+             meta: SessionMeta {
++                agent_workflow_policy: None,
+                 attached_thread: false,
+                 creator_user_id: None,
+                 creator_account_id: None,
+diff --git a/codex-rs/thread-store/src/in_memory.rs b/codex-rs/thread-store/src/in_memory.rs
+index 2df41dc..d60a02f 100644
+--- a/codex-rs/thread-store/src/in_memory.rs
++++ b/codex-rs/thread-store/src/in_memory.rs
+@@ -166,6 +166,7 @@ mod tests {
+         ] {
+             store
+                 .create_thread(CreateThreadParams {
++                    agent_workflow_policy: None,
+                     attached_thread: false,
+                     creator_user_id: None,
+                     creator_account_id: None,
+@@ -443,6 +444,7 @@ mod tests {
+         history_mode: ThreadHistoryMode,
+     ) -> CreateThreadParams {
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -585,6 +587,7 @@ impl InMemoryThreadStore {
+         let mut state = self.state.lock().await;
+         state.calls.create_thread += 1;
+         let session_meta = SessionMeta {
++            agent_workflow_policy: params.agent_workflow_policy.clone(),
+             attached_thread: params.attached_thread,
+             session_id: params.session_id,
+             id: params.thread_id,
+diff --git a/codex-rs/thread-store/src/local/create_thread.rs b/codex-rs/thread-store/src/local/create_thread.rs
+index 8b9823e..ea53c33 100644
+--- a/codex-rs/thread-store/src/local/create_thread.rs
++++ b/codex-rs/thread-store/src/local/create_thread.rs
+@@ -43,6 +43,7 @@ pub(super) async fn create_thread(
+         .with_session_id(params.session_id)
+         .with_attached_thread(params.attached_thread)
+         .with_selected_capability_roots(params.selected_capability_roots)
++        .with_agent_workflow_policy(params.agent_workflow_policy)
+         .with_runtime_workspace_roots(params.runtime_workspace_roots.map(|roots| {
+             roots
+                 .into_iter()
+diff --git a/codex-rs/thread-store/src/local/mod.rs b/codex-rs/thread-store/src/local/mod.rs
+index 8a2506b..4f01f39 100644
+--- a/codex-rs/thread-store/src/local/mod.rs
++++ b/codex-rs/thread-store/src/local/mod.rs
+@@ -2374,6 +2374,7 @@ mod tests {
+ 
+     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
+         CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/thread-store/src/local/pending_thread_metadata_tests.rs b/codex-rs/thread-store/src/local/pending_thread_metadata_tests.rs
+index 8c68565..ae062ae 100644
+--- a/codex-rs/thread-store/src/local/pending_thread_metadata_tests.rs
++++ b/codex-rs/thread-store/src/local/pending_thread_metadata_tests.rs
+@@ -457,6 +457,7 @@ fn staged_model_patch() -> ThreadMetadataPatch {
+ 
+ fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
+     CreateThreadParams {
++        agent_workflow_policy: None,
+         attached_thread: false,
+         creator_user_id: None,
+         creator_account_id: None,
+diff --git a/codex-rs/thread-store/src/local/revert_thread.rs b/codex-rs/thread-store/src/local/revert_thread.rs
+index 8a91663..0a58af7 100644
+--- a/codex-rs/thread-store/src/local/revert_thread.rs
++++ b/codex-rs/thread-store/src/local/revert_thread.rs
+@@ -184,6 +184,7 @@ async fn create_replacement_recorder(
+     .with_attached_thread(source_meta.attached_thread)
+     .with_rollout_id(rollout_id)
+     .with_selected_capability_roots(source_meta.selected_capability_roots)
++    .with_agent_workflow_policy(source_meta.agent_workflow_policy)
+     .with_runtime_workspace_roots(source_meta.runtime_workspace_roots)
+     .with_multi_agent_version(source_meta.multi_agent_version)
+     .with_history_mode(ThreadHistoryMode::Paginated)
+diff --git a/codex-rs/thread-store/src/local/revert_thread_tests.rs b/codex-rs/thread-store/src/local/revert_thread_tests.rs
+index 564c990..eaaf7ab 100644
+--- a/codex-rs/thread-store/src/local/revert_thread_tests.rs
++++ b/codex-rs/thread-store/src/local/revert_thread_tests.rs
+@@ -272,6 +272,7 @@ async fn rollout_paths_for_thread(
+ async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) {
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: Some("creator-user".to_string()),
+             creator_account_id: Some("creator-account".to_string()),
+diff --git a/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs b/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
+index ce951ad..29ca9a1 100644
+--- a/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
++++ b/codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
+@@ -754,6 +754,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
+     let legacy_thread_id = ThreadId::new();
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+@@ -3069,6 +3070,7 @@ async fn create_paginated_subagent_thread(
+ ) {
+     store
+         .create_thread(CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/thread-store/src/thread_metadata_sync.rs b/codex-rs/thread-store/src/thread_metadata_sync.rs
+index b81862a..0519c5c 100644
+--- a/codex-rs/thread-store/src/thread_metadata_sync.rs
++++ b/codex-rs/thread-store/src/thread_metadata_sync.rs
+@@ -486,6 +486,7 @@ mod tests {
+     async fn create_metadata_records_originator_without_project() {
+         let thread_id = ThreadId::new();
+         let sync = ThreadMetadataSync::for_create(&CreateThreadParams {
++            agent_workflow_policy: None,
+             attached_thread: false,
+             creator_user_id: None,
+             creator_account_id: None,
+diff --git a/codex-rs/thread-store/src/types.rs b/codex-rs/thread-store/src/types.rs
+index 7949786..de565af 100644
+--- a/codex-rs/thread-store/src/types.rs
++++ b/codex-rs/thread-store/src/types.rs
+@@ -72,6 +72,8 @@ pub struct ExtraConfig {}
+ /// Parameters required to create a persisted thread.
+ #[derive(Clone, Debug, Serialize, Deserialize)]
+ pub struct CreateThreadParams {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub agent_workflow_policy: Option<codex_protocol::protocol::AgentWorkflowPolicy>,
+     /// ChatGPT user that created this thread; absent when unavailable or for older threads.
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub creator_user_id: Option<String>,
+diff --git a/codex-rs/tui/src/dynamic_tools.rs b/codex-rs/tui/src/dynamic_tools.rs
+index 5c20f96..cd26ccf 100644
+--- a/codex-rs/tui/src/dynamic_tools.rs
++++ b/codex-rs/tui/src/dynamic_tools.rs
+@@ -283,6 +283,7 @@ pub(crate) fn non_delegation_tool_specs() -> Vec<DynamicToolSpec> {
+ 
+ pub(crate) fn failure_response(message: impl Into<String>) -> DynamicToolCallResponse {
+     DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputText {
+             text: truncate(&message.into(), MAX_ERROR_CHARS),
+         }],
+@@ -317,6 +318,7 @@ pub(crate) async fn execute(
+ fn success_response(value: Value) -> Result<DynamicToolCallResponse, String> {
+     let text = response::serialize(value)?;
+     Ok(DynamicToolCallResponse {
++        agent_workflow_permit: None,
+         content_items: vec![DynamicToolCallOutputContentItem::InputText { text }],
+         success: true,
+     })
+diff --git a/codex-rs/tui/src/managed_worktree_tools.rs b/codex-rs/tui/src/managed_worktree_tools.rs
+index 87d6c98..4edcafa 100644
+--- a/codex-rs/tui/src/managed_worktree_tools.rs
++++ b/codex-rs/tui/src/managed_worktree_tools.rs
+@@ -112,6 +112,7 @@ impl ManagedWorktreeTools {
+             (text, success)
+         };
+         DynamicToolCallResponse {
++            agent_workflow_permit: None,
+             content_items: vec![DynamicToolCallOutputContentItem::InputText { text }],
+             success,
+         }
