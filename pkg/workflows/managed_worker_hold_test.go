@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -263,10 +264,24 @@ func TestManagedCodexHeldWorkerSurvivesRestartAndBlocksDisposition(t *testing.T)
 				if _, err = reopened.db.Exec(`UPDATE workers SET status='idle',record=? WHERE id=?`, raw, w.ID); err != nil {
 					t.Fatal(err)
 				}
-				stop = managedHoldServe(t, m)
-				wait.MessageID, wait.OperationID, wait.Deadline = queued.ID, "queued-wait", time.Now().Add(150*time.Millisecond)
-				_, err = m.WaitMessage(ctx, wait)
-				stop()
+				// Drive ordinary queued admission synchronously after reopening. A
+				// scheduler timeout would not prove this durable guard was reached.
+				pool := &Capacity{Slots: m.Slots}
+				lease, acquireErr := pool.Acquire(ctx)
+				if acquireErr != nil {
+					t.Fatal(acquireErr)
+				}
+				m.turn(ctx, before, lease)
+				lease.Release()
+				current, loadErr := m.Get(ctx, run, w.ID)
+				if loadErr != nil || current.Status != RunStatusNeedsAttention || !strings.Contains(current.Error, "original managed native attempt") {
+					t.Fatal("ordinary queued admission did not retain the hold", current, loadErr)
+				}
+				var queuedStatus string
+				if loadErr = reopened.db.QueryRow(`SELECT status FROM messages WHERE id=?`, queued.ID).Scan(&queuedStatus); loadErr != nil || queuedStatus != "queued" {
+					t.Fatal("held queued message was admitted", queuedStatus, loadErr)
+				}
+				err = ErrActionIntegrity
 			}
 			if err == nil {
 				t.Fatal("held native original allowed", operation)
