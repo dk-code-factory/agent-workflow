@@ -133,6 +133,12 @@ does not replace it with a later physical attempt. The session fingerprint
 correlates continued turns without exposing the provider's session ID.
 `formatting_tool` says whether this turn also admitted `StructuredOutput`.
 Model text and structured business data cannot create this controller field.
+When the worker's serialized result exceeds its output limit, provider outputs
+are discarded and the task fails with `limit`. The controller retains this grant
+receipt alongside the existing typed grant and session metadata, even if that
+metadata alone exceeds the limit. This metadata exception does not retain
+provider text or business outputs; frozen recovery still validates both grant
+representations and their original bindings.
 
 A later verifier can bind, for example,
 `${{ steps.validate.outputs.tool_policy.grant.mode }}` and

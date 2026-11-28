@@ -1146,7 +1146,8 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			w.SessionID = result.SessionID
 		}
 	}
-	if policyErr := retainNativeTaskPolicy(w, msg, &result, turnErr == nil); policyErr != nil {
+	policyErr := retainNativeTaskPolicy(w, msg, &result, turnErr == nil)
+	if policyErr != nil {
 		turnErr = errors.Join(turnErr, policyErr)
 	}
 	result.Outputs, _ = redactValue(result.Outputs, secrets).(map[string]any)
@@ -1156,8 +1157,16 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		outputLimit = m.Limits.MaxOutput
 	}
 	if len(encoded) > outputLimit {
+		// Discard provider outputs, retaining the validated controller receipt
+		// alongside its typed binding. Frozen waits must still verify both.
+		publicPolicy := result.Outputs["tool_policy"]
 		result.Outputs = nil
-		turnErr = fmt.Errorf("worker output exceeds limit")
+		if result.TaskPolicy != nil && publicPolicy != nil {
+			result.Outputs = map[string]any{"tool_policy": publicPolicy}
+		}
+		// Grant validation runs after the original failure causes are captured.
+		// Its integrity error must survive replacement of the size diagnostic.
+		turnErr = errors.Join(policyErr, fmt.Errorf("worker output exceeds limit"))
 	}
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)

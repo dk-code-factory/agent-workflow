@@ -16,7 +16,8 @@ import (
 
 type nativePolicyFixture struct {
 	*nativeTaskFixture
-	reject bool
+	reject      bool
+	alterResult func(*SessionResult)
 }
 
 func (f *nativePolicyFixture) AdmitNativeTask(d *AgentDefinition) (*AgentDefinition, error) {
@@ -39,6 +40,9 @@ func (f *nativePolicyFixture) RunTurn(ctx context.Context, req SessionRequest, e
 	result, err := f.nativeTaskFixture.RunTurn(ctx, req, emit)
 	if req.Definition != nil && req.Definition.NativePolicy != nil {
 		result.TaskPolicy = &NativeTaskPolicyEvidence{Grant: *req.Definition.NativePolicy, Agent: req.ParentWorkerID, InvocationID: req.InvocationID, SessionFingerprint: NativeTaskSessionFingerprint(result.SessionID), FormattingTool: req.Output != nil && req.Output.Schema != nil}
+	}
+	if f.alterResult != nil {
+		f.alterResult(&result)
 	}
 	return result, err
 }
@@ -197,11 +201,15 @@ func TestNativeTaskReadOnlyExplicitRetryRetainsGrant(t *testing.T) {
 }
 
 func TestNativeTaskReadOnlyRejectsTamperedRecoveryReceipt(t *testing.T) {
-	for _, variant := range []string{"public-grant", "original-attempt", "session"} {
+	for _, variant := range []string{"public-grant", "missing-public-grant", "original-attempt", "session", "output-limit-public-grant", "output-limit-missing-public-grant"} {
 		t.Run(variant, func(t *testing.T) {
 			e, store, f, stop := newNativePolicyFixture(t, `jobs: {validate: {steps: [{id: task, uses: agent/run, with: {agent: reviewer.yaml, prompt: Validate}}]}}`, func(SessionRequest) (map[string]any, error) {
+				if strings.HasPrefix(variant, "output-limit-") {
+					return map[string]any{"text": strings.Repeat("x", 16<<10)}, nil
+				}
 				return map[string]any{"text": "verdict"}, nil
 			})
+			e.Workers.Limits.MaxOutput = 16 << 10
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
@@ -219,8 +227,10 @@ func TestNativeTaskReadOnlyRejectsTamperedRecoveryReceipt(t *testing.T) {
 				t.Fatal("missing frozen completion", receipt, err)
 			}
 			switch variant {
-			case "public-grant":
+			case "public-grant", "output-limit-public-grant":
 				receipt.Result.Result.Outputs["tool_policy"].(map[string]any)["grant"].(map[string]any)["mode"] = "forged"
+			case "missing-public-grant", "output-limit-missing-public-grant":
+				delete(receipt.Result.Result.Outputs, "tool_policy")
 			case "original-attempt":
 				receipt.Result.Result.TaskPolicy.TaskAttemptID = "foreign-attempt"
 			case "session":
@@ -411,5 +421,164 @@ func TestNativeTaskReadOnlyEvidenceCannotBeForged(t *testing.T) {
 	result := SessionResult{TaskPolicy: &NativeTaskPolicyEvidence{Grant: *policy}, Outputs: map[string]any{"tool_policy": "model-claim"}}
 	if err := retainNativeTaskPolicy(Worker{}, m, &result, true); err != nil || result.TaskPolicy != nil || result.Outputs["tool_policy"] != nil {
 		t.Fatal("ordinary historical task acquired read-only evidence", result, err)
+	}
+}
+
+func TestNativeTaskReadOnlyOutputLimitRecovery(t *testing.T) {
+	for _, lostCompletion := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lost-completion=%v", lostCompletion), func(t *testing.T) {
+			calls := 0
+			// Provider outputs fit the cap; adding controller grant metadata crosses it.
+			providerOutputs := map[string]any{"text": strings.Repeat("x", (16<<10)-256), "business": "discard me"}
+			raw, err := json.Marshal(providerOutputs)
+			if err != nil || len(raw) >= 16<<10 {
+				t.Fatal("fixture provider outputs must fit the cap", len(raw), err)
+			}
+			source := fmt.Sprintf(`jobs: {validate: {steps: [{id: task, uses: agent/run, continue-on-error: %v, with: {agent: reviewer.yaml, prompt: Validate, turns: 4}}]}}`, lostCompletion)
+			e, store, f, stop := newNativePolicyFixture(t, source, func(SessionRequest) (map[string]any, error) {
+				calls++
+				if calls == 1 {
+					return providerOutputs, nil
+				}
+				return map[string]any{"text": "retried verdict"}, nil
+			})
+			e.Workers.Limits.MaxOutput = 16 << 10
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if lostCompletion {
+				e.Store = &blockCompletionFault{SQLiteStore: store, failID: "task"}
+			}
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || run == nil {
+				t.Fatal("expected output failure", run, err)
+			}
+			if lostCompletion {
+				if !strings.Contains(err.Error(), "lost checkpoint write") {
+					t.Fatal("completion fault not exercised", err)
+				}
+			} else {
+				if run.Status != RunStatusFailed {
+					t.Fatal("ordinary limit changed run status", run.Status)
+				}
+				assertNativeOutputLimitFailure(t, run)
+			}
+			workers, err := e.Workers.List(ctx, run.ID)
+			if err != nil || len(workers) != 1 {
+				t.Fatal(workers, err)
+			}
+			messages, err := e.Workers.Messages(ctx, run.ID, workers[0].ID)
+			if err != nil || len(messages) != 1 {
+				t.Fatal(messages, err)
+			}
+			original := messages[0]
+			if original.Status != RunStatusFailed || original.FailureClass != "limit" || original.UnsafeFailureClass != "" || original.Error != "worker output exceeds limit" || original.Result.TaskPolicy == nil || len(original.Result.Outputs) != 1 || original.Result.Outputs["tool_policy"] == nil {
+				t.Fatal("output cap lost diagnostic or retained provider data", original)
+			}
+			if err := validateRetainedNativeTaskPolicy(workers[0], original); err != nil {
+				t.Fatal("controller receipt did not survive output cap", err)
+			}
+			stop()
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(e.WorkspaceDir, "workflows", "main.yml")); err != nil {
+				t.Fatal(err)
+			}
+			fresh, err := OpenSQLite(store.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = fresh.Close() })
+			replacement, _ := nativePolicyExecutor(t, e.WorkspaceDir, fresh, f)
+			if lostCompletion {
+				// Continue-on-error recovery exposes the frozen failure without retry.
+				recovered, err := replacement.Resume(ctx, run.ID, nil, true)
+				if err != nil || recovered.Status != RunStatusSucceeded || calls != 1 {
+					t.Fatal("lost completion replayed provider work", recovered, err, calls)
+				}
+				assertNativeOutputLimitFailure(t, recovered)
+				if !reflect.DeepEqual(recovered.Jobs["validate"].Steps["task"].Outputs["tool_policy"], original.Result.Outputs["tool_policy"]) {
+					t.Fatal("recovery replaced original public receipt", recovered)
+				}
+				retained, err := replacement.Workers.Messages(ctx, run.ID, workers[0].ID)
+				if err != nil || len(retained) != 1 || !reflect.DeepEqual(retained[0].Result, original.Result) {
+					t.Fatal("recovery changed original durable result", retained, err)
+				}
+				return
+			}
+			resumed, err := replacement.Resume(ctx, run.ID, nil, true)
+			if err != nil || resumed.Status != RunStatusSucceeded || calls != 2 {
+				t.Fatal("explicit output-limit retry failed", resumed, err, calls)
+			}
+			retained, err := replacement.Workers.Messages(ctx, run.ID, workers[0].ID)
+			if err != nil || len(retained) != 2 {
+				t.Fatal(retained, err)
+			}
+			// Acknowledgement may be added; the frozen result and grant cannot change.
+			if !reflect.DeepEqual(retained[0].Result, original.Result) || retained[1].Result.SessionID != original.Result.SessionID || retained[1].TaskAttemptID == original.TaskAttemptID || retained[1].Result.TaskPolicy.InvocationID == original.ID || actionHash(retained[1].Result.TaskPolicy.Grant) != actionHash(original.Result.TaskPolicy.Grant) {
+				t.Fatal("retry replaced original result or widened grant", retained)
+			}
+		})
+	}
+}
+
+func assertNativeOutputLimitFailure(t *testing.T, run *Run) {
+	t.Helper()
+	if run == nil {
+		t.Fatal("missing failed run")
+	}
+	step := run.Jobs["validate"].Steps["task"]
+	if step.Status != RunStatusFailed || step.FailureClass != "limit" || step.Error != "worker output exceeds limit" || step.Outputs["text"] != nil || step.Outputs["business"] != nil || step.Outputs["tool_policy"] == nil {
+		t.Fatal("normal limit failure was replaced", run.Status, step)
+	}
+}
+
+func TestNativeTaskReadOnlyOutputLimitHandlers(t *testing.T) {
+	e, _, _, _ := newNativePolicyFixture(t, `jobs:
+  validate:
+    steps:
+      - id: task
+        uses: agent/run
+        with: {agent: reviewer.yaml, prompt: Validate}
+        onError: [{id: recover, argv: [echo, recovered]}]
+        onFailure: [{id: report, argv: [echo, reported]}]
+        finally: [{id: finish, argv: [echo, finalized]}]
+`, func(SessionRequest) (map[string]any, error) {
+		return map[string]any{"text": strings.Repeat("x", 16<<10)}, nil
+	})
+	e.Workers.Limits.MaxOutput = 16 << 10
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+	if err == nil || run == nil || run.Status != RunStatusFailed {
+		t.Fatal("limit did not retain ordinary failure status", run, err)
+	}
+	life := run.Jobs["validate"].Steps["task"].Lifecycle
+	if life == nil || life.OriginalError != "worker output exceeds limit" || len(life.Handlers["onError"]) != 1 || life.Handlers["onError"][0].Status != RunStatusSucceeded || len(life.Handlers["onFailure"]) != 1 || life.Handlers["onFailure"][0].Status != RunStatusSucceeded || len(life.Handlers["finally"]) != 1 || life.Handlers["finally"][0].Status != RunStatusSucceeded {
+		t.Fatal("limit handlers lost original diagnostic", life)
+	}
+}
+
+func TestNativeTaskReadOnlyOutputLimitCannotHideIntegrityFailure(t *testing.T) {
+	for _, variant := range []string{"missing", "grant"} {
+		t.Run(variant, func(t *testing.T) {
+			e, _, f, _ := newNativePolicyFixture(t, `jobs: {validate: {steps: [{id: task, uses: agent/run, with: {agent: reviewer.yaml, prompt: Validate}}]}}`, func(SessionRequest) (map[string]any, error) {
+				return map[string]any{"text": strings.Repeat("x", 16<<10)}, nil
+			})
+			f.alterResult = func(result *SessionResult) {
+				if variant == "missing" {
+					result.TaskPolicy = nil
+				} else {
+					result.TaskPolicy.Grant.NativeTools = []string{"Read", "Bash"}
+				}
+			}
+			e.Workers.Limits.MaxOutput = 16 << 10
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+			if err == nil || run == nil || run.Status != RunStatusNeedsAttention || run.Jobs["validate"].Steps["task"].FailureClass != "action_integrity" || !strings.Contains(err.Error(), "native task grant evidence is missing or changed") || !strings.Contains(err.Error(), "worker output exceeds limit") {
+				t.Fatal("output cap masked invalid successful evidence", run, err)
+			}
+		})
 	}
 }
