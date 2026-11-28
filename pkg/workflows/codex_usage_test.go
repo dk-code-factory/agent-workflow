@@ -193,6 +193,14 @@ func TestManagedCodexAuthorityUsesOriginalConsumedTurnAndDeadline(t *testing.T) 
 	if err != nil || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 10 {
 		t.Fatal("deadline erased known charge", report, err)
 	}
+	message.StartedAt = time.Now().UTC()
+	messageRaw, _ = json.Marshal(message)
+	if _, err := store.db.Exec(`UPDATE messages SET record=? WHERE id=?`, messageRaw, message.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckManagedCodexAuthority(ctx, id.RunID, id.ID); err != nil {
+		t.Fatal("fresh original lost authority before SQL status change", err)
+	}
 	if _, err := store.db.Exec(`UPDATE messages SET status='queued' WHERE id=?`, message.ID); err != nil {
 		t.Fatal(err)
 	}
