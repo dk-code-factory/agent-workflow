@@ -217,14 +217,20 @@ func recordManagedTaskTerminal(ctx context.Context, tag managedTaskAdmission, re
 
 // Unknown nonworker native attempts remain held. No retry flag or changed
 // logical/physical run may silently grant another provider attempt.
-const managedTaskCoordinateQuery = `SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id)
+const managedTaskCoordinateSelect = `SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id)
  FROM usage_invocations v INDEXED BY usage_origin
  CROSS JOIN usage_observations u
  CROSS JOIN attempts a
- WHERE v.origin_id IN (SELECT CASE WHEN origin_id='' THEN id ELSE origin_id END FROM runs r WHERE r.id=? OR r.origin_id=? OR (?!='' AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=?))
+ WHERE v.origin_id IN (`
+const managedTaskCoordinateOriginQuery = `SELECT CASE WHEN origin_id='' THEN id ELSE origin_id END FROM runs r WHERE r.id=? OR r.origin_id=?`
+const managedTaskCoordinateLogicalQuery = managedTaskCoordinateOriginQuery + ` OR (?!='' AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=?)`
+const managedTaskCoordinatePredicates = `)
  AND u.invocation_id=v.id AND u.observation_key IN (?,?)
  AND a.id IN (v.id,json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.original_admission.task.parent_id'),json_extract(CAST(u.record AS TEXT),'$.managed_codex_admission.admission.task.parent_id'))
  AND a.job_id=? AND a.step_id=? AND a.iteration=?`
+
+const managedTaskCoordinateQuery = managedTaskCoordinateSelect + managedTaskCoordinateOriginQuery + managedTaskCoordinatePredicates
+const managedTaskLogicalCoordinateQuery = managedTaskCoordinateSelect + managedTaskCoordinateLogicalQuery + managedTaskCoordinatePredicates
 
 func managedTaskCoordinateHold(ctx context.Context, tx *sql.Tx, run, job, step string, iteration int, logical string) error {
 	origin := run
@@ -234,7 +240,14 @@ func managedTaskCoordinateHold(ctx context.Context, tx *sql.Tx, run, job, step s
 	if origin == "" {
 		origin = run
 	}
-	rows, err := tx.QueryContext(ctx, managedTaskCoordinateQuery, run, origin, logical, logical, managedSDKAttemptKey, managedCodexAdmissionKey, job, step, iteration)
+	query := managedTaskCoordinateQuery
+	args := []any{run, origin}
+	if logical != "" {
+		query = managedTaskLogicalCoordinateQuery
+		args = append(args, logical, logical)
+	}
+	args = append(args, managedSDKAttemptKey, managedCodexAdmissionKey, job, step, iteration)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

@@ -187,7 +187,7 @@ func TestManagedConversationTaskOriginAndAuthority(t *testing.T) {
 
 func TestManagedConversationReplayQueryUsesOriginIndex(t *testing.T) {
 	s, _, run, _, _ := managedTaskFixture(t, "claude-sdk")
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+managedTaskCoordinateQuery, run.ID, run.ID, "", "", managedSDKAttemptKey, managedCodexAdmissionKey, "job", "conversation", 1)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+managedTaskCoordinateQuery, run.ID, run.ID, managedSDKAttemptKey, managedCodexAdmissionKey, "job", "conversation", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestManagedConversationReplayQueryUsesOriginIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := strings.Join(plan, "\n")
-	if !strings.Contains(all, "usage_origin") || strings.Contains(all, "SCAN u") || !strings.Contains(all, "SEARCH u USING INDEX") {
+	if !strings.Contains(all, "usage_origin") || strings.Contains(all, "SCAN u") || strings.Contains(all, "SCAN r") || !strings.Contains(all, "SEARCH u USING INDEX") {
 		t.Fatal("global historical observation scan", all)
 	}
 }
