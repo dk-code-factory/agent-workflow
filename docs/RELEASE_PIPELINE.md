@@ -183,6 +183,14 @@ new recurring release prerequisite or a substitute for existing certification.
 The source fingerprint covers all tracked bytes and modes. Builds require the
 exact pinned Go toolchain. Scans use current vulnerability databases; high or
 critical image vulnerabilities block release.
+Release scanners use official Linux binaries whose archive SHA256 values and
+versions are pinned in `scripts/release-scanners.json`. Update both architecture
+entries from the upstream release checksums when changing a scanner version.
+CI caches only those download archives and rechecks their hashes and installed
+versions before scanning; vulnerability databases are not cached. Worker image
+archives use gzip level 1 with the same fixed timestamp and empty filename,
+trading a larger compressed archive for less compression time. The compressed
+archive checksum is recorded in the image inventory.
 Images are loaded and pushed from the tested archives without rebuilding. Image
 configuration IDs and registry manifest/index digests are kept distinct in the
 inventory. The multi-architecture index references the tested platform manifests.

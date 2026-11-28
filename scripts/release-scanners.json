@@ -1,0 +1,18 @@
+{
+  "syft": {
+    "version": "1.57.0",
+    "release": "https://github.com/anchore/syft/releases/download/v1.57.0/",
+    "archives": {
+      "amd64": {"name": "syft_1.57.0_linux_amd64.tar.gz", "sha256": "9c077a7d43029b3b13e98a8db720661e700c4d58db6352153a06395ae4a2a704"},
+      "arm64": {"name": "syft_1.57.0_linux_arm64.tar.gz", "sha256": "410cbfa0ae0f63246bc0057843760b1de2833cd23919e025e368fd7681308cdb"}
+    }
+  },
+  "trivy": {
+    "version": "0.76.2",
+    "release": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/",
+    "archives": {
+      "amd64": {"name": "trivy_0.76.2_Linux-64bit.tar.gz", "sha256": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"},
+      "arm64": {"name": "trivy_0.76.2_Linux-ARM64.tar.gz", "sha256": "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"}
+    }
+  }
+}
