@@ -1621,10 +1621,15 @@ index c3b3fa7..f9b2d3f 100644
      /// Replace this thread's disabled plugin IDs.
      /// Omitted/null preserves the list; [] clears it.
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index da4d0e1..4b6e313 100644
+index da4d0e1..f995cb8 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
-@@ -1136,6 +1136,28 @@ pub(crate) async fn apply_bespoke_event_handling(
+@@ -1132,12 +1132,39 @@ pub(crate) async fn apply_bespoke_event_handling(
+                 outgoing.send_server_notification(notification).await;
+             }
+             if let Some(params) = dynamic_tool_call_params {
++                let turn_id = params.turn_id.clone();
+                 let call_id = params.call_id.clone();
                  let (_pending_request_id, rx) = outgoing
                      .send_request(ServerRequestPayload::DynamicToolCall(params))
                      .await;
@@ -1642,18 +1647,25 @@ index da4d0e1..4b6e313 100644
 +                        }
 +                        Ok(None) => {}
 +                        Err(_) => {
-+                            runtime.invalidate();
++                            runtime.invalidate_turn(&turn_id);
 +                            let interrupted = Arc::clone(&conversation);
++                            let failed_turn = turn_id.clone();
 +                            tokio::spawn(async move {
-+                                interrupted.invalidate_agent_workflow_turn().await;
++                                interrupted
++                                    .invalidate_agent_workflow_turn(&failed_turn)
++                                    .await;
 +                            });
 +                        }
 +                    }
 +                }
                  tokio::spawn(async move {
-                     crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+-                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
++                    crate::dynamic_tools::on_call_response(turn_id, call_id, rx, conversation)
++                        .await;
                  });
-@@ -1655,7 +1677,18 @@ async fn handle_token_count_event(
+             }
+         }
+@@ -1655,7 +1682,18 @@ async fn handle_token_count_event(
      token_count_event: TokenCountEvent,
      outgoing: &ThreadScopedOutgoingMessageSender,
  ) {
@@ -1673,7 +1685,7 @@ index da4d0e1..4b6e313 100644
      if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
          let notification = ThreadTokenUsageUpdatedNotification {
              thread_id: conversation_id.to_string(),
-@@ -3801,6 +3834,7 @@ mod tests {
+@@ -3801,6 +3839,7 @@ mod tests {
              conversation_id,
              turn_id.clone(),
              TokenCountEvent {
@@ -1681,7 +1693,7 @@ index da4d0e1..4b6e313 100644
                  info: Some(info),
                  rate_limits: Some(rate_limits),
              },
-@@ -3854,6 +3888,7 @@ mod tests {
+@@ -3854,6 +3893,7 @@ mod tests {
              conversation_id,
              turn_id.clone(),
              TokenCountEvent {
@@ -1690,10 +1702,16 @@ index da4d0e1..4b6e313 100644
                  rate_limits: None,
              },
 diff --git a/codex-rs/app-server/src/dynamic_tools.rs b/codex-rs/app-server/src/dynamic_tools.rs
-index 0069b6d..880510e 100644
+index 0069b6d..31c32f7 100644
 --- a/codex-rs/app-server/src/dynamic_tools.rs
 +++ b/codex-rs/app-server/src/dynamic_tools.rs
-@@ -21,6 +21,16 @@ pub(crate) async fn on_call_response(
+@@ -16,11 +16,22 @@ use crate::server_request_error::is_turn_transition_server_request_error;
+ const INVALID_AUDIO_URL_ERROR: &str = "audio URLs must use an inline data URL";
+ 
+ pub(crate) async fn on_call_response(
++    turn_id: String,
+     call_id: String,
+     receiver: oneshot::Receiver<ClientRequestResult>,
      conversation: Arc<CodexThread>,
  ) {
      let response = receiver.await;
@@ -1704,18 +1722,18 @@ index 0069b6d..880510e 100644
 +    if managed && !matches!(response, Ok(Ok(_))) {
 +        // Turn-transition errors, receiver loss, and explicit client failures
 +        // must revoke/join a managed wait even when the submission queue closed.
-+        conversation.invalidate_agent_workflow_turn().await;
++        conversation.invalidate_agent_workflow_turn(&turn_id).await;
 +        return;
 +    }
      let (response, _error) = match response {
          Ok(Ok(value)) => decode_response(value),
          Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
-@@ -33,12 +43,18 @@ pub(crate) async fn on_call_response(
+@@ -33,12 +44,18 @@ pub(crate) async fn on_call_response(
              fallback_response("dynamic tool request failed")
          }
      };
 +    if managed && _error.is_some() {
-+        conversation.invalidate_agent_workflow_turn().await;
++        conversation.invalidate_agent_workflow_turn(&turn_id).await;
 +        return;
 +    }
  
@@ -1729,17 +1747,17 @@ index 0069b6d..880510e 100644
          content_items: content_items
              .into_iter()
              .map(CoreDynamicToolCallOutputContentItem::from)
-@@ -53,6 +69,9 @@ pub(crate) async fn on_call_response(
+@@ -53,6 +70,9 @@ pub(crate) async fn on_call_response(
          .await
      {
          error!("failed to submit DynamicToolResponse: {err}");
 +        if managed {
-+            conversation.invalidate_agent_workflow_turn().await;
++            conversation.invalidate_agent_workflow_turn(&turn_id).await;
 +        }
      }
  }
  
-@@ -101,6 +120,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
+@@ -101,6 +121,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
  fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
      (
          DynamicToolCallResponse {
@@ -3586,10 +3604,10 @@ index 0000000..8135bcc
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..eced74e
+index 0000000..c4a668e
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +0,1395 @@
+@@ -0,0 +1,1439 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -3620,6 +3638,23 @@ index 0000000..eced74e
 +use std::sync::atomic::AtomicU64;
 +use std::sync::atomic::AtomicUsize;
 +use std::sync::atomic::Ordering;
++
++// A poisoned authority mutex cannot be recovered without trusting partially
++// mutated policy, counters or durable receipt state. Preserve fail-closed panic
++// semantics rather than continuing with the poisoned inner value.
++trait ManagedAuthorityMutex<T> {
++    fn lock_authority(&self) -> std::sync::MutexGuard<'_, T>;
++}
++
++impl<T> ManagedAuthorityMutex<T> for Mutex<T> {
++    #[expect(
++        clippy::expect_used,
++        reason = "poisoned managed authority must never authorize further work"
++    )]
++    fn lock_authority(&self) -> std::sync::MutexGuard<'_, T> {
++        self.lock().expect("managed authority mutex poisoned")
++    }
++}
 +
 +/// Source-owned accounting for the deliberately broker-only execution profile.
 +pub struct AgentWorkflowRuntime {
@@ -3692,7 +3727,7 @@ index 0000000..eced74e
 +
 +impl Drop for BatchGuard {
 +    fn drop(&mut self) {
-+        let mut state = self.runtime.batch.lock().unwrap();
++        let mut state = self.runtime.batch.lock_authority();
 +        if let Some(batch) = state
 +            .as_ref()
 +            .filter(|batch| batch.identity.batch_id == self.id)
@@ -3700,8 +3735,7 @@ index 0000000..eced74e
 +            let completed =
 +                self.runtime
 +                    .journal
-+                    .lock()
-+                    .unwrap()
++                    .lock_authority()
 +                    .as_ref()
 +                    .is_some_and(|(_, journal)| {
 +                        journal.identity.batch_id == self.id
@@ -3710,8 +3744,7 @@ index 0000000..eced74e
 +            let unknown_attempt =
 +                self.runtime
 +                    .intent
-+                    .lock()
-+                    .unwrap()
++                    .lock_authority()
 +                    .as_ref()
 +                    .is_some_and(|(_, intent)| {
 +                        intent.started.batch_id == self.id && intent.completed.is_none()
@@ -3727,9 +3760,26 @@ index 0000000..eced74e
 +impl AgentWorkflowRuntime {
 +    /// Synchronously revoke every outstanding permit before joining turn work.
 +    pub fn invalidate(&self) {
-+        let mut batch = self.batch.lock().unwrap();
++        let mut batch = self.batch.lock_authority();
++        self.invalidate_locked(&mut batch);
++    }
++
++    /// Callback failures can only revoke the batch that produced that callback.
++    pub fn invalidate_turn(&self, turn_id: &str) -> bool {
++        let mut batch = self.batch.lock_authority();
++        if batch
++            .as_ref()
++            .is_none_or(|batch| batch.identity.turn_id != turn_id)
++        {
++            return false;
++        }
++        self.invalidate_locked(&mut batch);
++        true
++    }
++
++    fn invalidate_locked(&self, batch: &mut Option<Batch>) {
 +        self.generation.fetch_add(1, Ordering::AcqRel);
-+        let mut durable = self.journal.lock().unwrap();
++        let mut durable = self.journal.lock_authority();
 +        let pending_journal = durable
 +            .as_ref()
 +            .is_some_and(|(_, journal)| journal.phase != JournalPhase::Completed);
@@ -3742,8 +3792,7 @@ index 0000000..eced74e
 +        });
 +        let unknown_attempt = self
 +            .intent
-+            .lock()
-+            .unwrap()
++            .lock_authority()
 +            .as_ref()
 +            .is_some_and(|(_, intent)| intent.completed.is_none());
 +        if pending_journal || incomplete_batch || unknown_attempt {
@@ -3765,7 +3814,7 @@ index 0000000..eced74e
 +
 +    /// Register before spawning, including a task that will reject invalid work.
 +    pub(crate) fn scheduled(self: &Arc<Self>, call: &str) -> ManagedWorkGuard {
-+        let batch = self.batch.lock().unwrap();
++        let batch = self.batch.lock_authority();
 +        let admitted = batch
 +            .as_ref()
 +            .is_some_and(|batch| batch.sealed && batch.planned.contains(call));
@@ -3780,7 +3829,7 @@ index 0000000..eced74e
 +    }
 +
 +    pub(crate) fn model_scheduled(self: &Arc<Self>) -> ManagedWorkGuard {
-+        let _batch = self.batch.lock().unwrap();
++        let _batch = self.batch.lock_authority();
 +        let generation = self.generation.load(Ordering::Acquire);
 +        self.model_generation.store(generation, Ordering::Release);
 +        self.active_tasks.fetch_add(1, Ordering::AcqRel);
@@ -3806,6 +3855,16 @@ index 0000000..eced74e
 +            }
 +            notified.await;
 +        }
++    }
++
++    #[cfg(test)]
++    pub(crate) fn new_for_test(policy: AgentWorkflowPolicy) -> Self {
++        Self::new(policy)
++    }
++
++    #[cfg(test)]
++    pub(crate) fn model_tasks_for_test(&self) -> usize {
++        self.active_tasks.load(Ordering::Acquire)
 +    }
 +
 +    fn new(policy: AgentWorkflowPolicy) -> Self {
@@ -3844,7 +3903,7 @@ index 0000000..eced74e
 +        {
 +            return Err(invalid("missing or invalid engine invocation identity"));
 +        }
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        if state.is_some()
 +            || self.active_work.load(Ordering::Acquire) != 0
 +            || self.active_tasks.load(Ordering::Acquire) != 1
@@ -3855,8 +3914,7 @@ index 0000000..eced74e
 +        }
 +        if self
 +            .journal
-+            .lock()
-+            .unwrap()
++            .lock_authority()
 +            .as_ref()
 +            .is_some_and(|(_, journal)| journal.phase != JournalPhase::Completed)
 +        {
@@ -3864,7 +3922,7 @@ index 0000000..eced74e
 +                "an original broker batch requires explicit receipt recovery or hold",
 +            ));
 +        }
-+        let mut bound = self.invocation.lock().unwrap();
++        let mut bound = self.invocation.lock_authority();
 +        if bound
 +            .as_ref()
 +            .is_some_and(|(id, previous)| *id == invocation && *previous != turn)
@@ -3905,7 +3963,7 @@ index 0000000..eced74e
 +        original: &AgentWorkflowParkedBatch,
 +        rollout: &Path,
 +    ) -> Result<(BatchGuard, Vec<OriginalCall>)> {
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        if state.is_some()
 +            || self.active_work.load(Ordering::Acquire) != 0
 +            || self.active_tasks.load(Ordering::Acquire) != 1
@@ -3917,7 +3975,7 @@ index 0000000..eced74e
 +            ));
 +        }
 +        let raw = read_raw_rollout(rollout)?;
-+        let durable = self.journal.lock().unwrap();
++        let durable = self.journal.lock_authority();
 +        let (_, journal) = durable
 +            .as_ref()
 +            .ok_or_else(|| invalid("original seal absent"))?;
@@ -3932,7 +3990,7 @@ index 0000000..eced74e
 +            ));
 +        }
 +        raw.validate_journal(journal, &self.policy)?;
-+        let mut intent = self.intent.lock().unwrap();
++        let mut intent = self.intent.lock_authority();
 +        let (file, value) = intent
 +            .as_mut()
 +            .ok_or_else(|| invalid("original native request intent absent"))?;
@@ -3964,7 +4022,7 @@ index 0000000..eced74e
 +        }
 +        let calls = journal.calls.clone();
 +        let ids = original.call_ids.iter().cloned().collect::<BTreeSet<_>>();
-+        *self.invocation.lock().unwrap() =
++        *self.invocation.lock_authority() =
 +            Some((original.invocation_id.clone(), original.turn_id.clone()));
 +        *state = Some(Batch {
 +            identity: original.clone(),
@@ -3999,7 +4057,7 @@ index 0000000..eced74e
 +        if !tool.is_default_namespace() || !self.policy.broker_tools.contains(&tool.name) {
 +            return Err(invalid("ungranted tool emitted by model"));
 +        }
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
 +        if batch.planned.len() >= 128
 +            || batch.sealed
@@ -4033,7 +4091,7 @@ index 0000000..eced74e
 +    }
 +
 +    pub(crate) fn seal(&self, response_id: String) -> Result<()> {
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
 +        if batch.sealed || response_id.is_empty() {
 +            return Err(invalid("incomplete or duplicate model batch seal"));
@@ -4047,19 +4105,19 @@ index 0000000..eced74e
 +    /// Persist before the first transport request. A started intent that has no
 +    /// durable actual Completed witness is unknown usage and cannot be retried.
 +    pub(crate) fn start_model_intent(&self, rollout: &Path) -> Result<()> {
-+        let state = self.batch.lock().unwrap();
++        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("model intent has no admitted batch"))?;
 +        sync_raw_rollout(rollout)?;
 +        crate::agent_workflow_journal::sync_parent_entries_once(
 +            rollout,
-+            &mut self.parent_barriers.lock().unwrap(),
++            &mut self.parent_barriers.lock_authority(),
 +        )?;
 +        let value = ModelRequestIntent::begin(batch.identity.clone(), &self.policy)?;
 +        let file = IntentFile::for_rollout(rollout)?;
 +        file.persist(&value, &self.policy)?;
-+        *self.intent.lock().unwrap() = Some((file, value));
++        *self.intent.lock_authority() = Some((file, value));
 +        Ok(())
 +    }
 +
@@ -4068,7 +4126,7 @@ index 0000000..eced74e
 +        response_id: &str,
 +        usage: &codex_protocol::protocol::TokenUsage,
 +    ) -> Result<codex_protocol::protocol::AgentWorkflowModelWitness> {
-+        let state = self.batch.lock().unwrap();
++        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("native completed witness has no live model batch"))?;
@@ -4103,14 +4161,14 @@ index 0000000..eced74e
 +        usage: serde_json::Value,
 +    ) -> Result<()> {
 +        self.seal(response_id)?;
-+        let state = self.batch.lock().unwrap();
++        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("batch disappeared before durable seal"))?;
 +        sync_raw_rollout(rollout)?;
 +        crate::agent_workflow_journal::sync_parent_entries_once(
 +            rollout,
-+            &mut self.parent_barriers.lock().unwrap(),
++            &mut self.parent_barriers.lock_authority(),
 +        )?;
 +        let raw = read_raw_rollout(rollout)?;
 +        let calls = batch.calls.values().cloned().collect::<Vec<_>>();
@@ -4121,9 +4179,9 @@ index 0000000..eced74e
 +            raw.validate_journal(&journal, &self.policy)?;
 +            let file = JournalFile::for_rollout(rollout)?;
 +            file.persist(&journal, &self.policy)?;
-+            *self.journal.lock().unwrap() = Some((file, journal));
++            *self.journal.lock_authority() = Some((file, journal));
 +        }
-+        let mut intent = self.intent.lock().unwrap();
++        let mut intent = self.intent.lock_authority();
 +        let (file, original) = intent
 +            .as_mut()
 +            .ok_or_else(|| invalid("native completion lacks original model intent"))?;
@@ -4137,7 +4195,7 @@ index 0000000..eced74e
 +    /// Caller first flushes and syncs every native real output. The completion
 +    /// marker is a second ordered durable barrier before another model request.
 +    pub(crate) fn complete_durable(&self, rollout: &Path) -> Result<()> {
-+        let state = self.batch.lock().unwrap();
++        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("batch disappeared before durable completion"))?;
@@ -4145,7 +4203,7 @@ index 0000000..eced74e
 +            return Ok(());
 +        }
 +        sync_raw_rollout(rollout)?;
-+        let mut journal = self.journal.lock().unwrap();
++        let mut journal = self.journal.lock_authority();
 +        let (file, value) = journal
 +            .as_mut()
 +            .ok_or_else(|| invalid("durable result journal absent"))?;
@@ -4163,7 +4221,7 @@ index 0000000..eced74e
 +        &self,
 +        rollout: &Path,
 +    ) -> Result<Vec<codex_protocol::models::ResponseItem>> {
-+        let state = self.batch.lock().unwrap();
++        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("recovery batch absent"))?;
@@ -4172,7 +4230,7 @@ index 0000000..eced74e
 +                "recovery results have not all received the fresh permit",
 +            ));
 +        }
-+        let durable = self.journal.lock().unwrap();
++        let durable = self.journal.lock_authority();
 +        let (_, journal) = durable
 +            .as_ref()
 +            .ok_or_else(|| invalid("recovery journal absent"))?;
@@ -4198,7 +4256,7 @@ index 0000000..eced74e
 +                } else {
 +                    self.recovery_hold.store(true, Ordering::Release);
 +                }
-+                *self.intent.lock().unwrap() = Some((intent_file, intent));
++                *self.intent.lock_authority() = Some((intent_file, intent));
 +            }
 +            Err(error)
 +                if error.kind() == std::io::ErrorKind::NotFound
@@ -4223,7 +4281,7 @@ index 0000000..eced74e
 +                {
 +                    return Err(invalid("completed marker has missing real outputs"));
 +                }
-+                *self.journal.lock().unwrap() = Some((file, journal));
++                *self.journal.lock_authority() = Some((file, journal));
 +            }
 +            Err(error)
 +                if error.kind() == std::io::ErrorKind::NotFound
@@ -4239,7 +4297,7 @@ index 0000000..eced74e
 +    }
 +
 +    pub(crate) fn park(&self, call: &str) -> Result<()> {
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
 +        if !batch.sealed || !batch.planned.contains(call) || !batch.parked.insert(call.to_owned()) {
 +            return Err(invalid("unsealed, unknown or duplicate parked callback"));
@@ -4248,7 +4306,7 @@ index 0000000..eced74e
 +    }
 +
 +    fn batch_permit(&self, batch: &Batch) -> Result<AgentWorkflowBatchPermit> {
-+        let durable = self.journal.lock().unwrap();
++        let durable = self.journal.lock_authority();
 +        let usage = match durable.as_ref() {
 +            Some((_, journal))
 +                if journal.identity == batch.identity
@@ -4278,7 +4336,7 @@ index 0000000..eced74e
 +    /// Called after the app-server has queued this call's public RPC request.
 +    /// No attestation exists until every deferred future is both parked and published.
 +    pub fn published(&self, call: &str) -> Result<Option<AgentWorkflowBatchPermit>> {
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        let batch = state.as_mut().ok_or_else(|| invalid("no model batch"))?;
 +        if !batch.parked.contains(call) || !batch.published.insert(call.to_owned()) {
 +            return Err(invalid("unknown or duplicate published callback"));
@@ -4304,7 +4362,7 @@ index 0000000..eced74e
 +        call: &str,
 +        mut response: DynamicToolResponse,
 +    ) -> Result<Vec<(String, DynamicToolResponse)>> {
-+        let mut state = self.batch.lock().unwrap();
++        let mut state = self.batch.lock_authority();
 +        let batch = state
 +            .as_mut()
 +            .ok_or_else(|| invalid("no live parked batch"))?;
@@ -4327,7 +4385,7 @@ index 0000000..eced74e
 +        // Persist the entire semantic batch before delivering even one oneshot.
 +        // Test-only memory runtimes have no local journal and never admit a real
 +        // managed app-server callback without seal_durable's barrier.
-+        if let Some((file, journal)) = self.journal.lock().unwrap().as_mut() {
++        if let Some((file, journal)) = self.journal.lock_authority().as_mut() {
 +            if journal.phase == JournalPhase::ResultsAccepted {
 +                // Replay must return the exact already durable semantic set;
 +                // the fresh control epoch never changes original result bytes.
@@ -4867,6 +4925,10 @@ index 0000000..eced74e
 +        );
 +        assert!(runtime.plan("a", &ToolName::new(None, FIRST)).is_err());
 +        let (old, work) = parked(&runtime);
++        assert!(!runtime.invalidate_turn("stale-turn"));
++        assert!(guard._task.is_admitted());
++        assert!(runtime.invalidate_turn("turn"));
++        assert!(!guard._task.is_admitted());
 +        drop(guard);
 +        assert!(runtime.accept_result("a", response(&old)).is_err());
 +        assert!(
@@ -5150,30 +5212,23 @@ index 26e780e..428aba1 100644
          rx_event: rx_events,
          agent_status,
 diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
-index a8d5865..509b018 100644
+index a8d5865..faebe4a 100644
 --- a/codex-rs/core/src/codex_thread.rs
 +++ b/codex-rs/core/src/codex_thread.rs
-@@ -310,6 +310,19 @@ impl CodexThread {
+@@ -310,6 +310,12 @@ impl CodexThread {
          &self.session.services.thread_extension_data
      }
  
 +    /// Revoke the source-owned managed park and join the actual active turn.
 +    /// This bypasses a possibly closed submission queue during disconnect.
-+    pub async fn invalidate_agent_workflow_turn(&self) {
-+        if let Some(runtime) = self
-+            .thread_extension_data()
-+            .get::<crate::AgentWorkflowRuntime>()
-+        {
-+            runtime.invalidate();
-+            self.session.interrupt_task().await;
-+            runtime.join_work().await;
-+        }
++    pub async fn invalidate_agent_workflow_turn(&self, turn_id: &str) {
++        self.session.invalidate_agent_workflow_turn(turn_id).await;
 +    }
 +
      /// Returns tools from this thread’s ready, unshared Apps MCP client.
      /// Returns an empty list if the client is absent, still starting, or uses
      /// a shared catalog. Does not start or wait for discovery.
-@@ -541,21 +554,57 @@ impl CodexThread {
+@@ -541,21 +547,57 @@ impl CodexThread {
          &self,
          request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
      ) -> CodexResult<StartIfIdleSubmission> {
@@ -5235,7 +5290,7 @@ index a8d5865..509b018 100644
          };
          match self
              .io
-@@ -656,6 +705,35 @@ impl CodexThread {
+@@ -656,6 +698,35 @@ impl CodexThread {
          request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
          mode: TurnInputMode,
      ) -> CodexResult<TurnInputSubmission> {
@@ -5361,7 +5416,7 @@ index 4356991..fe1f6fd 100644
          let shutdown = self.mcp_prewarm_shutdown.clone();
          let worker = self.services.runtime_handle.spawn(async move {
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index f365c4e..def5c64 100644
+index f365c4e..ce4a8e4 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
 @@ -440,6 +440,7 @@ pub(crate) enum NetworkApprovalTurn {
@@ -5418,7 +5473,18 @@ index f365c4e..def5c64 100644
          if sub.trace.is_none() {
              sub.trace = current_span_w3c_trace_context();
          }
-@@ -3652,25 +3685,52 @@ impl Session {
+@@ -2363,6 +2396,10 @@ impl Session {
+                 self.services.plugins_manager.as_ref(),
+                 environments.single_local_environment(),
+                 &disabled_plugin_ids,
++                self.services
++                    .thread_extension_data
++                    .get::<crate::AgentWorkflowRuntime>()
++                    .is_some(),
+             )
+             .await;
+ 
+@@ -3652,25 +3689,52 @@ impl Session {
          clippy::await_holding_invalid_type,
          reason = "active turn checks and turn state updates must remain atomic"
      )]
@@ -5486,7 +5552,7 @@ index f365c4e..def5c64 100644
      }
  
      #[expect(
-@@ -5299,12 +5359,13 @@ impl Session {
+@@ -5299,12 +5363,13 @@ impl Session {
          incomplete: &ResponseIncompleteError,
      ) {
          if let Some(response_id) = &incomplete.response_id {
@@ -5506,14 +5572,14 @@ index f365c4e..def5c64 100644
          }
          // Accounting may exhaust the budget; keep the original incomplete-response reason.
          let _ = self
-@@ -5354,8 +5415,20 @@ impl Session {
+@@ -5354,8 +5419,20 @@ impl Session {
              }),
          )
          .await;
 -        self.record_response_token_usage(turn_context, response_id, usage)
 +        let witness = self
 +            .record_response_token_usage(turn_context, response_id, usage)
-             .await;
++            .await;
 +        if let Some(witness) = witness {
 +            self.send_event(
 +                turn_context,
@@ -5523,12 +5589,12 @@ index f365c4e..def5c64 100644
 +                    rate_limits: None,
 +                }),
 +            )
-+            .await;
+             .await;
 +        }
      }
  
      pub(crate) async fn record_response_token_usage(
-@@ -5363,11 +5436,11 @@ impl Session {
+@@ -5363,11 +5440,11 @@ impl Session {
          turn_context: &TurnContext,
          response_id: &str,
          usage: Option<&TokenUsage>,
@@ -5543,7 +5609,7 @@ index f365c4e..def5c64 100644
              self.thread_id,
              &turn_context.sub_id,
              self.session_id(),
-@@ -5378,8 +5451,23 @@ impl Session {
+@@ -5378,8 +5455,23 @@ impl Session {
              response_id.to_string(),
              usage,
          );
@@ -5567,7 +5633,7 @@ index f365c4e..def5c64 100644
      }
  
      pub(crate) async fn record_token_usage_info(
-@@ -5539,7 +5627,11 @@ impl Session {
+@@ -5539,7 +5631,11 @@ impl Session {
              let state = self.state.lock().await;
              state.token_info_and_rate_limits()
          };
@@ -5580,8 +5646,23 @@ index f365c4e..def5c64 100644
          self.send_event(turn_context, event).await;
      }
  
+@@ -5801,7 +5897,14 @@ async fn build_hooks_config(
+     plugins_manager: &PluginsManager,
+     environment: Option<&TurnEnvironment>,
+     disabled_plugin_ids: &[String],
++    managed: bool,
+ ) -> HooksConfig {
++    // Startup and global refresh must share the same empty managed authority.
++    // Legacy notify is independent of feature flags, so never load native or
++    // plugin hook inputs for an engine-owned managed session.
++    if managed {
++        return HooksConfig::default();
++    }
+     let (hook_shell_program, hook_shell_argv) = environment
+         .and_then(|environment| environment.shell.as_ref())
+         .map(|shell| {
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
-index 52325c5..3096347 100644
+index 52325c5..fa1a936 100644
 --- a/codex-rs/core/src/session/session.rs
 +++ b/codex-rs/core/src/session/session.rs
 @@ -1049,6 +1049,8 @@ impl Session {
@@ -5626,31 +5707,14 @@ index 52325c5..3096347 100644
                  && (!use_executor_shell_snapshots || credential_broker_available)
              {
                  let snapshot_credential_broker = credential_broker_available.then(|| {
-@@ -1665,13 +1675,17 @@ impl Session {
-             let mcp_runtime = Arc::new(McpRuntime::empty(
-                 mcp_projection.config.prefix_mcp_tool_names,
-             ));
--            let hooks_config = build_hooks_config(
--                &config,
--                plugins_manager.as_ref(),
--                resolved_environments.single_local_environment(),
--                &session_configuration.disabled_plugin_ids,
--            )
--            .await;
-+            let hooks_config = if agent_workflow_policy.is_some() {
-+                codex_hooks::HooksConfig::default()
-+            } else {
-+                build_hooks_config(
-+                    &config,
-+                    plugins_manager.as_ref(),
-+                    resolved_environments.single_local_environment(),
-+                    &session_configuration.disabled_plugin_ids,
-+                )
-+                .await
-+            };
+@@ -1670,6 +1680,7 @@ impl Session {
+                 plugins_manager.as_ref(),
+                 resolved_environments.single_local_environment(),
+                 &session_configuration.disabled_plugin_ids,
++                agent_workflow_policy.is_some(),
+             )
+             .await;
              let (hooks, async_hook_results) = Hooks::new(
-                 hooks_config,
-                 thread_id,
 diff --git a/codex-rs/core/src/session/startup_prewarm.rs b/codex-rs/core/src/session/startup_prewarm.rs
 index 5d3fa4d..cfec7c0 100644
 --- a/codex-rs/core/src/session/startup_prewarm.rs
@@ -5671,7 +5735,7 @@ index 5d3fa4d..cfec7c0 100644
          let mut state = self.state.lock().await;
          if state.shutting_down {
 diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
-index 9bb8aa2..c638078 100644
+index 9bb8aa2..4410027 100644
 --- a/codex-rs/core/src/session/tests.rs
 +++ b/codex-rs/core/src/session/tests.rs
 @@ -3466,24 +3466,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
@@ -5783,7 +5847,7 @@ index 9bb8aa2..c638078 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -13819,3 +13833,54 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+@@ -13819,3 +13833,401 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
          "rejection must not permit same-name ordinary-auth replacement in this session"
      );
  }
@@ -5837,6 +5901,353 @@ index 9bb8aa2..c638078 100644
 +    assert!(rx_sub.is_empty());
 +    assert!(io.submit(Op::Shutdown).await.is_ok());
 +    assert!(matches!(rx_sub.recv().await.unwrap().op, Op::Shutdown));
++}
++
++// These fixtures call actual Session setup, hook refresh, task completion and
++// turn-scoped cancellation. They never start a model/provider request.
++fn managed_source_runtime(session: &Session) -> Arc<crate::AgentWorkflowRuntime> {
++    let runtime = Arc::new(crate::AgentWorkflowRuntime::new_for_test(
++        codex_protocol::protocol::AgentWorkflowPolicy {
++            protocol: 1,
++            build_id: "a".repeat(64),
++            policy_id: "b".repeat(64),
++            broker_tools: vec!["broker_0123456789abcdef01234567".into()],
++        },
++    ));
++    session
++        .services
++        .thread_extension_data
++        .insert_arc(Arc::clone(&runtime));
++    runtime
++}
++
++async fn managed_source_model_registered(runtime: &crate::AgentWorkflowRuntime) {
++    timeout(StdDuration::from_secs(2), async {
++        while runtime.model_tasks_for_test() != 1 {
++            tokio::task::yield_now().await;
++        }
++    })
++    .await
++    .expect("managed setup registered before its first asynchronous state lock");
++}
++
++struct ManagedSourceTask {
++    polled: Arc<std::sync::atomic::AtomicBool>,
++    started: Arc<Notify>,
++    release: Arc<Notify>,
++}
++
++impl SessionTask for ManagedSourceTask {
++    fn kind(&self) -> TaskKind {
++        TaskKind::Regular
++    }
++
++    fn span_name(&self) -> &'static str {
++        "session_task.managed_source_fixture"
++    }
++
++    async fn run(
++        self: Arc<Self>,
++        _session: Arc<Session>,
++        _ctx: Arc<TurnContext>,
++        _input: Vec<TurnInput>,
++        cancellation_token: CancellationToken,
++    ) -> SessionTaskResult {
++        self.polled
++            .store(true, std::sync::atomic::Ordering::Release);
++        self.started.notify_one();
++        tokio::select! {
++            _ = self.release.notified() => Ok(None),
++            _ = cancellation_token.cancelled() => Err(CodexErr::TurnAborted),
++            _ = tokio::time::sleep(StdDuration::from_secs(5)) => {
++                Err(CodexErr::InvalidRequest("managed fixture release deadline".into()))
++            }
++        }
++    }
++}
++
++#[tokio::test]
++async fn managed_source_hook_refresh_preserves_empty_startup_authority() {
++    let owned = tempfile::tempdir().expect("owned hook fixture");
++    let ambient = owned.path().join("unavailable-ambient-hook");
++    let (session, _turn, _events) = make_session_and_context_with_auth_and_config_and_rx(
++        CodexAuth::from_api_key("fake-only"),
++        Vec::new(),
++        |config| {
++            config.notify = Some(vec![ambient.to_string_lossy().into_owned()]);
++            config.features.disable(Feature::CodexHooks);
++            config.features.disable(Feature::Plugins);
++        },
++    )
++    .await;
++    let config = session.get_config().await;
++    let payload = codex_hooks::HookPayload {
++        session_id: session.thread_id,
++        cwd: config.cwd.clone(),
++        client: None,
++        triggered_at: chrono::Utc::now(),
++        hook_event: codex_hooks::HookEvent::AfterAgent {
++            event: codex_hooks::HookEventAfterAgent {
++                thread_id: session.thread_id,
++                turn_id: "owned-hook-turn".into(),
++                input_messages: Vec::new(),
++                last_assistant_message: None,
++            },
++        },
++    };
++    let native_config = timeout(
++        StdDuration::from_secs(2),
++        build_hooks_config(
++            &config,
++            session.services.plugins_manager.as_ref(),
++            None,
++            &[],
++            false,
++        ),
++    )
++    .await
++    .expect("native hook config deadline");
++    let native = session.hooks().reconfigured(native_config);
++    // Even with both feature flags off, legacy notify remains registered on the
++    // native control. Its absent owned command cannot spawn a child process.
++    assert_eq!(
++        timeout(StdDuration::from_secs(2), native.dispatch(payload.clone()))
++            .await
++            .expect("native hook dispatch deadline")
++            .len(),
++        1
++    );
++    let managed_config = timeout(
++        StdDuration::from_secs(2),
++        build_hooks_config(
++            &config,
++            session.services.plugins_manager.as_ref(),
++            None,
++            &[],
++            true,
++        ),
++    )
++    .await
++    .expect("managed startup hook config deadline");
++    assert!(managed_config.legacy_notify_argv.is_none());
++    assert!(!managed_config.feature_enabled);
++    assert!(managed_config.config_layer_stack.is_none());
++    assert!(managed_config.plugin_hook_sources.is_empty());
++    let (startup, _hook_events) = Hooks::new(
++        managed_config,
++        session.thread_id,
++        Arc::new(CoreHookMcpExecutor {
++            runtime: Arc::clone(&session.services.mcp_runtime),
++            thread_id: session.thread_id,
++        }),
++    )
++    .expect("managed startup hooks");
++    assert!(
++        timeout(StdDuration::from_secs(2), startup.dispatch(payload.clone()))
++            .await
++            .expect("managed startup dispatch deadline")
++            .is_empty()
++    );
++    session.services.hooks.store(Arc::new(startup));
++    let _runtime = managed_source_runtime(&session);
++    for _ in 0..2 {
++        timeout(
++            StdDuration::from_secs(2),
++            session.refresh_hooks(Arc::clone(&config)),
++        )
++        .await
++        .expect("global hook refresh deadline");
++        assert!(
++            timeout(
++                StdDuration::from_secs(2),
++                session.hooks().dispatch(payload.clone())
++            )
++            .await
++            .expect("refreshed managed dispatch deadline")
++            .is_empty()
++        );
++    }
++    assert!(!ambient.exists());
++}
++
++#[expect(
++    clippy::await_holding_invalid_type,
++    reason = "hold Session state to deterministically block managed pre-registration setup"
++)]
++#[tokio::test]
++async fn managed_source_revoked_setup_retires_its_registered_turn() {
++    let (session, turn, events) = make_session_and_context_with_rx().await;
++    let runtime = managed_source_runtime(&session);
++    // Retain a cancelled predecessor's conservative hold while rejecting setup.
++    let prior_task = runtime.model_scheduled();
++    let prior_batch = runtime
++        .begin(
++            "thread".into(),
++            "prior-turn".into(),
++            "prior-invocation".into(),
++        )
++        .expect("prior original batch");
++    runtime
++        .plan(
++            "prior-call",
++            &codex_extension_api::ToolName::new(None, "broker_0123456789abcdef01234567"),
++        )
++        .expect("original planned callback");
++    runtime.invalidate();
++    drop(prior_batch);
++    drop(prior_task);
++    turn.extension_data
++        .insert(crate::AgentWorkflowInvocation("revoked-setup".into()));
++    *session.active_turn.lock().await = Some(ActiveTurn::default());
++    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    let state = session.state.lock().await;
++    let task_session = Arc::clone(&session);
++    let task_turn = Arc::clone(&turn);
++    let task_polled = Arc::clone(&polled);
++    let mut setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
++        task_session
++            .start_task(
++                task_turn,
++                Vec::new(),
++                ManagedSourceTask {
++                    polled: task_polled,
++                    started: Arc::new(Notify::new()),
++                    release: Arc::new(Notify::new()),
++                },
++            )
++            .await;
++    }));
++    managed_source_model_registered(&runtime).await;
++    runtime.invalidate();
++    let reservation = session
++        .active_turn
++        .lock()
++        .await
++        .take()
++        .expect("taskless reservation");
++    assert!(reservation.task.is_none());
++    drop(state);
++    timeout(StdDuration::from_secs(2), &mut setup)
++        .await
++        .expect("revoked setup completed")
++        .expect("setup did not panic");
++    let mut rejected = false;
++    timeout(StdDuration::from_secs(2), async {
++        loop {
++            let event = events.recv().await.expect("terminal event channel open");
++            if event.id != turn.sub_id {
++                continue;
++            }
++            match event.msg {
++                EventMsg::Error(error) => {
++                    assert!(error.message.contains("revoked before execution"));
++                    rejected = true;
++                }
++                EventMsg::TurnComplete(_) => break,
++                _ => {}
++            }
++        }
++    })
++    .await
++    .expect("revoked task terminal event deadline");
++    assert!(rejected);
++    assert!(!polled.load(std::sync::atomic::Ordering::Acquire));
++    timeout(StdDuration::from_secs(2), runtime.join_work())
++        .await
++        .expect("revoked setup and task guards joined without self-deadlock");
++    assert!(session.active_turn.lock().await.is_none());
++    let probe = runtime.model_scheduled();
++    let error = runtime
++        .begin(
++            "thread".into(),
++            "subsequent-turn".into(),
++            "subsequent-invocation".into(),
++        )
++        .err()
++        .expect("cancelled original remains held");
++    assert!(error.to_string().contains("requires recovery hold"));
++    drop(probe);
++}
++
++#[expect(
++    clippy::await_holding_invalid_type,
++    reason = "hold Session state to deterministically block managed pre-registration setup"
++)]
++#[tokio::test]
++async fn managed_source_stale_callback_cannot_revoke_later_task_or_finish_it() {
++    let (session, turn, events) = make_session_and_context_with_rx().await;
++    let runtime = managed_source_runtime(&session);
++    turn.extension_data
++        .insert(crate::AgentWorkflowInvocation("later-turn".into()));
++    *session.active_turn.lock().await = Some(ActiveTurn::default());
++    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    let started = Arc::new(Notify::new());
++    let release = Arc::new(Notify::new());
++    let state = session.state.lock().await;
++    let task_session = Arc::clone(&session);
++    let task_turn = Arc::clone(&turn);
++    let task = ManagedSourceTask {
++        polled: Arc::clone(&polled),
++        started: Arc::clone(&started),
++        release: Arc::clone(&release),
++    };
++    let mut setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
++        task_session.start_task(task_turn, Vec::new(), task).await;
++    }));
++    managed_source_model_registered(&runtime).await;
++    timeout(
++        StdDuration::from_secs(2),
++        session.invalidate_agent_workflow_turn("prior-turn"),
++    )
++    .await
++    .expect("stale callback must not join a later taskless reservation");
++    assert!(session.active_turn.lock().await.is_some());
++    drop(state);
++    timeout(StdDuration::from_secs(2), &mut setup)
++        .await
++        .expect("later setup completed")
++        .expect("setup did not panic");
++    timeout(StdDuration::from_secs(2), started.notified())
++        .await
++        .expect("later task remained admitted");
++    assert!(polled.load(std::sync::atomic::Ordering::Acquire));
++    let (_unused_session, mut stale_context) = make_session_and_context().await;
++    stale_context.sub_id = "prior-turn".into();
++    timeout(
++        StdDuration::from_secs(2),
++        session.on_task_finished(Arc::new(stale_context), Ok(None)),
++    )
++    .await
++    .expect("stale completion is bounded");
++    assert_eq!(
++        session
++            .active_turn
++            .lock()
++            .await
++            .as_ref()
++            .expect("later turn retained")
++            .task
++            .as_ref()
++            .expect("later task retained")
++            .turn_context
++            .sub_id,
++        turn.sub_id
++    );
++    release.notify_one();
++    timeout(StdDuration::from_secs(2), async {
++        loop {
++            let event = events.recv().await.expect("terminal event channel open");
++            if event.id == turn.sub_id && matches!(event.msg, EventMsg::TurnComplete(_)) {
++                break;
++            }
++        }
++    })
++    .await
++    .expect("later task completed after stale callback");
++    timeout(StdDuration::from_secs(2), runtime.join_work())
++        .await
++        .expect("later task guard released");
++    assert!(session.active_turn.lock().await.is_none());
 +}
 diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
 index c3a82ef..6c66411 100644
@@ -6077,7 +6488,7 @@ index e548195..1f43005 100644
                  ctx.sess.thread_id,
                  &call.tool_name,
 diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
-index 77ce9b8..e2baa58 100644
+index 77ce9b8..2a968d3 100644
 --- a/codex-rs/core/src/tasks/mod.rs
 +++ b/codex-rs/core/src/tasks/mod.rs
 @@ -49,7 +49,9 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
@@ -6126,19 +6537,43 @@ index 77ce9b8..e2baa58 100644
          // Replace the cache; in-flight acquisitions retain their previous Arc.
          self.services
              .thread_extension_data
-@@ -383,6 +414,11 @@ impl Session {
+@@ -383,16 +414,26 @@ impl Session {
          );
          let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
          let task_future = async move {
 +            let _managed_task = managed_task;
-+            if _managed_task.as_ref().is_some_and(|guard| !guard.is_admitted()) {
-+                done_clone.notify_waiters();
-+                return;
-+            }
              let ctx_for_finish = Arc::clone(&ctx);
-             let task_result = task_for_run
-                 .run(
-@@ -471,6 +507,15 @@ impl Session {
+-            let task_result = task_for_run
+-                .run(
+-                    Arc::clone(&session),
+-                    ctx,
+-                    task_input,
+-                    task_cancellation_token.child_token(),
+-                )
+-                .instrument(trace_span!("session_task.run"))
+-                .await;
++            let task_result = if _managed_task.as_ref().is_some_and(|guard| !guard.is_admitted()) {
++                // Setup can finish after its reservation was revoked. Retire
++                // the registered turn through the normal terminal path without
++                // polling provider work or joining our own managed model guard.
++                Err(codex_protocol::error::CodexErr::InvalidRequest(
++                    "managed task was revoked before execution".into(),
++                ))
++            } else {
++                task_for_run
++                    .run(
++                        Arc::clone(&session),
++                        ctx,
++                        task_input,
++                        task_cancellation_token.child_token(),
++                    )
++                    .instrument(trace_span!("session_task.run"))
++                    .await
++            };
+             let sess = Arc::clone(&session);
+             // Private reviewers save their transcript together with the terminal event.
+             // Errors and cancellation retain their existing save path.
+@@ -471,6 +512,15 @@ impl Session {
          self: &Arc<Self>,
          sub_id: String,
      ) {
@@ -6154,7 +6589,7 @@ index 77ce9b8..e2baa58 100644
          if !self.input_queue.has_pending_mailbox_items().await {
              return;
          }
-@@ -571,6 +616,13 @@ impl Session {
+@@ -571,6 +621,13 @@ impl Session {
      }
  
      pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -6168,7 +6603,7 @@ index 77ce9b8..e2baa58 100644
          let mut aborted_turn = false;
          let mut active_turn_to_clear = None;
          if let Some(mut active_turn) = self.take_active_turn(&reason).await {
-@@ -595,6 +647,9 @@ impl Session {
+@@ -595,11 +652,28 @@ impl Session {
              // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
              self.input_queue.clear_pending(&active_turn).await;
          }
@@ -6178,7 +6613,26 @@ index 77ce9b8..e2baa58 100644
          if reason == TurnAbortReason::Interrupted && aborted_turn {
              self.maybe_start_turn_for_pending_work().await;
          }
-@@ -638,11 +693,21 @@ impl Session {
+     }
+ 
++    pub(crate) async fn invalidate_agent_workflow_turn(self: &Arc<Self>, turn_id: &str) {
++        if let Some(runtime) = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++        {
++            // Preserve synchronous permit revocation for the callback's own
++            // batch. Delayed callbacks cannot revoke or join a newer task.
++            runtime.invalidate_turn(turn_id);
++            self.abort_turn_if_active(turn_id, TurnAbortReason::Interrupted, None)
++                .await;
++        }
++    }
++
+     pub(crate) async fn abort_turn_if_active(
+         self: &Arc<Self>,
+         turn_id: &str,
+@@ -638,11 +712,21 @@ impl Session {
          reason: TurnAbortReason,
          error: Option<ErrorEvent>,
      ) {
@@ -6200,7 +6654,17 @@ index 77ce9b8..e2baa58 100644
          // Let interrupted tasks observe cancellation before dropping pending approvals, or an
          // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
          self.input_queue.clear_pending(&active_turn).await;
-@@ -980,8 +1045,15 @@ impl Session {
+@@ -688,6 +772,9 @@ impl Session {
+         let turn_state = {
+             let mut active = self.active_turn.lock().await;
+             active.as_mut().and_then(|active_turn| {
++                if active_turn.task.as_ref()?.turn_context.sub_id != turn_context.sub_id {
++                    return None;
++                }
+                 let task = active_turn.task.take()?;
+                 task.handle.detach();
+                 active_turn.finishing = Some(finishing);
+@@ -980,8 +1067,15 @@ impl Session {
          turn_state: &Mutex<TurnState>,
          error: Option<ErrorEvent>,
      ) {
@@ -6217,7 +6681,7 @@ index 77ce9b8..e2baa58 100644
              self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                  .await;
              return;
-@@ -1026,6 +1098,11 @@ impl Session {
+@@ -1026,6 +1120,11 @@ impl Session {
              .abort(Arc::clone(self), Arc::clone(&task.turn_context))
              .await;
  
