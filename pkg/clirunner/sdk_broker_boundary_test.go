@@ -1,6 +1,7 @@
 package clirunner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -173,6 +174,17 @@ func TestSDKBrokerNativeStreamBoundaries(t *testing.T) {
 				result, runErr = runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "role", Prompt: "Use exactly the original admitted lookup calls", Tools: &workflows.InvocationTools{Binding: binding, Lease: lease}}}, func(event workflows.ProviderEvent) { eventMu.Lock(); events = append(events, event); eventMu.Unlock() })
 				close(done)
 			}()
+			defer func() {
+				cancel()
+				finalOnce.Do(func() { close(releaseFinal) })
+				eofOnce.Do(func() { close(releaseEOF) })
+				toolOnce.Do(func() { close(releaseTool) })
+				select {
+				case <-done:
+				case <-time.After(6 * time.Second):
+					t.Error("owned SDK boundary did not join during cleanup")
+				}
+			}()
 			if mode == "delayed-final-and-eof" {
 				select {
 				case <-finalReached:
@@ -181,9 +193,8 @@ func TestSDKBrokerNativeStreamBoundaries(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal(ctx.Err())
 				}
-				time.Sleep(100 * time.Millisecond)
 				if binding.calls.Load() != 0 || pool.Suspended() != 0 || requests.Load() != 1 {
-					t.Fatalf("false early barrier: calls%d suspended%d APIs%d", binding.calls.Load(), pool.Suspended(), requests.Load())
+					t.Fatalf("effects before gateway final: calls%d suspended%d APIs%d", binding.calls.Load(), pool.Suspended(), requests.Load())
 				}
 				finalOnce.Do(func() { close(releaseFinal) })
 				select {
@@ -196,7 +207,6 @@ func TestSDKBrokerNativeStreamBoundaries(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("valid stop did not permit isolated callback", ctx.Err())
 				}
-				time.Sleep(100 * time.Millisecond)
 				if binding.calls.Load() != 1 || pool.Suspended() != 1 || requests.Load() != 1 {
 					t.Fatalf("held original callback allowed model/native overlap: calls%d suspended%d APIs%d", binding.calls.Load(), pool.Suspended(), requests.Load())
 				}
@@ -243,5 +253,98 @@ func TestSDKBrokerNativeStreamBoundaries(t *testing.T) {
 				t.Fatalf("false boundary permitted effects/retry: %+v %v calls%d APIs%d", result, runErr, binding.calls.Load(), requests.Load())
 			}
 		})
+	}
+}
+
+// The synchronous production controller calls establish that the callback was
+// processed while its response seal was withheld. The gateway fixture above
+// separately exercises the locked SDK and public Runner transport.
+func TestSDKBrokerWaitRequiresProcessedSeal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	pool := &workflows.Capacity{Slots: make(chan struct{}, 1)}
+	lease, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	definition := workflows.ToolDefinition{Server: "fixture", Name: "lookup"}
+	started, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	var callbacks sync.WaitGroup
+	defer func() {
+		cancel()
+		releaseOnce.Do(func() { close(release) })
+		joined := make(chan struct{})
+		go func() { callbacks.Wait(); close(joined) }()
+		select {
+		case <-joined:
+		case <-time.After(3 * time.Second):
+			t.Error("owned callback did not join")
+		}
+	}()
+	binding := &managedBatchBinding{catalog: []workflows.ToolDefinition{definition}, call: func(ctx context.Context, _ workflows.ToolRequest) (json.RawMessage, error) {
+		child, err := pool.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer child.Release()
+		close(started)
+		select {
+		case <-release:
+			return json.RawMessage(`{"original":true}`), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}
+	batch := newSDKBrokerBatch(&workflows.InvocationTools{Binding: binding, Lease: lease}, nil, nil)
+	data := map[string]any{"response_id": "original", "model": "fixture", "stop_reason": "tool_use", "usage": map[string]any{"input_tokens": 11, "output_tokens": 3, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "calls": []map[string]any{{"id": "call", "name": "mcp__broker__" + workflows.ToolWireName(definition), "arguments": json.RawMessage(`{}`)}}}
+	if err := batch.start(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.queue(workflows.ToolRequest{CallID: "call", Server: definition.Server, Tool: definition.Name, Arguments: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	failures := make(chan error, 1)
+	report := func(err error) { failures <- err }
+	frame := bridgeFrame{Data: data, CallIDs: []string{"call"}}
+	if err := batch.blocked(ctx, frame, &bridgeWriter{writer: &output}, &callbacks, report); err == nil {
+		t.Fatal("unsealed processed callback accepted a broker wait")
+	}
+	if binding.calls.Load() != 0 || pool.Suspended() != 0 || len(pool.Slots) != 1 || output.Len() != 0 {
+		t.Fatalf("processed unsealed callback released capacity: calls=%d suspended=%d occupied=%d output=%q", binding.calls.Load(), pool.Suspended(), len(pool.Slots), output.String())
+	}
+	if err := batch.seal(ctx, data, "fixture", "session"); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.blocked(ctx, frame, &bridgeWriter{writer: &output}, &callbacks, report); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case err := <-failures:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal("sealed callback could not acquire capacity one", ctx.Err())
+	}
+	if binding.calls.Load() != 1 || pool.Suspended() != 1 || len(pool.Slots) != 1 {
+		t.Fatal("sealed callback did not own the isolated slot")
+	}
+	releaseOnce.Do(func() { close(release) })
+	joined := make(chan struct{})
+	go func() { callbacks.Wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-ctx.Done():
+		t.Fatal("sealed callback did not join", ctx.Err())
+	}
+	select {
+	case err := <-failures:
+		t.Fatal(err)
+	default:
+	}
+	if !strings.Contains(output.String(), `"call_id":"call"`) || pool.Suspended() != 0 || len(pool.Slots) != 1 {
+		t.Fatal("sealed callback did not reacquire before delivering its original result", output.String())
 	}
 }

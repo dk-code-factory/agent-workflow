@@ -25,7 +25,15 @@ test('synthetic stop, omitted final usage, unadmitted tool and trailing events s
   const s = new BrokerStream(new Set([name])); start(s); planned(s); final(s); s.event({ type: 'message_stop' });
   assert.throws(() => planned(s, 'late', 1), /sealed/); assert.throws(() => s.settle('unknown'), /Unplanned/); s.settle('call'); assert.throws(() => s.settle('call'), /repeated/);
 });
-test('incomplete block, repeated IDs, unknown counters and extra model response are rejected', () => {
+test('unfinished block rejects a valid final delta and stop without granting a callback', () => {
+  const s = new BrokerStream(new Set([name])); start(s);
+  s.event({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call', name, input: {} } });
+  s.event({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":"original"}' } });
+  final(s);
+  assert.throws(() => s.event({ type: 'message_stop' }), /incomplete model stop/);
+  assert.equal(s.blocked(['call']), undefined);
+});
+test('repeated IDs, unknown counters and extra model response are rejected', () => {
   const s = new BrokerStream(new Set([name])); start(s); planned(s); planned(s, 'call', 1); final(s); assert.throws(() => s.event({ type: 'message_stop' }), /Duplicate/);
   const t = new BrokerStream(new Set([name])); start(t); planned(t); t.event({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: -1 } }); assert.throws(() => t.event({ type: 'message_stop' }), /usage/);
   const u = new BrokerStream(new Set([name])); start(u); assert.throws(() => start(u, 'second'), /unresolved/);
