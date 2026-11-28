@@ -3624,10 +3624,10 @@ index 0000000..8135bcc
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..638b2e6
+index 0000000..2eae8c0
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1547 @@
+@@ -0,0 +1,1562 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -4216,6 +4216,7 @@ index 0000000..638b2e6
 +
 +    pub(crate) fn model_witness(
 +        &self,
++        turn_id: &str,
 +        response_id: &str,
 +        usage: &codex_protocol::protocol::TokenUsage,
 +    ) -> Result<codex_protocol::protocol::AgentWorkflowModelWitness> {
@@ -4223,8 +4224,8 @@ index 0000000..638b2e6
 +        let batch = state
 +            .as_ref()
 +            .ok_or_else(|| invalid("native response usage witness has no live model batch"))?;
-+        if batch.sealed || response_id.is_empty() {
-+            return Err(invalid("late native response usage witness"));
++        if batch.identity.turn_id != turn_id || batch.sealed || response_id.is_empty() {
++            return Err(invalid("late or foreign native response usage witness"));
 +        }
 +        let mut identity = batch.identity.clone();
 +        identity.response_id = response_id.to_owned();
@@ -4851,6 +4852,20 @@ index 0000000..638b2e6
 +    #[test]
 +    fn entire_batch_permit_and_results_precede_any_source_delivery() {
 +        let (runtime, _guard) = planned();
++        let usage = codex_protocol::protocol::TokenUsage::default();
++        assert!(
++            runtime
++                .model_witness("prior-turn", "reported-response", &usage)
++                .is_err()
++        );
++        assert_eq!(
++            runtime
++                .model_witness("turn", "reported-response", &usage)
++                .unwrap()
++                .batch
++                .turn_id,
++            "turn"
++        );
 +        let (permit, _work) = parked(&runtime);
 +        // Original-turn ownership is checked before receipt mutation: even an
 +        // otherwise valid permit from a delayed producer cannot erase this batch.
@@ -5291,6 +5306,55 @@ index 0000000..e7b7b18
 +    runtime.complete_durable(&rollout)?;
 +    Ok(())
 +}
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 889a626..008c9b1 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -340,6 +340,8 @@ pub struct ModelClientSession {
+     /// appends, or continuation requests), and must not send it between different turns.
+     /// An auth ownership change clears it so the new owner gets fresh routing state.
+     turn_state: Arc<OnceLock<String>>,
++    #[cfg(test)]
++    test_response_stream: Option<Option<ResponseStream>>,
+ }
+ 
+ /// Executes HTTP Responses requests without owning a turn's WebSocket state.
+@@ -755,6 +757,8 @@ impl ModelClient {
+             client: self.clone(),
+             websocket_session,
+             turn_state: Arc::new(OnceLock::new()),
++            #[cfg(test)]
++            test_response_stream: None,
+         }
+     }
+ 
+@@ -1555,6 +1559,11 @@ impl Drop for ModelClientSession {
+ }
+ 
+ impl ModelClientSession {
++    #[cfg(test)]
++    pub(crate) fn set_response_stream_for_test(&mut self, stream: ResponseStream) {
++        self.test_response_stream = Some(Some(stream));
++    }
++
+     pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
+         let previous = self
+             .client
+@@ -2507,6 +2516,14 @@ impl ModelClientSession {
+         responses_metadata: &CodexResponsesMetadata,
+         inference_trace: &InferenceTraceContext,
+     ) -> Result<ResponseStream> {
++        #[cfg(test)]
++        if let Some(slot) = self.test_response_stream.as_mut() {
++            // In-memory unit fixtures must never fall through to a provider,
++            // including if an unexpected second request consumes the fixture.
++            return slot.take().ok_or_else(|| {
++                CodexErr::InvalidRequest("owned in-memory response stream exhausted".into())
++            });
++        }
+         let wire_api = self.client.state.provider.info().wire_api;
+         match wire_api {
+             WireApi::Responses => {
 diff --git a/codex-rs/core/src/codex_delegate.rs b/codex-rs/core/src/codex_delegate.rs
 index d4227af..9c65796 100644
 --- a/codex-rs/core/src/codex_delegate.rs
@@ -5630,7 +5694,7 @@ index 4356991..fe1f6fd 100644
          let shutdown = self.mcp_prewarm_shutdown.clone();
          let worker = self.services.runtime_handle.spawn(async move {
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index f365c4e..5e08704 100644
+index f365c4e..f5aac53 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
 @@ -440,6 +440,7 @@ pub(crate) enum NetworkApprovalTurn {
@@ -5831,7 +5895,7 @@ index f365c4e..5e08704 100644
              self.thread_id,
              &turn_context.sub_id,
              self.session_id(),
-@@ -5378,8 +5463,23 @@ impl Session {
+@@ -5378,8 +5463,25 @@ impl Session {
              response_id.to_string(),
              usage,
          );
@@ -5840,11 +5904,13 @@ index f365c4e..5e08704 100644
 +            .thread_extension_data
 +            .get::<crate::AgentWorkflowRuntime>()
 +        {
-+            match runtime.model_witness(response_id, usage) {
++            match runtime.model_witness(&turn_context.sub_id, response_id, usage) {
 +                Ok(witness) => record.agent_workflow_witness = Some(witness),
 +                Err(_) => {
-+                    runtime.invalidate();
-+                    return None;
++                    // Revocation can race an already received usage report.
++                    // Preserve its exact original spending record without a
++                    // witness, and never invalidate a later turn's authority.
++                    runtime.invalidate_turn(&turn_context.sub_id);
 +                }
 +            }
 +        }
@@ -5855,7 +5921,7 @@ index f365c4e..5e08704 100644
      }
  
      pub(crate) async fn record_token_usage_info(
-@@ -5539,7 +5639,11 @@ impl Session {
+@@ -5539,7 +5641,11 @@ impl Session {
              let state = self.state.lock().await;
              state.token_info_and_rate_limits()
          };
@@ -5868,7 +5934,7 @@ index f365c4e..5e08704 100644
          self.send_event(turn_context, event).await;
      }
  
-@@ -5801,7 +5905,14 @@ async fn build_hooks_config(
+@@ -5801,7 +5907,14 @@ async fn build_hooks_config(
      plugins_manager: &PluginsManager,
      environment: Option<&TurnEnvironment>,
      disabled_plugin_ids: &[String],
@@ -5957,7 +6023,7 @@ index 5d3fa4d..cfec7c0 100644
          let mut state = self.state.lock().await;
          if state.shutting_down {
 diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
-index 9bb8aa2..4b97013 100644
+index 9bb8aa2..5ad50bc 100644
 --- a/codex-rs/core/src/session/tests.rs
 +++ b/codex-rs/core/src/session/tests.rs
 @@ -3466,24 +3466,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
@@ -6069,7 +6135,7 @@ index 9bb8aa2..4b97013 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -13819,3 +13833,1013 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+@@ -13819,3 +13833,1155 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
          "rejection must not permit same-name ordinary-auth replacement in this session"
      );
  }
@@ -6982,51 +7048,210 @@ index 9bb8aa2..4b97013 100644
 +}
 +
 +#[tokio::test]
-+async fn managed_source_incomplete_usage_witness_does_not_complete_original_intent() {
-+    let (mut session, turn) = make_session_and_context().await;
-+    let rollout = attach_thread_persistence(&mut session).await;
++async fn managed_source_incomplete_usage_survives_revocation_without_completing_intent() {
++    for revoked in [false, true] {
++        let (mut session, turn) = make_session_and_context().await;
++        let rollout = attach_thread_persistence(&mut session).await;
++        let runtime = managed_source_runtime(&session);
++        let model = runtime.model_scheduled();
++        let batch = runtime
++            .begin(
++                session.thread_id.to_string(),
++                turn.sub_id.clone(),
++                "incomplete-invocation".into(),
++            )
++            .expect("original model batch");
++        runtime
++            .start_model_intent(&rollout)
++            .expect("original durable started intent");
++        if revoked {
++            runtime.invalidate();
++        }
++        let usage = TokenUsage {
++            input_tokens: 17,
++            output_tokens: 5,
++            total_tokens: 22,
++            ..Default::default()
++        };
++        let turn = Arc::new(turn);
++        let step = StepContext::for_test(Arc::clone(&turn));
++        timeout(
++            StdDuration::from_secs(2),
++            session.record_incomplete_response_usage(
++                &turn,
++                &step.settings,
++                &ResponseIncompleteError {
++                    partial_output: Vec::new(),
++                    reason: "max_output_tokens".into(),
++                    response_id: Some("reported-incomplete-response".into()),
++                    token_usage: Some(usage.clone()),
++                },
++            ),
++        )
++        .await
++        .expect("actual incomplete accounting producer deadline");
++        session
++            .flush_rollout()
++            .await
++            .expect("persist reported incomplete spending");
++        let (items, _, errors) = RolloutRecorder::load_rollout_items(&rollout)
++            .await
++            .expect("read actual usage record");
++        assert_eq!(errors, 0);
++        let records = items
++            .iter()
++            .filter_map(|item| match item {
++                RolloutItem::TokenUsageRecord(record) => Some(record),
++                _ => None,
++            })
++            .collect::<Vec<_>>();
++        assert_eq!(records.len(), 1);
++        assert_eq!(
++            records[0].usage, usage,
++            "reported spending is preserved exactly"
++        );
++        assert_eq!(records[0].thread_token_usage, usage);
++        assert_eq!(records[0].turn_token_usage, usage);
++        assert_eq!(records[0].turn_id, turn.sub_id);
++        assert_eq!(records[0].response_id, "reported-incomplete-response");
++        if revoked {
++            assert!(
++                records[0].agent_workflow_witness.is_none(),
++                "revoked usage retains spending and original record identity without fabricated authority"
++            );
++        } else {
++            let witness = records[0]
++                .agent_workflow_witness
++                .as_ref()
++                .expect("reported response identity witness");
++            assert_eq!(witness.batch.turn_id, turn.sub_id);
++            assert_eq!(witness.batch.invocation_id, "incomplete-invocation");
++            assert_eq!(witness.batch.response_id, "reported-incomplete-response");
++            assert_eq!(
++                witness.usage,
++                serde_json::to_value(&usage).expect("known usage")
++            );
++        }
++        let intent: serde_json::Value = serde_json::from_slice(
++            &tokio::fs::read(rollout.with_extension("managed-model.json"))
++                .await
++                .expect("original durable intent"),
++        )
++        .expect("intent JSON");
++        assert!(
++            intent["completed"].is_null(),
++            "usage witness cannot assert actual Completed or seal an intent"
++        );
++        assert_eq!(intent["started"]["turnId"], turn.sub_id);
++        assert_eq!(intent["started"]["invocationId"], "incomplete-invocation");
++        assert!(!rollout.with_extension("managed-broker.json").exists());
++        drop(batch);
++        drop(model);
++        let probe = runtime.model_scheduled();
++        assert!(
++            runtime
++                .begin(
++                    "thread".into(),
++                    "later-turn".into(),
++                    "later-invocation".into()
++                )
++                .err()
++                .expect("unknown original remains held")
++                .to_string()
++                .contains("requires recovery hold")
++        );
++        drop(probe);
++        timeout(StdDuration::from_secs(2), runtime.join_work())
++            .await
++            .expect("incomplete source guards joined");
++    }
++}
++
++#[tokio::test]
++async fn managed_source_sampling_incomplete_publishes_known_usage_before_error() {
++    let (mut session, turn, events) = make_session_and_context_with_rx().await;
++    let rollout = attach_thread_persistence(
++        Arc::get_mut(&mut session).expect("unique owned sampling Session"),
++    )
++    .await;
 +    let runtime = managed_source_runtime(&session);
 +    let model = runtime.model_scheduled();
-+    let batch = runtime
-+        .begin(
-+            session.thread_id.to_string(),
-+            turn.sub_id.clone(),
-+            "incomplete-invocation".into(),
-+        )
-+        .expect("original model batch");
-+    runtime
-+        .start_model_intent(&rollout)
-+        .expect("original durable started intent");
++    turn.extension_data
++        .insert(crate::AgentWorkflowInvocation("sampled-incomplete".into()));
 +    let usage = TokenUsage {
-+        input_tokens: 17,
-+        output_tokens: 5,
-+        total_tokens: 22,
++        input_tokens: 23,
++        output_tokens: 7,
++        total_tokens: 30,
 +        ..Default::default()
 +    };
-+    let turn = Arc::new(turn);
-+    let step = StepContext::for_test(Arc::clone(&turn));
-+    timeout(
++    let (tx, rx_event) = tokio::sync::mpsc::channel(1);
++    tx.try_send(Err(CodexErr::new(CodexErrorDetails::ResponseIncomplete(
++        Box::new(ResponseIncompleteError {
++            partial_output: Vec::new(),
++            reason: "max_output_tokens".into(),
++            response_id: Some("sampled-incomplete-response".into()),
++            token_usage: Some(usage.clone()),
++        }),
++    ))))
++    .expect("owned in-memory incomplete response");
++    drop(tx);
++    let consumer_dropped = CancellationToken::new();
++    let stream = crate::ResponseStream {
++        routing_affinity: None,
++        rx_event,
++        interrupt: None,
++        consumer_dropped: consumer_dropped.clone(),
++    };
++    let result = timeout(
 +        StdDuration::from_secs(2),
-+        session.record_incomplete_response_usage(
-+            &turn,
-+            &step.settings,
-+            &ResponseIncompleteError {
-+                partial_output: Vec::new(),
-+                reason: "max_output_tokens".into(),
-+                response_id: Some("reported-incomplete-response".into()),
-+                token_usage: Some(usage.clone()),
-+            },
++        super::turn::sample_managed_source_response_for_test(
++            Arc::clone(&session),
++            Arc::clone(&turn),
++            stream,
 +        ),
 +    )
 +    .await
-+    .expect("actual incomplete accounting producer deadline");
++    .expect("actual single sampling attempt deadline");
++    let error = result.expect_err("incomplete error remains the sampling result");
++    assert!(
++        matches!(error.details(), CodexErrorDetails::ResponseIncomplete(incomplete)
++        if incomplete.response_id.as_deref() == Some("sampled-incomplete-response")
++        && incomplete.token_usage.as_ref() == Some(&usage))
++    );
++    assert!(
++        consumer_dropped.is_cancelled(),
++        "actual sampling consumer releases the stream"
++    );
++    let mut notifications = 0;
++    while let Ok(event) = events.try_recv() {
++        match event.msg {
++            EventMsg::TokenCount(count) => {
++                assert_eq!(event.id, turn.sub_id);
++                assert!(
++                    count.agent_workflow_witness.is_none(),
++                    "incomplete spending cannot emit Completed authority"
++                );
++                let info = count.info.expect("public native usage totals");
++                assert_eq!(info.total_token_usage, usage);
++                notifications += 1;
++            }
++            EventMsg::RawResponseCompleted(_) => {
++                panic!("incomplete response cannot become Completed")
++            }
++            _ => {}
++        }
++    }
++    assert_eq!(
++        notifications, 1,
++        "known usage is public before returning the original error"
++    );
 +    session
 +        .flush_rollout()
 +        .await
-+        .expect("persist reported incomplete spending");
++        .expect("persist actual incomplete sampling usage");
 +    let (items, _, errors) = RolloutRecorder::load_rollout_items(&rollout)
 +        .await
-+        .expect("read actual usage record");
++        .expect("read sampled usage");
 +    assert_eq!(errors, 0);
 +    let records = items
 +        .iter()
@@ -7036,34 +7261,17 @@ index 9bb8aa2..4b97013 100644
 +        })
 +        .collect::<Vec<_>>();
 +    assert_eq!(records.len(), 1);
-+    assert_eq!(
-+        records[0].usage, usage,
-+        "reported spending is preserved exactly"
-+    );
-+    let witness = records[0]
-+        .agent_workflow_witness
-+        .as_ref()
-+        .expect("reported response identity witness");
-+    assert_eq!(witness.batch.turn_id, turn.sub_id);
-+    assert_eq!(witness.batch.invocation_id, "incomplete-invocation");
-+    assert_eq!(witness.batch.response_id, "reported-incomplete-response");
-+    assert_eq!(
-+        witness.usage,
-+        serde_json::to_value(&usage).expect("known usage")
-+    );
++    assert_eq!(records[0].usage, usage);
++    assert_eq!(records[0].turn_id, turn.sub_id);
++    assert_eq!(records[0].response_id, "sampled-incomplete-response");
 +    let intent: serde_json::Value = serde_json::from_slice(
 +        &tokio::fs::read(rollout.with_extension("managed-model.json"))
 +            .await
-+            .expect("original durable intent"),
++            .expect("original sampled intent"),
 +    )
 +    .expect("intent JSON");
-+    assert!(
-+        intent["completed"].is_null(),
-+        "usage witness cannot assert actual Completed or seal an intent"
-+    );
-+    assert_eq!(intent["started"]["turnId"], turn.sub_id);
++    assert!(intent["completed"].is_null());
 +    assert!(!rollout.with_extension("managed-broker.json").exists());
-+    drop(batch);
 +    drop(model);
 +    let probe = runtime.model_scheduled();
 +    assert!(
@@ -7074,14 +7282,14 @@ index 9bb8aa2..4b97013 100644
 +                "later-invocation".into()
 +            )
 +            .err()
-+            .expect("unknown original remains held")
++            .expect("incomplete original is held")
 +            .to_string()
 +            .contains("requires recovery hold")
 +    );
 +    drop(probe);
 +    timeout(StdDuration::from_secs(2), runtime.join_work())
 +        .await
-+        .expect("incomplete source guards joined");
++        .expect("sampling guards joined");
 +}
 diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
 index c3a82ef..6c66411 100644
@@ -7105,7 +7313,7 @@ index c3a82ef..6c66411 100644
          if let Some(live_thread) = self.live_thread() {
              let config = self.get_config().await;
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index ef7db28..b0ab263 100644
+index ef7db28..5731cf5 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
 @@ -183,6 +183,12 @@ pub(crate) async fn run_turn(
@@ -7203,7 +7411,7 @@ index ef7db28..b0ab263 100644
          })
          .await;
      }
-@@ -3565,6 +3614,37 @@ async fn try_run_sampling_request(
+@@ -3565,6 +3614,42 @@ async fn try_run_sampling_request(
      )
      .await;
  
@@ -7211,6 +7419,11 @@ index ef7db28..b0ab263 100644
 +        // Deferred broker futures have not dispatched. The complete model stream
 +        // and allowed post-request work have ended before the plan is sealed.
 +        if !response_completed || outcome.is_err() {
++            // There are no admitted deferred callbacks to wait for on this
++            // path. Publish known spending before returning its original error.
++            if should_emit_token_count {
++                sess.send_token_count_event(&turn_context).await;
++            }
 +            return outcome;
 +        }
 +        sess.try_ensure_rollout_materialized(PersistContext::Standard)
@@ -7241,7 +7454,7 @@ index ef7db28..b0ab263 100644
      if !in_flight.is_empty() {
          let _tool_blocking_timing_guard = turn_context
              .turn_timing_state
-@@ -3577,6 +3657,17 @@ async fn try_run_sampling_request(
+@@ -3577,6 +3662,17 @@ async fn try_run_sampling_request(
          );
          drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
      }
@@ -7259,6 +7472,46 @@ index ef7db28..b0ab263 100644
  
      if should_emit_token_count {
          // A tool call such as request_user_input can intentionally pause the turn. Emit token
+@@ -3615,6 +3711,39 @@ pub(crate) fn get_last_assistant_message_from_turn<'a>(
+     None
+ }
+ 
++#[cfg(test)]
++pub(super) async fn sample_managed_source_response_for_test(
++    sess: Arc<Session>,
++    turn: Arc<TurnContext>,
++    stream: crate::ResponseStream,
++) -> CodexResult<()> {
++    let step = StepContext::for_test(Arc::clone(&turn));
++    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
++    let tools = ToolCallRuntime::new(Arc::clone(&sess), Arc::clone(&step), Arc::clone(&tracker));
++    let prompt = build_prompt(Vec::new(), &step, BaseInstructions::default(), false);
++    let metadata = sess
++        .responses_metadata(&step, CodexResponsesRequestKind::Turn)
++        .await;
++    let mut client = sess.services.model_client.new_session();
++    client.set_response_stream_for_test(stream);
++    let mut draining = false;
++    try_run_sampling_request(
++        tools,
++        sess,
++        step,
++        Arc::new(ExtensionData::new(turn.sub_id.clone())),
++        &mut client,
++        &metadata,
++        tracker,
++        prompt,
++        0,
++        CancellationToken::new(),
++        &mut draining,
++    )
++    .await
++    .map(|_| ())
++}
++
+ #[cfg(test)]
+ #[path = "turn_tests.rs"]
+ mod tests;
 diff --git a/codex-rs/core/src/state/session.rs b/codex-rs/core/src/state/session.rs
 index 94c8874..fa3c6df 100644
 --- a/codex-rs/core/src/state/session.rs
