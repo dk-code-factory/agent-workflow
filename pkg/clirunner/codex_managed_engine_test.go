@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	codexsource "github.com/dk-code-factory/agent-workflow/patches/codex"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
@@ -93,17 +94,12 @@ func managedNativeFixtureIdentity(t *testing.T) *ManagedCodexBuildIdentity {
 	if path == "" {
 		t.Skip("owned compiled managed app-server manifest required for local deterministic native proof")
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	// Match the receipt to the embedded source tuple without changing its gate.
+	// The public managed entry still requires the canonical profile to be enabled.
+	var source managedCodexDescriptor
+	if err := strictCodexDecode(codexsource.Descriptor(), &source); err != nil {
 		t.Fatal(err)
 	}
-	var m managedCodexBinaryManifest
-	if err = strictCodexDecode(raw, &m); err != nil {
-		t.Fatal(err)
-	}
-	// Use the frozen source tuple supplied by the owned build receipt. Test
-	// selection never changes the embedded canonical descriptor.
-	source := managedCodexDescriptor{UpstreamSHA: m.Inputs.UpstreamSHA, PatchSHA256: m.Inputs.PatchSHA256, RecipeSHA256: m.Inputs.RecipeSHA256, Protocol: m.Inputs.Protocol, RustToolchain: m.Inputs.RustToolchain, OfflineWrapperSHA256: m.Inputs.OfflineWrapperSHA256, SourceSHA256: m.SourceSHA256}
 	identity, err := captureManagedBuild(path, source)
 	if err != nil {
 		t.Fatal(err)
@@ -303,13 +299,18 @@ func TestManagedCodexProductionEngineCapacityOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	originalFound := false
 	for _, inv := range report.Invocations {
 		if inv.ID == message.ID {
+			originalFound = true
 			final := inv.Observations["final"]
 			if len(inv.Observations) != 5 || !inv.Finished || final.InputTokens == nil || *final.InputTokens != 33 || final.OutputTokens == nil || *final.OutputTokens != 9 || !final.Complete {
 				t.Fatalf("native response accounting absent %+v", inv)
 			}
 		}
+	}
+	if !originalFound {
+		t.Fatal("original invocation accounting absent", message.ID)
 	}
 	if report.Summary.InputTokens == nil || *report.Summary.InputTokens != 35 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 11 {
 		t.Fatal("final aggregate repeated original response charges", report.Summary)
