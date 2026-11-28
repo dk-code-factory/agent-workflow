@@ -335,9 +335,6 @@ func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error
 	// Programmatic configurations pass the same source-profile gate as YAML
 	// before runtime admission or connector discovery can claim any resources.
 	for _, agent := range r.Config.Agents {
-		if agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && len(agent.MCPGrants) > 0 {
-			return nil, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
-		}
 		if err := validateManagedBuildRole(agent); err != nil {
 			return nil, err
 		}

@@ -3,12 +3,14 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
-	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
 func managedIdentityFixture(t *testing.T) (*ManagedCodexBuildIdentity, managedCodexDescriptor, string) {
@@ -105,24 +107,83 @@ func TestManagedAdmissionCannotReplaceHistoricalOrSelectedAuthority(t *testing.T
 	}
 }
 
-func TestSDKMixedNativeBrokerAuthorityIsClosedBeforeAdmission(t *testing.T) {
-	role := Agent{Provider: "claude-sdk", Tools: []string{"Read"}, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}}}
+func TestSDKRolePinningPreservesNativePolicyNarrowing(t *testing.T) {
+	for _, variant := range []struct {
+		name  string
+		tools []string
+		want  []string
+	}{
+		{"read-intersection", []string{"Read", "Write", "WebFetch"}, []string{"Read"}},
+		{"empty-ceiling", []string{"Write", "WebFetch"}, []string{}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			root := t.TempDir()
+			metadata := filepath.Join(root, "node_modules/@anthropic-ai/claude-agent-sdk/package.json")
+			if err := os.MkdirAll(filepath.Dir(metadata), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(metadata, []byte(`{"version":"0.3.322"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(root, "bridge-launched")
+			encodedMarker, err := json.Marshal(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bridge := filepath.Join(root, "bridge.mjs")
+			if err := os.WriteFile(bridge, []byte("import {writeFileSync} from 'node:fs'; writeFileSync("+string(encodedMarker)+", 'launched');\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			role := Agent{Provider: "claude-sdk", Bridge: bridge, Tools: variant.tools, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_status"}}}
+			runner := &Runner{Workspace: root, Config: Config{AgentRuntime: "worker", Agents: map[string]Agent{"worker": role}}}
+			original, err := json.Marshal(runner.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			roles, err := runner.PinRoles(t.Context())
+			if err != nil {
+				t.Fatal("broad configured role rejected before task narrowing", err)
+			}
+			retained, err := runner.RunnerForRoles(roles)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pinned := retained.(*Runner)
+			if !reflect.DeepEqual(pinned.Config.Agents["worker"], role) {
+				t.Fatal("role pinning changed configured capabilities", pinned.Config.Agents["worker"])
+			}
+			definition := &workflows.AgentDefinition{Name: "validator", ToolPolicy: "read-only"}
+			admitted, err := pinned.AdmitNativeTask(definition)
+			if err != nil || admitted.NativePolicy == nil || !reflect.DeepEqual(admitted.NativePolicy.NativeTools, variant.want) || definition.NativePolicy != nil {
+				t.Fatal("task did not retain its native intersection without mutating input", admitted, err)
+			}
+			if _, err := pinned.AdmitNativeTask(&workflows.AgentDefinition{Name: "ordinary"}); err != nil {
+				t.Fatal("native task without an active broker binding was rejected", err)
+			}
+			probe := &nativePolicyBrokerProbe{}
+			_, err = pinned.RunTurn(t.Context(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "worker", Tools: &workflows.InvocationTools{Binding: probe}}}, nil)
+			if err == nil || !strings.Contains(err.Error(), "direct native tools with managed broker") || probe.calls.Load() != 0 {
+				t.Fatal("actual mixed invocation escaped rejection before effects", err, probe.calls.Load())
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatal("mixed invocation started its bridge", err)
+			}
+			current, err := json.Marshal(runner.Config)
+			if err != nil || string(current) != string(original) || !reflect.DeepEqual(pinned.Config.Agents["worker"], role) {
+				t.Fatal("task admission or mixed rejection changed configured role authority", err)
+			}
+		})
+	}
+	role := Agent{Provider: "claude-sdk", Tools: []string{"Read"}}
 	runner := &Runner{Config: Config{AgentRuntime: "worker", Agents: map[string]Agent{"worker": role}}}
-	if _, err := runner.PinRoles(context.Background()); err == nil {
-		t.Fatal("mixed native/broker profile pinned")
-	}
-	if _, err := runner.nativeTaskRuntime(); err == nil {
-		t.Fatal("mixed native/broker task admitted")
-	}
 	if err := runner.ValidateConversationRole("worker"); err == nil {
 		t.Fatal("native conversation admitted broker release")
 	}
-	role.MCPGrants = nil
-	runner.Config.Agents["worker"] = role
 	if _, err := runner.nativeTaskRuntime(); err != nil {
 		t.Fatal("native-only route changed", err)
 	}
 	role.Tools = nil
+	role.MCPGrants = []workflows.ToolGrant{{Server: "engine", Tool: "worker_status"}}
 	runner.Config.Agents["worker"] = role
 	if err := runner.ValidateConversationRole("worker"); err != nil {
 		t.Fatal("broker-only conversation rejected", err)

@@ -629,9 +629,6 @@ func (r *Runner) nativeTaskRuntime() (Agent, error) {
 	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
 		return Agent{}, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
 	}
-	if role.Provider == "claude-sdk" && len(role.Tools) > 0 && len(role.MCPGrants) > 0 {
-		return Agent{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
-	}
 	if role.Provider == "codex-app-server" {
 		if role.ManagedBuild != nil {
 			if err := validateManagedBuildRole(role); err != nil {
