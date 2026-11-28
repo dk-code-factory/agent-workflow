@@ -1,17 +1,14 @@
 package clirunner
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
-// A provider/cleanup regression must fail this fixture before the outer suite
-// deadline, including when a failure jumps directly to deferred cancellation.
+// Overdue shutdown fails immediately but retains fixture ownership until the
+// actual join. The outer package/stage fail-stop is failed evidence, not join.
 func awaitManagedServe(t *testing.T, done <-chan struct{}) {
 	t.Helper()
-	select {
-	case <-done:
-	case <-time.After(6 * time.Second):
-		t.Error("managed worker scheduler did not join after cancellation")
+	if err := managedFixtureJoin(done, managedFixtureJoinBudget(), func(err error) { t.Error(err) }); err != nil {
+		// Explicit pre-reopen callers must not dispatch more work after an
+		// overdue shutdown. Fatal is safe only after the primitive joined.
+		t.Fatal(err)
 	}
 }

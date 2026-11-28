@@ -264,7 +264,7 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
-	firstCtx, stopFirst := context.WithCancel(ctx)
+	firstCtx, stopFirst := context.WithCancel(t.Context())
 	firstDone := make(chan struct{})
 	go func() { manager.Serve(firstCtx); close(firstDone) }()
 	defer func() { stopFirst(); awaitManagedServe(t, firstDone) }()
@@ -333,8 +333,15 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	if err = store.CheckInvocationCleanup(ctx, run.ID); err != nil {
 		t.Fatal("owned runtime cleanup not durably complete", err)
 	}
+	observationErr := ctx.Err()
+	cancel()
 	stopFirst()
 	awaitManagedServe(t, firstDone)
+	if observationErr != nil {
+		t.Fatal("original restart cut observation deadline", observationErr)
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
 	if mode == "cancel" {
 		if _, err = manager.Send(ctx, run.ID, worker.ID, "rejected-after-cancel", "must not gain new mailbox authority"); !errors.Is(err, workflows.ErrActionIntegrity) {
 			t.Fatal("cancelled original accepted new mailbox work", err)
@@ -383,7 +390,17 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	if err = manager.Resume(ctx, run.ID, worker.ID); !errors.Is(err, workflows.ErrActionIntegrity) {
 		t.Fatal("public mailbox ACK discarded original invocation", err)
 	}
-	secondCtx, stopSecond := context.WithCancel(ctx)
+	if err := ctx.Err(); err != nil {
+		t.Fatal("restart recovery setup deadline", err)
+	}
+	recoveryBudget := 45 * time.Second
+	if mode == "cancel" {
+		recoveryBudget = 15 * time.Second // No second native invocation is admitted.
+	}
+	cancel()
+	ctx, cancel = context.WithTimeout(t.Context(), recoveryBudget)
+	defer cancel()
+	secondCtx, stopSecond := context.WithCancel(t.Context())
 	secondDone := make(chan struct{})
 	go func() { manager.Serve(secondCtx); close(secondDone) }()
 	defer func() { stopSecond(); awaitManagedServe(t, secondDone) }()
@@ -408,6 +425,15 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
+		observationErr := ctx.Err()
+		cancel()
+		stopSecond()
+		awaitManagedServe(t, secondDone)
+		if observationErr != nil {
+			t.Fatal("restart hold observation deadline", observationErr)
+		}
+		ctx, cancel = context.WithTimeout(t.Context(), 15*time.Second)
+		defer cancel()
 		messages, err := manager.Messages(ctx, run.ID, worker.ID)
 		if err != nil {
 			t.Fatal(err)
@@ -468,6 +494,15 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	recoveryObservationErr := ctx.Err()
+	cancel()
+	stopSecond()
+	awaitManagedServe(t, secondDone)
+	if recoveryObservationErr != nil {
+		t.Fatal("original restart recovery observation deadline", recoveryObservationErr)
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
 	if after.Status != workflows.RunStatusSucceeded || after.ID != before.ID || !after.StartedAt.Equal(before.StartedAt) || after.Generation != resumed.Generation || after.Result.SessionID != before.Result.SessionID && before.Result.SessionID != "" {
 		messages, _ := manager.Messages(context.Background(), run.ID, worker.ID)
 		current, _ := manager.Get(context.Background(), run.ID, worker.ID)

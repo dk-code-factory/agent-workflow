@@ -258,16 +258,10 @@ func TestManagedCodexProductionEngineCapacityOne(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
+	serveCtx, stop := context.WithCancel(t.Context())
 	done := make(chan struct{})
-	go func() { manager.Serve(ctx); close(done) }()
-	defer func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(6 * time.Second):
-			t.Error("owned engine workers did not join")
-		}
-	}()
+	go func() { manager.Serve(serveCtx); close(done) }()
+	defer func() { stop(); awaitManagedServe(t, done) }()
 	var completed workflows.WorkerMessage
 	for ctx.Err() == nil {
 		messages, err := manager.Messages(ctx, run.ID, parent.ID)
@@ -280,6 +274,15 @@ func TestManagedCodexProductionEngineCapacityOne(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	observationErr := ctx.Err()
+	cancel()
+	stop()
+	awaitManagedServe(t, done)
+	if observationErr != nil {
+		t.Fatal("Codex engine observation deadline", observationErr)
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
 	if completed.Status != workflows.RunStatusSucceeded || completed.Result.Outputs["text"] != "PARENT_AND_CHILDREN_JOINED" || requests.Load() != 3 || fixture.children.Load() != 2 {
 		t.Fatalf("parent=%+v APIs=%d children=%d", completed, requests.Load(), fixture.children.Load())
 	}
