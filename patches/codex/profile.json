@@ -7,11 +7,11 @@
   "upstream_sha": "0a94398fa60c4fac0e7659e4213a0a36e613dd46",
   "rust_toolchain": "1.95.0",
   "patch": "patches/codex/0.167.1-managed-v1.patch",
-  "patch_sha256": "e6b3f52fea7f23bb766ce9c1b350673b5791557f67314676a3d6581f987b4e60",
-  "recipe_sha256": "41a07aba8a8a1d0023bbfa9071289c995648d418b9a5737e87d730e215fc2924",
+  "patch_sha256": "aee624fb6bd2edd55482e7d3651e5a937f6075c645790aa25525b9a0c6e488dd",
+  "recipe_sha256": "50f25dd682d7721cb9b439dd5a9ad20563edc36725a34f9a688a879678e726c3",
   "offline_wrapper": "scripts/codex_offline_exec.py",
   "offline_wrapper_sha256": "ce76f43b55ee7814043901ddeea7528e80f50eee9340b1c33ec8148e762c3c47",
   "upstream_lock_sha256": "9e71c74824a7ea114d0a3a4c94e93d81a1ddd13ca8fa6f698cbd1284c2e9ff2f",
   "source_lock_sha256": "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883",
-  "source_sha256": "587a9b1656a570001df5d61aa31f396aa53bf07f34fa9c0bd35431a3c506bad5"
+  "source_sha256": "25ff5adc1a472fe60479c297ace79cc406570571658f2051d229389aa4e609cf"
 }
