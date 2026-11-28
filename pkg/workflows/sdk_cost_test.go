@@ -146,6 +146,7 @@ func TestManagedSDKKnownTerminalCostSurvivesCancellationWithoutSettlement(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	_, attempt, err := readManagedSDKAttempt(ctx, tx, id.ID)
 	if err != nil || attempt.State != "active" {
 		t.Fatal("known charge settled original attempt", attempt, err)
@@ -184,6 +185,7 @@ func TestManagedSDKKnownTerminalCostSurvivesCancellationWithoutSettlement(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer tx.Rollback()
 		if err = observeManagedSDKFinalTx(ctx, tx, id, result); err != nil {
 			tx.Rollback()
 			t.Fatal(err)
