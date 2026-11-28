@@ -20,6 +20,11 @@ import (
 // Uses the actual pinned SDK against a local fake Messages API. No upstream
 // credentials or model calls are involved. CI enables this after npm ci.
 func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
+	t.Run("conversation", testSDKBridgeAgainstFakeGateway)
+	t.Run("repair", testSDKRepairAgainstFakeGateway)
+}
+
+func testSDKBridgeAgainstFakeGateway(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("enable after npm ci --prefix bridge/claude")
 	}

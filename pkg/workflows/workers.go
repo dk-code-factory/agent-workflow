@@ -896,6 +896,11 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		journalErr = errors.Join(journalErr, err)
 	}
 	expectedSession := w.SessionID
+	if msg.RepairOnly {
+		// A repair consumes this worker's admitted turn allowance, but runs in
+		// a separate provider context and must not replace its durable session.
+		expectedSession = ""
+	}
 	request := AgentRequest{RunID: w.RunID, Generation: origin.Generation, InvocationID: msg.ID, ParentWorkerID: w.ID, AgentID: w.Role, Workspace: w.TaskWorkspace, SessionOwnerID: w.SessionOwnerID, Prompt: msg.Prompt, Definition: w.Definition, Skill: w.Skill, SkillEvidence: w.SkillEvidence, Input: msg.Input, Output: msg.Output, Model: msg.Model, RepairOnly: msg.RepairOnly}
 	if w.Skill != nil {
 		root, skillErr := m.Store.SkillAssets(ctx, w.RunID, w.Skill)
@@ -905,7 +910,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			request.SkillRoot = root
 		}
 	}
-	usageIdentity := UsageIdentity{TaskAttemptID: msg.TaskAttemptID, ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: w.SessionID}
+	usageIdentity := UsageIdentity{TaskAttemptID: msg.TaskAttemptID, ID: msg.ID, RunID: w.RunID, WorkerID: w.ID, Kind: "worker", SessionID: expectedSession}
 	if source, ok := runner.(interface {
 		UsageProvider(string, string) (string, string)
 	}); ok {
@@ -954,7 +959,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	}
 	invocationJournal := workerInvocationJournal{Journal: m.Store, observe: retainJournalError}
 	ctx = runtimeexec.WithBinding(ctx, runtimeexec.Binding{Journal: invocationJournal, Dir: m.Store.Dir, RunID: w.RunID, Generation: origin.Generation, Owner: origin.Owner, LogicalID: msg.ID, Kind: "worker"})
-	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: w.SessionID}, func(event ProviderEvent) {
+	result, turnErr := runner.RunTurn(ctx, SessionRequest{AgentRequest: request, SessionID: expectedSession}, func(event ProviderEvent) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
 		if callbacksClosed {
@@ -1061,7 +1066,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			err = current.SkillEvidence.ObserveUncertainAttempt(current.Skill, *retryObservation)
 		}
 		if err == nil && (event.SessionID != "" || skillObservation != nil || childObservation != nil || retryObservation != nil) {
-			if event.SessionID != "" {
+			if event.SessionID != "" && !msg.RepairOnly {
 				current.SessionID = event.SessionID
 				w.SessionID = event.SessionID
 			}
@@ -1111,7 +1116,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	if result.SessionID != "" {
 		if expectedSession != "" && result.SessionID != expectedSession {
 			turnErr = fmt.Errorf("provider returned an unexpected resumed session identity")
-		} else {
+		} else if !msg.RepairOnly {
 			w.SessionID = result.SessionID
 		}
 	}

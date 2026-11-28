@@ -132,7 +132,9 @@ func (f *nativeTaskFixture) RunTurn(ctx context.Context, req SessionRequest, emi
 	f.requests = append(f.requests, req)
 	f.mu.Unlock()
 	session := req.SessionID
-	if session == "" {
+	if req.RepairOnly {
+		session = "repair-" + req.InvocationID
+	} else if session == "" {
 		session = "session-" + req.ParentWorkerID
 	}
 	emit(ProviderEvent{Type: "session", SessionID: session})
@@ -195,6 +197,42 @@ func TestNativeAgentTaskIdentityContinuationAndIndependentAgent(t *testing.T) {
 	}
 	if f.requests[0].Definition.DeveloperInstructions != "Review admitted changes." {
 		t.Fatal(f.requests[0])
+	}
+}
+
+func TestNativeAgentRepairPreservesWorkerSessionAndChargesTurns(t *testing.T) {
+	e, _, fixture := agentTaskFixture(t, `jobs:
+  review:
+    steps:
+      - id: first
+        uses: agent/run
+        with:
+          agent: reviewer.yaml
+          prompt: first
+          turns: 4
+          output: {format: json, repair-attempts: 1, schema: {type: object, required: [ok], properties: {ok: {type: boolean}}}}
+      - id: followup
+        uses: agent/run
+        with: {agent: '${{ steps.first.outputs.agent }}', prompt: next}
+`, func(req SessionRequest) (map[string]any, error) {
+		if !req.RepairOnly && strings.HasPrefix(req.Prompt, "first") {
+			return map[string]any{"text": `{"ok":"invalid"}`}, nil
+		}
+		return map[string]any{"text": `{"ok":true}`}, nil
+	})
+	run, err := e.Run(context.Background(), RunRequest{Ref: "workflows/main.yml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	requests := fixture.requests
+	if len(requests) != 3 || !requests[1].RepairOnly || requests[1].SessionID != "" || requests[2].SessionID != "session-"+requests[0].ParentWorkerID {
+		t.Fatalf("repair changed worker continuation: %+v", requests)
+	}
+	workers, err := e.Workers.List(context.Background(), run.ID)
+	if err != nil || len(workers) != 1 || workers[0].Remaining != 1 || workers[0].SessionID != requests[2].SessionID {
+		t.Fatalf("repair changed session or turn accounting: %+v %v", workers, err)
 	}
 }
 func TestNativeAgentTaskDefinitionSnapshotAndHooks(t *testing.T) {

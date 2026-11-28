@@ -103,6 +103,21 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if !ok {
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
 	}
+	if req.RepairOnly {
+		// A formatting repair is a fresh, tool-free operation. In particular a
+		// native task's retained definition/input/session must not restore its
+		// original task context into the repair request.
+		if req.Model == "" && req.Definition != nil {
+			req.Model = req.Definition.Model
+		}
+		req.SessionID = ""
+		req.Definition = nil
+		req.Input = nil
+		req.Tools = nil
+		req.Output = nil // schema validation belongs to the engine, without SDK tools
+		agent.InstructionText = "Format the supplied repair data as JSON. Do not execute tools or perform the original task."
+		agent.Tools = []string{}
+	}
 	if req.Definition != nil {
 		if req.AgentID != r.NativeTaskRole() {
 			return workflows.SessionResult{}, fmt.Errorf("native task runtime role binding changed")

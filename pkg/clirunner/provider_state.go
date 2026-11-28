@@ -39,6 +39,10 @@ func providerStateDir(root, provider string, req workflows.SessionRequest) (stri
 		}
 	}
 	path := filepath.Join(root, ".agent-workflow", "providers", provider, origin, stateComponent(owner))
+	if req.RepairOnly {
+		// Repair sessions never share the task's provider configuration/history.
+		path = filepath.Join(path, "repairs", stateComponent(req.InvocationID))
+	}
 	if err := os.MkdirAll(filepath.Join(path, "home"), 0700); err != nil {
 		return "", &runtimeexec.StorageError{Err: err}
 	}
