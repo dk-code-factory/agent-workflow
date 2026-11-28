@@ -113,6 +113,9 @@ func (m *WorkerManager) acknowledgeFailure(ctx context.Context, req WorkerFailur
 	if !generationMatches || msg.Status != RunStatusFailed || msg.FinishedAt.IsZero() || (msg.UnsafeFailureClass != "" && !(waitOperation != "" && msg.UnsafeFailureClass == "canceled" && msg.FailureClass != "canceled")) || !acknowledgeableFailure(msg.FailureClass) {
 		return zero, fmt.Errorf("native failure is not a settled ordinary failure in this execution")
 	}
+	if err = managedSDKWorkerHold(ctx, tx, worker.ID); err != nil {
+		return zero, err
+	}
 	if prior := msg.FailureAcknowledgement; prior != nil {
 		if prior.RequestID != req.RequestID || prior.MessageID != req.MessageID || prior.Generation != msg.Generation || prior.Reason != req.Reason || prior.Evidence != req.Evidence {
 			return zero, fmt.Errorf("conflicting failure acknowledgement")

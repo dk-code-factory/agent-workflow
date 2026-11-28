@@ -170,8 +170,7 @@ func (t *toolBinding) Call(ctx context.Context, req ToolRequest) (json.RawMessag
 			break
 		}
 	}
-	var args any
-	decodeErr := decodeJSONWithNumbers(req.Arguments, &args)
+	args, canonical, fingerprint, decodeErr := toolArgumentIdentity(req)
 	var denied error
 	failureClass := "schema"
 	if decodeErr != nil {
@@ -190,9 +189,6 @@ func (t *toolBinding) Call(ctx context.Context, req ToolRequest) (json.RawMessag
 			denied = validateToolArguments(*definition, args)
 		}
 	}
-	canonical, _ := json.Marshal(args)
-	h := sha256.Sum256(append([]byte(req.Server+"\x00"+req.Tool+"\x00"), canonical...))
-	fingerprint := hex.EncodeToString(h[:])
 	key := t.invocation.RunID + "\x00" + t.invocation.InvocationID + "\x00" + req.CallID
 	b := t.broker
 	b.mu.Lock()
@@ -337,7 +333,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 			return nil, fmt.Errorf("provider call ID reused with conflicting content")
 		}
 		if previous.Status == "denied" {
-			return nil, errors.New(previous.Error)
+			return nil, deniedToolReceipt(in, previous, errors.New(previous.Error))
 		}
 		if previous.Status == "completed" {
 			return previous.Result, nil
@@ -380,7 +376,7 @@ func (t *toolBinding) dispatch(ctx context.Context, req ToolRequest, d ToolDefin
 		return nil, &runtimeexec.StorageError{Err: err}
 	}
 	if denied != nil {
-		return nil, errors.New(record.Error)
+		return nil, deniedToolReceipt(in, record, redactedError{cause: denied, text: record.Error})
 	}
 	var result json.RawMessage
 	dispatch := in.Dispatch
