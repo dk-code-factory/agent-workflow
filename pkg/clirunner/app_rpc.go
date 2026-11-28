@@ -194,7 +194,17 @@ func (rpc *appRPC) callContext(ctx context.Context, method string, params any) (
 		}
 		return frame.Result, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		// The peer may close after its response is queued, cancelling rpc.ctx.
+		// Preserve the acknowledgement when it and cancellation are observable.
+		select {
+		case frame := <-response:
+			if len(frame.Error) > 0 && string(frame.Error) != "null" {
+				return nil, &appRPCResponseError{method: method, raw: frame.Error}
+			}
+			return frame.Result, nil
+		default:
+			return nil, ctx.Err()
+		}
 	case <-rpc.done:
 		select {
 		case frame := <-response:
