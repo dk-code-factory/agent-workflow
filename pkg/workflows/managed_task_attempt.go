@@ -232,20 +232,31 @@ func recordManagedTaskTerminal(ctx context.Context, tag managedTaskAdmission, re
 
 // Unknown nonworker native attempts remain held. No retry flag or changed
 // logical/physical run may silently grant another provider attempt.
-const managedTaskCoordinateSelect = `SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id),a.run_id
- FROM usage_invocations v INDEXED BY usage_origin
- CROSS JOIN usage_observations u
- CROSS JOIN attempts a
- WHERE v.origin_id IN (`
 const managedTaskCoordinateOriginQuery = `SELECT CASE WHEN origin_id='' THEN id ELSE origin_id END FROM runs r WHERE r.id=? OR r.origin_id=?`
 const managedTaskCoordinateLogicalQuery = managedTaskCoordinateOriginQuery + ` OR (?!='' AND json_extract(CAST(r.snapshot AS TEXT),'$.metadata.iteration_logical_run_id')=?)`
-const managedTaskCoordinatePredicates = `)
- AND u.invocation_id=v.id AND u.observation_key IN (?,?)
- AND a.id IN (v.id,json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.original_admission.task.parent_id'),json_extract(CAST(u.record AS TEXT),'$.managed_codex_admission.admission.task.parent_id'))
- AND a.job_id=? AND a.step_id=? AND a.iteration=?`
-
-const managedTaskCoordinateQuery = managedTaskCoordinateSelect + managedTaskCoordinateOriginQuery + managedTaskCoordinatePredicates
-const managedTaskLogicalCoordinateQuery = managedTaskCoordinateSelect + managedTaskCoordinateLogicalQuery + managedTaskCoordinatePredicates
+const managedTaskCoordinatePrefix = `WITH origins AS MATERIALIZED (`
+const managedTaskCoordinateScope = `), requested AS (SELECT ? AS sdk,? AS codex,? AS job,? AS step,? AS iteration),
+ scoped_runs AS MATERIALIZED (
+ SELECT id FROM runs WHERE id IN (SELECT * FROM origins)
+ UNION SELECT id FROM runs INDEXED BY runs_origin WHERE origin_id IN (SELECT * FROM origins)),
+ coordinates AS MATERIALIZED (
+ SELECT a.id,a.run_id FROM scoped_runs selected CROSS JOIN requested p CROSS JOIN attempts a
+ WHERE a.run_id=selected.id AND a.job_id=p.job AND a.step_id=p.step AND a.iteration=p.iteration)
+ SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id),a.run_id
+ FROM coordinates a CROSS JOIN usage_invocations v CROSS JOIN usage_observations u CROSS JOIN requested p
+ WHERE v.id=a.id AND v.origin_id IN (SELECT * FROM origins) AND u.invocation_id=v.id AND u.observation_key IN (p.sdk,p.codex)
+ UNION
+ SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id),a.run_id
+ FROM coordinates a CROSS JOIN usage_observations u INDEXED BY usage_managed_sdk_parent CROSS JOIN usage_invocations v
+ WHERE CAST(json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.original_admission.task.parent_id') AS TEXT)=a.id
+ AND u.observation_key IN ('managed-sdk-attempt','codex-managed-admission') AND v.id=u.invocation_id AND v.origin_id IN (SELECT * FROM origins)
+ UNION
+ SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id),a.run_id
+ FROM coordinates a CROSS JOIN usage_observations u INDEXED BY usage_managed_codex_parent CROSS JOIN usage_invocations v
+ WHERE CAST(json_extract(CAST(u.record AS TEXT),'$.managed_codex_admission.admission.task.parent_id') AS TEXT)=a.id
+ AND u.observation_key IN ('managed-sdk-attempt','codex-managed-admission') AND v.id=u.invocation_id AND v.origin_id IN (SELECT * FROM origins)`
+const managedTaskCoordinateQuery = managedTaskCoordinatePrefix + managedTaskCoordinateOriginQuery + managedTaskCoordinateScope
+const managedTaskLogicalCoordinateQuery = managedTaskCoordinatePrefix + managedTaskCoordinateLogicalQuery + managedTaskCoordinateScope
 
 func managedTaskCoordinateHold(ctx context.Context, tx *sql.Tx, run, job, step string, iteration int, logical string) error {
 	origin := run

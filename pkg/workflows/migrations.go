@@ -9,7 +9,7 @@ import (
 	"github.com/dk-code-factory/agent-workflow/internal/ownership"
 )
 
-const schemaVersion = 13
+const schemaVersion = 14
 
 const schemaV1 = `
 CREATE TABLE runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,record BLOB NOT NULL,snapshot BLOB NOT NULL,updated TEXT NOT NULL);
@@ -99,6 +99,13 @@ BEGIN
  DELETE FROM task_deadlines WHERE group_id=old.group_id;
  DELETE FROM task_state_requests WHERE group_id=old.group_id;
 END;
+`
+
+// Index only private native bookkeeping. Existing terminal records remain
+// intact; admission can find their parent without parsing retained payloads.
+const schemaV14 = `
+CREATE INDEX IF NOT EXISTS usage_managed_sdk_parent ON usage_observations(CAST(json_extract(CAST(record AS TEXT),'$.managed_sdk_attempt.original_admission.task.parent_id') AS TEXT)) WHERE observation_key IN ('managed-sdk-attempt','codex-managed-admission');
+CREATE INDEX IF NOT EXISTS usage_managed_codex_parent ON usage_observations(CAST(json_extract(CAST(record AS TEXT),'$.managed_codex_admission.admission.task.parent_id') AS TEXT)) WHERE observation_key IN ('managed-sdk-attempt','codex-managed-admission');
 `
 
 const schemaV10InputIndexes = `
@@ -202,7 +209,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context, owner *ownership.Lock) error 
 		}
 		return s.CleanupHelperStaging(ctx, owner)
 	}
-	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13}
+	migrations := []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14}
 	for next := version + 1; next <= schemaVersion; next++ {
 		if _, err = tx.ExecContext(ctx, migrations[next-1]); err != nil {
 			return fmt.Errorf("schema migration %d: %w", next, err)

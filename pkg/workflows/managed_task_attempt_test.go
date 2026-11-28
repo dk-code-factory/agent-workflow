@@ -207,7 +207,7 @@ func TestManagedConversationReplayQueryUsesOriginIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := strings.Join(plan, "\n")
-	if !strings.Contains(all, "usage_origin") || strings.Contains(all, "SCAN u") || strings.Contains(all, "SCAN r") || !strings.Contains(all, "SEARCH u USING INDEX") {
+	if !strings.Contains(all, "runs_origin") || !strings.Contains(all, "SEARCH a USING INDEX sqlite_autoindex_attempts_2 (run_id=? AND job_id=? AND step_id=? AND iteration=?)") || !strings.Contains(all, "SEARCH u USING INDEX usage_managed_sdk_parent") || !strings.Contains(all, "SEARCH u USING INDEX usage_managed_codex_parent") || strings.Contains(all, "SCAN u") || strings.Contains(all, "SCAN r") || !strings.Contains(all, "SEARCH u USING INDEX") {
 		t.Fatal("global historical observation scan", all)
 	}
 }
