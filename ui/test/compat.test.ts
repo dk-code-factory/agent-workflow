@@ -79,6 +79,13 @@ describe('advisory reference dependencies', () => {
 });
 
 describe('runner compatibility', () => {
+  it('rejects binary persistent-state targets that cannot round-trip through JSON', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-invalid-utf8.yml'), 'utf8');
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.severity === 'error')).toBe(true);
+    expect(result.workflow).toBeUndefined();
+  });
   it('normalizes a binary persistent-state target through visual edits and history', () => {
     const source = readFileSync(resolve(root, 'persistent-state-binary-target.yml'), 'utf8');
     const document = new WorkflowDocument({ source });

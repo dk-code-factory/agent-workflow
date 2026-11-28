@@ -1,0 +1,7 @@
+persistent-state:
+  ledger: {mount-target: !!binary L2NmLcOpdGF0}
+jobs:
+  build:
+    container: ubuntu:24.04
+    steps:
+      - argv: [cat, /cf-état/ledger]

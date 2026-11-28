@@ -1,6 +1,7 @@
 package runtimeexec
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,33 @@ func TestPersistentStateBuildRequestReadWriteAndRejectsUnsafeBinds(t *testing.T)
 	if !found {
 		t.Fatal("persistent mount missing")
 	}
+	for _, target := range []string{"/cf-state", "/cf-état"} {
+		opts.PersistentState[0].Target = target
+		request, err := BuildRequest(opts, owner, lifetime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored containerapi.CreateRequest
+		if err := json.Unmarshal(encoded, &restored); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, mount := range restored.Mounts {
+			if mount.Source == source {
+				found = true
+				if mount.Target != target || mount.ReadOnly {
+					t.Fatalf("persistent mount changed during JSON serialization: %+v", mount)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("serialized persistent mount missing")
+		}
+	}
 	link := filepath.Join(root, "link")
 	if err := os.Symlink(source, link); err != nil {
 		t.Fatal(err)
@@ -63,7 +91,7 @@ func TestPersistentStateBuildRequestReadWriteAndRejectsUnsafeBinds(t *testing.T)
 		}
 	}
 	opts.PersistentState[0].Source = source
-	for _, bad := range []string{"/", "relative", "/workspace/private", "/state", "/engine-task-state/child", "/engine-guardian", "/actions", "/tmp/state", "/proc/x", "/x/../safe", "/x\\y", "/${{ inputs.path }}"} {
+	for _, bad := range []string{"/", "relative", "/workspace/private", "/state", "/engine-task-state/child", "/engine-guardian", "/actions", "/tmp/state", "/proc/x", "/x/../safe", "/x\\y", "/${{ inputs.path }}", "/cf-\xff", "/cf-\xfe"} {
 		opts.PersistentState[0].Target = bad
 		if _, err := BuildRequest(opts, owner, lifetime); err == nil {
 			t.Errorf("accepted unsafe target %q", bad)

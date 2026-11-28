@@ -1,0 +1,8 @@
+persistent-state:
+  first: {mount-target: !!binary L2NmLf8=}
+  second: {mount-target: !!binary L2NmLf4=}
+jobs:
+  task:
+    container: ubuntu:24.04
+    steps:
+      - argv: [true]

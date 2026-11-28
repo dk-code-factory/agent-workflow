@@ -574,5 +574,11 @@
     "file": "persistent-state-binary-target.yml",
     "parse": true,
     "valid": true
+  },
+  {
+    "name": "persistent-state-binary-unicode-target",
+    "file": "persistent-state-binary-unicode-target.yml",
+    "parse": true,
+    "valid": true
   }
 ]

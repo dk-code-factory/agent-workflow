@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -8,6 +9,57 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestPersistentStateBinaryTargetsRetainRepresentation(t *testing.T) {
+	for _, target := range []string{"/cf-state", "/cf-état", "/cf-\xff", "/cf-\xfe"} {
+		t.Run(base64.StdEncoding.EncodeToString([]byte(target)), func(t *testing.T) {
+			definition := "persistent-state: {ledger: {mount-target: !!binary " + base64.StdEncoding.EncodeToString([]byte(target)) + "}}\njobs: {task: {steps: [{argv: [true]}]}}"
+			workflow, err := Parse([]byte(definition))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := workflow.PersistentState["ledger"].MountTarget; got != target {
+				t.Fatalf("binary target decoded as %q, want %q", got, target)
+			}
+			err = Validate(workflow)
+			if target == "/cf-\xff" || target == "/cf-\xfe" {
+				if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+					t.Fatalf("nonrepresentable target was not rejected: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(workflow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored Workflow
+			if err := json.Unmarshal(data, &restored); err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(&restored); err != nil {
+				t.Fatal(err)
+			}
+			if got := restored.PersistentState["ledger"].MountTarget; got != target {
+				t.Fatalf("retained target changed: %q != %q", got, target)
+			}
+		})
+	}
+	// These byte-distinct targets would both become /cf-\uFFFD in JSON.
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "ui-compat", "persistent-state-binary-invalid-utf8.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(workflow); err == nil {
+		t.Fatal("accepted targets that collapse during JSON serialization")
+	}
+}
 
 const persistentWorkflow = `persistent-state:
   ledger: {mount-target: /cf-workflows-state}

@@ -342,8 +342,8 @@ so the application owns any data migrations and concurrency control.
 The host directory and every existing ancestor must be real directories without
 symlinks. The source must be disjoint from the workspace, engine state and other
 engine mounts, and cannot be the host home directory or an ancestor. Mount targets
-must be static, clean absolute container paths, disjoint from one another and
-reserved mounts such as `/workspace`, `/state`, `/actions`, `/engine-task-state`
+must be valid UTF-8, static, clean absolute container paths, disjoint from one
+another and reserved mounts such as `/workspace`, `/state`, `/actions`, `/engine-task-state`
 and `/engine-guardian`; home, temporary and kernel paths are also reserved. The
 checks run again before container creation. Missing directories are created with
 0700 permissions. When the engine runs as root, the launcher sets the leaf's owner

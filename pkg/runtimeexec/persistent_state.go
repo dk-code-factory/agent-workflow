@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // PersistentStateMount is resolved by the engine, never from workflow host paths.
@@ -21,6 +22,9 @@ func pathsOverlap(a, b string) bool {
 }
 
 func ValidatePersistentStateTarget(target string) error {
+	if !utf8.ValidString(target) {
+		return fmt.Errorf("persistent-state mount-target must be valid UTF-8")
+	}
 	if !strings.HasPrefix(target, "/") || target == "/" || path.Clean(target) != target || strings.ContainsAny(target, "\\\x00\r\n") || strings.Contains(target, "${{") {
 		return fmt.Errorf("persistent-state mount-target must be a clean absolute container path")
 	}
