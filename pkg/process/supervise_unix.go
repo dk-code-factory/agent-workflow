@@ -132,7 +132,13 @@ func init() {
 		// terminal in a fresh session; never steal the caller's terminal.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	}
-	if err = cmd.Start(); err != nil {
+	err = cmd.Start()
+	// Start duplicates ExtraFiles into the target; the guardian must release
+	// its own copies so a target-owned pipe can reach EOF before target exit.
+	for _, file := range inherited {
+		_ = file.Close()
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		clean()
 		finish(127, cleanupError)
