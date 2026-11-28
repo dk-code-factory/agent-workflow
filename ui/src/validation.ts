@@ -60,6 +60,24 @@ export function normalizeStringScalar(node: Scalar): string {
   return text;
 }
 
+function invalidPersistentTargetUnicode(node: Scalar, source: string): boolean {
+  if (typeof node.value === 'string' && /[\uD800-\uDFFF]/u.test(node.value)) return true;
+  if (node.type !== 'QUOTE_DOUBLE' || !node.range) return false;
+  const spelling = source.slice(node.range[0], node.range[1]);
+  // yaml.v3 rejects surrogate escape values even when two escapes would form
+  // a valid JavaScript pair. Literal astral characters and \U escapes remain valid.
+  for (let i = 1; i < spelling.length - 1; i++) {
+    if (spelling[i] !== '\\') continue;
+    const escape = spelling[++i];
+    if (escape !== 'u' && escape !== 'U') continue;
+    const width = escape === 'u' ? 4 : 8;
+    const point = Number.parseInt(spelling.slice(i + 1, i + 1 + width), 16);
+    if (point >= 0xD800 && point <= 0xDFFF) return true;
+    i += width;
+  }
+  return false;
+}
+
 function validContainerArgs(text: string): boolean {
   let quote = '', escaped = false;
   for (const char of text) {
@@ -201,6 +219,10 @@ export function parseWorkflow(source: string): Parsed {
     const walk = (node: Node | null, path: Path, depth: number) => {
       if (depth > 64) { add('depth', 'YAML nesting exceeds 64', path, node, 'parser'); safe = false; return; }
       if (isAlias(node)) { add('alias', 'YAML aliases are unsupported', path, node, 'parser'); safe = false; return; }
+      if (isScalar(node) && path.length === 3 && path[0] === 'persistent-state' && path[2] === 'mount-target' && invalidPersistentTargetUnicode(node, source)) {
+        add('persistent-state-unicode', 'Mount target contains an invalid Unicode surrogate or YAML escape', path, node, 'parser');
+        safe = false;
+      }
       if (isMap(node)) {
         const keys = new Set<string>();
         for (const pair of node.items) {

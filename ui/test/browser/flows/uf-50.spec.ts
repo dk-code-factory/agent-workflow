@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { open, snapshot, field, job, downloadText } from './harness';
+
+const compatibilityFixture = (file: string) => readFileSync(new URL(`../../../../testdata/ui-compat/${file}`, import.meta.url), 'utf8');
 
 test('retain job helper paths and replace a Docker sibling bundle with reviewed conversion and undo', async ({ page }) => {
   const ui = await open(page, `jobs: {build: {container: ubuntu:24.04, steps: [{id: sibling, uses: 'docker://ubuntu:24.04'}]}}`);
@@ -176,4 +179,39 @@ jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-state/ledger]}]
   await ui.getByRole('button', { name: 'Split', exact: true }).click();
   await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace('!!binary bGVkZ2Vy:', 'ledger: {mount-target: /cf-first}, !!binary bGVkZ2Vy:'));
   expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'duplicate-key' && d.severity === 'error')).toBe(true);
+});
+
+for (const kind of ['high', 'low', 'pair']) test(`diagnose a persistent-state surrogate ${kind} escape and retain repaired Unicode through export and history`, async ({ page }) => {
+  const source = compatibilityFixture(`persistent-state-surrogate-${kind}.yml`);
+  const repaired = compatibilityFixture('persistent-state-unicode-targets.yml');
+  const expected = {
+    ascii: { 'mount-target': '/cf-state' }, unicode: { 'mount-target': '/cf-état' },
+    literal: { 'mount-target': '/cf-literal-🚀' }, escaped: { 'mount-target': '/cf-escape-🚀' },
+  };
+  const ui = await open(page, source);
+  await ui.getByRole('button', { name: 'Split', exact: true }).click();
+  await expect(ui.locator('.aw-diagnostics')).toContainText('invalid Unicode surrogate or YAML escape');
+  await expect(ui.getByRole('button', { name: 'Add job', exact: true })).toBeDisabled();
+  expect((await snapshot(page)).stale).toBe(true);
+  expect((await snapshot(page)).workflow).toBeUndefined();
+  // Raw source remains available for repair; it is not a usable visual definition.
+  expect(await downloadText(page)).toBe(source);
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(repaired);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(expected);
+  await job(page);
+  await field(page, 'Name', 'Unicode retained');
+  const edited = (await snapshot(page)).source;
+  expect(parse(await downloadText(page))['persistent-state']).toEqual(expected);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(repaired);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  expect((await snapshot(page)).stale).toBe(true);
+  await expect(ui.locator('.aw-diagnostics')).toContainText('invalid Unicode surrogate or YAML escape');
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(expected);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(edited);
+  expect(parse(await downloadText(page))['persistent-state']).toEqual(expected);
 });

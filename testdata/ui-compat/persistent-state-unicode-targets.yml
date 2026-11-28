@@ -1,0 +1,9 @@
+persistent-state:
+  ascii: {mount-target: /cf-state}
+  unicode: {mount-target: /cf-état}
+  literal: {mount-target: /cf-literal-🚀}
+  escaped: {mount-target: "/cf-escape-\U0001F680"}
+jobs:
+  build:
+    container: ubuntu:24.04
+    steps: [{argv: [true]}]

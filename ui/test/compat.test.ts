@@ -79,6 +79,41 @@ describe('advisory reference dependencies', () => {
 });
 
 describe('runner compatibility', () => {
+  it.each(['high', 'low', 'pair'])('keeps a persistent-state surrogate %s escape unavailable until repaired', kind => {
+    const source = readFileSync(resolve(root, `persistent-state-surrogate-${kind}.yml`), 'utf8');
+    const repaired = readFileSync(resolve(root, 'persistent-state-unicode-targets.yml'), 'utf8');
+    const expected = {
+      ascii: { 'mount-target': '/cf-state' }, unicode: { 'mount-target': '/cf-état' },
+      literal: { 'mount-target': '/cf-literal-🚀' }, escaped: { 'mount-target': '/cf-escape-🚀' },
+    };
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot()).toMatchObject({ source, stale: true, workflow: undefined });
+    expect(document.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({
+      code: 'persistent-state-unicode', severity: 'error', source: 'parser',
+      path: ['persistent-state', 'ledger', 'mount-target'], location: expect.objectContaining({ line: 2 }),
+    }));
+    expect(() => document.setField(['jobs', 'build', 'name'], 'Unapplied')).toThrow('suspended');
+    expect(document.getSnapshot().source).toBe(source);
+    // Go rejects these escapes in Parse, before runtime target validation.
+    // A literal astral character or scalar-value \U escape is valid in both parsers.
+    document.setSource(repaired);
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Unicode retained');
+    const edited = document.getSnapshot().source;
+    expect(parseDocument(edited).toJS()['persistent-state']).toEqual(expected);
+    expect(parseWorkflow(edited).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(repaired);
+    document.undo();
+    expect(document.getSnapshot()).toMatchObject({ source, stale: true, workflow: undefined });
+    document.redo();
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.redo();
+    expect(document.getSnapshot().source).toBe(edited);
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Unicode retained');
+  });
   it('normalizes a binary persistent-state resource key through edits and history', () => {
     const source = readFileSync(resolve(root, 'persistent-state-binary-key.yml'), 'utf8');
     const document = new WorkflowDocument({ source });
