@@ -86,12 +86,21 @@ jobs:
           export AGENT_WORKFLOW_CONTAINER_IMAGE="$(cat "dist/worker-linux-$ARCH.iid")"
           go test ./pkg/clirunner -run '^TestContainer(ExecutionAndCleanup|RuntimeRemoval)$' -count=1
           python3 scripts/verify-worker-image.py --runtime "$AGENT_WORKFLOW_CONTAINER_RUNTIME" --image "$AGENT_WORKFLOW_CONTAINER_IMAGE"
+      - name: Cache pinned scanner downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/release-scanners/downloads
+          key: release-scanners-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('scripts/release-scanners.json') }}
+      - name: Install checksum-verified release scanners
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 scripts/install_release_scanners.py --arch "$ARCH" --cache "$RUNNER_TEMP/release-scanners/downloads" --bin-dir "$RUNNER_TEMP/release-scanners/bin"
+          echo "$RUNNER_TEMP/release-scanners/bin" >> "$GITHUB_PATH"
       - name: Scan the actual image archive
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          go install github.com/anchore/syft/cmd/syft@v1.57.0
-          go install github.com/aquasecurity/trivy/cmd/trivy@v0.76.2
           syft "docker-archive:dist/worker-linux-$ARCH.docker.tar" -o "cyclonedx-json=dist/worker-linux-$ARCH.sbom.json"
           trivy image --input "dist/worker-linux-$ARCH.docker.tar" --severity HIGH,CRITICAL --exit-code 1 --format json --output "dist/worker-linux-$ARCH.vulnerabilities.json"
       - run: python3 scripts/compress-worker-image.py '${{ matrix.arch }}'
