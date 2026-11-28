@@ -24,8 +24,8 @@ from subjects import SUBJECTS, seed, snapshot
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run(arguments, **kwargs):
-    return subprocess.run(arguments, check=True, capture_output=True, text=True, timeout=30, **kwargs).stdout
+def run(arguments, *, timeout=30, **kwargs):
+    return subprocess.run(arguments, check=True, capture_output=True, text=True, timeout=timeout, **kwargs).stdout
 
 
 def isolated_credential(source):
@@ -152,9 +152,21 @@ class Session:
         self.stderr.close()
 
 
-def recover_gate(engine, workspace, environment, evidence, run_id, deadline):
+def recover_gate(engine, workspace, environment, evidence, run_id, deadline, controller):
+    if controller is None:
+        raise ValueError("Recovery needs its owned controller process.")
+    def remaining():
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise TimeoutError("Recovery exceeded subject deadline.")
+        return seconds
     def cli(verb, *arguments):
-        return json.loads(run([str(engine), verb, "--workspace", str(workspace), *arguments], env=environment))
+        try:
+            output = run([str(engine), verb, "--workspace", str(workspace), *arguments], env=environment, timeout=min(30, remaining()))
+        except subprocess.CalledProcessError as failure:
+            detail = (failure.stderr or "no stderr").strip()[:4096]
+            raise RuntimeError(f"Recovery {verb} failed with exit {failure.returncode}: {detail}") from failure
+        return json.loads(output)
     before = cli("inputs", run_id)
     if len(before) != 1 or before[0]["state"] != "pending":
         raise ValueError("Recovery needs exactly one pending approval gate.")
@@ -164,6 +176,13 @@ def recover_gate(engine, workspace, environment, evidence, run_id, deadline):
         (evidence / "recovery.json").write_text(json.dumps(record, indent=2))
     checkpoint()
     cli("stop")
+    # Shutdown acknowledges the request before supervised cleanup releases ownership.
+    try:
+        stopped = controller.wait(timeout=remaining())
+    except subprocess.TimeoutExpired as failure:
+        raise TimeoutError("Owned controller shutdown exceeded recovery deadline.") from failure
+    if stopped != 0:
+        raise RuntimeError(f"Owned controller exited with status {stopped} during recovery.")
     # Resume the same waiting run starts a replacement owned controller, never a replacement run.
     cli("resume", "--parallel", "2", "--detach", run_id)
     after = cli("inputs", run_id)
@@ -175,7 +194,7 @@ def recover_gate(engine, workspace, environment, evidence, run_id, deadline):
     answer.write_text('"approve"')
     flags = ["--gate", gate["gate_id"], "--answer-file", str(answer)]
     stale = subprocess.run([str(engine), "answer", "--workspace", str(workspace), *flags,
-                            "--answer-id", "stale-delivery", "--evidence-id", "stale-evidence", run_id], env=environment, capture_output=True, timeout=15)
+                            "--answer-id", "stale-delivery", "--evidence-id", "stale-evidence", run_id], env=environment, capture_output=True, timeout=min(15, remaining()))
     if stale.returncode == 0 or b"stale" not in stale.stderr:
         raise ValueError("Stale gate answer did not produce the expected explicit conflict.")
     record["stale_answer_rejected"] = True
@@ -189,7 +208,7 @@ def recover_gate(engine, workspace, environment, evidence, run_id, deadline):
             record["processing_count"] = int((workspace / "fixture/processed.count").read_text())
             checkpoint()
             raise ValueError("Recovered workflow failed.")
-        time.sleep(0.1)
+        time.sleep(min(0.1, remaining()))
     else:
         raise TimeoutError("Recovery exceeded subject deadline.")
     if (workspace / "fixture/processed.count").read_text() != "1" or (workspace / "fixture/report.txt").read_text() != "Total: 5\n":
@@ -330,7 +349,7 @@ def main():
                 if "recover" in control:
                     if not approved or args.scenario != "plugin-gated-report-recovery":
                         raise ValueError("Recovery control is confined to the approved gate subject.")
-                    recover_gate(engine, workspace, environment, evidence, control["recover"], effect_deadline)
+                    recover_gate(engine, workspace, environment, evidence, control["recover"], effect_deadline, controller)
                     continue
                 if "approve" in control:
                     if approved or control["approve"] != plan_hash:
