@@ -17,12 +17,11 @@ type codexControl struct {
 	completed     chan struct{}
 	completeOnce  sync.Once
 	interruptOnce sync.Once
-	cleanup       func()
-	timer         *time.Timer
+	stop          *cancellationStop
 }
 
-func newCodexControl(cleanup func()) *codexControl {
-	return &codexControl{cleanup: cleanup, completed: make(chan struct{})}
+func newCodexControl(terminate func()) *codexControl {
+	return &codexControl{stop: newCancellationStop(terminate), completed: make(chan struct{})}
 }
 func (c *codexControl) identity() (string, string) {
 	c.mu.Lock()
@@ -58,12 +57,14 @@ func (c *codexControl) notify(frame rpcFrame) {
 }
 func (c *codexControl) interrupt() error {
 	c.interruptOnce.Do(func() {
+		if !c.stop.arm(5 * time.Second) {
+			return
+		}
 		c.mu.Lock()
 		rpc, thread, turn := c.rpc, c.thread, c.turn
-		c.timer = time.AfterFunc(5*time.Second, c.cleanup)
 		c.mu.Unlock()
 		if rpc == nil || thread == "" || turn == "" {
-			c.cleanup()
+			c.stop.stop()
 			return
 		}
 		go func() {
@@ -89,11 +90,7 @@ func (c *codexControl) finish(ctx context.Context) {
 			timer.Stop()
 		}
 	}
-	c.mu.Lock()
-	if c.timer != nil {
-		c.timer.Stop()
-	}
-	c.mu.Unlock()
+	c.stop.finish()
 }
 
 func codexRequestHandler(agent Agent, req workflows.SessionRequest, control *codexControl) func(context.Context, rpcFrame) (any, error) {

@@ -76,7 +76,14 @@ func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.Sessi
 		return result, err
 	}
 	defer cleanup()
-	control := newCodexControl(cleanup)
+	// Cancellation may overlap Wait. The supervisor's cancellation callback
+	// requests termination without inspecting command state or finalizing records.
+	guardianCancel := cmd.Cancel
+	if guardianCancel == nil {
+		return result, fmt.Errorf("supervisor cancellation is unavailable")
+	}
+	control := newCodexControl(func() { _ = guardianCancel() })
+	defer control.stop.finish()
 	cmd.Cancel = control.interrupt
 	if err = cmd.Start(); err != nil {
 		return result, err
