@@ -1,0 +1,49 @@
+name: Go dependency and build caches
+description: Reuse locked modules and refresh compiler outputs for each source revision.
+inputs:
+  workload:
+    description: Stable name of the test or build workload.
+    required: true
+  save-modules:
+    description: Let this job populate the shared module cache after success.
+    default: 'false'
+  save-build:
+    description: Let this job populate its workload build cache after success.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+        echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+    # Only one native job per platform writes modules. Race shards restore them.
+    - if: inputs.save-modules == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.modules }}
+        key: go-modules-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.version }}-${{ hashFiles('go.mod', 'go.sum') }}
+    - if: inputs.save-modules != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.modules }}
+        key: go-modules-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.version }}-${{ hashFiles('go.mod', 'go.sum') }}
+    # Compilation covers the entire package even when -run selects one shard.
+    # One writer per workload prevents identical per-shard cache uploads.
+    - if: inputs.save-build == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.build }}
+        key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.version }}-${{ inputs.workload }}-${{ github.sha }}
+        restore-keys: |
+          go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.version }}-${{ inputs.workload }}-
+    - if: inputs.save-build != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.build }}
+        key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.version }}-${{ inputs.workload }}-${{ github.sha }}
+        restore-keys: |
+          go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.version }}-${{ inputs.workload }}-

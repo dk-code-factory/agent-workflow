@@ -22,11 +22,12 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.27.3' # Match go.mod toolchain and images/pins.json.
-          # Refresh the shared cache when its Go test/build workload changes.
-          cache-dependency-path: |
-            go.sum
-            Makefile
-            scripts/prfix_race.py
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          workload: ci-native
+          save-modules: 'true'
+          save-build: 'true'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26.13.0'
@@ -57,11 +58,12 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.27.3'
-          # Refresh the shared cache when its Go test/build workload changes.
-          cache-dependency-path: |
-            go.sum
-            Makefile
-            scripts/prfix_race.py
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          workload: prfix-race
+          save-modules: 'false'
+          save-build: ${{ matrix.shard == 0 }}
       - name: Check complete Go dependency locks before tests
         run: make go-locks-check
       - name: Run selected PR-fix race tests
@@ -80,11 +82,12 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.27.3'
-          # Refresh the shared cache when its Go test/build workload changes.
-          cache-dependency-path: |
-            go.sum
-            Makefile
-            scripts/prfix_race.py
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          workload: workflows-race
+          save-modules: 'false'
+          save-build: ${{ matrix.shard == 0 }}
       - name: Check complete Go dependency locks before tests
         run: make go-locks-check
       - name: Run selected workflow race tests
