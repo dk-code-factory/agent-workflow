@@ -17,6 +17,9 @@ import (
 )
 
 func (r *Runner) codexTurn(ctx context.Context, agent Agent, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, returnErr error) {
+	if agent.ManagedBuild != nil {
+		return r.codexManagedTurn(ctx, agent, req, emit)
+	}
 	result = workflows.SessionResult{SessionID: req.SessionID}
 	if len(agent.Args) > 0 {
 		return result, fmt.Errorf("app-server raw arguments are unsupported; use explicit managed fields")
