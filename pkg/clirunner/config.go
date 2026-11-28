@@ -57,6 +57,7 @@ type Limits struct {
 }
 
 type Agent struct {
+	ManagedBuild    *ManagedBuild         `yaml:"managed-build,omitempty" json:",omitempty"`
 	MCPGrants       []workflows.ToolGrant `yaml:"mcp-grants"`
 	Limits          Limits                `yaml:"limits"`
 	Execution       Execution             `yaml:"execution"`
@@ -153,6 +154,20 @@ func LoadConfig(path string) (Config, error) {
 			}
 			agent.InstructionText += string(b) + "\n"
 		}
+		if agent.ManagedBuild != nil {
+			if !filepath.IsAbs(agent.ManagedBuild.Manifest) {
+				agent.ManagedBuild.Manifest = filepath.Join(filepath.Dir(path), agent.ManagedBuild.Manifest)
+			}
+			source, profileErr := managedSourceDescriptor()
+			if profileErr != nil {
+				return cfg, fmt.Errorf("agent %s: %w", id, profileErr)
+			}
+			identity, profileErr := captureManagedBuild(agent.ManagedBuild.Manifest, source)
+			if profileErr != nil {
+				return cfg, fmt.Errorf("agent %s: %w", id, profileErr)
+			}
+			agent.ManagedBuild.Identity = identity
+		}
 		if agent.Bridge != "" && !filepath.IsAbs(agent.Bridge) {
 			agent.Bridge = filepath.Join(filepath.Dir(path), agent.Bridge)
 		}
@@ -202,6 +217,9 @@ func (c Config) Validate() error {
 	for id, agent := range c.Agents {
 		if agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && len(agent.MCPGrants) > 0 {
 			return fmt.Errorf("agent %s: SDK direct native tools with managed broker lease release are not certified", id)
+		}
+		if err := validateManagedBuildRole(agent); err != nil {
+			return fmt.Errorf("agent %s: %w", id, err)
 		}
 		if c.Execution.NetworkRuntime != "" && agent.Execution.NetworkRuntime != c.Execution.NetworkRuntime {
 			return fmt.Errorf("agent %s must inherit global network-runtime", id)

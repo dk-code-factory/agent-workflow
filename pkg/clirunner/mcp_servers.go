@@ -332,10 +332,20 @@ func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err 
 // admission validates its captured native definitions before DiscoverRoles.
 func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error) {
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
+	// Programmatic configurations pass the same source-profile gate as YAML
+	// before runtime admission or connector discovery can claim any resources.
+	for _, agent := range r.Config.Agents {
+		if agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && len(agent.MCPGrants) > 0 {
+			return nil, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
+		}
+		if err := validateManagedBuildRole(agent); err != nil {
+			return nil, err
+		}
+	}
 	// Reject explicitly selected Codex policy before discovery can launch an
 	// MCP connector for grants this adapter cannot enforce. Legacy configs may
 	// retain an unused Codex role; native task admission checks defaults.
-	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
+	if role, ok := r.Config.Agents[r.NativeTaskRole()]; r.Config.AgentRuntime != "" && ok && role.Provider == "codex-app-server" && role.ManagedBuild == nil && (role.Tools != nil || len(role.MCPGrants) > 0) {
 		return nil, fmt.Errorf("Codex managed tool subsets are not certified")
 	}
 	cfg, err := r.Config.PinRuntimes(ctx)
@@ -346,6 +356,9 @@ func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error
 	// are decoded by RunnerForRoles without rewriting historical bytes.
 	cfg.AgentRuntime = cfg.NativeRole()
 	cfg.NativeTaskAdmission = 1
+	if cfg.Agents[cfg.NativeRole()].ManagedBuild != nil {
+		cfg.NativeTaskAdmission = 2
+	}
 	return json.Marshal(cfg)
 }
 
