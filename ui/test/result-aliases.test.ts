@@ -4,6 +4,22 @@ import { mapReferences, references, referenceText } from '../src/expressions';
 import { expressionSuggestions, stepResultPaths } from '../src/source';
 import { parseWorkflow } from '../src/validation';
 
+it('keeps optional native grant evidence distinct from structured business results and conversations', () => {
+  const schema = {type:'object',properties:{tool_policy:{type:'object',properties:{verdict:{type:'boolean'}}}}};
+  const native = {id:'native',uses:'agent/run',with:{agent:'read-only.yaml',output:{format:'json',schema}}};
+  const conversation = {id:'conversation',conversation:['one','two'],with:{output:{format:'json',schema}}};
+  const fields = stepResultPaths(native, {}, 'outputs.tool_policy.');
+  expect(fields).toContain('outputs.tool_policy.grant.mode');
+  expect(fields).toContain('outputs.tool_policy.session_fingerprint');
+  expect(stepResultPaths(native)).toContain('tool_policy.verdict');
+  expect(stepResultPaths(conversation)).not.toContain('outputs.tool_policy.grant.mode');
+  const suggestions = expressionSuggestions({jobs:{build:{steps:[native,conversation,{id:'read',argv:['echo','ready']}]}}}, 'build', 2);
+  expect(suggestions).toContain('steps.native.outputs.tool_policy.grant.profile');
+  expect(suggestions).not.toContain('steps.conversation.outputs.tool_policy.grant.profile');
+  expect(suggestions).toContain('steps.conversation.tool_policy.verdict');
+  expect(stepResultPaths(native, {}, 'outputs.tool_policy.', 2)).toHaveLength(2);
+});
+
 const workflow = {
   on: { workflow_call: { outputs: { answer: { value: '${{ jobs.review.steps.analyze.approved }}' } } } },
   jobs: {

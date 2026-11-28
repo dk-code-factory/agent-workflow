@@ -78,6 +78,26 @@ func retainNativeTaskPolicy(worker Worker, message WorkerMessage, result *Sessio
 	return nil
 }
 
+func validateRetainedNativeTaskPolicy(worker Worker, message WorkerMessage) error {
+	if worker.Definition == nil || worker.Definition.NativePolicy == nil {
+		return nil
+	}
+	if err := validateNativeTaskPolicy(worker.Definition); err != nil {
+		return err
+	}
+	// Wait receipts can outlive the original executor. Recheck both the typed
+	// controller binding and its public output before exposing a frozen result.
+	retained := message.Result
+	retained.Outputs, _ = cloneJSONValue(message.Result.Outputs).(map[string]any)
+	if err := retainNativeTaskPolicy(worker, message, &retained, message.Status == RunStatusSucceeded); err != nil {
+		return err
+	}
+	if actionHash(retained) != actionHash(message.Result) {
+		return fmt.Errorf("%w: retained native task grant output changed", ErrActionIntegrity)
+	}
+	return nil
+}
+
 // NativeTaskPolicyEvidence binds an enforced grant to the original native turn.
 // The controller adds the durable task-attempt identity before storing outputs.
 type NativeTaskPolicyEvidence struct {

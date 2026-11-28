@@ -252,3 +252,44 @@ test('inherit configured image without dropping helper files and retain expressi
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
   expect((await snapshot(page)).source).toBe(edited.source);
 });
+
+test('wire optional native task grant evidence into a verifier and retain source history', async ({ page }) => {
+  const source = `jobs:
+  validate:
+    steps:
+      - id: validator
+        uses: agent/run
+        with:
+          agent: agents/read-only-validator.yaml
+          prompt: Validate the proposal.
+          output: {format: json, repair-attempts: 0, schema: {type: object, properties: {approved: {type: boolean}}}}
+  consume:
+    steps: [{id: verify, argv: [verify-policy, '']}]
+`;
+  const ui = await open(page, source);
+  await job(page, 'consume');
+  await ui.getByRole('button', {name:'1. verify', exact:true}).click();
+  await ui.getByRole('button', {name:'Use job result in Argument 1', exact:true}).click();
+  const picker = ui.getByRole('dialog', {name:'Use job result', exact:true});
+  await picker.getByLabel('Result source', {exact:true}).selectOption('result');
+  for (const field of ['outputs.tool_policy.grant.mode', 'outputs.tool_policy.grant.profile', 'outputs.tool_policy.agent', 'outputs.tool_policy.task_attempt_id', 'outputs.tool_policy.session_fingerprint']) {
+    await expect(picker.locator('datalist option').filter({hasText: new RegExp(`^${field.replaceAll('.', '\\.')}$`)})).toHaveCount(1);
+  }
+  await expect(picker).toContainText('optional controller grant evidence');
+  await picker.getByLabel('Result field', {exact:true}).fill('outputs.tool_policy.grant.mode');
+  await picker.getByRole('button', {name:'Preview result wiring', exact:true}).click();
+  await expect(picker.getByLabel('Result wiring preview', {exact:true})).toContainText('${{ needs.validate.steps.validator.outputs.tool_policy.grant.mode }}');
+  expect((await snapshot(page)).source).toBe(source);
+  await picker.getByRole('button', {name:'Apply job result', exact:true}).click();
+  const edited = await snapshot(page);
+  expect(edited.workflow.jobs.consume.needs).toEqual(['validate']);
+  expect(edited.workflow.jobs.consume.steps[0].argv[1]).toBe('${{ needs.validate.steps.validator.outputs.tool_policy.grant.mode }}');
+  expect(edited.workflow.jobs.validate.steps[0].with.agent).toBe('agents/read-only-validator.yaml');
+  expect(edited.workflow.jobs.validate.steps[0].with.output['repair-attempts']).toBe(0);
+  expect(edited.diagnostics.filter((d:any) => d.severity === 'error')).toEqual([]);
+  expect(parse(await downloadText(page)).jobs.consume.steps[0].argv[1]).toBe(edited.workflow.jobs.consume.steps[0].argv[1]);
+  await ui.getByRole('button', {name:'Undo', exact:true}).click();
+  expect((await snapshot(page)).source).toBe(source);
+  await ui.getByRole('button', {name:'Redo', exact:true}).click();
+  expect((await snapshot(page)).source).toBe(edited.source);
+});

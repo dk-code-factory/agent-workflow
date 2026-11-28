@@ -81,8 +81,9 @@ JSON-encoded typed input, must fit the mailbox's 1 MiB limit.
 
 The shared YAML agent definition requires `name`, `description` and
 `instructions`, with optional `model` and `reasoning-effort` (`none`, `minimal`,
-`low`, `medium`, `high`, or `xhigh`). Unknown settings are rejected, including
-tool, provider, authentication, sandbox, permission, MCP and execution overrides.
+`low`, `medium`, `high`, or `xhigh`) and `tool-policy: read-only`. Unknown settings
+are rejected, including arbitrary tool lists, provider, authentication, sandbox,
+permission, MCP and execution overrides.
 Starter definitions omit model and reasoning settings for portability:
 
 ```yaml
@@ -90,6 +91,60 @@ name: reviewer
 description: Review changes for correctness.
 instructions: Inspect the changes and report concrete findings.
 ```
+
+For a configuration validator, add `tool-policy: read-only` to its agent
+definition. This narrows that task's native tools to the intersection of the
+workspace role's tools and `Read`, `Glob`, and `Grep`; it never adds a tool the
+role did not grant. All broker/MCP tools, writes, shell execution, network tools,
+delegation, and supplied skills are outside this policy. A JSON schema may add
+the pinned SDK's `StructuredOutput` formatting tool. That tool returns the
+schema result; it does not execute commands or call application helpers.
+
+The initial supported profile is
+`claude-sdk@0.3.322/native-task-read-only-v1`, using the local Claude SDK runtime
+and its pinned Claude Code 2.1.322 controls. Codex, container execution, unknown
+policy profiles, and supplied-skill combinations are rejected at admission.
+Structured output must set `repair-attempts: 0`; implicit formatting repair is
+not part of this policy. Omit the output contract when no structured result is
+needed. Definitions without `tool-policy` keep the workspace role's normal
+authority and do not receive read-only evidence.
+
+```yaml
+# agents/validator.yaml
+name: validator
+description: Validate a configuration proposal.
+instructions: Read the supplied proposal and return a validation verdict.
+tool-policy: read-only
+```
+
+Admission retains the exact provider profile and native-tool intersection.
+Continuing an opaque agent reference reuses that original grant, even after the
+definition file or current workspace configuration changes. Resume and explicit
+retry retain the grant and original session; a changed retained profile or
+ceiling is rejected before dispatch. A new definition at another step creates
+an independent task with its own admission.
+
+After verified SDK initialization, the controller stores `outputs.tool_policy`
+with the durable native result. It contains `grant.mode`, `grant.provider`,
+`grant.profile`, `grant.native_tools`, `agent`, `invocation_id`,
+`task_attempt_id`, `session_fingerprint`, and `formatting_tool`. The attempt
+identity belongs to the original dispatched task, so lost-completion recovery
+does not replace it with a later physical attempt. The session fingerprint
+correlates continued turns without exposing the provider's session ID.
+`formatting_tool` says whether this turn also admitted `StructuredOutput`.
+Model text and structured business data cannot create this controller field.
+
+A later verifier can bind, for example,
+`${{ steps.validate.outputs.tool_policy.grant.mode }}` and
+`${{ steps.validate.outputs.tool_policy.agent }}`, require the expected profile
+and grant, and compare the agent binding with
+`${{ steps.validate.outputs.agent }}` before accepting the verdict. The editor's
+result picker offers these explicit `outputs.tool_policy` paths; resolving an
+external definition and checking its actual provider policy remain host checks.
+
+This is evidence of an enforced native tool grant, not an operation log. It does
+not list which reads occurred, restrict read paths, or make the provider process
+or its own session storage an operating-system read-only sandbox.
 
 New runs accept YAML sources only. Convert native definitions offline with:
 

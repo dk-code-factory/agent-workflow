@@ -194,6 +194,11 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 			}
 			cancel()
 		}
+		if outcome.ID != "" {
+			if policyErr := validateRetainedNativeTaskPolicy(worker, outcome); policyErr != nil {
+				return nil, policyErr
+			}
+		}
 		if err != nil {
 			outputs, _ := cloneJSONValue(outcome.Result.Outputs).(map[string]any)
 			if outputs == nil {

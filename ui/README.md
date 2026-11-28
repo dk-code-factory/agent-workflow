@@ -83,6 +83,14 @@ result scopes. See [reusable step definitions](../docs/REUSABLE_STEPS.md).
 
 Agent tasks use `uses: agent/run` with `with.agent` naming a canonical YAML agent definition or an expression returning an opaque agent reference. The inspector edits the definition reference, prompt, typed input, output contract, and all six ordered hook lists. Conversion review, Undo/Redo, and export preserve these declarations. Removed shorthand and role targets produce diagnostics. See [native agent tasks](../docs/AGENT_TASKS.md).
 
+An external agent definition can request `tool-policy: read-only`. The host
+admits supported runtime profiles and retains the exact grant; the browser does
+not load that file or certify its policy. Native task result suggestions include
+the optional controller evidence under `outputs.tool_policy`, including grant,
+agent, original attempt and session fingerprint fields. These references remain
+editable and survive export and Undo/Redo. A task without an admitted narrower
+policy has no such evidence.
+
 Choose **Conversation** to author a bounded conversation among 2–16 declared
 roles. **Participants (YAML)** lists role IDs; **Starter** defaults to the first,
 and **Finisher** must name a participant. Set **Prompt**, **Maximum turns**,
