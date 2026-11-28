@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,5 +110,14 @@ export function query({prompt,options}) {
 				t.Fatal("original empty native grant receipt changed", result.TaskPolicy)
 			}
 		})
+	}
+}
+
+func TestSDKMixedNativeBrokerAuthorityRejected(t *testing.T) {
+	probe := &nativePolicyBrokerProbe{}
+	runner := &Runner{Workspace: t.TempDir(), Config: Config{Agents: map[string]Agent{"role": {Provider: "claude-sdk", Tools: []string{"Read"}}}}}
+	_, err := runner.RunTurn(t.Context(), workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "role", Tools: &workflows.InvocationTools{Binding: probe}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "direct native tools with managed broker") || probe.calls.Load() != 0 {
+		t.Fatal("genuine mixed native/broker authority was admitted", err, probe.calls.Load())
 	}
 }

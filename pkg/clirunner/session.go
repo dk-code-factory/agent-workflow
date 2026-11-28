@@ -129,9 +129,6 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
 	}
 	agent, req = isolateRepairTurn(agent, req)
-	if req.Skill == nil && agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0 {
-		return workflows.SessionResult{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
-	}
 
 	if req.Definition != nil {
 		if req.AgentID != r.NativeTaskRole() {
@@ -157,6 +154,10 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		if req.Definition.Model != "" {
 			agent.Model = req.Definition.Model
 		}
+	}
+	// An admitted native policy removes broker authority before this check.
+	if req.Skill == nil && agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0 {
+		return workflows.SessionResult{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
 	}
 	if req.Skill != nil {
 		workspace := req.Workspace
