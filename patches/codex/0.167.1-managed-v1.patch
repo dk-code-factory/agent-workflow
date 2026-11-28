@@ -3624,10 +3624,10 @@ index 0000000..8135bcc
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..dbfa03c
+index 0000000..638b2e6
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1517 @@
+@@ -0,0 +1,1547 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -3704,8 +3704,8 @@ index 0000000..dbfa03c
 +
 +impl ManagedWorkGuard {
 +    /// The successor is counted before waiting. Ticket order prevents two
-+    /// registered setups from joining each other, and keeps all earlier task
-+    /// cleanup (including cancellation) inside the source quiescence fence.
++    /// registered setups from joining each other. The future and its external
++    /// abort owner share this guard until their complete lifecycle has ended.
 +    pub(crate) async fn join_predecessors(&self) {
 +        let Some(ticket) = self.model_ticket else {
 +            return;
@@ -3726,6 +3726,10 @@ index 0000000..dbfa03c
 +            }
 +            notified.await;
 +        }
++    }
++
++    pub(crate) fn ticket_boundary(&self) -> u64 {
++        self.model_ticket.map_or(0, |ticket| ticket + 1)
 +    }
 +
 +    pub(crate) fn is_admitted(&self) -> bool {
@@ -3899,6 +3903,32 @@ index 0000000..dbfa03c
 +            model: true,
 +            model_ticket: Some(ticket),
 +            generation,
++        }
++    }
++
++    pub(crate) fn model_boundary(&self) -> u64 {
++        let _batch = self.batch.lock_authority();
++        self.next_model_ticket.load(Ordering::Acquire)
++    }
++
++    /// Join only the abort's original predecessors and independent dispatches.
++    /// Its own shared lifecycle guard remains counted through terminal cleanup;
++    /// successors registered after this boundary must never be joined by it.
++    pub(crate) async fn join_abort_work(&self, boundary: u64, owner: Option<&ManagedWorkGuard>) {
++        let excluded = owner.and_then(|guard| guard.model_ticket);
++        loop {
++            let notified = self.work_finished.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            let prior_models = self
++                .model_tasks
++                .lock_authority()
++                .range(..boundary)
++                .any(|ticket| Some(*ticket) != excluded);
++            if !prior_models && self.active_work.load(Ordering::Acquire) == 0 {
++                return;
++            }
++            notified.await;
 +        }
 +    }
 +
@@ -4192,9 +4222,9 @@ index 0000000..dbfa03c
 +        let state = self.batch.lock_authority();
 +        let batch = state
 +            .as_ref()
-+            .ok_or_else(|| invalid("native completed witness has no live model batch"))?;
++            .ok_or_else(|| invalid("native response usage witness has no live model batch"))?;
 +        if batch.sealed || response_id.is_empty() {
-+            return Err(invalid("late native completed witness"));
++            return Err(invalid("late native response usage witness"));
 +        }
 +        let mut identity = batch.identity.clone();
 +        identity.response_id = response_id.to_owned();
@@ -5495,6 +5525,24 @@ index 5157340..8c10e20 100644
  mod memory_usage;
  pub mod otel_init;
  
+diff --git a/codex-rs/core/src/session/extension_interruption.rs b/codex-rs/core/src/session/extension_interruption.rs
+index 70f2d46..4f23a0e 100644
+--- a/codex-rs/core/src/session/extension_interruption.rs
++++ b/codex-rs/core/src/session/extension_interruption.rs
+@@ -82,6 +82,13 @@ impl Session {
+                 return;
+             }
+             self.mark_interrupted();
++            if let Some(runtime) = self
++                .services
++                .thread_extension_data
++                .get::<crate::AgentWorkflowRuntime>()
++            {
++                runtime.invalidate();
++            }
+             active.take()
+         };
+         // The caller may be inside the task that cancellation must join.
 diff --git a/codex-rs/core/src/session/guardian_checkpoint.rs b/codex-rs/core/src/session/guardian_checkpoint.rs
 index 4ccfef8..cda7857 100644
 --- a/codex-rs/core/src/session/guardian_checkpoint.rs
@@ -5909,7 +5957,7 @@ index 5d3fa4d..cfec7c0 100644
          let mut state = self.state.lock().await;
          if state.shutting_down {
 diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
-index 9bb8aa2..ff1ce1d 100644
+index 9bb8aa2..4b97013 100644
 --- a/codex-rs/core/src/session/tests.rs
 +++ b/codex-rs/core/src/session/tests.rs
 @@ -3466,24 +3466,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
@@ -6021,7 +6069,7 @@ index 9bb8aa2..ff1ce1d 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -13819,3 +13833,701 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+@@ -13819,3 +13833,1013 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
          "rejection must not permit same-name ordinary-auth replacement in this session"
      );
  }
@@ -6678,6 +6726,22 @@ index 9bb8aa2..ff1ce1d 100644
 +    assert!(futures::poll!(submissions.as_mut()).is_pending());
 +    assert_eq!(io.tx_sub.len(), 0);
 +    assert_eq!(runtime.model_tasks_for_test(), 1);
++    assert!(
++        session
++            .active_turn
++            .lock()
++            .await
++            .as_ref()
++            .expect("later turn")
++            .task
++            .as_ref()
++            .expect("later task")
++            .managed_lifecycle
++            .as_ref()
++            .expect("actual later lifecycle guard")
++            .is_admitted(),
++        "late prior response must not revoke the later managed generation"
++    );
 +    assert_eq!(
 +        session
 +            .active_turn
@@ -6722,6 +6786,302 @@ index 9bb8aa2..ff1ce1d 100644
 +        .expect("later guard completes");
 +    assert!(session.active_turn.lock().await.is_none());
 +    drop(submissions);
++}
++
++struct ManagedSourceAbortTailTask {
++    forced: bool,
++    started: Arc<Notify>,
++    stopped: Arc<std::sync::atomic::AtomicBool>,
++    abort_entered: Arc<Notify>,
++    abort_release: Arc<Notify>,
++}
++
++impl SessionTask for ManagedSourceAbortTailTask {
++    fn kind(&self) -> TaskKind {
++        TaskKind::Regular
++    }
++    fn span_name(&self) -> &'static str {
++        "session_task.managed_source_abort_tail"
++    }
++    async fn run(
++        self: Arc<Self>,
++        _session: Arc<Session>,
++        _ctx: Arc<TurnContext>,
++        _input: Vec<TurnInput>,
++        cancellation: CancellationToken,
++    ) -> SessionTaskResult {
++        struct Stopped(Arc<std::sync::atomic::AtomicBool>);
++        impl Drop for Stopped {
++            fn drop(&mut self) {
++                self.0.store(true, std::sync::atomic::Ordering::Release);
++            }
++        }
++        let _stopped = Stopped(Arc::clone(&self.stopped));
++        self.started.notify_one();
++        if self.forced {
++            // The source's 100ms abort deadline must destroy and join this run
++            // future. The independent 5s bound also cleans up any test failure.
++            tokio::time::sleep(StdDuration::from_secs(5)).await;
++        } else {
++            timeout(StdDuration::from_secs(5), cancellation.cancelled())
++                .await
++                .expect("owned graceful cancellation deadline");
++        }
++        Err(CodexErr::TurnAborted)
++    }
++    async fn abort(&self, _session: Arc<Session>, _ctx: Arc<TurnContext>) {
++        assert!(
++            self.stopped.load(std::sync::atomic::Ordering::Acquire),
++            "the real task future must be joined before the external abort tail"
++        );
++        self.abort_entered.notify_one();
++        timeout(StdDuration::from_secs(5), self.abort_release.notified())
++            .await
++            .expect("owned external abort-tail release deadline");
++    }
++}
++
++#[tokio::test]
++async fn managed_source_external_abort_tail_fences_graceful_and_forced_successors() {
++    for forced in [false, true] {
++        let (mut session, original, events) = make_session_and_context_with_rx().await;
++        attach_thread_persistence(Arc::get_mut(&mut session).expect("unique owned Session")).await;
++        let runtime = managed_source_runtime(&session);
++        original
++            .extension_data
++            .insert(crate::AgentWorkflowInvocation("original-abort".into()));
++        let started = Arc::new(Notify::new());
++        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let abort_entered = Arc::new(Notify::new());
++        let abort_release = Arc::new(Notify::new());
++        timeout(
++            StdDuration::from_secs(2),
++            session.start_task(
++                Arc::clone(&original),
++                Vec::new(),
++                ManagedSourceAbortTailTask {
++                    forced,
++                    started: Arc::clone(&started),
++                    stopped: Arc::clone(&stopped),
++                    abort_entered: Arc::clone(&abort_entered),
++                    abort_release: Arc::clone(&abort_release),
++                },
++            ),
++        )
++        .await
++        .expect("original setup deadline");
++        timeout(StdDuration::from_secs(2), started.notified())
++            .await
++            .expect("actual original run started");
++        let abort_session = Arc::clone(&session);
++        let original_id = original.sub_id.clone();
++        let mut aborting = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
++            // Exercise the off-submission original-turn callback cancellation path.
++            abort_session
++                .abort_turn_if_active(&original_id, TurnAbortReason::Interrupted, None)
++                .await
++        }));
++        timeout(StdDuration::from_secs(2), abort_entered.notified())
++            .await
++            .expect("actual external abort tail entered");
++        assert!(stopped.load(std::sync::atomic::Ordering::Acquire));
++        assert!(session.active_turn.lock().await.is_none());
++        assert_eq!(
++            runtime.model_tasks_for_test(),
++            1,
++            "joined run retains its full abort lifecycle guard"
++        );
++        let (_unused, mut successor) = make_session_and_context().await;
++        successor.sub_id = if forced {
++            "after-forced-abort"
++        } else {
++            "after-graceful-abort"
++        }
++        .into();
++        let successor_id = successor.sub_id.clone();
++        successor
++            .extension_data
++            .insert(crate::AgentWorkflowInvocation(
++                "successor-after-abort".into(),
++            ));
++        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let next_started = Arc::new(Notify::new());
++        let next_release = Arc::new(Notify::new());
++        let next_session = Arc::clone(&session);
++        let task = ManagedSourceTask {
++            polled: Arc::clone(&polled),
++            started: Arc::clone(&next_started),
++            release: Arc::clone(&next_release),
++        };
++        let mut setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
++            next_session
++                .start_task(Arc::new(successor), Vec::new(), task)
++                .await;
++        }));
++        timeout(StdDuration::from_secs(2), async {
++            while runtime.model_tasks_for_test() != 2 {
++                tokio::task::yield_now().await;
++            }
++        })
++        .await
++        .expect("successor registration remains counted");
++        assert!(!polled.load(std::sync::atomic::Ordering::Acquire));
++        let mut joined = Box::pin(runtime.join_work());
++        assert!(futures::poll!(joined.as_mut()).is_pending());
++        abort_release.notify_one();
++        assert!(
++            timeout(StdDuration::from_secs(2), &mut aborting)
++                .await
++                .expect("abort must not join its own or the successor guard")
++                .expect("abort task panic")
++        );
++        timeout(StdDuration::from_secs(2), &mut setup)
++            .await
++            .expect("successor setup deadline")
++            .expect("successor setup panic");
++        timeout(StdDuration::from_secs(2), next_started.notified())
++            .await
++            .expect("successor generation remains admitted");
++        // The terminal event and actual rollout flush precede lifecycle release.
++        timeout(StdDuration::from_secs(2), async {
++            loop {
++                let event = events.recv().await.expect("terminal event channel open");
++                if event.id == successor_id && matches!(event.msg, EventMsg::TurnStarted(_)) {
++                    panic!("successor started before the original abort terminal event");
++                }
++                if event.id == original.sub_id && matches!(event.msg, EventMsg::TurnAborted(_)) {
++                    break;
++                }
++            }
++        })
++        .await
++        .expect("original abort terminal event deadline");
++        assert_eq!(runtime.model_tasks_for_test(), 1);
++        assert!(
++            session
++                .active_turn
++                .lock()
++                .await
++                .as_ref()
++                .expect("successor turn")
++                .task
++                .as_ref()
++                .expect("successor task")
++                .managed_lifecycle
++                .as_ref()
++                .expect("successor lifecycle")
++                .is_admitted()
++        );
++        assert!(futures::poll!(joined.as_mut()).is_pending());
++        next_release.notify_one();
++        timeout(StdDuration::from_secs(2), joined)
++            .await
++            .expect("both full lifecycles joined");
++        assert!(session.active_turn.lock().await.is_none());
++    }
++}
++
++#[tokio::test]
++async fn managed_source_incomplete_usage_witness_does_not_complete_original_intent() {
++    let (mut session, turn) = make_session_and_context().await;
++    let rollout = attach_thread_persistence(&mut session).await;
++    let runtime = managed_source_runtime(&session);
++    let model = runtime.model_scheduled();
++    let batch = runtime
++        .begin(
++            session.thread_id.to_string(),
++            turn.sub_id.clone(),
++            "incomplete-invocation".into(),
++        )
++        .expect("original model batch");
++    runtime
++        .start_model_intent(&rollout)
++        .expect("original durable started intent");
++    let usage = TokenUsage {
++        input_tokens: 17,
++        output_tokens: 5,
++        total_tokens: 22,
++        ..Default::default()
++    };
++    let turn = Arc::new(turn);
++    let step = StepContext::for_test(Arc::clone(&turn));
++    timeout(
++        StdDuration::from_secs(2),
++        session.record_incomplete_response_usage(
++            &turn,
++            &step.settings,
++            &ResponseIncompleteError {
++                partial_output: Vec::new(),
++                reason: "max_output_tokens".into(),
++                response_id: Some("reported-incomplete-response".into()),
++                token_usage: Some(usage.clone()),
++            },
++        ),
++    )
++    .await
++    .expect("actual incomplete accounting producer deadline");
++    session
++        .flush_rollout()
++        .await
++        .expect("persist reported incomplete spending");
++    let (items, _, errors) = RolloutRecorder::load_rollout_items(&rollout)
++        .await
++        .expect("read actual usage record");
++    assert_eq!(errors, 0);
++    let records = items
++        .iter()
++        .filter_map(|item| match item {
++            RolloutItem::TokenUsageRecord(record) => Some(record),
++            _ => None,
++        })
++        .collect::<Vec<_>>();
++    assert_eq!(records.len(), 1);
++    assert_eq!(
++        records[0].usage, usage,
++        "reported spending is preserved exactly"
++    );
++    let witness = records[0]
++        .agent_workflow_witness
++        .as_ref()
++        .expect("reported response identity witness");
++    assert_eq!(witness.batch.turn_id, turn.sub_id);
++    assert_eq!(witness.batch.invocation_id, "incomplete-invocation");
++    assert_eq!(witness.batch.response_id, "reported-incomplete-response");
++    assert_eq!(
++        witness.usage,
++        serde_json::to_value(&usage).expect("known usage")
++    );
++    let intent: serde_json::Value = serde_json::from_slice(
++        &tokio::fs::read(rollout.with_extension("managed-model.json"))
++            .await
++            .expect("original durable intent"),
++    )
++    .expect("intent JSON");
++    assert!(
++        intent["completed"].is_null(),
++        "usage witness cannot assert actual Completed or seal an intent"
++    );
++    assert_eq!(intent["started"]["turnId"], turn.sub_id);
++    assert!(!rollout.with_extension("managed-broker.json").exists());
++    drop(batch);
++    drop(model);
++    let probe = runtime.model_scheduled();
++    assert!(
++        runtime
++            .begin(
++                "thread".into(),
++                "later-turn".into(),
++                "later-invocation".into()
++            )
++            .err()
++            .expect("unknown original remains held")
++            .to_string()
++            .contains("requires recovery hold")
++    );
++    drop(probe);
++    timeout(StdDuration::from_secs(2), runtime.join_work())
++        .await
++        .expect("incomplete source guards joined");
 +}
 diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
 index c3a82ef..6c66411 100644
@@ -6931,6 +7291,19 @@ index 5d3defe..64d173d 100644
              thread_id,
              turn_id: "turn-b".to_string(),
              session_id,
+diff --git a/codex-rs/core/src/state/turn.rs b/codex-rs/core/src/state/turn.rs
+index 99d7152..82ee9df 100644
+--- a/codex-rs/core/src/state/turn.rs
++++ b/codex-rs/core/src/state/turn.rs
+@@ -84,6 +84,8 @@ pub(crate) struct RunningTask {
+     pub(crate) cancellation_token: CancellationToken,
+     pub(crate) handle: AbortOnDropHandle<()>,
+     pub(crate) turn_context: Arc<TurnContext>,
++    // Shared with the future, and retained by external abort cleanup after join.
++    pub(crate) managed_lifecycle: Option<Arc<crate::agent_workflow_managed::ManagedWorkGuard>>,
+     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
+     pub(crate) _diagnostics_guard: GaugeGuard,
+     // Timer recorded when the task drops to capture the full turn duration.
 diff --git a/codex-rs/core/src/stream_events_utils.rs b/codex-rs/core/src/stream_events_utils.rs
 index e548195..1f43005 100644
 --- a/codex-rs/core/src/stream_events_utils.rs
@@ -6962,7 +7335,7 @@ index e548195..1f43005 100644
                  ctx.sess.thread_id,
                  &call.tool_name,
 diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
-index 77ce9b8..bd43769 100644
+index 77ce9b8..1073271 100644
 --- a/codex-rs/core/src/tasks/mod.rs
 +++ b/codex-rs/core/src/tasks/mod.rs
 @@ -49,7 +49,9 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
@@ -7007,18 +7380,20 @@ index 77ce9b8..bd43769 100644
 +            .services
 +            .thread_extension_data
 +            .get::<crate::agent_workflow_managed::AgentWorkflowRuntime>()
-+            .map(|runtime| runtime.model_scheduled());
++            .map(|runtime| Arc::new(runtime.model_scheduled()));
 +        if let Some(guard) = managed_task.as_ref() {
 +            guard.join_predecessors().await;
 +        }
          // Replace the cache; in-flight acquisitions retain their previous Arc.
          self.services
              .thread_extension_data
-@@ -383,16 +417,26 @@ impl Session {
+@@ -382,17 +416,28 @@ impl Session {
+             codex.turn.token_usage.total_tokens = field::Empty,
          );
          let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
++        let future_lifecycle = managed_task.clone();
          let task_future = async move {
-+            let _managed_task = managed_task;
++            let _managed_task = future_lifecycle;
              let ctx_for_finish = Arc::clone(&ctx);
 -            let task_result = task_for_run
 -                .run(
@@ -7050,7 +7425,15 @@ index 77ce9b8..bd43769 100644
              let sess = Arc::clone(&session);
              // Private reviewers save their transcript together with the terminal event.
              // Errors and cancellation retain their existing save path.
-@@ -471,6 +515,15 @@ impl Session {
+@@ -432,6 +477,7 @@ impl Session {
+             task,
+             cancellation_token,
+             turn_context: Arc::clone(&turn_context),
++            managed_lifecycle: managed_task,
+             _agent_execution_guard: agent_execution_guard,
+             _diagnostics_guard: ACTIVE_TURNS.track(),
+             _timer: timer,
+@@ -471,6 +517,15 @@ impl Session {
          self: &Arc<Self>,
          sub_id: String,
      ) {
@@ -7066,7 +7449,7 @@ index 77ce9b8..bd43769 100644
          if !self.input_queue.has_pending_mailbox_items().await {
              return;
          }
-@@ -571,6 +624,13 @@ impl Session {
+@@ -571,12 +626,19 @@ impl Session {
      }
  
      pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -7074,18 +7457,30 @@ index 77ce9b8..bd43769 100644
 +            .services
 +            .thread_extension_data
 +            .get::<crate::AgentWorkflowRuntime>();
-+        if let Some(runtime) = &managed {
-+            runtime.invalidate();
-+        }
++        let (active_turn, boundary) = self.take_active_turn(&reason).await;
++        let mut lifecycle = None;
          let mut aborted_turn = false;
          let mut active_turn_to_clear = None;
-         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
-@@ -595,11 +655,28 @@ impl Session {
+-        if let Some(mut active_turn) = self.take_active_turn(&reason).await {
++        if let Some(mut active_turn) = active_turn {
+             let task = active_turn.task.take();
+             aborted_turn = task.is_some();
+             if let Some(task) = task {
++                lifecycle = task.managed_lifecycle.clone();
+                 self.handle_task_abort(
+                     task,
+                     reason.clone(),
+@@ -595,11 +657,33 @@ impl Session {
              // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
              self.input_queue.clear_pending(&active_turn).await;
          }
 +        if let Some(runtime) = &managed {
-+            runtime.join_work().await;
++            let boundary = lifecycle
++                .as_ref()
++                .map_or(boundary, |guard| guard.ticket_boundary());
++            runtime
++                .join_abort_work(boundary, lifecycle.as_deref())
++                .await;
 +        }
          if reason == TurnAbortReason::Interrupted && aborted_turn {
              self.maybe_start_turn_for_pending_work().await;
@@ -7109,7 +7504,23 @@ index 77ce9b8..bd43769 100644
      pub(crate) async fn abort_turn_if_active(
          self: &Arc<Self>,
          turn_id: &str,
-@@ -638,11 +715,21 @@ impl Session {
+@@ -619,6 +703,15 @@ impl Session {
+                 ) {
+                     self.mark_interrupted();
+                 }
++                // Revoke while the matched original still occupies the slot.
++                // A later accepted setup must inherit the post-abort generation.
++                if let Some(runtime) = self
++                    .services
++                    .thread_extension_data
++                    .get::<crate::AgentWorkflowRuntime>()
++                {
++                    runtime.invalidate();
++                }
+                 active.take()
+             } else {
+                 None
+@@ -638,11 +731,35 @@ impl Session {
          reason: TurnAbortReason,
          error: Option<ErrorEvent>,
      ) {
@@ -7117,21 +7528,35 @@ index 77ce9b8..bd43769 100644
 +            .services
 +            .thread_extension_data
 +            .get::<crate::AgentWorkflowRuntime>();
-+        if let Some(runtime) = &managed {
-+            runtime.invalidate();
-+        }
++        // Both callers revoke under the active-turn lock before taking it.
++        // Retain this shared guard beyond the joined future and terminal tail,
++        // including the outer pending-input cleanup below.
++        let lifecycle = active_turn
++            .task
++            .as_ref()
++            .and_then(|task| task.managed_lifecycle.clone());
++        let boundary = lifecycle.as_ref().map_or_else(
++            || {
++                managed
++                    .as_ref()
++                    .map_or(0, |runtime| runtime.model_boundary())
++            },
++            |guard| guard.ticket_boundary(),
++        );
          let task = active_turn.task.take();
          if let Some(task) = task {
              self.handle_task_abort(task, reason.clone(), &active_turn.turn_state, error)
                  .await;
          }
 +        if let Some(runtime) = &managed {
-+            runtime.join_work().await;
++            runtime
++                .join_abort_work(boundary, lifecycle.as_deref())
++                .await;
 +        }
          // Let interrupted tasks observe cancellation before dropping pending approvals, or an
          // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
          self.input_queue.clear_pending(&active_turn).await;
-@@ -688,6 +775,9 @@ impl Session {
+@@ -688,6 +805,9 @@ impl Session {
          let turn_state = {
              let mut active = self.active_turn.lock().await;
              active.as_mut().and_then(|active_turn| {
@@ -7141,7 +7566,35 @@ index 77ce9b8..bd43769 100644
                  let task = active_turn.task.take()?;
                  task.handle.detach();
                  active_turn.finishing = Some(finishing);
-@@ -980,8 +1070,15 @@ impl Session {
+@@ -937,8 +1057,17 @@ impl Session {
+         }
+     }
+ 
+-    async fn take_active_turn(&self, reason: &TurnAbortReason) -> Option<ActiveTurn> {
++    async fn take_active_turn(&self, reason: &TurnAbortReason) -> (Option<ActiveTurn>, u64) {
+         let mut active = self.active_turn.lock().await;
++        let boundary = self
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .map_or(0, |runtime| {
++                // Revoke before exposing an idle slot to successor admission.
++                runtime.invalidate();
++                runtime.model_boundary()
++            });
+         if matches!(
+             reason,
+             TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited
+@@ -952,7 +1081,7 @@ impl Session {
+             // persisted, so capacity eviction cannot close their rollout writer.
+             self.mark_interrupted();
+         }
+-        active.take()
++        (active.take(), boundary)
+     }
+ 
+     pub(crate) async fn close_unified_exec_processes(&self) {
+@@ -980,8 +1109,16 @@ impl Session {
          turn_state: &Mutex<TurnState>,
          error: Option<ErrorEvent>,
      ) {
@@ -7149,22 +7602,26 @@ index 77ce9b8..bd43769 100644
 +            .services
 +            .thread_extension_data
 +            .get::<crate::agent_workflow_managed::AgentWorkflowRuntime>();
-+        if let Some(runtime) = managed.as_ref() {
-+            runtime.invalidate();
-+        }
++        let lifecycle = task.managed_lifecycle.clone();
++        let boundary = lifecycle
++            .as_ref()
++            .map_or(0, |guard| guard.ticket_boundary());
          let sub_id = task.turn_context.sub_id.clone();
 -        if task.cancellation_token.is_cancelled() {
 +        if task.cancellation_token.is_cancelled() && managed.is_none() {
              self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                  .await;
              return;
-@@ -1026,6 +1123,11 @@ impl Session {
+@@ -1026,6 +1163,14 @@ impl Session {
              .abort(Arc::clone(self), Arc::clone(&task.turn_context))
              .await;
  
 +        if let Some(runtime) = managed {
-+            // Joining the model task alone does not join independent dispatches.
-+            runtime.join_work().await;
++            // Keep our own shared lifecycle counted, and exclude later tasks
++            // waiting for it. Independent dispatches must still all settle.
++            runtime
++                .join_abort_work(boundary, lifecycle.as_deref())
++                .await;
 +        }
 +
          if reason == TurnAbortReason::Interrupted
@@ -7561,7 +8018,7 @@ index bbe92b8..f10bc65 100644
      pub success: bool,
  }
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index a0af620..1b8f703 100644
+index a0af620..73acd4b 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
 @@ -2503,6 +2503,8 @@ pub struct TokenUsage {
@@ -7594,7 +8051,7 @@ index a0af620..1b8f703 100644
      /// ChatGPT user that created this thread; absent when unavailable or for older threads.
      #[serde(default, skip_serializing_if = "Option::is_none")]
      pub creator_user_id: Option<String>,
-@@ -3495,10 +3504,56 @@ pub struct SessionMeta {
+@@ -3495,10 +3504,58 @@ pub struct SessionMeta {
      pub context_window: Option<SessionContextWindow>,
  }
  
@@ -7609,7 +8066,9 @@ index a0af620..1b8f703 100644
 +    pub broker_tools: Vec<String>,
 +}
 +
-+/// Independently persisted at the actual native Completed stream boundary.
++/// Independently persisted identity and usage from a reported native response.
++/// Incomplete responses can report spending too. This witness alone does not
++/// establish Completed status, a sealed batch or a completed model intent.
 +#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 +#[serde(rename_all = "camelCase", deny_unknown_fields)]
 +pub struct AgentWorkflowModelWitness {
