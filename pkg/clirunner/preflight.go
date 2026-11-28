@@ -24,10 +24,18 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 		if !ok {
 			return fmt.Errorf("agent %s is not configured", id)
 		}
-		if a.Provider == "codex-app-server" && (len(a.MCPGrants) > 0 || a.Tools != nil) {
+		if a.Provider == "codex-app-server" && a.ManagedBuild == nil && (len(a.MCPGrants) > 0 || a.Tools != nil) {
 			return fmt.Errorf("agent %s: Codex managed tool policy is not certified for this upstream version", id)
 		}
+		if a.ManagedBuild != nil {
+			if err := validateManagedBuildRole(a); err != nil {
+				return err
+			}
+		}
 		command := a.Command
+		if a.ManagedBuild != nil {
+			command = a.ManagedBuild.Identity.BinaryPath
+		}
 		if command == "" {
 			switch a.Provider {
 			case "claude", "claude-cli":
@@ -50,7 +58,7 @@ func (r *Runner) Preflight(ctx context.Context, ids []string) error {
 		if _, err := exec.LookPath(command); err != nil {
 			return fmt.Errorf("agent %s backend: %w", id, err)
 		}
-		if a.Provider == "codex-app-server" && a.Execution.Mode != "container" {
+		if a.Provider == "codex-app-server" && a.ManagedBuild == nil && a.Execution.Mode != "container" {
 			if err := verifyCodexCLI(ctx, command, a.Execution.policy()); err != nil {
 				return fmt.Errorf("agent %s: %w", id, err)
 			}

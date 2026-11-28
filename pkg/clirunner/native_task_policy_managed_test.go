@@ -2,6 +2,7 @@ package clirunner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,8 +16,9 @@ import (
 )
 
 // Exercise the public Runner and maintained bridge with an in-memory SDK stream,
-// without a native CLI or provider. An empty read-only grant must retain its own
-// acknowledgement and receipt while ordinary usage observation remains enabled.
+// without a native CLI or provider. A read-only invocation removes the broader
+// role's broker and unsafe native tools without mutating configured authority.
+// An empty grant retains its acknowledgement and ordinary usage observation.
 func TestNativeTaskPolicyAndManagedAccountingBoundaries(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("Node unavailable")
@@ -76,9 +78,14 @@ export function query({prompt,options}) {
 			}
 			t.Setenv("EMPTY_NATIVE_POLICY_KEY", "fake-only")
 			runner := &Runner{Workspace: root, Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {
-				Provider: "claude-sdk", Bridge: filepath.Join(root, "bridge.mjs"), Model: "claude-sonnet-4-6", Tools: nativeTools,
+				Provider: "claude-sdk", Bridge: filepath.Join(root, "bridge.mjs"), Model: "claude-sonnet-4-6", Tools: append(append([]string{}, nativeTools...), "Write", "WebFetch"),
+				MCPGrants:      []workflows.ToolGrant{{Server: "engine", Tool: "worker_status"}},
 				Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "EMPTY_NATIVE_POLICY_KEY"},
 			}}}}
+			originalRole, err := json.Marshal(runner.Config.Agents["native"])
+			if err != nil {
+				t.Fatal(err)
+			}
 			definition, err := runner.AdmitNativeTask(&workflows.AgentDefinition{Name: "empty-validator", ToolPolicy: "read-only"})
 			if err != nil || definition.NativePolicy == nil || !reflect.DeepEqual(definition.NativePolicy.NativeTools, nativeTools) {
 				t.Fatal("empty native policy admission failed", definition, err)
@@ -86,8 +93,10 @@ export function query({prompt,options}) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			observations, barriers := 0, 0
+			probe := &nativePolicyBrokerProbe{}
 			result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{
 				AgentID: "native", ParentWorkerID: "original-worker", InvocationID: "original-message", Definition: definition, Prompt: "EMPTY_POLICY_TASK",
+				Tools: &workflows.InvocationTools{Binding: probe},
 				ObserveUsage: func(update workflows.UsageUpdate) error {
 					observations++
 					if update.Key != "native-policy-usage" || fmt.Sprint(update.Usage["input_tokens"]) != "2" || fmt.Sprint(update.Usage["output_tokens"]) != "1" {
@@ -108,6 +117,10 @@ export function query({prompt,options}) {
 			}
 			if !reflect.DeepEqual(result.TaskPolicy.Grant, *definition.NativePolicy) || result.TaskPolicy.InvocationID != "original-message" || result.TaskPolicy.Agent != "original-worker" || result.TaskPolicy.FormattingTool {
 				t.Fatal("original empty native grant receipt changed", result.TaskPolicy)
+			}
+			currentRole, err := json.Marshal(runner.Config.Agents["native"])
+			if err != nil || string(currentRole) != string(originalRole) || probe.calls.Load() != 0 {
+				t.Fatal("read-only invocation retained broker effects or changed its configured role", err, probe.calls.Load())
 			}
 		})
 	}

@@ -31,6 +31,12 @@ func (r *Runner) Capabilities(id string) (workflows.ProviderCapabilities, error)
 		}
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true, ManagedPolicy: true}, nil
 	case "codex-app-server":
+		if a.ManagedBuild != nil {
+			if err := validateManagedBuildRole(a); err != nil {
+				return workflows.ProviderCapabilities{}, err
+			}
+			return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true, ManagedPolicy: true}, nil
+		}
 		return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, StructuredOutput: true}, nil
 	case "claude", "claude-cli", "codex", "codex-cli":
 		return workflows.ProviderCapabilities{Interrupt: true, StructuredOutput: true}, nil
@@ -623,8 +629,14 @@ func (r *Runner) nativeTaskRuntime() (Agent, error) {
 	if role.Provider != "codex-app-server" && role.Provider != "claude-sdk" {
 		return Agent{}, fmt.Errorf("agent/run requires runtime provider codex-app-server or claude-sdk")
 	}
-	if role.Provider == "codex-app-server" && (role.Tools != nil || len(role.MCPGrants) > 0) {
-		return Agent{}, fmt.Errorf("Codex managed tool subsets are not certified")
+	if role.Provider == "codex-app-server" {
+		if role.ManagedBuild != nil {
+			if err := validateManagedBuildRole(role); err != nil {
+				return Agent{}, err
+			}
+		} else if role.Tools != nil || len(role.MCPGrants) > 0 {
+			return Agent{}, fmt.Errorf("Codex managed tool subsets are not certified")
+		}
 	}
 	return role, nil
 }
@@ -660,7 +672,7 @@ func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) erro
 	if contract == nil {
 		return nil
 	}
-	if role.Provider == "codex-app-server" && contract.RepairAttempts > 0 {
+	if role.Provider == "codex-app-server" && role.ManagedBuild == nil && contract.RepairAttempts > 0 {
 		return fmt.Errorf("Codex tool-free output repair is not certified; set repair-attempts: 0")
 	}
 	return r.ValidateConversationOutput(r.NativeTaskRole(), contract.Schema)
@@ -669,10 +681,13 @@ func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) erro
 // ValidateNativeOutput applies the policy retained at fresh admission after
 // expressions have been rendered. Historical Roles carry no policy marker.
 func (r *Runner) ValidateNativeOutput(contract *workflows.AgentOutputContract) error {
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
+	}
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
-	if r.Config.NativeTaskAdmission != 1 {
+	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native output admission policy")
 	}
 	return r.AdmitNativeOutput(contract)
@@ -681,10 +696,13 @@ func (r *Runner) ValidateNativeOutput(contract *workflows.AgentOutputContract) e
 // ValidateNativeModel preserves historical expression fallback while rejecting
 // incompatible rendered models before the first dispatch of a new admission.
 func (r *Runner) ValidateNativeModel(model any) error {
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
+	}
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
-	if r.Config.NativeTaskAdmission != 1 {
+	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native task admission policy")
 	}
 	if model != nil {
@@ -694,6 +712,23 @@ func (r *Runner) ValidateNativeModel(model any) error {
 	}
 	return nil
 }
+
+func (r *Runner) validateNativeAdmissionProfile() error {
+	role := r.Config.Agents[r.NativeTaskRole()]
+	if r.Config.NativeTaskAdmission == 2 {
+		if role.ManagedBuild == nil {
+			return fmt.Errorf("managed admission requires its original managed build")
+		}
+		return validateManagedBuildRole(role)
+	}
+	if role.ManagedBuild != nil {
+		return fmt.Errorf("historical native admission cannot acquire managed build authority")
+	}
+	return nil
+}
+
+// Conversation tools always use the engine broker. Selected native skills
+// have their separate retained surface and do not enter this contract.
 func (r *Runner) ValidateConversationRole(id string) error {
 	a, ok := r.Config.Agents[id]
 	if !ok {
