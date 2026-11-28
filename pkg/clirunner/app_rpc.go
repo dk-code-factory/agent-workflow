@@ -12,6 +12,17 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+// appRPCResponseError distinguishes a peer's explicit rejection from transport
+// loss. Its text preserves the historical stock-adapter diagnostic.
+type appRPCResponseError struct {
+	method string
+	raw    json.RawMessage
+}
+
+func (e *appRPCResponseError) Error() string {
+	return fmt.Sprintf("app-server %s failed: %s", e.method, e.raw)
+}
+
 type rpcFrame struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
@@ -161,6 +172,13 @@ func (rpc *appRPC) Close() {
 	})
 }
 
+func appRPCResult(method string, frame rpcFrame) (json.RawMessage, error) {
+	if len(frame.Error) > 0 && string(frame.Error) != "null" {
+		return nil, &appRPCResponseError{method: method, raw: frame.Error}
+	}
+	return frame.Result, nil
+}
+
 func (rpc *appRPC) call(method string, params any) (json.RawMessage, error) {
 	return rpc.callContext(rpc.ctx, method, params)
 }
@@ -178,19 +196,20 @@ func (rpc *appRPC) callContext(ctx context.Context, method string, params any) (
 	}
 	select {
 	case frame := <-response:
-		if len(frame.Error) > 0 && string(frame.Error) != "null" {
-			return nil, fmt.Errorf("app-server %s failed: %s", method, frame.Error)
-		}
-		return frame.Result, nil
+		return appRPCResult(method, frame)
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		// The peer may close after its response is queued, cancelling rpc.ctx.
+		// Preserve the acknowledgement when it and cancellation are observable.
+		select {
+		case frame := <-response:
+			return appRPCResult(method, frame)
+		default:
+			return nil, ctx.Err()
+		}
 	case <-rpc.done:
 		select {
 		case frame := <-response:
-			if len(frame.Error) > 0 && string(frame.Error) != "null" {
-				return nil, fmt.Errorf("app-server %s failed: %s", method, frame.Error)
-			}
-			return frame.Result, nil
+			return appRPCResult(method, frame)
 		default:
 			return nil, rpc.failure()
 		}

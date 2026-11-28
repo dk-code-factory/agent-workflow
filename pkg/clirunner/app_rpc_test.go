@@ -100,3 +100,86 @@ func TestAppRPCDeniesUnknownInteractiveRequests(t *testing.T) {
 		t.Fatalf("unknown request was not denied: %+v %v", response, err)
 	}
 }
+
+func TestAppRPCDistinguishesPeerRejectionFromConnectionLoss(t *testing.T) {
+	for _, rejected := range []bool{true, false} {
+		client, server := net.Pipe()
+		rpc := newAppRPC(context.Background(), client, client, nil, nil)
+		go func() {
+			defer server.Close()
+			var request rpcFrame
+			if json.NewDecoder(server).Decode(&request) == nil && rejected {
+				_ = json.NewEncoder(server).Encode(map[string]any{"id": request.ID, "error": map[string]any{"code": -32603, "message": "source recovery hold"}})
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err := rpc.callContext(ctx, "thread/resume", nil)
+		cancel()
+		rpc.Close()
+		var rejection *appRPCResponseError
+		if err == nil || errors.As(err, &rejection) != rejected {
+			t.Fatal("source rejection and unacknowledged transport loss collapsed", rejected, err)
+		}
+		if rejected && err.Error() != `app-server thread/resume failed: {"code":-32603,"message":"source recovery hold"}` {
+			t.Fatal("stock diagnostic changed", err)
+		}
+	}
+}
+
+type appRPCWaitForEOFWriter struct {
+	net.Conn
+	done <-chan struct{}
+}
+
+func (w appRPCWaitForEOFWriter) Write(data []byte) (int, error) {
+	n, err := w.Conn.Write(data)
+	if err == nil {
+		select {
+		case <-w.done:
+		case <-time.After(time.Second):
+			return n, errors.New("RPC reader did not observe peer EOF")
+		}
+	}
+	return n, err
+}
+
+func TestAppRPCReceivedResponseSurvivesPeerEOF(t *testing.T) {
+	for _, rejected := range []bool{true, false} {
+		for range 32 {
+			client, server := net.Pipe()
+			deadline := time.Now().Add(time.Second)
+			if err := client.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			if err := server.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			writer := &appRPCWaitForEOFWriter{Conn: client}
+			rpc := newAppRPC(context.Background(), client, writer, nil, nil)
+			writer.done = rpc.done
+			go func() {
+				defer server.Close()
+				var request rpcFrame
+				if json.NewDecoder(server).Decode(&request) != nil {
+					return
+				}
+				response := map[string]any{"id": request.ID, "result": map[string]bool{"accepted": true}}
+				if rejected {
+					delete(response, "result")
+					response["error"] = map[string]any{"code": -32603, "message": "source recovery hold"}
+				}
+				_ = json.NewEncoder(server).Encode(response)
+			}()
+			result, err := rpc.call("thread/resume", nil)
+			rpc.Close()
+			var rejection *appRPCResponseError
+			if rejected {
+				if !errors.As(err, &rejection) {
+					t.Fatalf("received peer rejection lost after EOF: %v", err)
+				}
+			} else if err != nil || string(result) != `{"accepted":true}` {
+				t.Fatalf("received successful response lost after EOF: %s %v", result, err)
+			}
+		}
+	}
+}
