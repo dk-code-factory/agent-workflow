@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec"
 )
@@ -21,9 +22,32 @@ type ExecutionBoundary interface {
 // RunID/JobID/StepID/Iteration identify the same durable attempt as execution.
 type CommandRequest struct {
 	RunID, JobID, StepID string
+	Uses                 string
 	Iteration            int
 	Argv                 []string
 	Environment          []string
 	Directory            string
 	Input                []byte
 }
+
+// ContainerExecutionBoundary adds structured helper phases to a command
+// boundary. An executor with a boundary never falls back to live containers.
+type ContainerExecutionBoundary interface {
+	ExecutionBoundary
+	RunContainerAction(context.Context, ContainerActionRequest) (ContainerActionResponse, error)
+}
+
+// ContainerActionRequest crosses the same durable action journal as a real
+// helper, after input validation. The boundary owns every helper phase and must
+// never delegate unconfigured calls to a container runtime.
+type ContainerActionRequest struct {
+	Uses, Phase     string
+	Context         ActionContext
+	Effect          ActionEffect
+	Input, Bindings json.RawMessage
+	Result          ActionValue
+}
+
+// ContainerActionResponse is the action-v1 protocol response, including the
+// declared read-only recovery capabilities.
+type ContainerActionResponse = containerResponse

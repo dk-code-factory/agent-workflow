@@ -302,7 +302,8 @@ fixtures cannot establish SDK/host acceptance or full managed feature parity.
 
 Supported operation ports are `agent/run`, `command/run`, the controller effects
 (`workspace/create`, `workspace/snapshot`, `workspace/integrate`, `git/commit`,
-`github/pr`), and explicitly declared registered actions. Commands record rendered
+`github/pr`), explicitly declared registered actions, `action-v1` helpers and
+`docker://<authored-image>` steps. Commands record rendered
 argv, working directory, environment and JSON stdin; they never spawn. Their
 scripted result uses `stdout`, `stderr` and integer `exit_code` (defaults are empty
 streams and zero). A nonzero exit code fails the command. Other results are maps
@@ -313,12 +314,42 @@ for that `uses` and `phase`; repeated otherwise-identical responses require it.
 Exactly one unused response must match each operation. An unexpected operation
 fails the fixture even if the case expects the resulting workflow failure.
 
-Container jobs, Docker steps, helper protocols, conversations and network/container
-execution policies are explicitly unsupported by this fixture runner. Admission
-checks the complete loaded closure, including children and handlers, before any
-container/image/guardian or command launch. Recovery applies the same boundary
-before completed-operation shortcuts. Test helper implementations separately.
-No unconfigured boundary falls back to a real provider, process or service.
+Container jobs and Docker steps use scripted boundary responses. Admission checks
+the complete loaded closure, including children and handlers, and validates
+container declarations, helper input/output schemas and explicit effects without
+discovering Docker, images or guardians. Job-container commands use `command/run`;
+Docker steps use their exact authored `docker://<image>` string. Image defaults,
+entrypoints and helper executables are not discovered or executed. Fixture
+results establish control flow and contracts; test helper implementations
+separately. Conversations, retained live container implementations and
+network/container execution policies remain unsupported. Recovery applies the
+same boundary before completed-operation shortcuts. No unconfigured boundary
+falls back to a real provider, process, container or service.
+
+Structured helpers use `action-v1` for job commands or the authored `docker://`
+string for Docker steps. The workflow supplies their input/output schemas and
+`read_only` or `external_mutation` effect, so no fixture `actions` entry is needed.
+Their phases are `bindings`, `execute`, `validate_checkpoint` and `reconcile`;
+`validate_checkpoint` succeeds unless its response sets `error`. `result` supplies
+bindings in the bindings phase and schema-checked output in execute/reconcile.
+As with registered actions, reconciliation uses `outcome` and proof in `evidence`.
+Only execute phases count toward `invocation-count`; every phase records its
+job, step, phase call count, rendered helper input and effect. A retained
+checkpoint requires explicit binding and validation responses on resume:
+
+```yaml
+operations:
+  - {uses: action-v1, job: main, step: helper, phase: bindings, call: 1, result: {target: fixture}}
+  - {uses: action-v1, job: main, step: helper, phase: execute, result: {value: done}}
+  - {uses: action-v1, job: main, step: helper, phase: bindings, call: 2, result: {target: fixture}}
+  - {uses: action-v1, job: main, step: helper, phase: validate_checkpoint}
+controls:
+  - {action: reopen}
+  - {action: resume, expect-state: succeeded, invocation-count: 1}
+```
+
+This example requires the helper's output schema to accept `{value: done}`.
+All responses must be configured, including read-only recovery phases.
 
 Registered actions require an explicit `actions` map from action name to
 `read_only` or `external_mutation`. Their implementation consists solely of

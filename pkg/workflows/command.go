@@ -131,7 +131,7 @@ func (e *Executor) executeCommand(ctx context.Context, step Step, ec expressionC
 		} else if !filepath.IsAbs(dir) {
 			dir = filepath.Join(e.WorkspaceDir, dir)
 		}
-		out, err := e.Boundary.RunCommand(ctx, CommandRequest{RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Iteration: ec.IterationNumber, Argv: argv, Environment: env, Directory: dir, Input: inputJSON})
+		out, err := e.Boundary.RunCommand(ctx, CommandRequest{RunID: ec.RunID, JobID: ec.JobID, StepID: step.ID, Uses: step.Uses, Iteration: ec.IterationNumber, Argv: argv, Environment: env, Directory: dir, Input: inputJSON})
 		if err != nil {
 			return out, err
 		}
