@@ -5,6 +5,7 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -241,6 +242,17 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var queued workflows.WorkerMessage
+	expectedMessages := 1
+	if mode == "cancel" {
+		expectedMessages = 2
+		// Retained mailbox work admitted before the original hold must stay
+		// queued; fresh work after the hold must be rejected before insertion.
+		queued, err = manager.Send(t.Context(), run.ID, worker.ID, "queued-before-cancel", "must retain original allowance without dispatch")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	req := workflows.SessionRequest{AgentRequest: workflows.AgentRequest{RunID: run.ID, ParentWorkerID: worker.ID, InvocationID: message.ID, AgentID: "effects"}}
 	state, err := providerStateDir(root, "codex", req)
 	if err != nil {
@@ -305,7 +317,7 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if current.Status == workflows.RunStatusNeedsAttention && len(messages) == 1 {
+		if current.Status == workflows.RunStatusNeedsAttention && len(messages) == expectedMessages {
 			before = messages[0]
 			break
 		}
@@ -324,8 +336,8 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	stopFirst()
 	awaitManagedServe(t, firstDone)
 	if mode == "cancel" {
-		if _, err = manager.Send(ctx, run.ID, worker.ID, "queued-after-cancel", "must retain original allowance without dispatch"); err != nil {
-			t.Fatal(err)
+		if _, err = manager.Send(ctx, run.ID, worker.ID, "rejected-after-cancel", "must not gain new mailbox authority"); !errors.Is(err, workflows.ErrActionIntegrity) {
+			t.Fatal("cancelled original accepted new mailbox work", err)
 		}
 	}
 	if mode == "foreign-raw" {
@@ -368,8 +380,8 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 	if err = manager.Init(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.Resume(ctx, run.ID, worker.ID); err == nil {
-		t.Fatal("public mailbox ACK discarded original invocation")
+	if err = manager.Resume(ctx, run.ID, worker.ID); !errors.Is(err, workflows.ErrActionIntegrity) {
+		t.Fatal("public mailbox ACK discarded original invocation", err)
 	}
 	secondCtx, stopSecond := context.WithCancel(ctx)
 	secondDone := make(chan struct{})
@@ -401,12 +413,12 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 			t.Fatal(err)
 		}
 		if mode == "cancel" {
-			if len(messages) != 2 || messages[0].ID != message.ID || messages[0].Status != "interrupted" || messages[1].Status != workflows.RunStatusQueued {
+			if len(messages) != 2 || messages[0].ID != message.ID || messages[0].Status != "interrupted" || !messages[0].StartedAt.Equal(before.StartedAt) || messages[1].ID != queued.ID || messages[1].Status != workflows.RunStatusQueued {
 				t.Fatal("cancelled original turn admitted later work", messages)
 			}
 		} else if outcome.ID != message.ID || !outcome.StartedAt.Equal(before.StartedAt) || outcome.Generation != resumed.Generation {
 			t.Fatal("foreign raw history replaced original invocation", messages)
-		} else if outcome.FailureClass != "action_integrity" || outcome.UnsafeFailureClass != "action_integrity" {
+		} else if outcome.FailureClass != "action_integrity" || outcome.UnsafeFailureClass != "integrity" {
 			t.Fatal("source uncertainty became acknowledgeable provider failure", outcome)
 		}
 		expectedRemaining := 0
@@ -419,8 +431,8 @@ func managedCodexRestartFixture(t *testing.T, mode string) {
 		if err != nil || current.Remaining != expectedRemaining || current.Status != workflows.RunStatusNeedsAttention {
 			t.Fatal("held original authority changed", current, err)
 		}
-		if err = manager.Resume(ctx, run.ID, worker.ID); err == nil {
-			t.Fatal("held original turn acknowledged into fresh authority")
+		if err = manager.Resume(ctx, run.ID, worker.ID); !errors.Is(err, workflows.ErrActionIntegrity) {
+			t.Fatal("held original turn acknowledged into fresh authority", err)
 		}
 		if requests.Load() != 1 || effects.Load() != 2 {
 			t.Fatal("held source allowed model/effect replay", requests.Load(), effects.Load())
