@@ -66,6 +66,15 @@ func TestSDKNativeAgainstFakeGateway(t *testing.T) {
 			return
 		}
 		n := calls.Add(1)
+		// This managed role admits no native formatter. JSON remains subject to
+		// the unchanged engine output schema on both original turns.
+		if tools, ok := payload["tools"].([]any); !ok || len(tools) != 0 {
+			t.Errorf("unexpected SDK tool grant: %v", payload["tools"])
+		}
+		outputConfig, _ := payload["output_config"].(map[string]any)
+		if payload["output_format"] != nil || outputConfig["format"] != nil {
+			t.Errorf("unexpected SDK output formatter: %v %v", payload["output_format"], outputConfig)
+		}
 		history, _ := json.Marshal(payload["messages"])
 		system, _ := json.Marshal(payload["system"])
 		if !strings.Contains(string(system), "DEFINITION_INSTRUCTIONS") || !strings.Contains(string(system), "WORKSPACE_INSTRUCTIONS") || strings.Contains(string(system), "HOST_MEMORY_MUST_NOT_LOAD") {
@@ -84,10 +93,10 @@ func TestSDKNativeAgainstFakeGateway(t *testing.T) {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, encoded)
 		}
 		emit("message_start", map[string]any{"type": "message_start", "message": message})
-		emit("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": fmt.Sprintf("tool_%d", n), "name": "StructuredOutput", "input": map[string]any{}}})
-		emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": `{"approved":true}`}})
+		emit("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+		emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": `{"approved":true}`}})
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "tool_use"}, "usage": map[string]int{"output_tokens": 3}})
+		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "end_turn"}, "usage": map[string]int{"output_tokens": 3}})
 		emit("message_stop", map[string]string{"type": "message_stop"})
 	}))
 	defer gateway.Close()
@@ -122,6 +131,10 @@ func TestSDKNativeAgainstFakeGateway(t *testing.T) {
 	all, err := workers.List(ctx, run.ID)
 	if err != nil || len(all) != 1 || all[0].Role != "native" || all[0].SessionID == "" || all[0].Remaining != 0 || calls.Load() != 2 {
 		t.Fatalf("SDK native continuation: %+v calls=%d err=%v", all, calls.Load(), err)
+	}
+	usage, err := store.Usage(ctx, run.ID)
+	if err != nil || usage.Summary.Invocations != 2 || !usage.Summary.Complete || usage.Summary.InputTokens == nil || *usage.Summary.InputTokens != 14 || usage.Summary.OutputTokens == nil || *usage.Summary.OutputTokens != 6 {
+		t.Fatalf("SDK native original accounting: %+v %v", usage, err)
 	}
 	for _, id := range []string{"first", "follow"} {
 		if structured, ok := run.Jobs["review"].Steps[id].Outputs["structured"].(map[string]any); !ok || structured["approved"] != true {
