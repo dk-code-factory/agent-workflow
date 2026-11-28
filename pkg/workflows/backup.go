@@ -88,7 +88,7 @@ func openBackupSource(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("backup schema %d is unsupported", version)
 	}
-	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}, {"action_attempts"}, {"iteration_plans", "iteration_attempts"}, {"input_gates", "input_controls"}, {"worker_waits"}, {"helper_assets", "run_helper_assets"}, {"task_groups", "task_group_members", "task_claims", "task_budgets", "task_deadlines", "task_state_requests"}}
+	checks := [][]string{{"runs", "admission_requests", "cancellations", "attempts", "artifacts", "events"}, {"workers", "messages", "external_intents", "executions"}, {"tool_calls", "invocation_grants"}, {"invocations"}, {"usage_invocations", "usage_observations", "usage_session_counters"}, {"retention_groups"}, {}, {"action_attempts"}, {"iteration_plans", "iteration_attempts"}, {"input_gates", "input_controls"}, {"worker_waits"}, {"helper_assets", "run_helper_assets"}, {"task_groups", "task_group_members", "task_claims", "task_budgets", "task_deadlines", "task_state_requests"}, {}}
 	// Helper prerelease snapshots used versions 11/12 before the independent
 	// worker-wait migration landed. Validate their own complete lineage.
 	if version == 11 || version == 12 {
@@ -111,6 +111,14 @@ func openBackupSource(ctx context.Context, path string) (*sql.DB, error) {
 			}
 		}
 	}
+	if version >= 14 {
+		var indexed int
+		if err = db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('usage_managed_sdk_parent','usage_managed_codex_parent')").Scan(&indexed); err != nil || indexed != 2 {
+			_ = db.Close()
+			return nil, fmt.Errorf("backup schema lacks managed task parent indexes")
+		}
+	}
+
 	if version >= 7 {
 		rows, columnErr := db.QueryContext(ctx, "SELECT finalizing FROM executions LIMIT 0")
 		if columnErr != nil {

@@ -60,6 +60,17 @@ func (m *WorkerManager) StopRun(ctx context.Context, run string) error {
 			return errors.Join(err, process.ErrCleanup, ctx.Err())
 		}
 	}
+	// Joining producers does not settle retained native evidence, including
+	// ordinary failures acknowledged by an earlier writer.
+	workers, holdErr := m.List(ctx, run)
+	if holdErr != nil {
+		return errors.Join(err, process.ErrCleanup, holdErr)
+	}
+	for _, worker := range workers {
+		if holdErr = managedWorkerHold(ctx, m.Store.db, worker.ID); holdErr != nil {
+			return errors.Join(err, process.ErrCleanup, holdErr)
+		}
+	}
 	// Closed workers retain their message outcome, including cleanup uncertainty.
 	var uncertain int
 	queryErr := m.Store.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m JOIN workers w ON w.id=m.worker_id JOIN runs r ON r.id=w.run_id

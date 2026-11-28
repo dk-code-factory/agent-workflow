@@ -151,6 +151,11 @@ func (e *Executor) preflightConversations(all map[string]*Workflow) error {
 					return fmt.Errorf("conversation requires a SessionRunner")
 				}
 				for _, role := range step.Conversation {
+					if checker, ok := e.Agents.(interface{ ValidateConversationRole(string) error }); ok {
+						if err := checker.ValidateConversationRole(role); err != nil {
+							return err
+						}
+					}
 					caps, err := sessions.Capabilities(role)
 					if err != nil {
 						return err
@@ -395,12 +400,14 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 				return &conversationTools{base: base, execution: c, role: active.To, turn: turnID}, nil
 			}
 			observed := StepExecution{ID: turnID, AttemptID: turn.ID, Status: RunStatusSucceeded, StartedAt: time.Now().UTC()}
-			observed.Outputs, err = execution.executeConversationTurn(invocationContext(ctx, e.Store, &turn), active.To, prompt, args, turnEC, slots)
+			turnCtx := invocationContext(ctx, e.Store, &turn)
+			turnCtx = withManagedConversationAttempt(turnCtx, c, turn, e.redactions(ec.Secrets))
+			observed.Outputs, err = execution.executeConversationTurn(turnCtx, active.To, prompt, args, turnEC, slots)
 			observed.FinishedAt = time.Now().UTC()
 			if err != nil {
 				observed.Status, observed.Error, observed.FailureClass = executionFailureStatus(ctx, err), err.Error(), classifyFailure(err)
 			}
-			if saveErr := journal.Complete(context.WithoutCancel(ctx), turn, observed); saveErr != nil {
+			if saveErr := journal.Complete(context.WithoutCancel(turnCtx), turn, observed); saveErr != nil {
 				err = errors.Join(err, errStepPersistence, saveErr)
 			}
 			if err != nil {
@@ -467,6 +474,9 @@ func (e *Executor) executeConversationTurn(ctx context.Context, role, prompt str
 	}
 	queueTime := time.Since(queued).Milliseconds()
 	identity := UsageIdentity{ID: request.InvocationID, RunID: owner, TaskAttemptID: ec.Attempt.ID, Kind: "task", Model: request.Model}
+	if participant, ok := e.Agents.(*conversationAgent); ok {
+		identity.SessionID = participant.session
+	}
 	if source, ok := e.Agents.(interface {
 		UsageProvider(string, string) (string, string)
 	}); ok {
@@ -486,7 +496,7 @@ func (e *Executor) executeConversationTurn(ctx context.Context, role, prompt str
 		outputs = cloneJSONMap(outputs)
 		outputs["queue_time_ms"] = queueTime
 	}
-	if store != nil {
+	if store != nil && !managedTaskHasMarker(context.WithoutCancel(ctx), store, identity.ID) {
 		if observeErr := store.ObserveUsage(context.WithoutCancel(ctx), identity, usageUpdate(outputs, true)); observeErr != nil {
 			err = errors.Join(err, iterationPersistence(observeErr, ec.Ordered))
 		}

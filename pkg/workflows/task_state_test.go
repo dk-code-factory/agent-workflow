@@ -539,10 +539,10 @@ func TestTaskStateBackupMigrationAndReadOnlyInspection(t *testing.T) {
 	if err = s.Migrate(t.Context(), lock); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(s.Dir, "state.pre-v13.db")); err != nil {
+	if _, err = os.Stat(filepath.Join(s.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion))); err != nil {
 		t.Fatal(err)
 	}
-	before, err := openBackupSource(t.Context(), filepath.Join(s.Dir, "state.pre-v13.db"))
+	before, err := openBackupSource(t.Context(), filepath.Join(s.Dir, fmt.Sprintf("state.pre-v%d.db", schemaVersion)))
 	if err != nil {
 		t.Fatal(err)
 	}
