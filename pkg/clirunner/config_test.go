@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/runtimeexec/network"
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
@@ -143,5 +145,75 @@ func TestOmittedRuntimeKeepsUnusedCodexRoleConfiguration(t *testing.T) {
 	}
 	if _, err := (&Runner{Config: cfg}).AdmitNativeTask(&workflows.AgentDefinition{Name: "fixture"}); err == nil {
 		t.Fatal("default native role lost capability restriction")
+	}
+}
+
+// Use the same public configuration loader as the CLI, with an exact engine
+// grant that a native task policy must remove from the invocation ceiling.
+func nativePolicyFixtureConfig(t *testing.T, root, bridge, endpoint, grants string) string {
+	t.Helper()
+	source := fmt.Sprintf(`agent-runtime: native
+agents:
+  native:
+    provider: claude-sdk
+    bridge: %q
+    model: claude-sonnet-4-6
+    tools: [Read, Write, WebFetch]
+    mcp-grants: %s
+    authentication: {mode: gateway, endpoint: %q, credential-env: READONLY_DENIAL_KEY}
+`, bridge, grants, endpoint)
+	path := filepath.Join(root, "agents.yml")
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadConfigNativePolicyRole(t *testing.T) {
+	for _, variant := range []struct{ name, grants, rejection string }{
+		{"exact-engine-grant", "[{server: engine, tool: worker_status}]", ""},
+		{"duplicate-grant", "[{server: engine, tool: worker_status}, {server: engine, tool: worker_status}]", "unique exact MCP"},
+		{"wildcard-grant", "[{server: engine, tool: '*'}]", "unique exact MCP"},
+		{"unknown-server", "[{server: missing, tool: worker_status}]", "unknown MCP server"},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			root := t.TempDir()
+			// Admission and rejection need metadata only; the gated gateway test
+			// separately runs the actual pinned SDK and maintained bridge.
+			metadata := filepath.Join(root, "node_modules/@anthropic-ai/claude-agent-sdk/package.json")
+			if err := os.MkdirAll(filepath.Dir(metadata), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(metadata, []byte(`{"version":"0.3.322"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			bridge := filepath.Join(root, "bridge.mjs")
+			cfg, err := LoadConfig(nativePolicyFixtureConfig(t, root, bridge, "http://127.0.0.1:1", variant.grants))
+			if variant.rejection != "" {
+				if err == nil || !strings.Contains(err.Error(), variant.rejection) {
+					t.Fatal("invalid MCP configuration accepted or misclassified", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("policy-capable role rejected before task admission", err)
+			}
+			role := cfg.Agents["native"]
+			if strings.Join(role.Tools, ",") != "Read,Write,WebFetch" || len(role.MCPGrants) != 1 || role.MCPGrants[0] != (workflows.ToolGrant{Server: "engine", Tool: "worker_status"}) {
+				t.Fatal("configuration silently narrowed the role before task admission", role)
+			}
+			runner := &Runner{Workspace: root, Config: cfg}
+			admitted, err := runner.AdmitNativeTask(&workflows.AgentDefinition{Name: "validator", ToolPolicy: "read-only"})
+			if err != nil || admitted.NativePolicy == nil || strings.Join(admitted.NativePolicy.NativeTools, ",") != "Read" {
+				t.Fatal("loaded role lost read-only task admission", admitted, err)
+			}
+			probe := &nativePolicyBrokerProbe{}
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			_, err = runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "native", Tools: &workflows.InvocationTools{Binding: probe}}}, nil)
+			if err == nil || !strings.Contains(err.Error(), "direct native tools with managed broker") || probe.calls.Load() != 0 {
+				t.Fatal("loaded configuration admitted genuine mixed execution", err, probe.calls.Load())
+			}
+		})
 	}
 }
