@@ -2339,7 +2339,7 @@ new file mode 100644
 index 0000000..8135bcc
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_journal.rs
-@@ -0,0 +1,1244 @@
+@@ -0,0 +0,1244 @@
 +//! Durable broker recovery records. Native normalized history is never a receipt.
 +//!
 +//! Journal I/O is synchronous within its owning model or control operation.
@@ -3589,7 +3589,7 @@ new file mode 100644
 index 0000000..eced74e
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1392 @@
+@@ -0,0 +0,1395 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -4816,7 +4816,10 @@ index 0000000..eced74e
 +                .is_err()
 +        );
 +        release.send(()).unwrap();
-+        child.await.unwrap();
++        tokio::time::timeout(std::time::Duration::from_secs(1), child)
++            .await
++            .expect("independent child did not join")
++            .unwrap();
 +        tokio::time::timeout(std::time::Duration::from_secs(1), joined)
 +            .await
 +            .unwrap()
@@ -4987,7 +4990,7 @@ new file mode 100644
 index 0000000..e7b7b18
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_recovery.rs
-@@ -0,0 +1,110 @@
+@@ -0,0 +0,110 @@
 +//! Replays one original native broker seal through the existing dynamic-tool
 +//! callback path before RegularTask can sample. No new user input or agent loop.
 +
@@ -5780,7 +5783,7 @@ index 9bb8aa2..c638078 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -13819,3 +13833,35 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+@@ -13819,3 +13833,54 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
          "rejection must not permit same-name ordinary-auth replacement in this session"
      );
  }
@@ -5813,6 +5816,25 @@ index 9bb8aa2..c638078 100644
 +        assert!(io.submit(operation).await.is_err());
 +        assert!(rx_sub.is_empty());
 +    }
++    let (reply, _result) = tokio::sync::oneshot::channel();
++    let unbound_start = Op::TurnInput {
++        request: Box::new(TurnInputRequest::new(SubmittedTurnInput::UserInput {
++            content: Vec::new(),
++            client_id: None,
++        })),
++        mode: TurnInputMode::StartIfIdle,
++        reply,
++    };
++    assert!(io.submit(unbound_start).await.is_err());
++    assert!(rx_sub.is_empty());
++    let (reply, _result) = tokio::sync::oneshot::channel();
++    let unbound_recovery = Op::RecoverTurn {
++        thread_settings: Default::default(),
++        start_options: Default::default(),
++        reply,
++    };
++    assert!(io.submit(unbound_recovery).await.is_err());
++    assert!(rx_sub.is_empty());
 +    assert!(io.submit(Op::Shutdown).await.is_ok());
 +    assert!(matches!(rx_sub.recv().await.unwrap().op, Op::Shutdown));
 +}
