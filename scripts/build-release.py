@@ -94,7 +94,7 @@ for target in targets:
         (licenses / "index.json").write_text(json.dumps(license_index, indent=2) + "\n")
         bridge = stage / "bridge" / "claude"
         bridge.mkdir(parents=True)
-        for item in ["bridge.mjs", "isolation.mjs", "package.json", "package-lock.json"]:
+        for item in ["bridge.mjs", "isolation.mjs", "broker-stream.mjs", "package.json", "package-lock.json"]:
             shutil.copyfile(ROOT / "bridge" / "claude" / item, bridge / item)
         build = dict(metadata, os=goos, arch=arch, commit=commit, dirty=str(dirty).lower(), source_fingerprint=source_fingerprint)
         (stage / "build.json").write_text(json.dumps(build, indent=2) + "\n")

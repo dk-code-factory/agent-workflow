@@ -204,11 +204,25 @@ func stopFixture(cmd *fixtureProcess) {
 	}
 }
 
+// Managed scenarios use the same durable public agent task as workflows.
+// The admitted workspace configuration selects its runtime; no action can
+// fabricate a nonworker invocation or a conversation admission tag.
 func writeManagedWorkflow(root, role, prompt string, structured bool) (string, error) {
 	if err := os.MkdirAll(filepath.Join(root, "workflows"), 0700); err != nil {
 		return "", err
 	}
-	data, err := yaml.Marshal(map[string]any{"jobs": map[string]any{"conformance": map[string]any{"steps": []any{map[string]any{"uses": "action/conformance-turn", "with": turnInput{role, prompt, structured}}}}}})
+	definition, err := yaml.Marshal(map[string]any{"name": "conformance", "description": "Bounded disposable conformance task", "instructions": "Follow only the explicitly supplied conformance task for the admitted runtime " + role + "."})
+	if err != nil {
+		return "", err
+	}
+	if err = os.WriteFile(filepath.Join(root, "workflows/conformance.yaml"), definition, 0600); err != nil {
+		return "", err
+	}
+	with := map[string]any{"agent": "conformance.yaml", "prompt": prompt, "turns": 8}
+	if structured {
+		with["output"] = map[string]any{"format": "json", "repair-attempts": 0, "schema": structuredContract().Schema}
+	}
+	data, err := yaml.Marshal(map[string]any{"jobs": map[string]any{"conformance": map[string]any{"steps": []any{map[string]any{"uses": "agent/run", "with": with}}}}})
 	if err != nil {
 		return "", err
 	}

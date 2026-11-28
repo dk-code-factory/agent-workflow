@@ -1,10 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization, assertNativeTaskPolicy, assertNativeTaskAcknowledgement, assertNativeTaskInitialization } from './isolation.mjs';
+import { isolatedSettings, isolatedEnvironment, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization, assertNativeTaskPolicy, assertNativeTaskAcknowledgement, assertNativeTaskInitialization } from './isolation.mjs';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+
+test('managed environment overrides inherited compaction settings', () => {
+  const environment = { DISABLE_COMPACT: '0', DISABLE_AUTO_COMPACT: '0', ...isolatedEnvironment };
+  assert.equal(environment.DISABLE_COMPACT, '1');
+  assert.equal(environment.DISABLE_AUTO_COMPACT, '1');
+  for (const name of ['autoCompactEnabled', 'precomputeCompactionEnabled', 'idleCompaction']) {
+    assert.equal(isolatedSettings[name], false);
+  }
+});
 
 test('known builtin native hooks are explicitly disabled', () => {
   for (const name of ['agents-md', 'telemetry', 'privacy', 'plugin-authoring', 'easel']) {
@@ -15,6 +24,7 @@ test('known builtin native hooks are explicitly disabled', () => {
 test('bridge closes an unexpected init and denies native work before verification', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bridge-isolation-'));
   try {
+    await writeFile(join(dir, 'broker-stream.mjs'), await readFile(new URL('./broker-stream.mjs', import.meta.url)));
     await writeFile(join(dir, 'isolation.mjs'), await readFile(new URL('./isolation.mjs', import.meta.url)));
     await writeFile(join(dir, 'sdk.mjs'), `
       import { writeFileSync } from 'node:fs';

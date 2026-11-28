@@ -23,7 +23,7 @@ func TestSkillChildBridgePartialUsageKeepsParentNamespaceSeparate(t *testing.T) 
 	for _, callID := range []string{"parent", "parent:message", "ordinary-child"} {
 		t.Run(callID, func(t *testing.T) {
 			root := t.TempDir()
-			for _, name := range []string{"bridge.mjs", "isolation.mjs"} {
+			for _, name := range []string{"bridge.mjs", "isolation.mjs", "broker-stream.mjs"} {
 				b, err := os.ReadFile(filepath.Join("../../bridge/claude", name))
 				if err != nil {
 					t.Fatal(err)

@@ -122,6 +122,19 @@ func TestSDKConversationContractAcceptsEnumData(t *testing.T) {
 	}
 }
 
+type conversationNativeContractRunner struct {
+	*Runner
+	t *testing.T
+}
+
+func (r *conversationNativeContractRunner) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	result, err := r.Runner.RunTurn(ctx, q, emit)
+	if err != nil {
+		r.t.Logf("original conversation provider: %v", err)
+	}
+	return result, err
+}
+
 func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("requires locked SDK dependencies; local fake API only")
@@ -130,18 +143,19 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 		name, schema string
 		first        any
 		invalid      bool
+		strictHold   bool
 	}{
-		{"invalid-type", "{type: object, properties: {answer: {type: string}}, required: [answer]}", map[string]any{"answer": 42}, true},
-		{"invalid-extra-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "extra": true}, true},
-		{"normalized-prototype-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "__proto__": true}, false},
-		{"normalized-array", "{}", []any{}, false},
-		{"normalized-scalar", "{}", "invalid", false},
-		{"normalized-null", "{}", nil, false},
-		{"invalid-size", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": 42, "padding": strings.Repeat("x", 1<<20)}, true},
-		{"annotation-only", "{description: Completion}", map[string]any{"answer": "approved"}, false},
-		{"object-enum", "{type: object, enum: [{answer: approved}]}", map[string]any{"answer": "approved"}, false},
-		{"object-enum-required-data", "{type: object, enum: [{required: [__proto__]}]}", map[string]any{"required": []any{"__proto__"}}, false},
-		{"unconstrained-json", "{}", map[string]any{"answer": "approved", "nested": map[string]any{"retained": true}}, false},
+		{"invalid-type", "{type: object, properties: {answer: {type: string}}, required: [answer]}", map[string]any{"answer": 42}, true, false},
+		{"invalid-extra-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "extra": true}, true, false},
+		{"normalized-prototype-property", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": "approved", "__proto__": true}, false, true},
+		{"normalized-array", "{}", []any{}, false, true},
+		{"normalized-scalar", "{}", "invalid", false, true},
+		{"normalized-null", "{}", nil, false, true},
+		{"invalid-size", "{type: object, properties: {answer: {type: string}}, required: [answer], additionalProperties: false}", map[string]any{"answer": 42, "padding": strings.Repeat("x", 1<<20)}, true, true},
+		{"annotation-only", "{description: Completion}", map[string]any{"answer": "approved"}, false, false},
+		{"object-enum", "{type: object, enum: [{answer: approved}]}", map[string]any{"answer": "approved"}, false, false},
+		{"object-enum-required-data", "{type: object, enum: [{required: [__proto__]}]}", map[string]any{"required": []any{"__proto__"}}, false, false},
+		{"unconstrained-json", "{}", map[string]any{"answer": "approved", "nested": map[string]any{"retained": true}}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			definition := workflows.ToolDefinition{Server: "workflow-conversation", Name: "finish"}
@@ -165,6 +179,7 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 				}
 				model, _ := payload["model"].(string)
 				number := requests.Add(1)
+				w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("conversation-response-", number)}
 				if tc.invalid && number > 1 {
 					history, _ := json.Marshal(payload["messages"])
 					if !strings.Contains(string(history), "invalid structured output") {
@@ -204,13 +219,72 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 			defer store.Close()
 			agent := Agent{Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-5", Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_CONVERSATION_KEY"}}
 			runner := &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}
-			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: runner, Store: store, Slots: make(chan struct{}, 1)}
+			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: &conversationNativeContractRunner{Runner: runner, t: t}, Store: store, Slots: make(chan struct{}, 1)}
+			executor.RoleRunner = func(json.RawMessage) (workflows.AgentRunner, error) {
+				return &conversationNativeContractRunner{Runner: runner, t: t}, nil
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			run, err := executor.Run(ctx, workflows.RunRequest{Ref: "workflows/main.yml"})
+			if tc.strictHold {
+				if err == nil || run.Status == workflows.RunStatusSucceeded || requests.Load() != 1 {
+					t.Fatalf("changed/unproven native input gained authority: %+v APIs=%d err=%v", run, requests.Load(), err)
+				}
+				attempts, loadErr := store.Attempts(ctx, run.ID)
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				found := false
+				for _, attempt := range attempts {
+					if c := attempt.Conversation; c != nil {
+						found = true
+						if c.Finished || c.Active == nil || c.Calls != 1 || len(c.Receipts) != 0 {
+							t.Fatalf("unproven native input mutated conversation authority: %+v", c)
+						}
+					}
+				}
+				usage, usageErr := store.Usage(ctx, run.ID)
+				if !found || usageErr != nil || usage.Summary.Complete {
+					t.Fatal("unproven original was settled", usage, usageErr)
+				}
+				for _, inv := range usage.Invocations {
+					if inv.Finished {
+						t.Fatal("unproven original accounting finished", inv)
+					}
+				}
+				if tc.name == "normalized-prototype-property" && (usage.Summary.InputTokens == nil || *usage.Summary.InputTokens != 16) {
+					t.Fatal("full original seal lost known charge", usage)
+				}
+				// Oversized/nonobject rejection before a full proof has no synthetic
+				// counters. A complete sealed response is the only charge witness.
+				if _, retryErr := executor.Resume(ctx, run.ID, nil, false); retryErr == nil || requests.Load() != 1 {
+					t.Fatal("unproven original retried", retryErr, requests.Load())
+				}
+				return
+			}
 			if tc.invalid {
-				if err == nil || !strings.Contains(err.Error(), "invalid structured output") || run.Status != workflows.RunStatusFailed || requests.Load() != 3 {
+				if err == nil || !strings.Contains(err.Error(), "invalid structured output") || run.Status != workflows.RunStatusFailed || requests.Load() != 1 {
 					t.Fatalf("invalid completion was repaired or hidden: run=%+v requests=%d err=%v", run, requests.Load(), err)
+				}
+				attempts, loadErr := store.Attempts(ctx, run.ID)
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				found := false
+				for _, attempt := range attempts {
+					if c := attempt.Conversation; c != nil {
+						found = true
+						if c.Finished || c.Failure == "" || c.Active == nil || c.Calls != 1 {
+							t.Fatalf("invalid original lost durable failure: %+v", c)
+						}
+					}
+				}
+				usage, usageErr := store.Usage(ctx, run.ID)
+				if !found || usageErr != nil || usage.Summary.Complete || usage.Summary.InputTokens == nil || *usage.Summary.InputTokens != 16 {
+					t.Fatal("invalid original lost hold/known usage", usage, usageErr)
+				}
+				if _, retryErr := executor.Resume(ctx, run.ID, nil, false); retryErr == nil || requests.Load() != 1 {
+					t.Fatal("invalid original retried native work", retryErr, requests.Load())
 				}
 				return
 			}
@@ -223,14 +297,6 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 			}
 			got, _ := json.Marshal(run.Jobs["solve"].Steps["solution"].Outputs["structured"])
 			expected := tc.first
-			switch tc.name {
-			case "normalized-prototype-property":
-				expected = map[string]any{"answer": "approved"}
-			case "normalized-array", "normalized-null":
-				expected = map[string]any{}
-			case "normalized-scalar":
-				expected = map[string]any{"0": "i", "1": "n", "2": "v", "3": "a", "4": "l", "5": "i", "6": "d"}
-			}
 			want, _ := json.Marshal(expected)
 			if string(got) != string(want) {
 				t.Fatalf("SDK changed completion arguments: got=%s want=%s", got, want)

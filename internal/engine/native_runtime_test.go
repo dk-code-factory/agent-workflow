@@ -219,8 +219,14 @@ if provider=='claude-sdk':
  assert os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')=='local-native-token'
  out({'version':2,'type':'hello','provider_version':'claude-agent-sdk@` + clirunner.ClaudeSDKVersion + `'})
  f=json.loads(sys.stdin.readline()); settings=f;session=f.get('session_id') or '';record(f['prompt'])
+ out({'version':2,'type':'broker_model_identity','data':{'requested':f['model'],'resolved':f['model']}})
+ assert json.loads(sys.stdin.readline())['type']=='model_bound'
  out({'version':2,'type':'session','session_id':'retained-session'})
- out({'version':2,'type':'result','session_id':'retained-session','status':'succeeded','outputs':{'text':'{"approved":true}','usage':{'input_tokens':7,'output_tokens':3}}})
+ response='continued' if session else 'first'
+ usage={'input_tokens':7,'output_tokens':3,'cache_read_input_tokens':0,'cache_creation_input_tokens':0}
+ out({'version':2,'type':'broker_model_start','session_id':'retained-session','data':{'response_id':response,'model':f['model']}})
+ out({'version':2,'type':'broker_batch','session_id':'retained-session','data':{'response_id':response,'model':f['model'],'stop_reason':'end_turn','calls':[],'usage':usage}})
+ out({'version':2,'type':'result','session_id':'retained-session','status':'succeeded','provider_status':'success','outputs':{'text':'{"approved":true}','usage':usage,'cost_usd':0}})
 else:
  for line in sys.stdin:
   f=json.loads(line);m=f.get('method');i=f.get('id');p=f.get('params') or {}

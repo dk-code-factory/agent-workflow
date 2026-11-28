@@ -22,6 +22,7 @@ import (
 func TestSDKBridgeAgainstFakeGateway(t *testing.T) {
 	t.Run("conversation", testSDKBridgeAgainstFakeGateway)
 	t.Run("repair", testSDKRepairAgainstFakeGateway)
+	t.Run("compaction", testSDKCompactionCeilingAgainstFakeGateway)
 }
 
 func testSDKBridgeAgainstFakeGateway(t *testing.T) {

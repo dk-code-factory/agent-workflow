@@ -200,6 +200,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("at least one agent must be configured")
 	}
 	for id, agent := range c.Agents {
+		if agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && len(agent.MCPGrants) > 0 {
+			return fmt.Errorf("agent %s: SDK direct native tools with managed broker lease release are not certified", id)
+		}
 		if c.Execution.NetworkRuntime != "" && agent.Execution.NetworkRuntime != c.Execution.NetworkRuntime {
 			return fmt.Errorf("agent %s must inherit global network-runtime", id)
 		}
