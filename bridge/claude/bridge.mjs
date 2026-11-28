@@ -217,6 +217,8 @@ try {
     cwd: request.workspace, title: 'Agent Workflow', model: request.model || undefined, resume: request.repair_only ? undefined : (sessionID || undefined),
     systemPrompt: request.repair_only ? 'Format the supplied repair data as JSON. Do not execute tools or perform the original task.' : (request.instructions || 'Follow the explicitly supplied task and engine policy.'),
     settingSources: [], settings: isolatedSettings,
+    // process.env is already the controller's private, allowlisted bridge
+    // environment. The SDK replaces env rather than merging it implicitly.
     env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0', ...(brokerStream ? { ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1' } : {}) },
     extraArgs: { ...(skill ? {} : { 'disable-slash-commands': null }), 'strict-mcp-config': null, 'no-chrome': null },
     pluginDelivery: skill ? 'initialize' : 'argv',
@@ -233,9 +235,6 @@ try {
       child.stderr.on('data', () => {}); // drain; no unbounded diagnostic retention
       return child;
     } } : {}),
-    // process.env is already the controller's private, allowlisted bridge
-    // environment. The SDK replaces env rather than merging it implicitly.
-    ...(skill ? { env: { ...process.env, ...isolatedEnvironment, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' } } : {}),
     ...(child ? { effort: 'high', maxTurns: 4, includeHookEvents: true, forwardSubagentText: true } : {}),
     hooks: {
       PreToolUse: [{ ...(skill || taskPolicy ? { onFailure: 'block' } : {}), hooks: [async input => {
