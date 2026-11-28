@@ -17,11 +17,15 @@ func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) erro
 			return err
 		}
 	}
-	if err := e.pinContainers(ctx, all); err != nil {
-		return err
-	}
-	if err := e.pinHelperBundles(ctx, all); err != nil {
-		return err
+	// A boundary admits declarations itself and owns all container effects.
+	// Discovery and executable asset pinning would escape that boundary.
+	if e.Boundary == nil {
+		if err := e.pinContainers(ctx, all); err != nil {
+			return err
+		}
+		if err := e.pinHelperBundles(ctx, all); err != nil {
+			return err
+		}
 	}
 	if err := e.preflightConversations(all); err != nil {
 		return err

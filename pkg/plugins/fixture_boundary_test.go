@@ -58,17 +58,17 @@ func TestPluginFixtureBoundaryChecksCompletedResumeBeforeContainerRecovery(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Model a valid older admitted container job. The engine must reject this
-	// fixture capability before resolving the image, guardian or completed effect.
+	// Model a retained live container implementation. The engine must reject this
+	// implementation before resolving the image, guardian or completed effect.
 	_, snap, err := store.Load(t.Context(), run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := snap.Definitions[run.WorkflowRef].Jobs["main"]
-	job.Container = &workflows.JobContainer{Image: "must-not-resolve"}
+	job.Container = &workflows.JobContainer{Image: "must-not-resolve", Implementation: &workflows.ContainerImplementation{}}
 	snap.Definitions[run.WorkflowRef].Jobs["main"] = job
 	// Admit a historical completed checkpoint, retaining its old definition
-	// hash and results. Resume must reject unsupported container effects even
+	// hash and results. Resume must reject retained live container implementations even
 	// before a completed-job shortcut or container receipt validation.
 	raw, _ := json.Marshal(snap.Definitions[run.WorkflowRef])
 	hash := sha256.Sum256(raw)
@@ -81,14 +81,14 @@ func TestPluginFixtureBoundaryChecksCompletedResumeBeforeContainerRecovery(t *te
 	if err = store.Admit(t.Context(), run, snap); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.Resume(t.Context(), run.ID, nil, false); err == nil || !strings.Contains(err.Error(), "fixtures do not support job containers") {
+	if _, err = e.Resume(t.Context(), run.ID, nil, false); err == nil || !strings.Contains(err.Error(), "fixtures do not support retained container implementations") {
 		t.Fatal(err)
 	}
 	if ports.count() != 1 {
 		t.Fatal("completed command replayed")
 	}
 }
-func TestPluginFixtureBoundaryRejectsNestedContainerBeforeAnyCommand(t *testing.T) {
+func TestPluginFixtureBoundaryRejectsNestedConversationBeforeAnyCommand(t *testing.T) {
 	e, _, ports := boundaryExecutor(t, `jobs:
   main:
     steps:
@@ -96,8 +96,7 @@ func TestPluginFixtureBoundaryRejectsNestedContainerBeforeAnyCommand(t *testing.
         argv: [must-not-execute]
       - id: nested
         sequence:
-          - uses: docker://alpine:latest
-            with: {args: echo unsafe}
+          - {conversation: [builder, reviewer], finishBy: builder, prompt: work}
 `)
 	if _, err := e.Run(t.Context(), workflows.RunRequest{Ref: "workflows/main.yml"}); err == nil || !strings.Contains(err.Error(), "fixtures do not support") {
 		t.Fatal(err)
@@ -162,7 +161,7 @@ func TestPluginFixtureBoundaryChecksReusableChildBeforeAnyCommand(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(e.WorkspaceDir, "workflows/child.yml"), []byte(`on: {workflow_call: {}}
 jobs:
   child:
-    steps: [{uses: 'docker://alpine:latest', with: {args: echo unsafe}}]
+    steps: [{conversation: [builder, reviewer], finishBy: builder, prompt: work}]
 `), 0600); err != nil {
 		t.Fatal(err)
 	}

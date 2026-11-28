@@ -755,7 +755,10 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		out.Outputs = child.Outputs
 		return out
 	}
-	if job.Container != nil {
+	if job.Container != nil && e.Boundary != nil {
+		ctx = context.WithValue(ctx, jobContainerKey{}, &jobContainerScope{})
+	}
+	if job.Container != nil && e.Boundary == nil {
 		if store := invocationStore(e.Store); store != nil {
 			attempts, err := store.Attempts(ctx, ec.RunID)
 			if err != nil {

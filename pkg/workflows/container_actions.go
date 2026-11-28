@@ -166,6 +166,10 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 				if step.Protocol != ContainerActionV1 {
 					continue
 				}
+				boundary, scripted := e.Boundary.(ContainerExecutionBoundary)
+				if e.Boundary != nil && !scripted {
+					return fmt.Errorf("execution boundary does not support structured helpers")
+				}
 				if actionJournal(e.Store) == nil {
 					return fmt.Errorf("structured helpers require durable ActionJournal")
 				}
@@ -173,7 +177,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 				if !isDockerStep(step) && j.Container != nil {
 					p = j.Container.Implementation
 				}
-				if p == nil {
+				if p == nil && e.Boundary == nil {
 					return fmt.Errorf("structured helper container was not admitted")
 				}
 				in, ir, err := resolveContainerSchema(w, step.InputSchema)
@@ -190,7 +194,7 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 					Container *ContainerImplementation
 					Step      Step
 				}{p, step})
-				if p.ContractVersion >= 1 {
+				if p != nil && p.ContractVersion >= 1 {
 					argv, err := structuredCommand(step, p.Image)
 					if err != nil {
 						return err
@@ -209,11 +213,24 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 						Env                                   map[string]string
 					}{p.Selection, p.Image.ID, p.Image.OS, p.Image.Architecture, argv, step.Protocol, step.WorkingDirectory, step.Timeout, p.Policy, p.Guardian.SHA256, p.Guardian.Platform, bundle, step.Env})
 				}
+				if e.Boundary != nil {
+					implementation = "execution-boundary-v1:" + actionHash(struct {
+						Container *JobContainer
+						Step      Step
+					}{j.Container, step})
+				}
 				a := &registeredAction{contract: buildActionContract(name, implementation, step.Effect, in, out), input: ir, output: or}
 				a.recovery = e.validateContainerRecoveryRequest
 				helper := step
 				selected := p
 				call := func(ctx context.Context, ac ActionContext, phase string, input, bindings json.RawMessage, result ActionValue) (containerResponse, error) {
+					if e.Boundary != nil {
+						uses := helper.Uses
+						if uses == "" {
+							uses = ContainerActionV1
+						}
+						return boundary.RunContainerAction(ctx, ContainerActionRequest{Uses: uses, Phase: phase, Context: ac, Effect: helper.Effect, Input: input, Bindings: bindings, Result: result})
+					}
 					return e.containerHook(ctx, helper, selected, ac, phase, input, bindings, result)
 				}
 				a.bindings = func(ctx context.Context, ac ActionContext, input json.RawMessage) (json.RawMessage, error) {

@@ -323,8 +323,10 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 	}
 	for _, op := range c.Operations {
 		application := strings.HasPrefix(op.Uses, "action/")
-		if !application && op.Phase != "" && op.Phase != "execute" {
-			return fmt.Errorf("only registered fixture actions support bindings/validate/reconcile phases")
+		helper := op.Uses == workflows.ContainerActionV1 || strings.HasPrefix(op.Uses, "docker://")
+		structured := application || helper
+		if !structured && op.Phase != "" && op.Phase != "execute" {
+			return fmt.Errorf("only fixture actions and helpers support recovery phases")
 		}
 		if op.Uses == "agent/run" && (op.Job != "" || op.Step != "") {
 			return fmt.Errorf("native fixture operations use prompt/role/call selectors, not job/step")
@@ -332,10 +334,10 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 		if op.Uses != "agent/run" && (op.Role != "" || op.Prompt != "") {
 			return fmt.Errorf("prompt and role selectors require agent/run")
 		}
-		if !application && (op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
-			return fmt.Errorf("evidence/receipt/outcome require registered fixture actions")
+		if !structured && (op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
+			return fmt.Errorf("evidence/receipt/outcome require fixture actions or helpers")
 		}
-		if op.Phase == "validate" && (op.Result != nil || op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
+		if (op.Phase == "validate" || op.Phase == "validate_checkpoint") && (op.Result != nil || op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
 			return fmt.Errorf("validate responses support selectors and error only")
 		}
 		if op.Phase == "bindings" && (op.Evidence != nil || op.Receipt != nil || op.Outcome != "") {
@@ -347,14 +349,17 @@ func validateFixture(c FixtureCase, captured *CapturedPackage) error {
 		if op.Uses == "" || op.Call < 0 {
 			return fmt.Errorf("operations require uses and a nonnegative call selector")
 		}
-		if op.Phase != "" && op.Phase != "execute" && op.Phase != "bindings" && op.Phase != "validate" && op.Phase != "reconcile" {
+		if op.Phase != "" && op.Phase != "execute" && op.Phase != "bindings" && op.Phase != "validate" && op.Phase != "validate_checkpoint" && op.Phase != "reconcile" {
 			return fmt.Errorf("unsupported operation phase %q", op.Phase)
+		}
+		if (application && op.Phase == "validate_checkpoint") || (helper && op.Phase == "validate") {
+			return fmt.Errorf("registered actions use validate; helpers use validate_checkpoint")
 		}
 		if strings.HasPrefix(op.Uses, "action/") {
 			if _, ok := c.Actions[strings.TrimPrefix(op.Uses, "action/")]; !ok {
 				return fmt.Errorf("%s requires an explicit fixture actions contract", op.Uses)
 			}
-		} else if op.Uses != "agent/run" && op.Uses != "command/run" && !workflows.IsControllerAction(op.Uses) {
+		} else if op.Uses != "agent/run" && op.Uses != "command/run" && !helper && !workflows.IsControllerAction(op.Uses) {
 			return fmt.Errorf("unsupported fixture operation %q", op.Uses)
 		}
 	}

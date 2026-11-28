@@ -38,6 +38,8 @@ type FixtureInvocation struct {
 	Worker           string                    `json:"worker,omitempty"`
 	Session          string                    `json:"session,omitempty"`
 	RequestedSession string                    `json:"requested-session,omitempty"`
+	Input            json.RawMessage           `json:"input,omitempty"`
+	Effect           workflows.ActionEffect    `json:"effect,omitempty"`
 	Command          *workflows.CommandRequest `json:"command,omitempty"`
 }
 
@@ -115,13 +117,18 @@ func (p *fixturePorts) CheckDefinitions(all map[string]*workflows.Workflow) erro
 	var visit func(string, []workflows.Step) error
 	visit = func(ref string, steps []workflows.Step) error {
 		for _, s := range steps {
+			if strings.HasPrefix(s.Uses, "docker://") {
+				if entrypoint, explicit := s.With["entrypoint"]; explicit && entrypoint == "" {
+					return fmt.Errorf("%s step %s: Docker entrypoint cannot be empty", ref, s.ID)
+				}
+			}
 			if strings.HasPrefix(s.Uses, "action/") {
 				if _, ok := p.contracts[strings.TrimPrefix(s.Uses, "action/")]; !ok {
 					return fmt.Errorf("%s: missing explicit fixture action contract", s.Uses)
 				}
 			}
-			if strings.HasPrefix(s.Uses, "docker://") || s.Protocol != "" || s.ContainerImplementation != nil || len(s.Conversation) > 0 {
-				return fmt.Errorf("%s step %s: fixtures do not support containers, helper protocols or conversations; use explicit supported fixture ports", ref, s.ID)
+			if s.ContainerImplementation != nil || len(s.Conversation) > 0 {
+				return fmt.Errorf("%s step %s: fixtures do not support retained container implementations or conversations; use explicit supported fixture ports", ref, s.ID)
 			}
 			for _, children := range [][]workflows.Step{s.Sequence, s.Parallel, s.OnResult, s.OnComplete, s.OnIncomplete, s.OnError, s.OnFailure, s.Finally} {
 				if err := visit(ref, children); err != nil {
@@ -132,9 +139,12 @@ func (p *fixturePorts) CheckDefinitions(all map[string]*workflows.Workflow) erro
 		return nil
 	}
 	for ref, w := range all {
+		if err := workflows.Validate(w); err != nil {
+			return p.fail(fmt.Errorf("%s: %w", ref, err))
+		}
 		for job, j := range w.Jobs {
-			if j.Container != nil {
-				return p.fail(fmt.Errorf("%s job %s: fixtures do not support job containers; no container/image/guardian was discovered", ref, job))
+			if j.Container != nil && j.Container.Implementation != nil {
+				return p.fail(fmt.Errorf("%s job %s: fixtures do not support retained container implementations; no container/image/guardian was discovered", ref, job))
 			}
 			if err := visit(ref, j.Steps); err != nil {
 				return p.fail(err)
@@ -147,7 +157,11 @@ func (p *fixturePorts) RunCommand(ctx context.Context, q workflows.CommandReques
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	op, err := p.take(FixtureInvocation{Uses: "command/run", Phase: "execute", Job: q.JobID, Step: q.StepID, Command: &q})
+	uses := "command/run"
+	if strings.HasPrefix(q.Uses, "docker://") {
+		uses = q.Uses
+	}
+	op, err := p.take(FixtureInvocation{Uses: uses, Phase: "execute", Job: q.JobID, Step: q.StepID, Command: &q})
 	out := op.Result
 	if out == nil {
 		out = map[string]any{}
@@ -183,6 +197,44 @@ func (p *fixturePorts) RunAction(ctx context.Context, q workflows.ActionRequest)
 	op, err := p.take(FixtureInvocation{Uses: q.Uses, Phase: "execute", Job: q.JobID, Step: q.StepID})
 	return op.Result, err
 }
+
+// Helpers use the authored contract and real action journal. Responses supply
+// data only; no image, Docker client, guardian or executable is available here.
+func (p *fixturePorts) RunContainerAction(ctx context.Context, q workflows.ContainerActionRequest) (workflows.ContainerActionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return workflows.ContainerActionResponse{}, err
+	}
+	op, err := p.take(FixtureInvocation{Uses: q.Uses, Phase: q.Phase, Job: q.Context.JobID, Step: q.Context.StepID, Input: q.Input, Effect: q.Effect})
+	response := workflows.ContainerActionResponse{Protocol: workflows.ContainerActionV1, Phase: q.Phase}
+	var encodingErr error
+	encode := func(value any) json.RawMessage {
+		raw, err := json.Marshal(value)
+		encodingErr = errors.Join(encodingErr, err)
+		return raw
+	}
+	switch q.Phase {
+	case "bindings":
+		response.Bindings = encode(op.Result)
+		response.Capabilities = []string{"bindings", "execute", "validate_checkpoint", "reconcile"}
+		response.ReadOnlyPhases = []string{"bindings", "validate_checkpoint", "reconcile"}
+	case "execute", "reconcile":
+		response.Result.Output = encode(op.Result)
+		response.Result.Evidence = encode(op.Evidence)
+		response.Result.Receipt = encode(op.Receipt)
+		response.Outcome = op.Outcome
+		response.Proof = response.Result.Evidence
+	case "validate_checkpoint":
+		valid := err == nil
+		response.Valid = &valid
+	default:
+		return response, p.fail(fmt.Errorf("unsupported fixture helper phase %q", q.Phase))
+	}
+	if encodingErr != nil {
+		err = errors.Join(err, p.fail(fmt.Errorf("helper fixture JSON: %w", encodingErr)))
+	}
+	return response, err
+}
+
 func fixtureConfig(provider string) clirunner.Config {
 	if provider == "" {
 		provider = "codex-app-server"
