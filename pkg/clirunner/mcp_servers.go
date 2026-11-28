@@ -332,6 +332,13 @@ func (r *Runner) AdmittedRoles(ctx context.Context) (roles json.RawMessage, err 
 // admission validates its captured native definitions before DiscoverRoles.
 func (r *Runner) PinRoles(ctx context.Context) (roles json.RawMessage, err error) {
 	defer func() { err = workflows.RedactError(err, r.SecretValues()) }()
+	// Programmatic configurations pass the same source-profile gate as YAML
+	// before runtime admission or connector discovery can claim any resources.
+	for _, agent := range r.Config.Agents {
+		if err := validateManagedBuildRole(agent); err != nil {
+			return nil, err
+		}
+	}
 	// Reject explicitly selected Codex policy before discovery can launch an
 	// MCP connector for grants this adapter cannot enforce. Legacy configs may
 	// retain an unused Codex role; native task admission checks defaults.
