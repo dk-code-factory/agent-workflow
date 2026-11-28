@@ -122,12 +122,12 @@ func TestSDKConversationContractAcceptsEnumData(t *testing.T) {
 	}
 }
 
-type conversationNativeContractRunner struct {
+type conversationErrorLoggingRunner struct {
 	*Runner
 	t *testing.T
 }
 
-func (r *conversationNativeContractRunner) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+func (r *conversationErrorLoggingRunner) RunTurn(ctx context.Context, q workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
 	result, err := r.Runner.RunTurn(ctx, q, emit)
 	if err != nil {
 		r.t.Logf("original conversation provider: %v", err)
@@ -219,9 +219,9 @@ func TestSDKConversationAgainstFakeGateway(t *testing.T) {
 			defer store.Close()
 			agent := Agent{Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-5", Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_CONVERSATION_KEY"}}
 			runner := &Runner{Workspace: workspace, Config: Config{Agents: map[string]Agent{"builder": agent, "reviewer": agent}}}
-			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: &conversationNativeContractRunner{Runner: runner, t: t}, Store: store, Slots: make(chan struct{}, 1)}
+			executor := &workflows.Executor{WorkspaceDir: workspace, Agents: &conversationErrorLoggingRunner{Runner: runner, t: t}, Store: store, Slots: make(chan struct{}, 1)}
 			executor.RoleRunner = func(json.RawMessage) (workflows.AgentRunner, error) {
-				return &conversationNativeContractRunner{Runner: runner, t: t}, nil
+				return &conversationErrorLoggingRunner{Runner: runner, t: t}, nil
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
