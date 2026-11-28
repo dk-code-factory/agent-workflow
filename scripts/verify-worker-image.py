@@ -59,7 +59,7 @@ def main():
              'node --version; git --version; bash --version; test "$(go env CGO_ENABLED)" = 0'])
         run(['--env', 'AGENT_WORKFLOW_SDK_TEST=1', '--volume', str(fixture) + ':/verification:ro',
              '--workdir', '/verification/pkg/clirunner', '--entrypoint', '/verification/clirunner.test',
-             args.image, '-test.run', '^TestSDK(Bridge|Broker|Conversation)AgainstFakeGateway$',
+             args.image, '-test.run', '^TestSDK((Bridge|Broker|Conversation)AgainstFakeGateway|BrokerNativeStreamBoundaries)$',
              '-test.v', '-test.timeout', '5m'])
 
 
