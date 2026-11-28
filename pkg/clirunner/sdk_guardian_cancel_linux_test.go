@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,9 @@ func TestSDKGuardianInterruptBridgeFixture(t *testing.T) {
 			write(map[string]any{"type": "progress", "data": map[string]any{"guardian_pid": os.Getppid(), "bridge_pid": os.Getpid()}})
 			write(map[string]any{"type": "usage", "data": map[string]any{"observation_key": "original-usage", "usage": map[string]int{"input_tokens": 10, "output_tokens": 2}}})
 			write(map[string]any{"type": "result", "status": "succeeded", "outputs": map[string]any{"text": "original result", "usage": map[string]int{"input_tokens": 10, "output_tokens": 2}}})
+			if err := os.WriteFile("terminal-written", []byte("yes"), 0600); err != nil {
+				os.Exit(2)
+			}
 		case "interrupt":
 			if err := os.WriteFile("interrupt-observed", []byte("yes"), 0600); err != nil {
 				os.Exit(2)
@@ -108,8 +112,107 @@ func (p *sdkCancelProcess) absent() bool {
 	return errors.Is(err, os.ErrNotExist) || err == nil && start != p.start
 }
 
+// Ownership publication and permission to pause share the shutdown gate. A
+// callback may arrive after cancellation while bridgeTurn drains buffered data.
+type sdkCancelOwnership struct {
+	mu               sync.Mutex
+	closing          bool
+	released         bool
+	guardian, child  *sdkCancelProcess
+	err              error
+	latePublications int
+	pauses           int
+	rejectedPauses   int
+}
+
+func (o *sdkCancelOwnership) stopLocked() {
+	if o.released {
+		return
+	}
+	for _, item := range []struct {
+		process *sdkCancelProcess
+		signal  unix.Signal
+	}{{o.child, unix.SIGKILL}, {o.guardian, unix.SIGCONT}} {
+		if item.process != nil {
+			if err := item.process.signal(item.signal); err != nil && !errors.Is(err, unix.ESRCH) {
+				o.err = errors.Join(o.err, err)
+			}
+		}
+	}
+}
+
+func (o *sdkCancelOwnership) publish(guardian, child int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.guardian != nil || o.released {
+		o.err = errors.Join(o.err, fmt.Errorf("duplicate or released fixture ownership"))
+		return
+	}
+	o.guardian, o.err = sdkCancelPin(guardian, os.Getpid())
+	if o.err == nil {
+		o.child, o.err = sdkCancelPin(child, guardian)
+	}
+	if o.closing {
+		o.latePublications++
+		o.stopLocked()
+	}
+}
+
+func (o *sdkCancelOwnership) pause() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closing {
+		o.rejectedPauses++
+		return
+	}
+	if o.err != nil || o.guardian == nil {
+		o.err = errors.Join(o.err, fmt.Errorf("fixture has no guardian to pause"))
+		return
+	}
+	o.err = o.guardian.signal(unix.SIGSTOP)
+	deadline := time.Now().Add(time.Second)
+	for o.err == nil {
+		_, start, state, err := sdkCancelStat(o.guardian.pid)
+		if err != nil || start != o.guardian.start {
+			o.err = fmt.Errorf("guardian changed before controlled pause: %v", err)
+			return
+		}
+		if state == "T" {
+			o.pauses++
+			return
+		}
+		if time.Now().After(deadline) {
+			o.err = fmt.Errorf("guardian did not enter controlled pause")
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (o *sdkCancelOwnership) shutdown() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closing = true
+	o.stopLocked()
+}
+
+// The caller must join RunTurn, including all of its callbacks, before release.
+func (o *sdkCancelOwnership) release() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.released {
+		for _, process := range []*sdkCancelProcess{o.child, o.guardian} {
+			if process != nil {
+				o.err = errors.Join(o.err, unix.Close(process.fd))
+			}
+		}
+		o.released = true
+	}
+	return o.err
+}
+
 func TestSDKCancellationRetainsGuardianCleanupBudget(t *testing.T) {
-	for _, mode := range []string{"cooperative", "guardian-delayed"} {
+	for _, mode := range []string{"cooperative", "guardian-delayed", "initialization-timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			self, err := os.Executable()
@@ -120,37 +223,45 @@ func TestSDKCancellationRetainsGuardianCleanupBudget(t *testing.T) {
 			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"sdk": {Provider: "claude-sdk", Command: self, Bridge: "-test.run=^TestSDKGuardianInterruptBridgeFixture$", Model: mode, Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_GUARDIAN_FIXTURE_KEY"}}}}}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var guardian, child *sdkCancelProcess
-			var identityErr error
+			var owner sdkCancelOwnership
 			var observations []workflows.UsageUpdate
 			cancelled := make(chan struct{})
+			publicationPending := make(chan struct{})
+			releasePublication := make(chan struct{})
+			var releaseOnce sync.Once
 			type outcome struct {
 				result workflows.SessionResult
 				err    error
 			}
 			finished := make(chan outcome, 1)
 			joined := false
-			defer func() {
+			cleaned := false
+			var result outcome
+			cleanup := func() error {
+				if cleaned {
+					return nil
+				}
+				// Close pause admission before cancellation or releasing a blocked
+				// publisher. Newly published handles reconcile under the same gate.
+				owner.shutdown()
 				cancel()
-				// Pinning makes cleanup safe even if the numeric PID has been reused.
-				if child != nil {
-					_ = child.signal(unix.SIGKILL)
-				}
-				if guardian != nil {
-					_ = guardian.signal(unix.SIGCONT)
-				}
+				releaseOnce.Do(func() { close(releasePublication) })
 				if !joined {
 					select {
-					case <-finished:
+					case result = <-finished:
+						joined = true
 					case <-time.After(12 * time.Second):
-						t.Error("owned RunTurn did not join during failure cleanup")
+						// Keep the pinned authority live if a publisher remains active.
+						return fmt.Errorf("owned RunTurn did not join; fixture ownership retained")
 					}
 				}
-				if child != nil {
-					_ = unix.Close(child.fd)
-				}
-				if guardian != nil {
-					_ = unix.Close(guardian.fd)
+				owner.shutdown()
+				cleaned = true
+				return owner.release()
+			}
+			defer func() {
+				if err := cleanup(); err != nil {
+					t.Error(err)
 				}
 			}()
 			go func() {
@@ -159,64 +270,83 @@ func TestSDKCancellationRetainsGuardianCleanupBudget(t *testing.T) {
 					return nil
 				}}}, func(event workflows.ProviderEvent) {
 					if event.Type == "progress" {
-						guardian, identityErr = sdkCancelPin(int(event.Data["guardian_pid"].(float64)), os.Getpid())
-						if identityErr == nil {
-							child, identityErr = sdkCancelPin(int(event.Data["bridge_pid"].(float64)), guardian.pid)
+						if mode == "initialization-timeout" {
+							close(publicationPending)
+							<-releasePublication
 						}
+						owner.publish(int(event.Data["guardian_pid"].(float64)), int(event.Data["bridge_pid"].(float64)))
 					}
 					if event.Type != "usage" {
 						return
 					}
-					if identityErr == nil && mode == "guardian-delayed" {
-						identityErr = guardian.signal(unix.SIGSTOP)
-						deadline := time.Now().Add(time.Second)
-						for identityErr == nil {
-							_, start, state, statErr := sdkCancelStat(guardian.pid)
-							if statErr != nil || start != guardian.start {
-								identityErr = fmt.Errorf("guardian changed before controlled pause: %v", statErr)
-								break
-							}
-							if state == "T" {
-								break
-							}
-							if time.Now().After(deadline) {
-								identityErr = fmt.Errorf("guardian did not enter controlled pause")
-								break
-							}
-							time.Sleep(time.Millisecond)
-						}
+					if mode != "cooperative" {
+						owner.pause()
 					}
 					cancel()
 					close(cancelled)
 				})
 				finished <- outcome{result, runErr}
 			}()
+			ready := cancelled
+			if mode == "initialization-timeout" {
+				ready = publicationPending
+			}
 			select {
-			case <-cancelled:
-			case result := <-finished:
+			case <-ready:
+			case result = <-finished:
 				joined = true
 				t.Fatalf("fixture ended before cancellation: %+v %v", result.result, result.err)
 			case <-time.After(5 * time.Second):
 				t.Fatal("fixture did not initialize")
 			}
-			if identityErr != nil || guardian == nil || child == nil {
-				t.Fatal("fixture ownership not established", identityErr)
+			if mode == "initialization-timeout" {
+				// Hold publication until cleanup has closed admission, while the
+				// original terminal and later usage callback are already buffered.
+				deadline := time.Now().Add(time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(root, "terminal-written")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("fixture did not buffer its original terminal")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if err := cleanup(); err != nil {
+					t.Fatal(err)
+				}
+				if owner.latePublications != 1 || owner.rejectedPauses != 1 || owner.pauses != 0 {
+					t.Fatalf("late callback did not exercise closed admission: published=%d rejected=%d pauses=%d", owner.latePublications, owner.rejectedPauses, owner.pauses)
+				}
 			}
 			if mode == "guardian-delayed" {
+				owner.mu.Lock()
+				guardianReady := owner.err == nil && owner.guardian != nil && owner.child != nil
+				owner.mu.Unlock()
+				if !guardianReady {
+					t.Fatal("fixture ownership not established before controlled pause")
+				}
 				// The old five-second os/exec deadline fires while this guardian is
 				// paused. The repaired deadline retains its original cleanup budget
 				// after the SDK's five-second interruption grace.
 				time.Sleep(6 * time.Second)
-				if err := guardian.signal(unix.SIGCONT); err != nil {
-					t.Fatalf("guardian killed before receiving its cleanup budget: %v", err)
+				owner.mu.Lock()
+				resumeErr := owner.guardian.signal(unix.SIGCONT)
+				owner.mu.Unlock()
+				if resumeErr != nil {
+					t.Fatalf("guardian killed before receiving its cleanup budget: %v", resumeErr)
 				}
 			}
-			var result outcome
-			select {
-			case result = <-finished:
-				joined = true
-			case <-time.After(5 * time.Second):
-				t.Fatal("owned cancellation did not finish within cleanup budget")
+			if !joined {
+				select {
+				case result = <-finished:
+					joined = true
+				case <-time.After(5 * time.Second):
+					t.Fatal("owned cancellation did not finish within cleanup budget")
+				}
+			}
+			if owner.err != nil || owner.guardian == nil || owner.child == nil {
+				t.Fatal("fixture ownership not established", owner.err)
 			}
 			if !errors.Is(result.err, context.Canceled) || result.result.SessionID != "sdk-interrupt-session" || result.result.Outputs["text"] != "original result" {
 				t.Fatalf("cancellation lost original result: %+v %v", result.result, result.err)
@@ -225,11 +355,13 @@ func TestSDKCancellationRetainsGuardianCleanupBudget(t *testing.T) {
 			if !ok || usage["input_tokens"] != float64(10) || usage["output_tokens"] != float64(2) || len(observations) != 1 || observations[0].Key != "original-usage" || observations[0].SessionID != "sdk-interrupt-session" {
 				t.Fatalf("cancellation lost original accounting: %+v %+v", result.result, observations)
 			}
-			if !guardian.absent() || !child.absent() {
-				t.Fatalf("owned guardian or child survived cancellation: guardian=%d child=%d", guardian.pid, child.pid)
+			if !owner.guardian.absent() || !owner.child.absent() {
+				t.Fatalf("owned guardian or child survived cancellation: guardian=%d child=%d", owner.guardian.pid, owner.child.pid)
 			}
-			if _, err := os.Stat(filepath.Join(root, "interrupt-observed")); err != nil {
-				t.Fatal("SDK interruption was not requested", err)
+			if mode != "initialization-timeout" {
+				if _, err := os.Stat(filepath.Join(root, "interrupt-observed")); err != nil {
+					t.Fatal("SDK interruption was not requested", err)
+				}
 			}
 		})
 	}
