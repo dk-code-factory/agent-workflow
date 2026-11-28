@@ -1,0 +1,391 @@
+package clirunner
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
+)
+
+type sdkManagedEngineFixture struct {
+	runner   *Runner
+	pool     *workflows.Capacity
+	children atomic.Int32
+}
+
+func (f *sdkManagedEngineFixture) Capabilities(string) (workflows.ProviderCapabilities, error) {
+	return workflows.ProviderCapabilities{Sessions: true, Resume: true, Interrupt: true, ManagedPolicy: true}, nil
+}
+func (f *sdkManagedEngineFixture) UsageProvider(role, model string) (string, string) {
+	if role == "child" {
+		return "fixture", model
+	}
+	return f.runner.UsageProvider(role, model)
+}
+func (f *sdkManagedEngineFixture) ToolPolicy(role string) ([]workflows.ToolGrant, []workflows.ToolDefinition) {
+	if role == "child" || role == "empty" {
+		return []workflows.ToolGrant{}, nil
+	}
+	return []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}, {Server: "engine", Tool: "worker_wait"}}, workflows.EngineTools()
+}
+func (f *sdkManagedEngineFixture) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (workflows.SessionResult, error) {
+	if req.AgentID == "child" {
+		if f.pool.Suspended() != 1 {
+			return workflows.SessionResult{}, fmt.Errorf("SDK child lacked attested parent suspension")
+		}
+		f.children.Add(1)
+		sid := "child-" + req.ParentWorkerID
+		if emit != nil {
+			emit(workflows.ProviderEvent{Type: "session", SessionID: sid})
+		}
+		return workflows.SessionResult{Status: workflows.RunStatusSucceeded, SessionID: sid, Outputs: map[string]any{"text": "CHILD_JOINED", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}}}, nil
+	}
+	return f.runner.RunTurn(ctx, req, emit)
+}
+func TestSDKManagedProductionEngineModelSelectors(t *testing.T) {
+	for _, selector := range []string{"sonnet", "opus", "haiku", ""} {
+		t.Run("selector-"+selector, func(t *testing.T) { testSDKManagedEngine(t, "model:"+selector) })
+	}
+}
+func TestSDKManagedProductionEngineCapacityOne(t *testing.T) { testSDKManagedEngine(t, "capacity") }
+func TestSDKManagedProductionEngineControls(t *testing.T) {
+	for _, mode := range []string{"known-denial-continuation", "known-denial-wrong-type", "known-denial-unknown-argument", "unknown-after-batch", "known-response-then-rejected-request"} {
+		t.Run(mode, func(t *testing.T) { testSDKManagedEngine(t, mode) })
+	}
+}
+func testSDKManagedEngine(t *testing.T, mode string) {
+	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
+		t.Skip("locked SDK/local fake gateway only")
+	}
+	root := t.TempDir()
+	store, err := workflows.OpenSQLite(filepath.Join(root, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	run := &workflows.Run{ID: "sdk-managed-capacity", Version: 1, Status: workflows.RunStatusQueued, Jobs: map[string]workflows.JobExecution{}}
+	if err = store.Admit(t.Context(), run, workflows.Snapshot{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	run.Status = workflows.RunStatusRunning
+	if err = store.Claim(t.Context(), run, workflows.RunStatusQueued); err != nil {
+		t.Fatal(err)
+	}
+	spawn := "mcp__broker__" + workflows.ToolWireName(workflows.ToolDefinition{Server: "engine", Name: "worker_spawn"})
+	wait := "mcp__broker__" + workflows.ToolWireName(workflows.ToolDefinition{Server: "engine", Name: "worker_wait"})
+	var requests atomic.Int32
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/messages") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"input_tokens":16,"data":[],"has_more":false}`)
+			return
+		}
+		var body map[string]any
+		if e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); e != nil {
+			t.Error(e)
+			w.WriteHeader(400)
+			return
+		}
+		stage := requests.Add(1)
+		if mode == "known-response-then-rejected-request" {
+			raw, _ := json.Marshal(map[string]any{"stage": stage, "headers": r.Header, "body": body})
+			t.Logf("HTTP400 original request: %s", raw)
+		}
+		model, _ := body["model"].(string)
+		w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprint("sdk-engine-response-", stage)}
+		call := func(id, name string, args map[string]any) map[string]any {
+			return map[string]any{"type": "tool_use", "id": id, "name": name, "input": args}
+		}
+		if strings.HasPrefix(mode, "known-denial") {
+			if stage == 1 {
+				arguments := map[string]any{"turns": 1}
+				if mode == "known-denial-wrong-type" {
+					arguments = map[string]any{"role": "child", "turns": "one"}
+				}
+				if mode == "known-denial-unknown-argument" {
+					arguments = map[string]any{"role": "child", "turns": 1, "surprise": true}
+				}
+				writeSDKMessage(w, model, []map[string]any{call("known-schema-denied", spawn, arguments)}, "tool_use")
+			} else {
+				writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": "SDK_KNOWN_DENIAL_SETTLED"}}, "end_turn")
+			}
+			return
+		}
+		if mode == "known-response-then-rejected-request" && stage == 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"Bounded fixture rejects next original request"}}`)
+			return
+		}
+		if mode == "unknown-after-batch" && stage == 2 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"unknown-original-response\",\"type\":\"message\",\"role\":\"assistant\",\"model\":%q,\"content\":[],\"usage\":{\"input_tokens\":16,\"output_tokens\":0}}}\n\n", model)
+			return
+		}
+		switch stage {
+		case 1:
+			tools, _ := body["tools"].([]any)
+			if len(tools) != 2 {
+				t.Errorf("SDK exact broker catalog differs: %+v", tools)
+			}
+			writeSDKMessage(w, model, []map[string]any{call("spawn-a", spawn, map[string]any{"role": "child", "turns": 1, "prompt": "a"}), call("spawn-b", spawn, map[string]any{"role": "child", "turns": 1, "prompt": "b"})}, "tool_use")
+		case 2:
+			receipts, e := store.ToolCalls(t.Context(), run.ID, false)
+			if e != nil {
+				t.Error(e)
+				return
+			}
+			var blocks []map[string]any
+			history, _ := json.Marshal(body["messages"])
+			for _, receipt := range receipts {
+				if receipt.Tool != "worker_spawn" {
+					continue
+				}
+				if receipt.Status != "completed" || !strings.Contains(string(history), receipt.CallID) {
+					t.Errorf("SDK model resumed before original spawn result: %+v", receipt)
+				}
+				var result struct {
+					Worker  workflows.Worker        `json:"worker"`
+					Message workflows.WorkerMessage `json:"message"`
+				}
+				if e = json.Unmarshal(receipt.Result, &result); e != nil || result.Worker.ID == "" || result.Message.ID == "" {
+					t.Errorf("invalid original spawn receipt %s", receipt.Result)
+					return
+				}
+				blocks = append(blocks, call("wait-"+receipt.CallID, wait, map[string]any{"worker_id": result.Worker.ID, "message_id": result.Message.ID}))
+			}
+			if len(blocks) != 2 {
+				t.Errorf("SDK incomplete original spawn receipts %d", len(blocks))
+			}
+			writeSDKMessage(w, model, blocks, "tool_use")
+		case 3:
+			writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": "SDK_PARENT_AND_CHILDREN_JOINED"}}, "end_turn")
+		default:
+			t.Errorf("unplanned SDK model attempt %d", stage)
+			w.WriteHeader(400)
+		}
+	}))
+	defer gateway.Close()
+	bridge, e := filepath.Abs("../../bridge/claude/bridge.mjs")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if mode == "known-response-then-rejected-request" {
+		// Test-only transparent capture of the maintained production bridge's
+		// exact frames; no model/request/permission behavior is replaced.
+		trace := filepath.Join(root, "original-bridge-frames.jsonl")
+		wrapper := filepath.Join(root, "capture.mjs")
+		script := fmt.Sprintf(`import { appendFileSync } from 'node:fs';
+const write = process.stdout.write.bind(process.stdout); let bytes=0;
+process.stdout.write = (chunk, ...args) => { bytes+=Buffer.byteLength(chunk); if(bytes>16*1024*1024) throw new Error('owned capture bound'); appendFileSync(%q,chunk); return write(chunk,...args); };
+await import(%q);`, trace, "file://"+bridge)
+		if err := os.WriteFile(wrapper, []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+		bridge = wrapper
+		defer func() {
+			raw, err := os.ReadFile(trace)
+			t.Logf("HTTP400 original bridge frames (read=%v):\n%s", err, raw)
+		}()
+	}
+	t.Setenv("SDK_ENGINE_FIXTURE_KEY", "fake-only")
+	pool := &workflows.Capacity{Slots: make(chan struct{}, 1), MaxSuspended: 8}
+	selector := "claude-sonnet-4-6"
+	if strings.HasPrefix(mode, "model:") {
+		selector = strings.TrimPrefix(mode, "model:")
+	}
+	fixture := &sdkManagedEngineFixture{pool: pool, runner: &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"parent": {Provider: "claude-sdk", Bridge: bridge, Model: selector, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "SDK_ENGINE_FIXTURE_KEY"}}}}}}
+	manager := &workflows.WorkerManager{Store: store, Capacity: pool, Factory: func(ctx context.Context, _, role string, _ []string) (workflows.SessionRunner, []string, map[string]string, error) {
+		if role == "child" {
+			report, e := store.Usage(ctx, run.ID)
+			if e != nil || report.Summary.InputTokens == nil || *report.Summary.InputTokens < 16 {
+				return nil, nil, nil, fmt.Errorf("SDK effect preceded durable usage: %+v %v", report, e)
+			}
+		}
+		return fixture, []string{}, nil, nil
+	}}
+	broker := &workflows.Broker{Store: store, Workers: manager}
+	manager.BindTools = func(ctx context.Context, in workflows.ToolInvocation) (workflows.ToolBinding, error) {
+		in.Catalog = workflows.EngineTools()
+		return broker.Bind(ctx, in)
+	}
+	if err = manager.Init(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	turns := 3
+	if strings.HasPrefix(mode, "known-denial") {
+		turns = 2
+	}
+	parent, err := manager.Spawn(t.Context(), workflows.WorkerSpec{RunID: run.ID, Role: "parent", Turns: turns})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := manager.Send(t.Context(), run.ID, parent.ID, "original", "Run two admitted child tasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { manager.Serve(ctx); close(done) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Error("owned SDK engine did not join")
+		}
+	}()
+	var completed workflows.WorkerMessage
+	for ctx.Err() == nil {
+		messages, e := manager.Messages(ctx, run.ID, parent.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(messages) == 1 && messages[0].Status != workflows.RunStatusQueued && messages[0].Status != workflows.RunStatusRunning {
+			completed = messages[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.HasPrefix(mode, "known-denial") {
+		if completed.Status != workflows.RunStatusSucceeded || requests.Load() != 2 || fixture.children.Load() != 0 {
+			t.Fatalf("known schema denial failed to settle: %+v API%d", completed, requests.Load())
+		}
+		firstSession := completed.Result.SessionID
+		next, err := manager.Send(ctx, run.ID, parent.ID, "continued-original", "Continue the same retained session")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var continued workflows.WorkerMessage
+		for ctx.Err() == nil {
+			messages, e := manager.Messages(ctx, run.ID, parent.ID)
+			if e != nil {
+				t.Fatal(e)
+			}
+			for _, msg := range messages {
+				if msg.ID == next.ID && msg.Status != workflows.RunStatusQueued && msg.Status != workflows.RunStatusRunning {
+					continued = msg
+				}
+			}
+			if continued.ID != "" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		receipts, err := store.ToolCalls(ctx, run.ID, false)
+		if err != nil || len(receipts) != 1 || receipts[0].Status != "denied" {
+			t.Fatal("known denial receipt lost", receipts, err)
+		}
+		worker, err := manager.Get(ctx, run.ID, parent.ID)
+		if err != nil || continued.Status != workflows.RunStatusSucceeded || continued.Result.SessionID != firstSession || worker.Remaining != 0 || requests.Load() != 3 {
+			t.Fatalf("normal retained continuation failed: %+v %+v %v API%d", continued, worker, err, requests.Load())
+		}
+		report, err := store.Usage(ctx, run.ID)
+		if err != nil || !report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens != 48 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 15 {
+			t.Fatal("known-denial continuation accounting", report, err)
+		}
+		t.Logf("known committed denied receipt + normal same-session continuation;0child/API3/Remaining0/48-15")
+		return
+	}
+	if mode == "unknown-after-batch" || mode == "known-response-then-rejected-request" {
+		if completed.Status == workflows.RunStatusSucceeded || requests.Load() != 2 || completed.UnsafeFailureClass != "integrity" {
+			t.Fatalf("unknown original response escaped hold: %+v API%d", completed, requests.Load())
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Fatal("old SDK engine did not join")
+		}
+		receipts, err := store.ToolCalls(t.Context(), run.ID, false)
+		if err != nil || len(receipts) != 2 {
+			t.Fatal(receipts, err)
+		}
+		for _, r := range receipts {
+			if r.Status != "completed" || r.InvocationID != original.ID {
+				t.Fatal(r)
+			}
+		}
+		oldOwner, oldGen := run.Owner, run.Generation
+		if err = store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err = workflows.OpenSQLite(filepath.Join(root, "state"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if err = store.Recover(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		resumed, e := store.QueueResume(t.Context(), run.ID, "same-original-sdk-unknown", true, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		resumed.Status = workflows.RunStatusRunning
+		if err = store.Claim(t.Context(), resumed, workflows.RunStatusQueued); err != nil {
+			t.Fatal(err)
+		}
+		if resumed.Owner == oldOwner || resumed.Generation != oldGen+1 {
+			t.Fatal("SDK owner fence did not advance", resumed)
+		}
+		recovered := &workflows.WorkerManager{Store: store, Capacity: &workflows.Capacity{Slots: make(chan struct{}, 1)}, Factory: manager.Factory}
+		if err = recovered.Init(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err = recovered.Resume(t.Context(), run.ID, parent.ID); err == nil {
+			t.Fatal("new owner public Resume discarded unknown original SDK attempt")
+		}
+		if _, err = recovered.Send(t.Context(), run.ID, parent.ID, "new-after-loss", "must not run"); err == nil {
+			t.Fatal("new owner granted replacement SDK work")
+		}
+		messages, err := recovered.Messages(t.Context(), run.ID, parent.ID)
+		if err != nil || len(messages) != 1 || messages[0].ID != original.ID || !messages[0].StartedAt.Equal(completed.StartedAt) {
+			t.Fatal(messages, err)
+		}
+		current, err := recovered.Get(t.Context(), run.ID, parent.ID)
+		if err != nil || current.Remaining != 0 {
+			t.Fatal(current, err)
+		}
+		report, err := store.Usage(t.Context(), run.ID)
+		if err != nil || report.Summary.Complete || report.Summary.InputTokens == nil || *report.Summary.InputTokens < 16 {
+			t.Fatal("known original charge lost on unknown response restart", report, err)
+		}
+		t.Logf("native unknown response after2 completed original effects;API2/no newAPI;SQLite reopen/newobjects/owner gen%d->%d/sameStartedAt/Remaining0", oldGen, resumed.Generation)
+		return
+	}
+	if completed.Status != workflows.RunStatusSucceeded || completed.Result.Outputs["text"] != "SDK_PARENT_AND_CHILDREN_JOINED" || requests.Load() != 3 || fixture.children.Load() != 2 {
+		t.Fatalf("SDK capacity1 original=%+v APIs=%d children=%d", completed, requests.Load(), fixture.children.Load())
+	}
+	current, err := manager.Get(ctx, run.ID, parent.ID)
+	if err != nil || current.Remaining != 0 {
+		t.Fatal("SDK allowance changed", current, err)
+	}
+	receipts, err := store.ToolCalls(ctx, run.ID, false)
+	if err != nil || len(receipts) != 4 {
+		t.Fatal(receipts, err)
+	}
+	for _, receipt := range receipts {
+		if receipt.Status != "completed" || receipt.InvocationID != original.ID {
+			t.Fatal("SDK original receipt changed", receipt)
+		}
+	}
+	report, err := store.Usage(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.InputTokens == nil || *report.Summary.InputTokens != 50 || report.Summary.OutputTokens == nil || *report.Summary.OutputTokens != 17 || !report.Summary.Complete {
+		t.Fatalf("SDK aggregate repeated/omitted original responses: %+v", report)
+	}
+	t.Logf("locked SDK .322 native2.1.322 capacity1 APIs3 child2 receipts4 original=%s Remaining0 usage50/17", original.ID)
+}
