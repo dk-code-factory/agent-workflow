@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,9 +29,25 @@ func (r *Runner) codexManagedTurn(ctx context.Context, agent Agent, req workflow
 	return r.codexManagedTransport(ctx, agent, req, emit, agent.ManagedBuild.Identity)
 }
 
+// startVerifiedManagedRPC does not start the protocol reader or its callback
+// responses until the owned native image has passed verification.
+func startVerifiedManagedRPC(ctx context.Context, reader io.Reader, writer io.Writer, verify func(context.Context) (int, error), handler func(context.Context, rpcFrame) (any, error), notify func(rpcFrame)) (*appRPC, int, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, 0, err
+	}
+	pid, err := verify(ctx)
+	if err != nil {
+		return nil, pid, err
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, pid, err
+	}
+	return newAppRPC(context.WithoutCancel(ctx), reader, writer, handler, notify), pid, nil
+}
+
 // The public entry validates the retained canonical profile before reaching
-// this transport. Local package tests supply a prepared immutable build through
-// the same verified public entry.
+// this transport. Local tests cover identity, admission and RPC startup helpers;
+// public managed-session conformance remains separate from those helper tests.
 // There is no public option, environment bypass or alternative agent loop.
 func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req workflows.SessionRequest, emit func(workflows.ProviderEvent), identity *ManagedCodexBuildIdentity) (result workflows.SessionResult, returnErr error) {
 	result = workflows.SessionResult{SessionID: req.SessionID, Outputs: map[string]any{"provider": "codex-app-server", "usage_incomplete": true}}
@@ -107,10 +124,47 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 		return result, err
 	}
 	var nativePID int
+	var rpc *appRPC
 	var controller atomic.Pointer[codexManagedBatchController]
 	var accounting atomic.Pointer[codexManagedAccounting]
+	defer func() {
+		// Establish loss before cleanup can terminate a healthy process. The
+		// native executable is the verified owned child, never a persisted PID.
+		cause := context.Cause(ctx)
+		if rpc != nil && result.ProviderStatus == "" && parent.Err() == nil && (cause == nil || errors.Is(cause, context.Canceled)) && nativePID > 0 {
+			if _, statErr := os.Stat(fmt.Sprintf("/proc/%d/exe", nativePID)); os.IsNotExist(statErr) {
+				select {
+				case <-rpc.done:
+					returnErr = errors.Join(returnErr, workflows.ErrManagedCodexProcessLost)
+				default:
+				}
+			}
+		}
+		if active := controller.Load(); active != nil {
+			active.close()
+		}
+		control.finish(ctx)
+		stop()
+		if rpc != nil {
+			rpc.Close()
+		} else {
+			_ = stdin.Close()
+			_ = stdout.Close()
+		}
+		waitErr := cmd.Wait()
+		if cause := context.Cause(ctx); cause != nil {
+			returnErr = errors.Join(returnErr, cause)
+		}
+		if cmd.ProcessState != nil && (cmd.ProcessState.ExitCode() == 125 || cmd.ProcessState.ExitCode() < 0) {
+			returnErr = errors.Join(returnErr, fmt.Errorf("%w: %v", process.ErrCleanup, waitErr))
+		}
+	}()
+	// The guardian is only a launcher. Verify its actual owned child before
+	// starting any RPC reader that could write protocol callback responses.
 	interrupt := func(failure error) { cancel(failure); _ = control.interrupt() }
-	rpc := newAppRPC(context.WithoutCancel(ctx), stdout, stdin, func(callbackCtx context.Context, frame rpcFrame) (any, error) {
+	rpc, nativePID, err = startVerifiedManagedRPC(ctx, stdout, stdin, func(checkCtx context.Context) (int, error) {
+		return image.verifyGuardianChild(checkCtx, cmd.Process)
+	}, func(callbackCtx context.Context, frame rpcFrame) (any, error) {
 		if active := controller.Load(); active != nil {
 			return active.handle(callbackCtx, frame)
 		}
@@ -135,41 +189,12 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 			interrupt(fmt.Errorf("empty managed catalog produced a broker batch"))
 		}
 	})
+	if err != nil {
+		return result, err
+	}
 	control.mu.Lock()
 	control.rpc = rpc
 	control.mu.Unlock()
-	defer func() {
-		// Establish loss before cleanup can terminate a healthy process. The
-		// native executable is the verified owned child, never a persisted PID.
-		cause := context.Cause(ctx)
-		if result.ProviderStatus == "" && parent.Err() == nil && (cause == nil || errors.Is(cause, context.Canceled)) && nativePID > 0 {
-			if _, statErr := os.Stat(fmt.Sprintf("/proc/%d/exe", nativePID)); os.IsNotExist(statErr) {
-				select {
-				case <-rpc.done:
-					returnErr = errors.Join(returnErr, workflows.ErrManagedCodexProcessLost)
-				default:
-				}
-			}
-		}
-		if active := controller.Load(); active != nil {
-			active.close()
-		}
-		control.finish(ctx)
-		stop()
-		rpc.Close()
-		waitErr := cmd.Wait()
-		if cause := context.Cause(ctx); cause != nil {
-			returnErr = errors.Join(returnErr, cause)
-		}
-		if cmd.ProcessState != nil && (cmd.ProcessState.ExitCode() == 125 || cmd.ProcessState.ExitCode() < 0) {
-			returnErr = errors.Join(returnErr, fmt.Errorf("%w: %v", process.ErrCleanup, waitErr))
-		}
-	}()
-	// The guardian is only a launcher. Hash and match the actual owned child
-	// image, through its executable fd, before even sending initialize data.
-	if nativePID, err = image.verifyGuardianChild(ctx, cmd.Process); err != nil {
-		return result, err
-	}
 	call := func(method string, params any) (json.RawMessage, error) {
 		raw, err := rpc.callContext(ctx, method, params)
 		var rejection *appRPCResponseError
