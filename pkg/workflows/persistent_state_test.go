@@ -61,6 +61,49 @@ func TestPersistentStateBinaryTargetsRetainRepresentation(t *testing.T) {
 	}
 }
 
+func TestPersistentStateBinaryResourceKeys(t *testing.T) {
+	root := filepath.Join("..", "..", "testdata", "ui-compat")
+	data, err := os.ReadFile(filepath.Join(root, "persistent-state-binary-key.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(workflow); err != nil {
+		t.Fatal(err)
+	}
+	if len(workflow.PersistentState) != 1 || workflow.PersistentState["ledger"].MountTarget != "/cf-state" {
+		t.Fatalf("resource key was not decoded: %+v", workflow.PersistentState)
+	}
+	encoded, err := json.Marshal(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained Workflow
+	if err := json.Unmarshal(encoded, &retained); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if len(retained.PersistentState) != 1 || retained.PersistentState["ledger"].MountTarget != "/cf-state" {
+		t.Fatalf("retained resource key changed: %+v", retained.PersistentState)
+	}
+	data, err = os.ReadFile(filepath.Join(root, "persistent-state-binary-key-invalid-utf8.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err = Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(workflow); err == nil || !strings.Contains(err.Error(), "invalid persistent-state name") {
+		t.Fatalf("invalid decoded resource key accepted: %v", err)
+	}
+}
+
 const persistentWorkflow = `persistent-state:
   ledger: {mount-target: /cf-workflows-state}
 jobs:

@@ -155,3 +155,25 @@ jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-state/ledger]}]
   expect((await snapshot(page)).workflow['persistent-state']).toEqual(exported['persistent-state']);
   expect((await snapshot(page)).workflow.jobs.build.name).toBe('Binary target retained');
 });
+
+test('normalize an imported binary persistent-state resource key through visual editing and history', async ({ page }) => {
+  const source = `persistent-state: {!!binary bGVkZ2Vy: {mount-target: /cf-state}}
+jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-state/ledger]}]}}
+`;
+  const ui = await open(page, source);
+  const expected = { ledger: { 'mount-target': '/cf-state' } };
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(expected);
+  await job(page);
+  await field(page, 'Name', 'Binary resource retained');
+  expect(parse(await downloadText(page))['persistent-state']).toEqual(expected);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(expected);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(expected);
+  expect((await snapshot(page)).workflow.jobs.build.name).toBe('Binary resource retained');
+  await ui.getByRole('button', { name: 'Split', exact: true }).click();
+  await ui.getByRole('textbox', { name: 'Workflow YAML' }).fill(source.replace('!!binary bGVkZ2Vy:', 'ledger: {mount-target: /cf-first}, !!binary bGVkZ2Vy:'));
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'duplicate-key' && d.severity === 'error')).toBe(true);
+});

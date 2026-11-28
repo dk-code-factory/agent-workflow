@@ -79,6 +79,34 @@ describe('advisory reference dependencies', () => {
 });
 
 describe('runner compatibility', () => {
+  it('normalizes a binary persistent-state resource key through edits and history', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-key.yml'), 'utf8');
+    const document = new WorkflowDocument({ source });
+    const expected = { ledger: { 'mount-target': '/cf-state' } };
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(parseDocument(document.getSnapshot().source).toJS()['persistent-state']).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.redo();
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Changed');
+  });
+  it('keeps colliding decoded persistent-state keys unavailable for visual edits', () => {
+    const source = 'persistent-state: {ledger: {mount-target: /cf-first}, !!binary bGVkZ2Vy: {mount-target: /cf-second}}\njobs: {build: {steps: [{argv: [true]}]}}';
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.code === 'duplicate-key' && d.path.join('.') === 'persistent-state.ledger')).toBe(true);
+  });
+  it('rejects a binary persistent-state resource key with invalid UTF-8', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-key-invalid-utf8.yml'), 'utf8');
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(true);
+  });
   it('rejects binary persistent-state targets that cannot round-trip through JSON', () => {
     const source = readFileSync(resolve(root, 'persistent-state-binary-invalid-utf8.yml'), 'utf8');
     const result = parseWorkflow(source);

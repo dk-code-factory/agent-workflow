@@ -206,8 +206,11 @@ export function parseWorkflow(source: string): Parsed {
         for (const pair of node.items) {
           if (!isScalar(pair.key) || pair.key.value === '<<') { add('key', 'Invalid mapping key or merge key', path, node, 'parser'); safe = false; }
           if (isScalar(pair.key)) {
-            // yaml.v3 decodes map[string] keys from their scalar spelling.
-            const key = typeof pair.key.value === 'string' ? pair.key.value : pair.key.source ?? String(pair.key.value);
+            // Resource names are decoded map[string] keys. Struct field names
+            // elsewhere retain their scalar spelling for strict schema checks.
+            const resourceKey = path.length === 1 && path[0] === 'persistent-state';
+            const key = resourceKey ? normalizeStringScalar(pair.key)
+              : typeof pair.key.value === 'string' ? pair.key.value : pair.key.source ?? String(pair.key.value);
             if (keys.has(key)) { add('duplicate-key', `Duplicate key "${key}"`, [...path, key], pair.key, 'parser'); safe = false; }
             keys.add(key);
             if (typeof pair.key.value !== 'string' && pair.key.tag) pair.key.tag = 'tag:yaml.org,2002:str';

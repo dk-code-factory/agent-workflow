@@ -580,5 +580,23 @@
     "file": "persistent-state-binary-unicode-target.yml",
     "parse": true,
     "valid": true
+  },
+  {
+    "name": "persistent-state-binary-key",
+    "file": "persistent-state-binary-key.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "persistent-state-binary-field-key",
+    "file": "persistent-state-binary-field-key.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-binary-duplicate-key",
+    "file": "persistent-state-binary-duplicate-key.yml",
+    "parse": false,
+    "valid": false
   }
 ]

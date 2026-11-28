@@ -330,8 +330,8 @@ in the reusable workflow closure may occur before rejection.
 
 The engine selects
 `${XDG_STATE_HOME:-$HOME/.local/state}/agent-workflow/plugin-state/repositories/<workspace-hash>/<package-name>/<resource-name>`.
-`workspace-hash` is the lowercase SHA256 of the canonical absolute target workspace
-path, encoded as UTF-8. Neither the package version, skill, run ID nor container
+`workspace-hash` is the lowercase SHA256 of the raw bytes of the canonical absolute
+target workspace path. Neither the package version, skill, run ID nor container
 ID changes the namespace. Separate helper steps, fresh or replacement runs and
 resume use the same directory. Different package names and target workspace paths
 use separate directories. Changing a package name or moving the target checkout

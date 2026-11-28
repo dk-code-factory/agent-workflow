@@ -1,0 +1,6 @@
+persistent-state:
+  !!binary /w==: {mount-target: /cf-state}
+jobs:
+  build:
+    steps:
+      - argv: [true]

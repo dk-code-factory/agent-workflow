@@ -1,0 +1,6 @@
+persistent-state:
+  ledger: {!!binary bW91bnQtdGFyZ2V0: /cf-state}
+jobs:
+  build:
+    steps:
+      - argv: [true]
