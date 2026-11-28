@@ -60,6 +60,24 @@ export function normalizeStringScalar(node: Scalar): string {
   return text;
 }
 
+function invalidPersistentTargetUnicode(node: Scalar, source: string): boolean {
+  if (typeof node.value === 'string' && /[\uD800-\uDFFF]/u.test(node.value)) return true;
+  if (node.type !== 'QUOTE_DOUBLE' || !node.range) return false;
+  const spelling = source.slice(node.range[0], node.range[1]);
+  // yaml.v3 rejects surrogate escape values even when two escapes would form
+  // a valid JavaScript pair. Literal astral characters and \U escapes remain valid.
+  for (let i = 1; i < spelling.length - 1; i++) {
+    if (spelling[i] !== '\\') continue;
+    const escape = spelling[++i];
+    if (escape !== 'u' && escape !== 'U') continue;
+    const width = escape === 'u' ? 4 : 8;
+    const point = Number.parseInt(spelling.slice(i + 1, i + 1 + width), 16);
+    if (point >= 0xD800 && point <= 0xDFFF) return true;
+    i += width;
+  }
+  return false;
+}
+
 function validContainerArgs(text: string): boolean {
   let quote = '', escaped = false;
   for (const char of text) {
@@ -152,6 +170,7 @@ export const handlerKinds = ['onResult', 'onComplete', 'onIncomplete', 'onError'
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
+  'persistent-state': { '*': { 'mount-target': 'string' } },
   'step-definitions': { '*': { parameters: { '*': input }, step: 'any' } },
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
@@ -200,13 +219,20 @@ export function parseWorkflow(source: string): Parsed {
     const walk = (node: Node | null, path: Path, depth: number) => {
       if (depth > 64) { add('depth', 'YAML nesting exceeds 64', path, node, 'parser'); safe = false; return; }
       if (isAlias(node)) { add('alias', 'YAML aliases are unsupported', path, node, 'parser'); safe = false; return; }
+      if (isScalar(node) && path.length === 3 && path[0] === 'persistent-state' && path[2] === 'mount-target' && invalidPersistentTargetUnicode(node, source)) {
+        add('persistent-state-unicode', 'Mount target contains an invalid Unicode surrogate or YAML escape', path, node, 'parser');
+        safe = false;
+      }
       if (isMap(node)) {
         const keys = new Set<string>();
         for (const pair of node.items) {
           if (!isScalar(pair.key) || pair.key.value === '<<') { add('key', 'Invalid mapping key or merge key', path, node, 'parser'); safe = false; }
           if (isScalar(pair.key)) {
-            // yaml.v3 decodes map[string] keys from their scalar spelling.
-            const key = typeof pair.key.value === 'string' ? pair.key.value : pair.key.source ?? String(pair.key.value);
+            // Resource names are decoded map[string] keys. Struct field names
+            // elsewhere retain their scalar spelling for strict schema checks.
+            const resourceKey = path.length === 1 && path[0] === 'persistent-state';
+            const key = resourceKey ? normalizeStringScalar(pair.key)
+              : typeof pair.key.value === 'string' ? pair.key.value : pair.key.source ?? String(pair.key.value);
             if (keys.has(key)) { add('duplicate-key', `Duplicate key "${key}"`, [...path, key], pair.key, 'parser'); safe = false; }
             keys.add(key);
             if (typeof pair.key.value !== 'string' && pair.key.tag) pair.key.tag = 'tag:yaml.org,2002:str';
@@ -367,6 +393,22 @@ export function parseWorkflow(source: string): Parsed {
 type Add = (code: string, message: string, path?: Path, node?: Node | null, source?: Diagnostic['source'], severity?: Diagnostic['severity']) => void;
 function validateWorkflow(w: Workflow, add: Add, doc: Document) {
   const jobs = w.jobs;
+  const persistentTargets: string[] = [];
+  const overlaps = (a: string, b: string) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  for (const [name, declaration] of Object.entries(w['persistent-state'] ?? {})) {
+    const location: Path = ['persistent-state', name];
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) add('persistent-state', 'Invalid persistent-state name', location);
+    const target = declaration['mount-target'];
+    if (typeof target !== 'string' || !target.startsWith('/') || target === '/' || /[\\\x00\r\n]/.test(target) || target.includes('${{') || target.slice(1).split('/').some(part => part === '' || part === '.' || part === '..')) {
+      add('persistent-state', 'Mount target requires a clean absolute container path', [...location, 'mount-target']);
+      continue;
+    }
+    const reserved = ['/workspace', '/state', '/actions', '/engine-lifetime', '/engine-task-state', '/engine-guardian', '/tmp', '/proc', '/sys', '/dev', '/home', '/root'];
+    if (reserved.some(path => overlaps(path, target))) add('persistent-state', 'Mount target overlaps a reserved container path', [...location, 'mount-target']);
+    if (persistentTargets.some(path => overlaps(path, target))) add('persistent-state', 'Persistent-state mount targets must be disjoint', [...location, 'mount-target']);
+    persistentTargets.push(target);
+    add('host-persistent-state', 'Runner requires an admitted package and selects its private host directory', location, undefined, 'host', 'info');
+  }
   const namedKeywords = new Set(['type', 'title', 'description', '$comment', 'pattern', 'properties', 'items', 'additionalProperties', 'required', 'enum', 'minLength', 'maxLength', 'maxItems', 'minimum']);
   const inspectSchema = (value: unknown, path: Path) => {
     if (!mapping(value)) { add('schema', 'Expected a schema mapping', path); return; }

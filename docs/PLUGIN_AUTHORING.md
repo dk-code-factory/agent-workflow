@@ -182,6 +182,13 @@ contains snapshots and asset references, not external asset bytes; recovery
 requires those bytes or the recovery bundle. Missing or corrupt retained assets
 fail before execution. Existing uncertain-effect acknowledgements still apply.
 
+For mutable helper ledgers, leases and artifacts outside the checkout, declare
+workflow-level [`persistent-state`](CONTAINER_WORKFLOWS.md#persistent-package-state)
+resources. Each symbolic resource is private to the package and target workspace;
+the engine selects the host directory and binds the declared container target
+read-write. Include these external application records in the operator backup
+alongside the engine recovery bundle. Package assets remain immutable.
+
 Runtime configuration, credentials and authority belong to the target workspace's
 `agents.yml`. The examples are templates only: no target configuration is created
 or changed. A host target does not select an execution provider. Claude SDK

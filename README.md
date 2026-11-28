@@ -394,6 +394,11 @@ those engine-owned paths and exclude native credential files and references.
 They are private sensitive archives, not publication artifacts. Restore files at
 matching managed paths and restore their database through the command; caller
 Git administration and native provider credential stores remain separate.
+Plugin helper [persistent state](docs/CONTAINER_WORKFLOWS.md#persistent-package-state)
+lives outside engine storage and survives run cleanup. Stop all application
+writers and back up its repository namespace alongside the recovery bundle;
+`bundle` does not include these mutable application directories. Restore them
+with compatible ownership before resuming a run.
 MCP exposes `controller_stop`, `database_backup`, `database_bundle` and
 `database_restore`; maintenance still requires the controller to have stopped.
 

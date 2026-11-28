@@ -302,3 +302,70 @@ a compatible local Docker daemon or selected Podman store. Other image platforms
 and unsupported runtime/transport choices fail admission. Actual container and
 provider conformance remains an explicitly selected check; the normal test suite
 uses fake APIs, local Python helpers and disposable SQLite storage.
+
+## Persistent package state
+
+An admitted plugin workflow can declare named, writable directories for its
+shared job containers and standalone Docker helper steps:
+
+```yaml
+persistent-state:
+  ledger:
+    mount-target: /cf-workflows-state
+jobs:
+  helper:
+    container: {image: ubuntu:24.04, files: [helper]}
+    steps:
+      - argv: [/actions/helper]
+        env:
+          CF_WORKFLOWS_STATE: /cf-workflows-state
+```
+
+Declare the resource in every reusable workflow that needs it. The name selects
+one directory within the admitted package and target workspace; the mount target
+selects its container path. Helpers set their application environment explicitly.
+The workflow cannot supply a host source path. Unpackaged workflow execution
+rejects these declarations before container launch. Discovery for other workflows
+in the reusable workflow closure may occur before rejection.
+
+The engine selects
+`${XDG_STATE_HOME:-$HOME/.local/state}/agent-workflow/plugin-state/repositories/<workspace-hash>/<package-name>/<resource-name>`.
+`workspace-hash` is the lowercase SHA256 of the raw bytes of the canonical absolute
+target workspace path. Neither the package version, skill, run ID nor container
+ID changes the namespace. Separate helper steps, fresh or replacement runs and
+resume use the same directory. Different package names and target workspace paths
+use separate directories. Changing a package name or moving the target checkout
+selects a different namespace; migrate the corresponding state while all writers
+are stopped. Installing a new package version under the same name reuses state,
+so the application owns any data migrations and concurrency control.
+
+The host directory and every existing ancestor must be real directories without
+symlinks. The source must be valid UTF-8 so runtime transport preserves its exact
+bytes. It must be disjoint from the workspace, engine state and other
+engine mounts, and cannot be the host home directory or an ancestor. Mount targets
+must be valid UTF-8, static, clean absolute container paths, disjoint from one
+another and reserved mounts such as `/workspace`, `/state`, `/actions`, `/engine-task-state`
+and `/engine-guardian`; home, temporary and kernel paths are also reserved. The
+checks run again before container creation. Missing directories are created with
+0700 permissions. When the engine runs as root, the launcher sets the leaf's owner
+to the admitted non-root container UID/GID, as it does for private container state.
+Changing runtime identities can require an operator to migrate application file
+ownership. Symbolic package/resource/target declarations participate in retained
+definitions and action identities; resolved persistent host paths do not.
+
+These directories hold application ledgers, repository leases and artifacts
+outside the checkout. They differ from fresh `/state`, immutable `/actions` and
+the scoped task-state RPC socket. Run retention leaves them intact because other
+runs may still use them. The engine does not garbage-collect or lock application
+records inside them.
+
+For backup, stop all controllers and other application writers using the target,
+then create the engine recovery bundle and separately archive the corresponding
+`plugin-state/repositories/<workspace-hash>/` tree. Preserve directory/file modes,
+UID/GID ownership and all application database sidecars; the application may offer
+a database-specific consistent backup procedure. Neither database-only backup nor
+`agent-workflow bundle` includes these external mutable directories. Keep both
+archives together privately. Before resume, restore application state into the
+same engine-selected namespace with compatible ownership, then restore the engine
+bundle/database using the stopped-owner recovery procedure. If the checkout or
+state-home path changes, migrate the application tree to the new namespace first.

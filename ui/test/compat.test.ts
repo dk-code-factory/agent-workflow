@@ -79,6 +79,94 @@ describe('advisory reference dependencies', () => {
 });
 
 describe('runner compatibility', () => {
+  it.each(['high', 'low', 'pair'])('keeps a persistent-state surrogate %s escape unavailable until repaired', kind => {
+    const source = readFileSync(resolve(root, `persistent-state-surrogate-${kind}.yml`), 'utf8');
+    const repaired = readFileSync(resolve(root, 'persistent-state-unicode-targets.yml'), 'utf8');
+    const expected = {
+      ascii: { 'mount-target': '/cf-state' }, unicode: { 'mount-target': '/cf-état' },
+      literal: { 'mount-target': '/cf-literal-🚀' }, escaped: { 'mount-target': '/cf-escape-🚀' },
+    };
+    const document = new WorkflowDocument({ source });
+    expect(document.getSnapshot()).toMatchObject({ source, stale: true, workflow: undefined });
+    expect(document.getSnapshot().diagnostics).toContainEqual(expect.objectContaining({
+      code: 'persistent-state-unicode', severity: 'error', source: 'parser',
+      path: ['persistent-state', 'ledger', 'mount-target'], location: expect.objectContaining({ line: 2 }),
+    }));
+    expect(() => document.setField(['jobs', 'build', 'name'], 'Unapplied')).toThrow('suspended');
+    expect(document.getSnapshot().source).toBe(source);
+    // Go rejects these escapes in Parse, before runtime target validation.
+    // A literal astral character or scalar-value \U escape is valid in both parsers.
+    document.setSource(repaired);
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Unicode retained');
+    const edited = document.getSnapshot().source;
+    expect(parseDocument(edited).toJS()['persistent-state']).toEqual(expected);
+    expect(parseWorkflow(edited).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(repaired);
+    document.undo();
+    expect(document.getSnapshot()).toMatchObject({ source, stale: true, workflow: undefined });
+    document.redo();
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.redo();
+    expect(document.getSnapshot().source).toBe(edited);
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Unicode retained');
+  });
+  it('normalizes a binary persistent-state resource key through edits and history', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-key.yml'), 'utf8');
+    const document = new WorkflowDocument({ source });
+    const expected = { ledger: { 'mount-target': '/cf-state' } };
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(parseDocument(document.getSnapshot().source).toJS()['persistent-state']).toEqual(expected);
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    document.redo();
+    expect(document.getSnapshot().workflow!['persistent-state']).toEqual(expected);
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Changed');
+  });
+  it('keeps colliding decoded persistent-state keys unavailable for visual edits', () => {
+    const source = 'persistent-state: {ledger: {mount-target: /cf-first}, !!binary bGVkZ2Vy: {mount-target: /cf-second}}\njobs: {build: {steps: [{argv: [true]}]}}';
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.code === 'duplicate-key' && d.path.join('.') === 'persistent-state.ledger')).toBe(true);
+  });
+  it('rejects a binary persistent-state resource key with invalid UTF-8', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-key-invalid-utf8.yml'), 'utf8');
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(true);
+  });
+  it('rejects binary persistent-state targets that cannot round-trip through JSON', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-invalid-utf8.yml'), 'utf8');
+    const result = parseWorkflow(source);
+    expect(result.usable).toBe(false);
+    expect(result.diagnostics.some(d => d.severity === 'error')).toBe(true);
+    expect(result.workflow).toBeUndefined();
+  });
+  it('normalizes a binary persistent-state target through visual edits and history', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-target.yml'), 'utf8');
+    const document = new WorkflowDocument({ source });
+    const target = () => document.getSnapshot().workflow!['persistent-state']!.ledger['mount-target'];
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(target()).toBe('/cf-state');
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(target()).toBe('/cf-state');
+    expect(parseDocument(document.getSnapshot().source).toJS()['persistent-state'].ledger['mount-target']).toBe('/cf-state');
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+    expect(target()).toBe('/cf-state');
+    document.redo();
+    expect(target()).toBe('/cf-state');
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Changed');
+  });
   for (const fixture of fixtures) it(fixture.name, () => {
     const result = parseWorkflow(readFileSync(resolve(root, fixture.file), 'utf8'));
     expect(!result.diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(fixture.parse);

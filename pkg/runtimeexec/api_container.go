@@ -39,6 +39,7 @@ type LaunchOptions struct {
 	Actions                string
 	EngineState            string
 	TaskStateDir           string
+	PersistentState        []PersistentStateMount
 }
 
 func containerIdentity(p Policy) (int, int) {
@@ -144,6 +145,9 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 		}
 	}
 	sort.Strings(q.PrivatePaths)
+	if err := ValidatePersistentStateMounts(o.PersistentState, workspace, o.EngineState, o.State, lifetime, o.Actions, o.TaskStateDir, filepath.Dir(o.Guardian.Path)); err != nil {
+		return q, err
+	}
 	if info, err := os.Lstat(filepath.Join(workspace, ".git")); err == nil && !info.IsDir() {
 		return q, fmt.Errorf("containers require independent Git administration, not a host worktree")
 	} else if err != nil && !os.IsNotExist(err) {
@@ -182,6 +186,11 @@ func BuildRequest(o LaunchOptions, owner containerapi.Owner, lifetime string) (c
 	}
 	if o.Actions != "" {
 		if err = bind(o.Actions, "/actions", true); err != nil {
+			return q, err
+		}
+	}
+	for _, m := range o.PersistentState {
+		if err = bind(m.Source, m.Target, false); err != nil {
 			return q, err
 		}
 	}
@@ -258,7 +267,11 @@ func LaunchContainer(ctx context.Context, o LaunchOptions) (session *ContainerSe
 		return nil, err
 	}
 	if os.Getuid() == 0 {
-		for _, path := range []string{o.State, filepath.Join(o.State, "home")} {
+		owned := []string{o.State, filepath.Join(o.State, "home")}
+		for _, mount := range o.PersistentState {
+			owned = append(owned, mount.Source)
+		}
+		for _, path := range owned {
 			if err = os.Chown(path, uid, gid); err != nil {
 				r.Close()
 				return nil, err

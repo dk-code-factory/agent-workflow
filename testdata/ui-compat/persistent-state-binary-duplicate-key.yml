@@ -1,0 +1,7 @@
+persistent-state:
+  !!binary bGVkZ2Vy: {mount-target: /cf-first}
+  !!binary bGVkZ2Vy: {mount-target: /cf-second}
+jobs:
+  build:
+    steps:
+      - argv: [true]

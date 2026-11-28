@@ -1,0 +1,6 @@
+persistent-state:
+  ledger: {mount-target: "/cf-\uDFFF"}
+jobs:
+  build:
+    container: ubuntu:24.04
+    steps: [{argv: [true]}]

@@ -309,3 +309,33 @@ func TestCaptureRejectsNonUTF8Paths(t *testing.T) {
 		t.Fatalf("exported a non-UTF-8 manifest path: %+v, %v", p, err)
 	}
 }
+
+func TestCapturePersistentStateDeclarationsStaySymbolic(t *testing.T) {
+	root, _, files := capturedFixture(t)
+	declaration := "persistent-state: {ledger: {mount-target: /cf-workflows-state}}\n"
+	put(t, root, "workflows/main.yml", declaration+files["workflows/main.yml"])
+	captured, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := captured.Admission("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range source.Entries {
+		if entry.Path == "workflows/main.yml" {
+			found = true
+			if !bytes.Contains(entry.Data, []byte(declaration)) {
+				t.Fatal("persistent resource declaration missing from captured workflow")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("captured workflow missing")
+	}
+	put(t, root, "workflows/main.yml", "persistent-state: {ledger: {mount-target: /cf-workflows-state, source: /host/private}}\n"+files["workflows/main.yml"])
+	if _, err := Capture(root); err == nil {
+		t.Fatal("workflow-controlled host path admitted into package")
+	}
+}

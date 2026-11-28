@@ -14,6 +14,9 @@ func Validate(w *Workflow) error {
 	if w == nil || len(w.Jobs) == 0 {
 		return fmt.Errorf("at least one job is required")
 	}
+	if _, err := persistentStateDeclarations(w.PersistentState); err != nil {
+		return err
+	}
 	if err := validateNamedSchemas(w); err != nil {
 		return err
 	}

@@ -562,5 +562,65 @@
     "file": "checklist-whitespace.yml",
     "parse": true,
     "valid": false
+  },
+  {
+    "name": "persistent-state",
+    "file": "persistent-state.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "persistent-state-binary-target",
+    "file": "persistent-state-binary-target.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "persistent-state-binary-unicode-target",
+    "file": "persistent-state-binary-unicode-target.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "persistent-state-binary-key",
+    "file": "persistent-state-binary-key.yml",
+    "parse": true,
+    "valid": true
+  },
+  {
+    "name": "persistent-state-binary-field-key",
+    "file": "persistent-state-binary-field-key.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-binary-duplicate-key",
+    "file": "persistent-state-binary-duplicate-key.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-surrogate-high",
+    "file": "persistent-state-surrogate-high.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-surrogate-low",
+    "file": "persistent-state-surrogate-low.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-surrogate-pair",
+    "file": "persistent-state-surrogate-pair.yml",
+    "parse": false,
+    "valid": false
+  },
+  {
+    "name": "persistent-state-unicode-targets",
+    "file": "persistent-state-unicode-targets.yml",
+    "parse": true,
+    "valid": true
   }
 ]

@@ -219,6 +219,9 @@ func (e *Executor) configureContainerActions(all map[string]*Workflow) error {
 						Step      Step
 					}{j.Container, step})
 				}
+				if p != nil && len(p.PersistentState) > 0 {
+					implementation = actionHash([]any{implementation, p.PersistentState})
+				}
 				a := &registeredAction{contract: buildActionContract(name, implementation, step.Effect, in, out), input: ir, output: or}
 				a.recovery = e.validateContainerRecoveryRequest
 				helper := step
