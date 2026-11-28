@@ -154,7 +154,12 @@ func managedSDKCostReceipt(id UsageIdentity, result SessionResult) string {
 }
 func managedSDKKnownCostMatches(row UsageObservation, id UsageIdentity, result SessionResult) bool {
 	total := costValue(result.Outputs["cost_usd"])
-	expected := NormalizeUsage(usageUpdate(result.Outputs, true))
+	update := usageUpdate(result.Outputs, true)
+	// Match the provider inheritance used when the original receipt was stored.
+	if update.Provider == "" {
+		update.Provider = id.Provider
+	}
+	expected := NormalizeUsage(update)
 	left, _ := json.Marshal([]any{row.InputTokens, row.CachedInputTokens, row.OutputTokens})
 	right, _ := json.Marshal([]any{expected.InputTokens, expected.CachedInputTokens, expected.OutputTokens})
 	return string(left) == string(right) && row.Final && row.Scope == "invocation" && row.CounterBasis == managedSDKCostBasis && row.ReceiptFingerprint == managedSDKCostReceipt(id, result) && total != nil && row.CostUSD != nil && *row.CostUSD == *total && row.DeltaCostUSD != nil && costValue(*row.DeltaCostUSD) != nil && *row.DeltaCostUSD <= *total && !row.CounterReset
