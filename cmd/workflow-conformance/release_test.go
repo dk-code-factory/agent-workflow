@@ -80,7 +80,7 @@ func TestManagedAndNativeWorkflowRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "action/conformance-turn") || strings.Contains(string(raw), "agent/run") {
+	if !strings.Contains(string(raw), "agent/run") || strings.Contains(string(raw), "action/conformance-turn") {
 		t.Fatal(string(raw))
 	}
 	if _, err = writeWorkflow(root, "claude", "bounded", false); err == nil {
@@ -194,14 +194,26 @@ func TestFixtureControllerNestedWorkersAtCapacityOne(t *testing.T) {
 	script := `
 import readline from 'node:readline';
 const emit=x=>process.stdout.write(JSON.stringify({version:2,...x})+'\n');
-let prompt='';
-const finish=()=>{emit({type:'result',session_id:'fixture',status:'succeeded',provider_version:'claude-agent-sdk@0.3.322',outputs:{text:'CONFORMANCE_OK',usage:{input_tokens:2,output_tokens:1}}});process.exit(0)};
-const call=(id,tool,args)=>{emit({type:'tool_request',call_id:id,server:'engine',tool,arguments:args});emit({type:'blocked',call_ids:[id]})};
+let prompt='', model='', response=0, proof;
+let usage={input_tokens:0,output_tokens:0,cache_read_input_tokens:0,cache_creation_input_tokens:0};
+const startBatch=calls=>{
+ const id='response-'+(++response);
+ emit({type:'broker_model_start',session_id:'fixture',data:{response_id:id,model}});
+ proof={response_id:id,model,stop_reason:calls.length?'tool_use':'end_turn',calls,usage:{input_tokens:2,output_tokens:1,cache_read_input_tokens:0,cache_creation_input_tokens:0}};
+ emit({type:'broker_batch',session_id:'fixture',data:proof});
+ usage.input_tokens+=2;usage.output_tokens+=1;
+};
+const finish=()=>{startBatch([]);emit({type:'result',session_id:'fixture',status:'succeeded',provider_status:'success',provider_version:'claude-agent-sdk@0.3.322',outputs:{text:'CONFORMANCE_OK',usage,cost_usd:0}});process.exit(0)};
+const wire=tool=>tool==='worker_spawn'?'mcp__broker__broker_0429d2feda5014b24eb241eb':'mcp__broker__broker_c214d5f05bfcf93835aa64e7';
+const call=(id,tool,args)=>{startBatch([{id,name:wire(tool),arguments:args}]);emit({type:'tool_request',call_id:id,server:'engine',tool,arguments:args});emit({type:'blocked',call_ids:[id],data:proof})};
 emit({type:'hello',provider_version:'claude-agent-sdk@0.3.322'});
 for await(const line of readline.createInterface({input:process.stdin})){
  const f=JSON.parse(line);
  if(f.type==='turn_start'){
-  prompt=f.prompt;emit({type:'session',session_id:'fixture'});emit({type:'usage',session_id:'fixture',data:{usage:{input_tokens:2,output_tokens:1},observation_key:'first'}});
+  prompt=f.prompt;model=f.model||'fixture-model';
+  emit({type:'broker_model_identity',data:{requested:f.model||'',resolved:model}});
+ }else if(f.type==='model_bound'){
+  emit({type:'session',session_id:'fixture'});
   if(prompt==='LEAF'){finish()}else{call('spawn','worker_spawn',{role:'claude',turns:prompt==='ROOT'?4:1,prompt:prompt==='ROOT'?'CHILD':'LEAF'})}
  }else if(f.type==='tool_result'){
   if(f.error){emit({type:'result',status:'failed',error:f.error});process.exit(1)}
@@ -213,7 +225,7 @@ for await(const line of readline.createInterface({input:process.stdin})){
 	if err := os.WriteFile(bridge, []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := clirunner.Config{Agents: map[string]clirunner.Agent{"claude": {Provider: "claude-sdk", Bridge: bridge, Tools: []string{}, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}, {Server: "engine", Tool: "worker_wait"}}, Authentication: clirunner.Authentication{Mode: "native"}, Limits: clirunner.Limits{MaxWorkers: 4, MaxDepth: 3, MaxTurns: 4}}}}
+	cfg := clirunner.Config{AgentRuntime: "claude", Agents: map[string]clirunner.Agent{"claude": {Provider: "claude-sdk", Bridge: bridge, Tools: []string{}, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}, {Server: "engine", Tool: "worker_wait"}}, Authentication: clirunner.Authentication{Mode: "native"}, Limits: clirunner.Limits{MaxWorkers: 4, MaxDepth: 3, MaxTurns: 8}}}}
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -278,8 +290,8 @@ for await(const line of readline.createInterface({input:process.stdin})){
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(workers) != 2 {
-		t.Fatalf("expected child and grandchild, got %+v", workers)
+	if len(workers) != 3 {
+		t.Fatalf("expected original task, child and grandchild, got %+v", workers)
 	}
 	usage, err := store.Usage(ctx, run.ID)
 	if err != nil || usage.Summary.Invocations != 3 {

@@ -3,6 +3,9 @@
 export const isolatedSettings = {
   autoMemoryEnabled: false,
   autoDreamEnabled: false,
+  autoCompactEnabled: false,
+  precomputeCompactionEnabled: false,
+  idleCompaction: false,
   enabledPlugins: Object.fromEntries([
     'cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-privacy',
     'cc-plugin-plugin-authoring', 'cc-plugin-easel', 'cc-plugin-sec-default', 'sec-default',
@@ -71,3 +74,10 @@ export function assertSelectedInitialization(message, skill) {
     throw new Error('Provider initialization differs from admitted skill/plugin set');
   }
 }
+
+// Native 2.1.322 checks this ceiling before automatic, idle, precomputed,
+// manual and plugin compaction. Settings alone are not the execution ceiling.
+export const isolatedEnvironment = {
+  DISABLE_COMPACT: '1',
+  DISABLE_AUTO_COMPACT: '1',
+};

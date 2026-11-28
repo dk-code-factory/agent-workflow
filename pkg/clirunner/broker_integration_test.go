@@ -68,7 +68,9 @@ func TestSDKBrokerAgainstFakeGateway(t *testing.T) {
 			return
 		}
 		model, _ := payload["model"].(string)
-		if requests.Add(1) == 1 {
+		stage := requests.Add(1)
+		w = skillChildSDKWriter{ResponseWriter: w, id: fmt.Sprintf("sdk-broker-%d", stage)}
+		if stage == 1 {
 			tools, _ := json.Marshal(payload["tools"])
 			if !strings.Contains(string(tools), qualified) {
 				t.Errorf("broker tool missing from SDK catalog: %s", tools)
