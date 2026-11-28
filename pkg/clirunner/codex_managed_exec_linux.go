@@ -19,7 +19,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A FIFO or device at the manifest path cannot block fresh admission.
+// O_NONBLOCK opens a FIFO without waiting for a writer. captureManagedBuild
+// then rejects nonregular descriptors before reading them.
 func openManagedManifest(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
