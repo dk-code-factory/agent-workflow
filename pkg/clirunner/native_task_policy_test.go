@@ -165,53 +165,60 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyFormatting(t *testing.T) {
 	if os.Getenv("AGENT_WORKFLOW_SDK_TEST") != "1" {
 		t.Skip("requires locked SDK dependencies; loopback fake API only")
 	}
-	var calls atomic.Int32
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/messages") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[],"has_more":false,"input_tokens":16}`))
-			return
-		}
-		var payload map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&payload); err != nil {
-			t.Error(err)
-			w.WriteHeader(400)
-			return
-		}
-		calls.Add(1)
-		tools, _ := payload["tools"].([]any)
-		seen := map[string]bool{}
-		for _, value := range tools {
-			tool, _ := value.(map[string]any)
-			name, _ := tool["name"].(string)
-			seen[name] = true
-		}
-		if !reflect.DeepEqual(seen, map[string]bool{"Read": true, "StructuredOutput": true}) {
-			t.Errorf("unexpected formatting tool grant: %v", seen)
-		}
-		model, _ := payload["model"].(string)
-		writeSDKMessage(w, model, []map[string]any{{"type": "tool_use", "id": "format-verdict", "name": "StructuredOutput", "input": map[string]any{"approved": true}}}, "tool_use")
-	}))
-	defer gateway.Close()
-	bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("READONLY_FORMAT_KEY", "fake-loopback-key-only")
-	runner := &Runner{Workspace: t.TempDir(), Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", Tools: []string{"Read", "Bash"}, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "READONLY_FORMAT_KEY"}}}}}
-	definition, err := runner.AdmitNativeTask(&workflows.AgentDefinition{Name: "validator", ToolPolicy: "read-only"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "native", ParentWorkerID: "agent-format", InvocationID: "original-format", Definition: definition, Prompt: "Format the validation verdict.", Output: &workflows.AgentOutputContract{Format: "json", Schema: map[string]any{"type": "object", "required": []string{"approved"}, "additionalProperties": false, "properties": map[string]any{"approved": map[string]any{"type": "boolean"}}}}}}, nil)
-	if err != nil || result.TaskPolicy == nil || !result.TaskPolicy.FormattingTool || calls.Load() != 1 {
-		t.Fatal("formatting-only grant failed", result, err, calls.Load())
-	}
-	structured, _ := result.Outputs["structured"].(map[string]any)
-	if structured["approved"] != true || result.Outputs["text"] != `{"approved":true}` {
-		t.Fatal("native formatter did not return its schema result", result)
+	for name, schema := range map[string]map[string]any{
+		"empty-schema":  {},
+		"object-schema": {"type": "object", "required": []string{"approved"}, "additionalProperties": false, "properties": map[string]any{"approved": map[string]any{"type": "boolean"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/messages") {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":[],"has_more":false,"input_tokens":16}`))
+					return
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&payload); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				calls.Add(1)
+				tools, _ := payload["tools"].([]any)
+				seen := map[string]bool{}
+				for _, value := range tools {
+					tool, _ := value.(map[string]any)
+					name, _ := tool["name"].(string)
+					seen[name] = true
+				}
+				if !reflect.DeepEqual(seen, map[string]bool{"Read": true, "StructuredOutput": true}) {
+					t.Errorf("unexpected formatting tool grant: %v", seen)
+				}
+				model, _ := payload["model"].(string)
+				writeSDKMessage(w, model, []map[string]any{{"type": "tool_use", "id": "format-verdict", "name": "StructuredOutput", "input": map[string]any{"approved": true}}}, "tool_use")
+			}))
+			defer gateway.Close()
+			bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("READONLY_FORMAT_KEY", "fake-loopback-key-only")
+			runner := &Runner{Workspace: t.TempDir(), Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", Tools: []string{"Read", "Bash"}, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "READONLY_FORMAT_KEY"}}}}}
+			definition, err := runner.AdmitNativeTask(&workflows.AgentDefinition{Name: "validator", ToolPolicy: "read-only"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "native", ParentWorkerID: "agent-format", InvocationID: "original-format", Definition: definition, Prompt: "Format the validation verdict.", Output: &workflows.AgentOutputContract{Format: "json", Schema: schema}}}, nil)
+			if err != nil || result.TaskPolicy == nil || !result.TaskPolicy.FormattingTool || calls.Load() != 1 {
+				t.Fatal("formatting-only grant failed", result, err, calls.Load())
+			}
+			structured, _ := result.Outputs["structured"].(map[string]any)
+			if structured["approved"] != true || result.Outputs["text"] != `{"approved":true}` {
+				t.Fatal("native formatter did not return its schema result", result)
+			}
+		})
 	}
 }
 
@@ -311,10 +318,10 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyWorkflow(t *testing.T) {
     steps:
       - id: original
         uses: agent/run
-        with: {agent: validator.yaml, prompt: Validate, turns: 3}
+        with: {agent: validator.yaml, prompt: Validate, turns: 3, output: {format: json, repair-attempts: 0}}
       - id: continuation
         uses: agent/run
-        with: {agent: '${{ steps.original.outputs.agent }}', prompt: Explain}
+        with: {agent: '${{ steps.original.outputs.agent }}', prompt: Explain, output: {format: json, repair-attempts: 0}}
       - id: verify
         argv: [python3, -c, "import sys; assert sys.argv[1]=='read-only'; assert sys.argv[2]=='claude-sdk'; assert sys.argv[3]==sys.argv[4]; print('NATIVE_GRANT_VERIFIED')", '${{ steps.original.outputs.tool_policy.grant.mode }}', '${{ steps.original.outputs.tool_policy.grant.provider }}', '${{ steps.original.outputs.tool_policy.session_fingerprint }}', '${{ steps.continuation.outputs.tool_policy.session_fingerprint }}']
 `,
@@ -338,8 +345,18 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyWorkflow(t *testing.T) {
 			return
 		}
 		calls.Add(1)
+		tools, _ := payload["tools"].([]any)
+		seen := map[string]bool{}
+		for _, value := range tools {
+			tool, _ := value.(map[string]any)
+			name, _ := tool["name"].(string)
+			seen[name] = true
+		}
+		if len(tools) != 1 || !reflect.DeepEqual(seen, map[string]bool{"Read": true}) {
+			t.Errorf("schema-less JSON changed the read-only grant: %v", tools)
+		}
 		model, _ := payload["model"].(string)
-		writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": "NATIVE_VERDICT"}}, "end_turn")
+		writeSDKMessage(w, model, []map[string]any{{"type": "text", "text": `{"approved":true}`}}, "end_turn")
 	}))
 	defer gateway.Close()
 	bridge, err := filepath.Abs(filepath.Join("..", "..", "bridge", "claude", "bridge.mjs"))
@@ -393,8 +410,12 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyWorkflow(t *testing.T) {
 	steps := run.Jobs["validate"].Steps
 	for _, name := range []string{"original", "continuation"} {
 		proof, _ := steps[name].Outputs["tool_policy"].(map[string]any)
-		if proof["agent"] != steps[name].Outputs["agent"] || proof["task_attempt_id"] != steps[name].AttemptID || proof["invocation_id"] == "" {
-			t.Fatal("native grant lost controller binding", name, proof, steps[name])
+		if proof["agent"] != steps[name].Outputs["agent"] || proof["task_attempt_id"] != steps[name].AttemptID || proof["invocation_id"] == "" || proof["formatting_tool"] != false {
+			t.Fatal("schema-less native grant lost controller binding", name, proof, steps[name])
+		}
+		structured, _ := steps[name].Outputs["structured"].(map[string]any)
+		if structured["approved"] != true {
+			t.Fatal("schema-less JSON did not reach public structured output", name, steps[name])
 		}
 	}
 }

@@ -235,7 +235,8 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Model != "" {
 		model = req.Model
 	}
-	var schema any
+	// A nil map is JSON null and does not grant the bridge formatter.
+	var schema map[string]any
 	if req.Output != nil {
 		schema = req.Output.Schema
 	}
