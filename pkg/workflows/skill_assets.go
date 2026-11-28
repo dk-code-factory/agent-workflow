@@ -13,6 +13,12 @@ func skillBundles(definitions map[string]*Workflow) map[string]*AssetBundle {
 	for _, w := range definitions {
 		for _, job := range w.Jobs {
 			_, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) {
+				for _, binding := range step.SkillAdmissions {
+					if binding != nil && binding.Assets != nil {
+						bundle := binding.Assets
+						out[bundle.OriginID+"/"+bundle.ID] = bundle
+					}
+				}
 				if step.Skill != nil && step.Skill.Binding.Assets != nil {
 					bundle := step.Skill.Binding.Assets
 					out[bundle.OriginID+"/"+bundle.ID] = bundle
@@ -85,11 +91,18 @@ func (s *SQLiteStore) SkillAssets(ctx context.Context, run string, plan *SkillIn
 		return "", fmt.Errorf("skill invocation identity changed")
 	}
 	found := false
+	static := false
 	for _, w := range snap.Definitions {
 		for _, job := range w.Jobs {
 			_, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) {
 				if step.Skill != nil && step.Skill.ID == plan.ID {
 					found = true
+					static = true
+				}
+				for _, binding := range step.SkillAdmissions {
+					if actionHash(binding) == actionHash(plan.Binding) {
+						found = true
+					}
 				}
 				return step, nil
 			})
@@ -97,6 +110,11 @@ func (s *SQLiteStore) SkillAssets(ctx context.Context, run string, plan *SkillIn
 	}
 	if !found {
 		return "", fmt.Errorf("skill invocation is outside admitted run")
+	}
+	if !static || plan.Occurrence != "" {
+		if err = s.admittedSkillOccurrence(ctx, run, plan); err != nil {
+			return "", err
+		}
 	}
 	if err = s.verifySkillAssets(ctx, run, snap); err != nil {
 		return "", err

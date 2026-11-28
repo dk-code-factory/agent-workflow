@@ -50,6 +50,9 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 		logical = ec.RunID
 	}
 	coordinate := []any{owner, logical, ec.JobID, step.ID, ec.IterationNumber}
+	if request.Skill != nil && request.Skill.Occurrence != "" {
+		coordinate = append(coordinate, request.Skill.ID)
+	}
 	reference := "agent_" + actionHash(coordinate)[:32]
 	args, err := renderMap(step.With, ec)
 	if err != nil {

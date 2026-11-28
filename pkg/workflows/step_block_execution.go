@@ -66,6 +66,10 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	if step.Protocol == ContainerActionV1 {
 		return e.executeContainerAction(ctx, step, ec, slots)
 	}
+	step, err = e.bindSkillOccurrence(ctx, step, ec)
+	if err != nil {
+		return
+	}
 	if hasLifecycle(step) || hasChecklist(step) {
 		return e.executeLifecycleStep(ctx, step, ec, slots, req.RetryUncertain, false)
 	}
@@ -79,7 +83,7 @@ func (e *Executor) executeDeclaredStep(ctx context.Context, step Step, path stri
 	var reused bool
 	journal, durable := e.Store.(Journal)
 	if durable {
-		if req.ordered {
+		if req.ordered || (step.Skill != nil && step.Skill.Occurrence != "") {
 			attempt, reused, err = e.beginIterationStep(ctx, journal, step, ec, req.RetryUncertain)
 		} else {
 			attempt, reused, err = journal.Begin(ctx, req.runID, ec.JobID, step.ID, req.iteration, req.RetryUncertain)

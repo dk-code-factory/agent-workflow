@@ -120,7 +120,7 @@ pre-model API admission barrier. Inline plugin suppression is the startup
 control, and native tool dispatch requires verified initialization.
 
 An explicitly supplied skill uses a declared `type: skill` input and a
-`with.skill` selection on one literal agent definition:
+`with.skill` selection on an admitted agent definition:
 
 ```yaml
 on:
@@ -158,9 +158,35 @@ Instruction bytes must also be valid UTF-8; admission rejects malformed text
 before capture or provider preflight.
 
 Arguments and model overrides can use literals and admitted `inputs` expressions.
-Admission pins these values, resources, model and capability profile before run
-claims. Resume uses the retained assets, original session and original turn
+Admission pins these values, resources, model and capability profile before the
+selected occurrence is claimed. Resume uses the retained assets, original session and original turn
 allowance even after source removal; it does not recapture or replenish them.
+
+Reusable workflows can forward the captured input under another declared
+`type: skill` name. For example, the caller can use
+`with: {supplied: '${{ inputs.selected }}'}` on a reusable workflow job, and the
+callee can declare `supplied: {type: skill}` and select `skill.input: supplied`.
+Only references captured from the entry workflow's skill inputs are eligible;
+called workflows cannot supply another directory or package for capture.
+
+The selected step can use a catalog such as
+`agent: {select: '${{ inputs.task.role }}', definitions: {review: reviewer.yaml, fix: fixer.yaml}}`.
+The catalog's definition paths remain literal and all definitions are admitted
+with the workflow closure. Nested input expressions such as
+`arguments: '${{ inputs.task.arguments }}'` resolve against that call's inputs.
+For-each iterations can select different admitted skill inputs or definitions.
+The engine commits the exact skill digest, selected definition, arguments,
+workspace and runtime controls in an immutable occurrence plan before claiming
+the step. Independent occurrences receive distinct identities and retain empty
+skill configuration unless explicitly selected.
+
+To continue a selected session, use its returned agent reference, for example
+`agent: '${{ steps.selected.outputs.agent }}'`, without another skill selection.
+Ordinary continuations, lifecycle handlers, checklist turns and explicit retries
+keep that session's original skill binding and remaining turn allowance.
+They cannot attach a skill to an existing session that began without one or
+change its admitted skill, workspace or model. Recovery revalidates pinned
+capabilities and original consumption evidence before claiming resumed work.
 
 The Claude profiles use the locked SDK 0.3.322 local runtime,
 with a pinned model, no broker grants, only existing native Read authority,
@@ -268,8 +294,8 @@ the original Claude child can be reconciled from its complete retained native
 terminal, outputs and accounting before generic tool uncertainty is evaluated.
 A failed turn or a later unknown continuation cannot borrow that older terminal.
 
-Codex native children, broader Claude child shapes, containers, reusable
-workflow selections, unproved tool/permission profiles and unsupported effort
+Codex native children, broader Claude child shapes, containers,
+unproved tool/permission profiles and unsupported effort
 or argument controls reject admission. They do not fall back to prompt imports
 or host skills. These profiles establish native loading, observed consumption
 and the specified controls; deterministic fake-gateway evidence does not prove
