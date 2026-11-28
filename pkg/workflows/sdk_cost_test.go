@@ -142,6 +142,8 @@ func testManagedSDKKnownTerminalCost(t *testing.T, annotated bool) {
 	result := SessionResult{Status: RunStatusSucceeded, ProviderStatus: "success", ProviderVersion: "claude-agent-sdk@0.3.322", SessionID: id.SessionID, Outputs: map[string]any{"text": "known output", "usage": usage, "cost_usd": 0.000246}}
 	if annotated {
 		result.Outputs["provider"] = "claude-sdk"
+		result.Outputs["model"] = id.Model
+		result.Outputs["session_id"] = id.SessionID
 	}
 	callerBefore, err := json.Marshal(result.Outputs)
 	if err != nil {
@@ -303,5 +305,88 @@ func testManagedSDKKnownTerminalCost(t *testing.T, annotated bool) {
 	report, err = store.Usage(ctx, id.RunID)
 	if err != nil || report.Summary.KnownCostUSD == nil || math.Abs(*report.Summary.KnownCostUSD-0.000123) > 1e-12 {
 		t.Fatal("success upgrade changed original known delta", report, err)
+	}
+}
+
+func TestManagedSDKTerminalRejectsOutputIdentitySubstitution(t *testing.T) {
+	for _, stage := range []string{"first-known", "repeated-known", "private-checkpoint", "final-settlement"} {
+		for _, field := range []string{"provider", "model", "session_id"} {
+			t.Run(stage+"/"+field, func(t *testing.T) {
+				store, ctx, id := sdkAttemptFixture(t)
+				if err := BeginManagedSDKInvocation(ctx, id.RunID, id.ID, id.Model); err != nil {
+					t.Fatal(err)
+				}
+				// Zero cache counters ensure provider identity is checked independently
+				// of provider-specific token arithmetic.
+				usage := map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+				if err := store.ObserveUsage(ctx, id, UsageUpdate{Key: "sdk-response:original", Provider: id.Provider, Model: id.Model, SessionID: "session", Usage: usage, Incomplete: true}); err != nil {
+					t.Fatal(err)
+				}
+				id.SessionID = "session"
+				result := SessionResult{Status: RunStatusSucceeded, ProviderStatus: "success", ProviderVersion: "claude-agent-sdk@0.3.322", SessionID: id.SessionID, Outputs: map[string]any{"usage": usage, "cost_usd": 0.000123}}
+				if stage == "repeated-known" {
+					if err := RecordManagedSDKTerminalCost(ctx, id.RunID, id.ID, result); err != nil {
+						t.Fatal(err)
+					}
+				}
+				snapshot := func() string {
+					t.Helper()
+					var raw string
+					if err := store.db.QueryRow(`SELECT json_group_array(CAST(record AS TEXT)) FROM (
+ SELECT record FROM usage_invocations WHERE id=? UNION ALL
+ SELECT record FROM usage_observations WHERE invocation_id=? UNION ALL
+ SELECT record FROM usage_session_counters WHERE origin_id=?)`, id.ID, id.ID, id.RunID).Scan(&raw); err != nil {
+						t.Fatal(err)
+					}
+					return raw
+				}
+				before := snapshot()
+				result.Outputs[field] = "foreign"
+				callerBefore, err := json.Marshal(result.Outputs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch stage {
+				case "first-known", "repeated-known":
+					err = RecordManagedSDKTerminalCost(ctx, id.RunID, id.ID, result)
+				case "private-checkpoint":
+					manager := &WorkerManager{Store: store, Limits: DefaultWorkerLimits()}
+					worker, loadErr := manager.Get(ctx, id.RunID, id.WorkerID)
+					if loadErr != nil {
+						t.Fatal(loadErr)
+					}
+					messages, loadErr := manager.Messages(ctx, id.RunID, worker.ID)
+					if loadErr != nil || len(messages) != 1 {
+						t.Fatal(messages, loadErr)
+					}
+					ctx = context.WithValue(ctx, managedSDKTerminalKey{}, manager.sdkTerminalRecorder(worker, messages[0], nil))
+					err = CheckpointManagedSDKTerminal(ctx, result)
+				case "final-settlement":
+					tx, beginErr := store.db.BeginTx(ctx, nil)
+					if beginErr != nil {
+						t.Fatal(beginErr)
+					}
+					defer tx.Rollback()
+					err = observeManagedSDKFinalTx(ctx, tx, id, result)
+					if err == nil {
+						if commitErr := tx.Commit(); commitErr != nil {
+							t.Fatal(commitErr)
+						}
+					} else if rollbackErr := tx.Rollback(); rollbackErr != nil {
+						t.Fatal(rollbackErr)
+					}
+				}
+				if err == nil {
+					t.Fatal("changed output identity accepted", stage, field)
+				}
+				if snapshot() != before {
+					t.Fatal("identity rejection changed accounting, admission or baseline")
+				}
+				callerAfter, marshalErr := json.Marshal(result.Outputs)
+				if marshalErr != nil || string(callerBefore) != string(callerAfter) || result.SessionID != id.SessionID {
+					t.Fatal("identity validation mutated caller result", marshalErr)
+				}
+			})
+		}
 	}
 }

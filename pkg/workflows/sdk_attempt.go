@@ -313,6 +313,17 @@ func CheckManagedSDKAuthority(ctx context.Context, run, inv string) error {
 }
 
 func validateManagedSDKResponseTotals(ctx context.Context, tx *sql.Tx, inv string, result SessionResult) error {
+	var identity UsageIdentity
+	var identityRaw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, inv).Scan(&identityRaw); err != nil {
+		return err
+	}
+	if err := decodeJSONWithNumbers(identityRaw, &identity); err != nil {
+		return err
+	}
+	if err := validateManagedSDKResultIdentity(identity, result); err != nil {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT observation_key,record FROM usage_observations WHERE invocation_id=?`, inv)
 	if err != nil {
 		return err
@@ -332,15 +343,6 @@ func validateManagedSDKResponseTotals(ctx context.Context, tx *sql.Tx, inv strin
 		if key == "final" {
 			var known UsageObservation
 			if err = decodeJSONWithNumbers(raw, &known); err != nil {
-				return err
-			}
-			var identity UsageIdentity
-			// Model is checked below against the engine-owned invocation row.
-			var identityRaw []byte
-			if err = tx.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, inv).Scan(&identityRaw); err != nil {
-				return err
-			}
-			if err = decodeJSONWithNumbers(identityRaw, &identity); err != nil {
 				return err
 			}
 			if known.Complete || !known.CostIncomplete || !managedSDKKnownCostMatches(known, identity, result) {

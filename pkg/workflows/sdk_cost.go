@@ -25,6 +25,9 @@ type managedSDKCostCounter struct {
 // Completion commits this mutation set. Known-charge recording evaluates it
 // inside a savepoint and retains only the incomplete original cost receipt.
 func observeManagedSDKFinalTx(ctx context.Context, tx *sql.Tx, id UsageIdentity, result SessionResult) error {
+	if err := validateManagedSDKResultIdentity(id, result); err != nil {
+		return err
+	}
 	total := costValue(result.Outputs["cost_usd"])
 	if total == nil || id.Provider != "claude-sdk" || id.Model == "" || id.Model == "unknown" || result.SessionID == "" || id.SessionID != result.SessionID {
 		return fmt.Errorf("managed SDK cumulative cost identity/value is incomplete")
@@ -145,6 +148,20 @@ func validateManagedSDKRetainedCost(ctx context.Context, tx *sql.Tx, id UsageIde
 	}
 	if a.Attempt == nil || a.Attempt.State != "settled" || a.Attempt.Profile != managedSDKProfile || a.Attempt.RunID != id.RunID || a.Attempt.SessionID != id.SessionID || a.Attempt.Model != id.Model {
 		return fmt.Errorf("SDK retained session original terminal is not settled")
+	}
+	return nil
+}
+
+// Optional output annotations describe the admitted identity; they cannot
+// replace it when generic final accounting consumes the provider outputs.
+func validateManagedSDKResultIdentity(id UsageIdentity, result SessionResult) error {
+	if id.Provider != "claude-sdk" || id.Model == "" || id.Model == "unknown" || id.SessionID == "" || result.SessionID != id.SessionID {
+		return fmt.Errorf("managed SDK terminal identity differs from original invocation")
+	}
+	for key, expected := range map[string]string{"provider": id.Provider, "model": id.Model, "session_id": id.SessionID} {
+		if value, present := result.Outputs[key]; present && value != expected {
+			return fmt.Errorf("managed SDK terminal %s annotation differs from original invocation", key)
+		}
 	}
 	return nil
 }
