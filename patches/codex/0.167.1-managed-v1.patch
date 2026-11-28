@@ -1702,7 +1702,7 @@ index da4d0e1..f995cb8 100644
                  rate_limits: None,
              },
 diff --git a/codex-rs/app-server/src/dynamic_tools.rs b/codex-rs/app-server/src/dynamic_tools.rs
-index 0069b6d..31c32f7 100644
+index 0069b6d..a8930f2 100644
 --- a/codex-rs/app-server/src/dynamic_tools.rs
 +++ b/codex-rs/app-server/src/dynamic_tools.rs
 @@ -16,11 +16,22 @@ use crate::server_request_error::is_turn_transition_server_request_error;
@@ -1728,7 +1728,7 @@ index 0069b6d..31c32f7 100644
      let (response, _error) = match response {
          Ok(Ok(value)) => decode_response(value),
          Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
-@@ -33,12 +44,18 @@ pub(crate) async fn on_call_response(
+@@ -33,26 +44,41 @@ pub(crate) async fn on_call_response(
              fallback_response("dynamic tool request failed")
          }
      };
@@ -1747,9 +1747,29 @@ index 0069b6d..31c32f7 100644
          content_items: content_items
              .into_iter()
              .map(CoreDynamicToolCallOutputContentItem::from)
-@@ -53,6 +70,9 @@ pub(crate) async fn on_call_response(
-         .await
-     {
+             .collect(),
+         success,
+     };
+-    if let Err(err) = conversation
+-        .submit(Op::DynamicToolResponse {
+-            id: call_id.clone(),
+-            response: core_response,
+-        })
+-        .await
+-    {
++    let submitted = if managed {
++        conversation
++            .submit_agent_workflow_dynamic_response(turn_id.clone(), call_id.clone(), core_response)
++            .await
++    } else {
++        conversation
++            .submit(Op::DynamicToolResponse {
++                id: call_id.clone(),
++                response: core_response,
++            })
++            .await
++    };
++    if let Err(err) = submitted {
          error!("failed to submit DynamicToolResponse: {err}");
 +        if managed {
 +            conversation.invalidate_agent_workflow_turn(&turn_id).await;
@@ -1757,7 +1777,7 @@ index 0069b6d..31c32f7 100644
      }
  }
  
-@@ -101,6 +121,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
+@@ -101,6 +127,7 @@ fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option
  fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
      (
          DynamicToolCallResponse {
@@ -3604,10 +3624,10 @@ index 0000000..8135bcc
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..c4a668e
+index 0000000..dbfa03c
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1439 @@
+@@ -0,0 +1,1517 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -3667,6 +3687,8 @@ index 0000000..c4a668e
 +    invocation: Mutex<Option<(String, String)>>,
 +    active_work: AtomicUsize,
 +    active_tasks: AtomicUsize,
++    model_tasks: Mutex<BTreeSet<u64>>,
++    next_model_ticket: AtomicU64,
 +    generation: AtomicU64,
 +    model_generation: AtomicU64,
 +    work_finished: tokio::sync::Notify,
@@ -3676,10 +3698,36 @@ index 0000000..c4a668e
 +    runtime: Arc<AgentWorkflowRuntime>,
 +    pub(crate) admitted: bool,
 +    model: bool,
++    model_ticket: Option<u64>,
 +    generation: u64,
 +}
 +
 +impl ManagedWorkGuard {
++    /// The successor is counted before waiting. Ticket order prevents two
++    /// registered setups from joining each other, and keeps all earlier task
++    /// cleanup (including cancellation) inside the source quiescence fence.
++    pub(crate) async fn join_predecessors(&self) {
++        let Some(ticket) = self.model_ticket else {
++            return;
++        };
++        loop {
++            let notified = self.runtime.work_finished.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            if self
++                .runtime
++                .model_tasks
++                .lock_authority()
++                .range(..ticket)
++                .next()
++                .is_none()
++            {
++                return;
++            }
++            notified.await;
++        }
++    }
++
 +    pub(crate) fn is_admitted(&self) -> bool {
 +        self.admitted && self.runtime.generation.load(Ordering::Acquire) == self.generation
 +    }
@@ -3692,7 +3740,11 @@ index 0000000..c4a668e
 +        } else {
 +            &self.runtime.active_work
 +        };
-+        if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
++        let last = counter.fetch_sub(1, Ordering::AcqRel) == 1;
++        if let Some(ticket) = self.model_ticket {
++            self.runtime.model_tasks.lock_authority().remove(&ticket);
++        }
++        if last || self.model {
 +            self.runtime.work_finished.notify_waiters();
 +        }
 +    }
@@ -3701,6 +3753,9 @@ index 0000000..c4a668e
 +/// Required for each engine-owned turn; not restored from thread history.
 +#[derive(Clone, Debug)]
 +pub struct AgentWorkflowInvocation(pub String);
++
++#[derive(Clone, Debug)]
++pub(crate) struct AgentWorkflowCallbackTurn(pub String);
 +
 +/// Engine-only continuation of the same original turn/invocation and seal.
 +/// The exact native journal must validate before this can create callbacks.
@@ -3824,6 +3879,7 @@ index 0000000..c4a668e
 +            runtime: Arc::clone(self),
 +            admitted,
 +            model: false,
++            model_ticket: None,
 +            generation,
 +        }
 +    }
@@ -3831,12 +3887,17 @@ index 0000000..c4a668e
 +    pub(crate) fn model_scheduled(self: &Arc<Self>) -> ManagedWorkGuard {
 +        let _batch = self.batch.lock_authority();
 +        let generation = self.generation.load(Ordering::Acquire);
++        let ticket = self.next_model_ticket.fetch_add(1, Ordering::AcqRel);
++        // Exhaustion poisons the authority lock rather than recycling task order.
++        assert_ne!(ticket, u64::MAX, "managed model task ticket exhausted");
++        self.model_tasks.lock_authority().insert(ticket);
 +        self.model_generation.store(generation, Ordering::Release);
 +        self.active_tasks.fetch_add(1, Ordering::AcqRel);
 +        ManagedWorkGuard {
 +            runtime: Arc::clone(self),
 +            admitted: true,
 +            model: true,
++            model_ticket: Some(ticket),
 +            generation,
 +        }
 +    }
@@ -3878,6 +3939,8 @@ index 0000000..c4a668e
 +            invocation: Mutex::new(None),
 +            active_work: AtomicUsize::new(0),
 +            active_tasks: AtomicUsize::new(0),
++            model_tasks: Mutex::new(BTreeSet::new()),
++            next_model_ticket: AtomicU64::new(0),
 +            generation: AtomicU64::new(0),
 +            model_generation: AtomicU64::new(0),
 +            work_finished: tokio::sync::Notify::new(),
@@ -4357,12 +4420,40 @@ index 0000000..c4a668e
 +        Ok(None)
 +    }
 +
-+    pub(crate) fn accept_result(
++    #[cfg(test)]
++    fn accept_result(
 +        &self,
++        call: &str,
++        response: DynamicToolResponse,
++    ) -> Result<Vec<(String, DynamicToolResponse)>> {
++        self.accept_result_bound(None, call, response)
++    }
++
++    pub(crate) fn accept_result_for_turn(
++        &self,
++        turn_id: &str,
++        call: &str,
++        response: DynamicToolResponse,
++    ) -> Result<Vec<(String, DynamicToolResponse)>> {
++        self.accept_result_bound(Some(turn_id), call, response)
++    }
++
++    fn accept_result_bound(
++        &self,
++        turn_id: Option<&str>,
 +        call: &str,
 +        mut response: DynamicToolResponse,
 +    ) -> Result<Vec<(String, DynamicToolResponse)>> {
 +        let mut state = self.batch.lock_authority();
++        // Check ownership under the same lock as receipt mutation. A delayed
++        // response must never erase or revoke another turn's batch.
++        if turn_id.is_some_and(|id| {
++            state
++                .as_ref()
++                .is_none_or(|batch| batch.identity.turn_id != id)
++        }) {
++            return Err(invalid("dynamic response belongs to another turn"));
++        }
 +        let batch = state
 +            .as_mut()
 +            .ok_or_else(|| invalid("no live parked batch"))?;
@@ -4731,6 +4822,13 @@ index 0000000..c4a668e
 +    fn entire_batch_permit_and_results_precede_any_source_delivery() {
 +        let (runtime, _guard) = planned();
 +        let (permit, _work) = parked(&runtime);
++        // Original-turn ownership is checked before receipt mutation: even an
++        // otherwise valid permit from a delayed producer cannot erase this batch.
++        assert!(
++            runtime
++                .accept_result_for_turn("prior-turn", "a", response(&permit))
++                .is_err()
++        );
 +        // Reordered results are buffered. Neither first result nor a duplicate
 +        // can resolve a single callback channel before the complete batch.
 +        assert!(
@@ -5212,10 +5310,39 @@ index 26e780e..428aba1 100644
          rx_event: rx_events,
          agent_status,
 diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
-index a8d5865..faebe4a 100644
+index a8d5865..93a56d1 100644
 --- a/codex-rs/core/src/codex_thread.rs
 +++ b/codex-rs/core/src/codex_thread.rs
-@@ -310,6 +310,12 @@ impl CodexThread {
+@@ -245,6 +245,28 @@ impl CodexThread {
+         self.io.submit(op).await
+     }
+ 
++    /// Submit a response carrying its producer's original turn identity.
++    pub async fn submit_agent_workflow_dynamic_response(
++        &self,
++        turn_id: String,
++        call_id: String,
++        response: codex_protocol::dynamic_tools::DynamicToolResponse,
++    ) -> CodexResult<String> {
++        let mut init = codex_extension_api::ExtensionDataInit::default();
++        init.insert(crate::agent_workflow_managed::AgentWorkflowCallbackTurn(
++            turn_id,
++        ));
++        self.io
++            .submit(WithTurnExtensionData::new(
++                Op::DynamicToolResponse {
++                    id: call_id,
++                    response,
++                },
++                init,
++            ))
++            .await
++    }
++
+     /// Returns the session telemetry handle for thread-scoped production instrumentation.
+     pub fn session_telemetry(&self) -> SessionTelemetry {
+         self.session.services.session_telemetry.clone()
+@@ -310,6 +332,12 @@ impl CodexThread {
          &self.session.services.thread_extension_data
      }
  
@@ -5228,7 +5355,7 @@ index a8d5865..faebe4a 100644
      /// Returns tools from this thread’s ready, unshared Apps MCP client.
      /// Returns an empty list if the client is absent, still starting, or uses
      /// a shared catalog. Does not start or wait for discovery.
-@@ -541,21 +547,57 @@ impl CodexThread {
+@@ -541,21 +569,57 @@ impl CodexThread {
          &self,
          request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
      ) -> CodexResult<StartIfIdleSubmission> {
@@ -5290,7 +5417,7 @@ index a8d5865..faebe4a 100644
          };
          match self
              .io
-@@ -656,6 +698,35 @@ impl CodexThread {
+@@ -656,6 +720,35 @@ impl CodexThread {
          request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
          mode: TurnInputMode,
      ) -> CodexResult<TurnInputSubmission> {
@@ -5381,21 +5508,60 @@ index 4ccfef8..cda7857 100644
                  rate_limits: None,
              },
 diff --git a/codex-rs/core/src/session/handlers.rs b/codex-rs/core/src/session/handlers.rs
-index f4f6dcc..672957e 100644
+index f4f6dcc..1a9d8be 100644
 --- a/codex-rs/core/src/session/handlers.rs
 +++ b/codex-rs/core/src/session/handlers.rs
-@@ -251,7 +251,10 @@ pub async fn request_permissions_response(
+@@ -250,8 +250,30 @@ pub async fn request_permissions_response(
+         .await;
  }
  
- pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
+-pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
 -    sess.notify_dynamic_tool_response(&id, response).await;
-+    if let Err(error) = sess.notify_dynamic_tool_response(&id, response).await {
++pub async fn dynamic_tool_response(
++    sess: &Arc<Session>,
++    id: String,
++    response: DynamicToolResponse,
++    original_turn: Option<&str>,
++) {
++    if let Err(error) = sess
++        .notify_dynamic_tool_response(&id, response, original_turn)
++        .await
++    {
 +        tracing::warn!(%error, "dynamic response rejected before source continuation");
-+        sess.interrupt_task().await;
++        if sess
++            .services
++            .thread_extension_data
++            .get::<crate::AgentWorkflowRuntime>()
++            .is_some()
++        {
++            if let Some(turn_id) = original_turn {
++                sess.invalidate_agent_workflow_turn(turn_id).await;
++            }
++        } else {
++            sess.interrupt_task().await;
++        }
 +    }
  }
  
  pub fn refresh_mcp_servers(sess: &Session) {
+@@ -704,7 +726,16 @@ pub(super) async fn submission_loop(
+                     false
+                 }
+                 Op::DynamicToolResponse { id, response } => {
+-                    dynamic_tool_response(&sess, id, response).await;
++                    let original_turn = sub.turn_extension_init.as_ref().and_then(|init| {
++                        init.get::<crate::agent_workflow_managed::AgentWorkflowCallbackTurn>()
++                    });
++                    dynamic_tool_response(
++                        &sess,
++                        id,
++                        response,
++                        original_turn.as_ref().map(|turn| turn.0.as_str()),
++                    )
++                    .await;
+                     false
+                 }
+                 Op::RefreshMcpServers => {
 diff --git a/codex-rs/core/src/session/mcp_prewarm.rs b/codex-rs/core/src/session/mcp_prewarm.rs
 index 4356991..fe1f6fd 100644
 --- a/codex-rs/core/src/session/mcp_prewarm.rs
@@ -5416,7 +5582,7 @@ index 4356991..fe1f6fd 100644
          let shutdown = self.mcp_prewarm_shutdown.clone();
          let worker = self.services.runtime_handle.spawn(async move {
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index f365c4e..ce4a8e4 100644
+index f365c4e..5e08704 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
 @@ -440,6 +440,7 @@ pub(crate) enum NetworkApprovalTurn {
@@ -5439,7 +5605,7 @@ index f365c4e..ce4a8e4 100644
              tx_sub,
              rx_event,
              agent_status: agent_status_rx,
-@@ -1123,6 +1129,33 @@ impl SessionIo {
+@@ -1123,6 +1129,37 @@ impl SessionIo {
  
      /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
      pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
@@ -5458,8 +5624,12 @@ index f365c4e..ce4a8e4 100644
 +                    let invocation = init.get::<crate::AgentWorkflowInvocation>();
 +                    matches!((recovery,invocation),(Some(recovery),Some(invocation)) if recovery.0.turn_id == sub.id && recovery.0.invocation_id == invocation.0)
 +                }),
-+                Op::DynamicToolResponse { .. }
-+                | Op::Interrupt
++                Op::DynamicToolResponse { .. } => sub
++                    .turn_extension_init
++                    .as_ref()
++                    .and_then(|init| init.get::<crate::agent_workflow_managed::AgentWorkflowCallbackTurn>())
++                    .is_some_and(|turn| !turn.0.is_empty()),
++                Op::Interrupt
 +                | Op::Shutdown
 +                | Op::SuspendTurnAndShutdown { .. } => true,
 +                _ => false,
@@ -5473,7 +5643,7 @@ index f365c4e..ce4a8e4 100644
          if sub.trace.is_none() {
              sub.trace = current_span_w3c_trace_context();
          }
-@@ -2363,6 +2396,10 @@ impl Session {
+@@ -2363,6 +2400,10 @@ impl Session {
                  self.services.plugins_manager.as_ref(),
                  environments.single_local_environment(),
                  &disabled_plugin_ids,
@@ -5484,7 +5654,7 @@ index f365c4e..ce4a8e4 100644
              )
              .await;
  
-@@ -3652,25 +3689,52 @@ impl Session {
+@@ -3652,25 +3693,56 @@ impl Session {
          clippy::await_holding_invalid_type,
          reason = "active turn checks and turn state updates must remain atomic"
      )]
@@ -5494,13 +5664,17 @@ index f365c4e..ce4a8e4 100644
 +        &self,
 +        call_id: &str,
 +        response: DynamicToolResponse,
++        expected_turn_id: Option<&str>,
 +    ) -> codex_protocol::error::Result<()> {
 +        let runtime = self
 +            .services
 +            .thread_extension_data
 +            .get::<crate::AgentWorkflowRuntime>();
 +        let responses = if let Some(runtime) = &runtime {
-+            runtime.accept_result(call_id, response)?
++            let turn_id = expected_turn_id.ok_or_else(|| {
++                CodexErr::InvalidRequest("managed dynamic response lacks original turn".into())
++            })?;
++            runtime.accept_result_for_turn(turn_id, call_id, response)?
 +        } else {
 +            vec![(call_id.to_owned(), response)]
 +        };
@@ -5552,7 +5726,7 @@ index f365c4e..ce4a8e4 100644
      }
  
      #[expect(
-@@ -5299,12 +5363,13 @@ impl Session {
+@@ -5299,12 +5371,13 @@ impl Session {
          incomplete: &ResponseIncompleteError,
      ) {
          if let Some(response_id) = &incomplete.response_id {
@@ -5572,14 +5746,14 @@ index f365c4e..ce4a8e4 100644
          }
          // Accounting may exhaust the budget; keep the original incomplete-response reason.
          let _ = self
-@@ -5354,8 +5419,20 @@ impl Session {
+@@ -5354,8 +5427,20 @@ impl Session {
              }),
          )
          .await;
 -        self.record_response_token_usage(turn_context, response_id, usage)
 +        let witness = self
 +            .record_response_token_usage(turn_context, response_id, usage)
-+            .await;
+             .await;
 +        if let Some(witness) = witness {
 +            self.send_event(
 +                turn_context,
@@ -5589,12 +5763,12 @@ index f365c4e..ce4a8e4 100644
 +                    rate_limits: None,
 +                }),
 +            )
-             .await;
++            .await;
 +        }
      }
  
      pub(crate) async fn record_response_token_usage(
-@@ -5363,11 +5440,11 @@ impl Session {
+@@ -5363,11 +5448,11 @@ impl Session {
          turn_context: &TurnContext,
          response_id: &str,
          usage: Option<&TokenUsage>,
@@ -5609,7 +5783,7 @@ index f365c4e..ce4a8e4 100644
              self.thread_id,
              &turn_context.sub_id,
              self.session_id(),
-@@ -5378,8 +5455,23 @@ impl Session {
+@@ -5378,8 +5463,23 @@ impl Session {
              response_id.to_string(),
              usage,
          );
@@ -5633,7 +5807,7 @@ index f365c4e..ce4a8e4 100644
      }
  
      pub(crate) async fn record_token_usage_info(
-@@ -5539,7 +5631,11 @@ impl Session {
+@@ -5539,7 +5639,11 @@ impl Session {
              let state = self.state.lock().await;
              state.token_info_and_rate_limits()
          };
@@ -5646,7 +5820,7 @@ index f365c4e..ce4a8e4 100644
          self.send_event(turn_context, event).await;
      }
  
-@@ -5801,7 +5897,14 @@ async fn build_hooks_config(
+@@ -5801,7 +5905,14 @@ async fn build_hooks_config(
      plugins_manager: &PluginsManager,
      environment: Option<&TurnEnvironment>,
      disabled_plugin_ids: &[String],
@@ -5735,7 +5909,7 @@ index 5d3fa4d..cfec7c0 100644
          let mut state = self.state.lock().await;
          if state.shutting_down {
 diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
-index 9bb8aa2..4410027 100644
+index 9bb8aa2..ff1ce1d 100644
 --- a/codex-rs/core/src/session/tests.rs
 +++ b/codex-rs/core/src/session/tests.rs
 @@ -3466,24 +3466,28 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
@@ -5847,7 +6021,7 @@ index 9bb8aa2..4410027 100644
              attached_thread: false,
              creator_user_id: None,
              creator_account_id: None,
-@@ -13819,3 +13833,401 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
+@@ -13819,3 +13833,701 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
          "rejection must not permit same-name ordinary-auth replacement in this session"
      );
  }
@@ -6249,6 +6423,306 @@ index 9bb8aa2..4410027 100644
 +        .expect("later task guard released");
 +    assert!(session.active_turn.lock().await.is_none());
 +}
++
++struct ManagedSourceBeginProbe {
++    runtime: Arc<crate::AgentWorkflowRuntime>,
++    started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>,
++    release: Arc<Notify>,
++}
++
++impl SessionTask for ManagedSourceBeginProbe {
++    fn kind(&self) -> TaskKind {
++        TaskKind::Regular
++    }
++    fn span_name(&self) -> &'static str {
++        "session_task.managed_source_begin_probe"
++    }
++    async fn run(
++        self: Arc<Self>,
++        session: Arc<Session>,
++        ctx: Arc<TurnContext>,
++        _input: Vec<TurnInput>,
++        cancellation: CancellationToken,
++    ) -> SessionTaskResult {
++        let batch = self.runtime.begin(
++            session.thread_id.to_string(),
++            ctx.sub_id.clone(),
++            "successor-invocation".into(),
++        );
++        self.started
++            .lock()
++            .expect("probe sender mutex")
++            .take()
++            .expect("one probe poll")
++            .send(batch.as_ref().map(|_| ()).map_err(ToString::to_string))
++            .expect("probe receiver retained");
++        let _batch = batch?;
++        tokio::select! {
++            _ = self.release.notified() => Ok(None),
++            _ = cancellation.cancelled() => Err(CodexErr::TurnAborted),
++            _ = tokio::time::sleep(StdDuration::from_secs(5)) => {
++                Err(CodexErr::InvalidRequest("managed begin probe release deadline".into()))
++            }
++        }
++    }
++}
++
++#[tokio::test]
++async fn managed_source_successor_waits_for_full_terminal_finalization() {
++    struct IdleGate {
++        entered: Arc<Notify>,
++        release: Arc<Notify>,
++        calls: std::sync::atomic::AtomicUsize,
++    }
++    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for IdleGate {
++        fn on_thread_idle<'a>(
++            &'a self,
++            _input: codex_extension_api::ThreadIdleInput<'a>,
++        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
++            Box::pin(async move {
++                if self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
++                    self.entered.notify_one();
++                    timeout(StdDuration::from_secs(5), self.release.notified())
++                        .await
++                        .expect("owned idle gate release deadline");
++                }
++            })
++        }
++    }
++    let (mut session, mut first) = make_session_and_context().await;
++    let entered = Arc::new(Notify::new());
++    let finish = Arc::new(Notify::new());
++    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
++    builder.thread_lifecycle_contributor(Arc::new(IdleGate {
++        entered: Arc::clone(&entered),
++        release: Arc::clone(&finish),
++        calls: std::sync::atomic::AtomicUsize::new(0),
++    }));
++    session.services.extensions = Arc::new(builder.build());
++    let session = Arc::new(session);
++    let runtime = managed_source_runtime(&session);
++    first.sub_id = "completed-predecessor".into();
++    first
++        .extension_data
++        .insert(crate::AgentWorkflowInvocation("first-invocation".into()));
++    timeout(
++        StdDuration::from_secs(2),
++        session.start_task(Arc::new(first), Vec::new(), CompletingTask),
++    )
++    .await
++    .expect("first setup deadline");
++    timeout(StdDuration::from_secs(2), entered.notified())
++        .await
++        .expect("actual idle tail entered");
++    // The actual terminal path has already exposed an idle Session, but its
++    // contributor and rollout tail still belong to the counted predecessor.
++    assert!(session.active_turn.lock().await.is_none());
++    assert_eq!(runtime.model_tasks_for_test(), 1);
++    let (_unused, mut successor) = make_session_and_context().await;
++    successor.sub_id = "accepted-successor".into();
++    successor
++        .extension_data
++        .insert(crate::AgentWorkflowInvocation(
++            "successor-invocation".into(),
++        ));
++    let (started_tx, mut started_rx) = tokio::sync::oneshot::channel();
++    let release = Arc::new(Notify::new());
++    let next_session = Arc::clone(&session);
++    let next_runtime = Arc::clone(&runtime);
++    let next_release = Arc::clone(&release);
++    let mut setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
++        next_session
++            .start_task(
++                Arc::new(successor),
++                Vec::new(),
++                ManagedSourceBeginProbe {
++                    runtime: next_runtime,
++                    started: std::sync::Mutex::new(Some(started_tx)),
++                    release: next_release,
++                },
++            )
++            .await;
++    }));
++    timeout(StdDuration::from_secs(2), async {
++        while runtime.model_tasks_for_test() != 2 {
++            tokio::task::yield_now().await;
++        }
++    })
++    .await
++    .expect("successor setup is counted while waiting");
++    assert!(matches!(
++        started_rx.try_recv(),
++        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
++    ));
++    // Full join cannot claim quiescence while either the predecessor's cleanup
++    // or the already registered successor remains owned by the source.
++    let mut joined = Box::pin(runtime.join_work());
++    assert!(futures::poll!(joined.as_mut()).is_pending());
++    finish.notify_one();
++    timeout(StdDuration::from_secs(2), &mut setup)
++        .await
++        .expect("successor setup deadline")
++        .expect("setup panic");
++    timeout(StdDuration::from_secs(2), &mut started_rx)
++        .await
++        .expect("successor begin deadline")
++        .expect("probe delivered")
++        .expect("successor retains exclusive model admission");
++    assert_eq!(runtime.model_tasks_for_test(), 1);
++    assert!(futures::poll!(joined.as_mut()).is_pending());
++    release.notify_one();
++    timeout(StdDuration::from_secs(2), joined)
++        .await
++        .expect("both complete lifecycles joined");
++    assert!(session.active_turn.lock().await.is_none());
++}
++
++#[tokio::test]
++async fn managed_source_queued_prior_success_cannot_revoke_later_task() {
++    let (session, turn, events) = make_session_and_context_with_rx().await;
++    let runtime = managed_source_runtime(&session);
++    // A cancelled original with an undispatched receipt remains conservatively
++    // held. Its late successful callback still has no authority over a later task.
++    let original_task = runtime.model_scheduled();
++    let original_batch = runtime
++        .begin(
++            "thread".into(),
++            "prior-turn".into(),
++            "prior-invocation".into(),
++        )
++        .expect("original batch");
++    runtime
++        .plan(
++            "prior-call",
++            &codex_extension_api::ToolName::new(None, "broker_0123456789abcdef01234567"),
++        )
++        .expect("original callback");
++    runtime
++        .seal("original-response".into())
++        .expect("original complete seal");
++    let original_work = runtime.scheduled("prior-call");
++    runtime
++        .park("prior-call")
++        .expect("original parked callback");
++    let original_permit = runtime
++        .published("prior-call")
++        .expect("original published callback")
++        .expect("original full-batch permit");
++    runtime.invalidate();
++    drop(original_batch);
++    drop(original_task);
++    drop(original_work);
++    turn.extension_data
++        .insert(crate::AgentWorkflowInvocation("later-turn".into()));
++    let started = Arc::new(Notify::new());
++    let release = Arc::new(Notify::new());
++    timeout(
++        StdDuration::from_secs(2),
++        session.start_task(
++            Arc::clone(&turn),
++            Vec::new(),
++            ManagedSourceTask {
++                polled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
++                started: Arc::clone(&started),
++                release: Arc::clone(&release),
++            },
++        ),
++    )
++    .await
++    .expect("later setup deadline");
++    timeout(StdDuration::from_secs(2), started.notified())
++        .await
++        .expect("later task executing");
++    let (tx_sub, rx_sub) = async_channel::bounded(1);
++    let (_tx_event, rx_event) = async_channel::unbounded();
++    let io = SessionIo {
++        agent_workflow_managed: true,
++        tx_sub,
++        rx_event,
++        agent_status: watch::channel(AgentStatus::PendingInit).1,
++        session_loop_termination: completed_session_loop_termination(),
++    };
++    let response = codex_protocol::dynamic_tools::DynamicToolResponse {
++        agent_workflow_permit: Some(original_permit),
++        content_items: Vec::new(),
++        success: true,
++    };
++    assert!(
++        io.submit(Op::DynamicToolResponse {
++            id: "prior-call".into(),
++            response: response.clone()
++        })
++        .await
++        .is_err()
++    );
++    assert!(rx_sub.is_empty());
++    let mut init = codex_extension_api::ExtensionDataInit::default();
++    init.insert(crate::agent_workflow_managed::AgentWorkflowCallbackTurn(
++        "prior-turn".into(),
++    ));
++    io.submit(WithTurnExtensionData::new(
++        Op::DynamicToolResponse {
++            id: "prior-call".into(),
++            response,
++        },
++        init,
++    ))
++    .await
++    .expect("bound old callback enters actual submission queue");
++    let mut submissions = Box::pin(tokio::task::unconstrained(submission_loop(
++        Arc::clone(&session),
++        Arc::clone(&turn.config),
++        rx_sub,
++    )));
++    // Execute the actual queued handler, then wait at the next empty receive.
++    assert!(futures::poll!(submissions.as_mut()).is_pending());
++    assert_eq!(io.tx_sub.len(), 0);
++    assert_eq!(runtime.model_tasks_for_test(), 1);
++    assert_eq!(
++        session
++            .active_turn
++            .lock()
++            .await
++            .as_ref()
++            .expect("later turn retained")
++            .task
++            .as_ref()
++            .expect("later task retained")
++            .turn_context
++            .sub_id,
++        turn.sub_id
++    );
++    assert!(
++        runtime
++            .begin("thread".into(), "probe".into(), "probe".into())
++            .err()
++            .expect("original remains held")
++            .to_string()
++            .contains("requires recovery hold")
++    );
++    // A terminal result after release proves the later task was never cancelled
++    // or revoked by the prior callback; the complete guard must still join.
++    release.notify_one();
++    timeout(StdDuration::from_secs(2), async {
++        loop {
++            let event = events.recv().await.expect("later terminal channel open");
++            if event.id == turn.sub_id {
++                match event.msg {
++                    EventMsg::TurnAborted(_) => panic!("prior callback cancelled the later turn"),
++                    EventMsg::TurnComplete(_) => break,
++                    _ => {}
++                }
++            }
++        }
++    })
++    .await
++    .expect("later task completes without cancellation");
++    timeout(StdDuration::from_secs(2), runtime.join_work())
++        .await
++        .expect("later guard completes");
++    assert!(session.active_turn.lock().await.is_none());
++    drop(submissions);
++}
 diff --git a/codex-rs/core/src/session/thread_settings.rs b/codex-rs/core/src/session/thread_settings.rs
 index c3a82ef..6c66411 100644
 --- a/codex-rs/core/src/session/thread_settings.rs
@@ -6488,7 +6962,7 @@ index e548195..1f43005 100644
                  ctx.sess.thread_id,
                  &call.tool_name,
 diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
-index 77ce9b8..2a968d3 100644
+index 77ce9b8..bd43769 100644
 --- a/codex-rs/core/src/tasks/mod.rs
 +++ b/codex-rs/core/src/tasks/mod.rs
 @@ -49,7 +49,9 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
@@ -6501,7 +6975,7 @@ index 77ce9b8..2a968d3 100644
  use codex_protocol::protocol::EventMsg;
  use codex_protocol::protocol::MultiAgentVersion;
  use codex_protocol::protocol::TokenUsage;
-@@ -291,6 +293,35 @@ impl Session {
+@@ -291,6 +293,38 @@ impl Session {
          input: Vec<TurnInput>,
          task: T,
      ) {
@@ -6534,10 +7008,13 @@ index 77ce9b8..2a968d3 100644
 +            .thread_extension_data
 +            .get::<crate::agent_workflow_managed::AgentWorkflowRuntime>()
 +            .map(|runtime| runtime.model_scheduled());
++        if let Some(guard) = managed_task.as_ref() {
++            guard.join_predecessors().await;
++        }
          // Replace the cache; in-flight acquisitions retain their previous Arc.
          self.services
              .thread_extension_data
-@@ -383,16 +414,26 @@ impl Session {
+@@ -383,16 +417,26 @@ impl Session {
          );
          let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
          let task_future = async move {
@@ -6573,7 +7050,7 @@ index 77ce9b8..2a968d3 100644
              let sess = Arc::clone(&session);
              // Private reviewers save their transcript together with the terminal event.
              // Errors and cancellation retain their existing save path.
-@@ -471,6 +512,15 @@ impl Session {
+@@ -471,6 +515,15 @@ impl Session {
          self: &Arc<Self>,
          sub_id: String,
      ) {
@@ -6589,7 +7066,7 @@ index 77ce9b8..2a968d3 100644
          if !self.input_queue.has_pending_mailbox_items().await {
              return;
          }
-@@ -571,6 +621,13 @@ impl Session {
+@@ -571,6 +624,13 @@ impl Session {
      }
  
      pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -6603,7 +7080,7 @@ index 77ce9b8..2a968d3 100644
          let mut aborted_turn = false;
          let mut active_turn_to_clear = None;
          if let Some(mut active_turn) = self.take_active_turn(&reason).await {
-@@ -595,11 +652,28 @@ impl Session {
+@@ -595,11 +655,28 @@ impl Session {
              // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
              self.input_queue.clear_pending(&active_turn).await;
          }
@@ -6632,7 +7109,7 @@ index 77ce9b8..2a968d3 100644
      pub(crate) async fn abort_turn_if_active(
          self: &Arc<Self>,
          turn_id: &str,
-@@ -638,11 +712,21 @@ impl Session {
+@@ -638,11 +715,21 @@ impl Session {
          reason: TurnAbortReason,
          error: Option<ErrorEvent>,
      ) {
@@ -6654,7 +7131,7 @@ index 77ce9b8..2a968d3 100644
          // Let interrupted tasks observe cancellation before dropping pending approvals, or an
          // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
          self.input_queue.clear_pending(&active_turn).await;
-@@ -688,6 +772,9 @@ impl Session {
+@@ -688,6 +775,9 @@ impl Session {
          let turn_state = {
              let mut active = self.active_turn.lock().await;
              active.as_mut().and_then(|active_turn| {
@@ -6664,7 +7141,7 @@ index 77ce9b8..2a968d3 100644
                  let task = active_turn.task.take()?;
                  task.handle.detach();
                  active_turn.finishing = Some(finishing);
-@@ -980,8 +1067,15 @@ impl Session {
+@@ -980,8 +1070,15 @@ impl Session {
          turn_state: &Mutex<TurnState>,
          error: Option<ErrorEvent>,
      ) {
@@ -6681,7 +7158,7 @@ index 77ce9b8..2a968d3 100644
              self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                  .await;
              return;
-@@ -1026,6 +1120,11 @@ impl Session {
+@@ -1026,6 +1123,11 @@ impl Session {
              .abort(Arc::clone(self), Arc::clone(&task.turn_context))
              .await;
  
@@ -6758,10 +7235,10 @@ index 0eac846..9a1a0de 100644
      session
          .emit_turn_item_started(
 diff --git a/codex-rs/core/src/tools/handlers/dynamic_tests.rs b/codex-rs/core/src/tools/handlers/dynamic_tests.rs
-index 2d926b3..24abefb 100644
+index 2d926b3..f627fa2 100644
 --- a/codex-rs/core/src/tools/handlers/dynamic_tests.rs
 +++ b/codex-rs/core/src/tools/handlers/dynamic_tests.rs
-@@ -48,6 +48,7 @@ async fn response_cancel_race_completes_once() {
+@@ -48,12 +48,14 @@ async fn response_cancel_race_completes_once() {
      });
      next_item(&receiver).await;
      let response = DynamicToolResponse {
@@ -6769,6 +7246,15 @@ index 2d926b3..24abefb 100644
          content_items: Vec::new(),
          success: true,
      };
+     session
+-        .notify_dynamic_tool_response("call-1", response.clone())
+-        .await;
++        .notify_dynamic_tool_response("call-1", response.clone(), None)
++        .await
++        .expect("non-managed response delivery must accept the cancellation race");
+     cancellation.cancel();
+     let result = lifecycle.await.expect("lifecycle joined");
+     assert!(result.is_none() || result == Some(response));
 diff --git a/codex-rs/core/src/tools/handlers/mod.rs b/codex-rs/core/src/tools/handlers/mod.rs
 index fbba3b9..be7b362 100644
 --- a/codex-rs/core/src/tools/handlers/mod.rs
