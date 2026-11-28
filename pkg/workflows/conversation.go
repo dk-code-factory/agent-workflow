@@ -407,7 +407,7 @@ func (e *Executor) executeConversationStep(ctx context.Context, step Step, ec ex
 			if err != nil {
 				observed.Status, observed.Error, observed.FailureClass = executionFailureStatus(ctx, err), err.Error(), classifyFailure(err)
 			}
-			if saveErr := journal.Complete(context.WithoutCancel(ctx), turn, observed); saveErr != nil {
+			if saveErr := journal.Complete(context.WithoutCancel(turnCtx), turn, observed); saveErr != nil {
 				err = errors.Join(err, errStepPersistence, saveErr)
 			}
 			if err != nil {

@@ -168,18 +168,19 @@ func TestManagedConversationTaskOriginAndAuthority(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	nestedTag := managedTaskAdmission{Attempt: nestedTurn, ParentID: nestedParent.ID, Deadline: nestedParent.Conversation.Deadline, ConversationSHA256: managedConversationDigest(nestedParent)}
+	nestedCtx := withManagedConversationAttempt(ctx, &conversationExecution{attempt: &nestedParent, state: nestedParent.Conversation}, nestedTurn, nil)
+	nestedTag := nestedCtx.Value(managedTaskKey{}).(managedTaskAdmission)
 	tx, err = s.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err = managedTaskSnapshot(ctx, tx, binding, nestedTurn.ID, nestedTag); err != nil {
+	if _, err = managedTaskSnapshot(nestedCtx, tx, binding, nestedTurn.ID, nestedTag); err != nil {
 		t.Fatal("real nested origin rejected", err)
 	}
 	foreign := binding
 	foreign.RunID = "foreign"
-	if _, err = managedTaskSnapshot(ctx, tx, foreign, nestedTurn.ID, nestedTag); err == nil || !strings.Contains(err.Error(), "another origin") {
+	if _, err = managedTaskSnapshot(nestedCtx, tx, foreign, nestedTurn.ID, nestedTag); err == nil || !strings.Contains(err.Error(), "another origin") {
 		t.Fatal("foreign origin admitted", err)
 	}
 	tx.Rollback()
@@ -208,5 +209,149 @@ func TestManagedConversationReplayQueryUsesOriginIndex(t *testing.T) {
 	all := strings.Join(plan, "\n")
 	if !strings.Contains(all, "usage_origin") || strings.Contains(all, "SCAN u") || strings.Contains(all, "SCAN r") || !strings.Contains(all, "SEARCH u USING INDEX") {
 		t.Fatal("global historical observation scan", all)
+	}
+}
+
+type managedConversationSession struct {
+	*conversationSession
+	provider string
+}
+
+func (s *managedConversationSession) UsageProvider(string, string) (string, string) {
+	return s.provider, "fixture"
+}
+
+func TestManagedConversationRedactedAuthority(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		for _, change := range []string{"unchanged", "persisted-prompt", "persisted-delivery", "live-prompt-collision", "live-delivery-collision"} {
+			t.Run(provider+"/"+change, func(t *testing.T) {
+				secrets := map[string]string{"first": "credential-one", "second": "credential-two"}
+				var store *SQLiteStore
+				var rejected bool
+				runner := &managedConversationSession{provider: provider}
+				runner.conversationSession = newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+					var result SessionResult
+					tag := ctx.Value(managedTaskKey{}).(managedTaskAdmission)
+					if req.AgentID == "reviewer" && change != "unchanged" {
+						if strings.HasPrefix(change, "live-") {
+							if change == "live-prompt-collision" {
+								tag.parent.Conversation.Prompt = strings.ReplaceAll(tag.parent.Conversation.Prompt, secrets["first"], secrets["second"])
+							} else {
+								tag.parent.Conversation.Active.Message = strings.ReplaceAll(tag.parent.Conversation.Active.Message, secrets["first"], secrets["second"])
+							}
+						} else {
+							parent := redactAttempt(*tag.parent, secrets)
+							if change == "persisted-prompt" {
+								parent.Conversation.Prompt += " changed"
+							} else {
+								active := *parent.Conversation.Active
+								active.ID = "foreign-delivery"
+								parent.Conversation.Active = &active
+							}
+							if err := store.RecordAttempt(ctx, parent); err != nil {
+								return result, err
+							}
+						}
+					}
+					var err error
+					if provider == "claude-sdk" {
+						err = BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, "fixture")
+					} else {
+						err = BeginManagedCodexInvocation(ctx, req.RunID, req.InvocationID, "build", "policy", "fixture")
+					}
+					if req.AgentID == "reviewer" && change != "unchanged" {
+						rejected = err != nil
+						if err == nil {
+							err = errors.New("changed authority admitted")
+						}
+						return result, err
+					}
+					if err != nil {
+						return result, err
+					}
+					result = conversationEvent(req, emit)
+					if req.AgentID == "builder" {
+						err = conversationCall(ctx, req, "session-send", "send", `{"to":"reviewer","message":"review credential-one"}`)
+					} else {
+						err = conversationCall(ctx, req, "session-finish", "finish", `{"answer":"credential-one"}`)
+					}
+					if err != nil {
+						return result, err
+					}
+					if provider == "claude-sdk" {
+						if err = BindManagedSDKModel(ctx, req.RunID, req.InvocationID, "fixture", "fixture"); err != nil {
+							return result, err
+						}
+						usage := map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+						if err = req.ObserveUsage(UsageUpdate{Key: "sdk-response:final", Provider: provider, Model: "fixture", SessionID: result.SessionID, Usage: usage, Incomplete: true}); err != nil {
+							return result, err
+						}
+						result.ProviderStatus, result.ProviderVersion = "success", "claude-agent-sdk@0.3.322"
+						result.Outputs["usage"], result.Outputs["cost_usd"] = usage, float64(0)
+						return result, CheckpointManagedSDKTerminal(ctx, result)
+					}
+					if err = BindManagedCodexInvocation(ctx, req.RunID, req.InvocationID, result.SessionID, "turn"); err != nil {
+						return result, err
+					}
+					w := managedUsageWitness("final", 10)
+					w.SessionID, w.TurnID = result.SessionID, "turn"
+					w.Batch = mustManagedRecoveryJSON(managedCodexBatchIdentity{ThreadID: w.SessionID, TurnID: w.TurnID, InvocationID: req.InvocationID, PolicyID: w.PolicyID, BuildID: w.BuildID, BatchID: "batch-final", ResponseID: w.ResponseID, CallIDs: []string{}})
+					if err = RecordManagedCodexUsage(ctx, req.RunID, req.InvocationID, w); err != nil {
+						return result, err
+					}
+					result.ProviderStatus, result.ProviderVersion = "completed", "agent-workflow-managed-v1/build"
+					result.Outputs["usage"], result.Outputs["usage_incomplete"] = w.Usage, false
+					return result, CheckpointManagedCodexTerminal(ctx, result, w.ResponseID, w.Digest)
+				})
+				source := strings.Replace(conversationYAML, "inputs.task", "secrets.first", 1)
+				e, s := durableExecutor(t, source, runner)
+				store = s
+				ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Inputs: map[string]any{"task": "task"}, Secrets: secrets})
+				if change != "unchanged" {
+					if err == nil || !rejected {
+						t.Fatalf("authority substitution was not rejected: run=%+v rejected=%v err=%v", run, rejected, err)
+					}
+					return
+				}
+				if err != nil || run.Status != RunStatusSucceeded || runner.calls.Load() != 2 {
+					t.Fatalf("unchanged redacted authority did not complete: run=%+v calls=%d err=%v", run, runner.calls.Load(), err)
+				}
+				attempts, err := store.Attempts(ctx, run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state := attempts[0].Conversation
+				if state.Prompt != "Task: [REDACTED]" || state.Transcript[0].Message != "review [REDACTED]" || state.Result.(map[string]any)["answer"] != "[REDACTED]" {
+					t.Fatalf("conversation data did not redact: %+v", state)
+				}
+				if state.Sessions["builder"] != "session-builder" || state.Sessions["reviewer"] != "session-reviewer" || state.Transcript[0].ID != "solution/conversation/0/session-send" {
+					t.Fatalf("protocol identities changed: %+v", state)
+				}
+				if _, ok := state.Receipts["solution/conversation/0/session-send"]; !ok {
+					t.Fatal("receipt identity changed")
+				}
+				rows, err := store.db.Query(`SELECT record FROM attempts UNION ALL SELECT record FROM usage_observations UNION ALL SELECT record FROM usage_invocations`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				for rows.Next() {
+					var raw string
+					if err = rows.Scan(&raw); err != nil {
+						t.Fatal(err)
+					}
+					for _, secret := range secrets {
+						if strings.Contains(raw, secret) {
+							t.Fatal("secret persisted in journal")
+						}
+					}
+				}
+				if err = rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }

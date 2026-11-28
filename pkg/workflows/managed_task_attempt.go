@@ -15,10 +15,12 @@ import (
 // Only the existing conversation controller installs this tag. Public agent
 // tasks retain their WorkerManager admission; this is no new execution loop.
 type managedTaskAdmission struct {
-	Attempt            Attempt   `json:"attempt"`
-	ParentID           string    `json:"parent_id"`
-	ConversationSHA256 string    `json:"conversation_sha256"`
-	Deadline           time.Time `json:"deadline"`
+	Attempt                     Attempt   `json:"attempt"`
+	ParentID                    string    `json:"parent_id"`
+	ConversationSHA256          string    `json:"conversation_sha256"`
+	PersistedConversationSHA256 string    `json:"persisted_conversation_sha256"`
+	Deadline                    time.Time `json:"deadline"`
+	parent                      *Attempt
 }
 type managedTaskKey struct{}
 
@@ -30,7 +32,12 @@ func managedConversationDigest(a Attempt) string {
 	return actionHash([]any{a.ID, a.RunID, a.JobID, a.StepID, a.Iteration, a.Number, a.StartedAt, a.InputFingerprint, c.Active, c.Calls, c.MaxCalls, c.MaxMessages, c.Prompt, c.Roles, c.FinishBy, c.Deadline})
 }
 func withManagedConversationAttempt(ctx context.Context, c *conversationExecution, turn Attempt, secrets map[string]string) context.Context {
-	tag := managedTaskAdmission{Attempt: turn, ParentID: c.attempt.ID, ConversationSHA256: managedConversationDigest(*c.attempt), Deadline: c.state.Deadline}
+	tag := managedTaskAdmission{
+		Attempt: turn, ParentID: c.attempt.ID, Deadline: c.state.Deadline,
+		ConversationSHA256:          managedConversationDigest(*c.attempt),
+		PersistedConversationSHA256: managedConversationDigest(redactAttempt(*c.attempt, secrets)),
+		parent:                      c.attempt,
+	}
 	ctx = context.WithValue(ctx, managedTaskKey{}, tag)
 	ctx = context.WithValue(ctx, managedSDKTerminalKey{}, managedSDKTerminalRecorder(func(tc context.Context, result SessionResult) error {
 		return recordManagedTaskTerminal(tc, tag, result, "", "", secrets)
@@ -40,8 +47,16 @@ func withManagedConversationAttempt(ctx context.Context, c *conversationExecutio
 	}))
 }
 func managedTaskSnapshot(ctx context.Context, tx *sql.Tx, binding runtimeexec.Binding, inv string, tag managedTaskAdmission) (*managedCodexAdmission, error) {
-	if tag.Attempt.ID != inv || binding.Kind != "" || tag.ParentID == "" || tag.ConversationSHA256 == "" || tag.Deadline.IsZero() || !time.Now().Before(tag.Deadline) {
+	if tag.Attempt.ID != inv || binding.Kind != "" || tag.ParentID == "" || tag.ConversationSHA256 == "" || tag.PersistedConversationSHA256 == "" || tag.Deadline.IsZero() || !time.Now().Before(tag.Deadline) {
 		return nil, fmt.Errorf("managed original conversation admission is missing or expired")
+	}
+	// Compare live authority before redaction as well as its persisted form. Two
+	// different secrets may redact to the same bytes, but cannot borrow a tag.
+	live, ok := ctx.Value(managedTaskKey{}).(managedTaskAdmission)
+	leftTag, _ := json.Marshal(live)
+	rightTag, _ := json.Marshal(tag)
+	if !ok || live.parent == nil || !bytes.Equal(leftTag, rightTag) || managedConversationDigest(*live.parent) != tag.ConversationSHA256 {
+		return nil, fmt.Errorf("managed live conversation authority changed")
 	}
 	var origin string
 	if err := tx.QueryRowContext(ctx, `SELECT origin_id FROM runs WHERE id=?`, tag.Attempt.RunID).Scan(&origin); err != nil {
@@ -73,7 +88,7 @@ func managedTaskSnapshot(ctx context.Context, tx *sql.Tx, binding runtimeexec.Bi
 		return nil, err
 	}
 	c := parent.Conversation
-	if c == nil || c.Active == nil || c.Calls < 1 || c.Calls > c.MaxCalls || managedConversationDigest(parent) != tag.ConversationSHA256 || !c.Deadline.Equal(tag.Deadline) {
+	if c == nil || c.Active == nil || c.Calls < 1 || c.Calls > c.MaxCalls || managedConversationDigest(parent) != tag.PersistedConversationSHA256 || !c.Deadline.Equal(tag.Deadline) {
 		return nil, fmt.Errorf("managed persisted conversation authority changed")
 	}
 	return &managedCodexAdmission{Task: &tag, MessageID: inv, StartedAt: original.StartedAt, BoundarySHA256: actionHash(tag)}, nil
