@@ -323,6 +323,17 @@ func (b *sdkBrokerBatch) complete(outputs map[string]any) error {
 	if !ok {
 		return fmt.Errorf("SDK final accounting is missing")
 	}
+	// Normalization combines uncached and cache-creation input. Verify the
+	// original categories first so an offsetting change cannot hide a different
+	// native terminal behind the same normalized total.
+	for _, name := range []string{"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+		counter, present := usage[name]
+		raw, err := json.Marshal(counter)
+		var value int64
+		if !present || counter == nil || err != nil || json.Unmarshal(raw, &value) != nil || value < 0 || value != b.totals[name] {
+			return fmt.Errorf("SDK final %s differs from original response accounting", name)
+		}
+	}
 	expected := workflows.NormalizeUsage(workflows.UsageUpdate{Provider: "claude-sdk", Usage: map[string]any{"input_tokens": b.totals["input_tokens"], "output_tokens": b.totals["output_tokens"], "cache_read_input_tokens": b.totals["cache_read_input_tokens"], "cache_creation_input_tokens": b.totals["cache_creation_input_tokens"]}})
 	actual := workflows.NormalizeUsage(workflows.UsageUpdate{Provider: "claude-sdk", Usage: usage})
 	left, _ := json.Marshal([]any{expected.InputTokens, expected.CachedInputTokens, expected.OutputTokens})
