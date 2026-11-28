@@ -681,14 +681,14 @@ func (r *Runner) AdmitNativeOutput(contract *workflows.AgentOutputContract) erro
 // ValidateNativeOutput applies the policy retained at fresh admission after
 // expressions have been rendered. Historical Roles carry no policy marker.
 func (r *Runner) ValidateNativeOutput(contract *workflows.AgentOutputContract) error {
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
+	}
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
 	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native output admission policy")
-	}
-	if err := r.validateNativeAdmissionProfile(); err != nil {
-		return err
 	}
 	return r.AdmitNativeOutput(contract)
 }
@@ -696,14 +696,14 @@ func (r *Runner) ValidateNativeOutput(contract *workflows.AgentOutputContract) e
 // ValidateNativeModel preserves historical expression fallback while rejecting
 // incompatible rendered models before the first dispatch of a new admission.
 func (r *Runner) ValidateNativeModel(model any) error {
+	if err := r.validateNativeAdmissionProfile(); err != nil {
+		return err
+	}
 	if r.Config.NativeTaskAdmission == 0 {
 		return nil
 	}
 	if r.Config.NativeTaskAdmission != 1 && r.Config.NativeTaskAdmission != 2 {
 		return fmt.Errorf("unsupported native task admission policy")
-	}
-	if err := r.validateNativeAdmissionProfile(); err != nil {
-		return err
 	}
 	if model != nil {
 		if _, ok := model.(string); !ok {
