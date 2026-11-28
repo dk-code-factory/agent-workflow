@@ -358,6 +358,9 @@ func verifyBundleDirectory(directory string, bundle *HelperBundle) error {
 	}
 	expectedFiles := map[string]HelperFile{}
 	var total int64
+	// Each limited reader below lacks WriterTo, so CopyBuffer reuses this
+	// scratch space instead of allocating another 32 KiB for every file.
+	var buffer []byte
 	for _, entry := range bundle.Files {
 		name, err := assetPath(entry.Path)
 		if err != nil || name != entry.Path || name == "." || entry.Size < 0 || entry.Mode != 0444 && entry.Mode != 0555 || len(entry.SHA256) != 64 || !hexID(entry.SHA256) {
@@ -388,7 +391,10 @@ func verifyBundleDirectory(directory string, bundle *HelperBundle) error {
 			return fmt.Errorf("retained helper mode/size mismatch: %s", name)
 		}
 		hash := sha256.New()
-		n, err := io.Copy(hash, io.LimitReader(f, entry.Size+1))
+		if buffer == nil {
+			buffer = make([]byte, 32<<10)
+		}
+		n, err := io.CopyBuffer(hash, io.LimitReader(f, entry.Size+1), buffer)
 		_ = f.Close()
 		if err != nil || n != entry.Size || hex.EncodeToString(hash.Sum(nil)) != entry.SHA256 {
 			return fmt.Errorf("retained helper checksum mismatch: %s", name)

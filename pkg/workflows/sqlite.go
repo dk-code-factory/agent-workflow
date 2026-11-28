@@ -86,6 +86,7 @@ type Journal interface {
 
 type SQLiteStore struct {
 	taskGroupCache *checkpointTaskGroupCache
+	invocationSQL  *invocationStatementCache
 	db             *sql.DB
 	Dir            string
 }
@@ -110,7 +111,7 @@ func OpenSQLite(dir string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &SQLiteStore{db: db, Dir: dir, taskGroupCache: &checkpointTaskGroupCache{}}
+	s := &SQLiteStore{db: db, Dir: dir, taskGroupCache: &checkpointTaskGroupCache{}, invocationSQL: &invocationStatementCache{}}
 	var version int
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		_ = db.Close()

@@ -12,6 +12,11 @@ import (
 )
 
 func (s *SQLiteStore) AdmitInvocation(ctx context.Context, record runtimeexec.Record) error {
+	// Prepare before acquiring the transaction: this store has one connection.
+	statement, err := s.invocationStatement(ctx, admitInvocationStatement)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -31,7 +36,9 @@ func (s *SQLiteStore) AdmitInvocation(ctx context.Context, record runtimeexec.Re
 	if err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO invocations(id,run_id,generation,state,record,updated) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM runs r JOIN executions e ON e.run_id=r.id AND e.generation=r.generation WHERE r.id=? AND r.generation=? AND r.owner=? AND r.status='running' AND e.finalizing=0)`, record.ID, record.RunID, record.Generation, record.State, data, time.Now().UTC().UnixNano(), record.RunID, record.Generation, record.Owner)
+	owned := tx.StmtContext(ctx, statement)
+	defer owned.Close()
+	result, err := owned.ExecContext(ctx, record.ID, record.RunID, record.Generation, record.State, data, time.Now().UTC().UnixNano(), record.RunID, record.Generation, record.Owner)
 	if err != nil {
 		return err
 	}
@@ -57,7 +64,11 @@ func (s *SQLiteStore) UpdateInvocation(ctx context.Context, record runtimeexec.R
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE invocations SET state=?,record=?,updated=? WHERE id=? AND run_id=? AND generation=? AND (state!='cleaned' OR ?='cleaned')", record.State, data, time.Now().UTC().UnixNano(), record.ID, record.RunID, record.Generation, record.State)
+	statement, err := s.invocationStatement(ctx, updateInvocationStatement)
+	if err != nil {
+		return err
+	}
+	result, err := statement.ExecContext(ctx, record.State, data, time.Now().UTC().UnixNano(), record.ID, record.RunID, record.Generation, record.State)
 	if err != nil {
 		return err
 	}
