@@ -163,6 +163,7 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	msg := messages[0]
 	msg.Status = RunStatusSucceeded
 	changed := result
@@ -181,6 +182,7 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if err = settleManagedSDKAttempt(ctx, tx, w, msg, result); err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +224,7 @@ func TestManagedSDKRequestedModelBindsOnceBeforeOriginalResponses(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer tx.Rollback()
 			_, attempt, err := readManagedSDKAttempt(ctx, tx, id.ID)
 			tx.Rollback()
 			if err != nil || !attempt.ModelBound || attempt.RequestedModel != selector || attempt.Model != "canonical-model" {

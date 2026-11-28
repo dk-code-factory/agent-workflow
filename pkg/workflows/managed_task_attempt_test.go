@@ -121,6 +121,7 @@ func TestManagedConversationTaskOriginAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	tag := ctx.Value(managedTaskKey{}).(managedTaskAdmission)
 	if _, err = managedTaskSnapshot(ctx, tx, binding, turn.ID, tag); err != nil {
 		t.Fatal(err)
@@ -172,6 +173,7 @@ func TestManagedConversationTaskOriginAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if _, err = managedTaskSnapshot(ctx, tx, binding, nestedTurn.ID, nestedTag); err != nil {
 		t.Fatal("real nested origin rejected", err)
 	}

@@ -48,6 +48,7 @@ func TestManagedCodexSealPreservesOriginalProofAndUnknownExtensions(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	r, err := managedRecoveryForInvocation(ctx, tx, id.ID)
 	tx.Rollback()
 	if err != nil || r == nil || r.State != "sealed" || r.Admission == nil || r.Admission.RemainingCeiling != 0 {
@@ -64,6 +65,7 @@ func TestManagedCodexSealPreservesOriginalProofAndUnknownExtensions(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	_, err = managedRecoveryForInvocation(ctx, tx, id.ID)
 	tx.Rollback()
 	if err == nil {
@@ -147,6 +149,7 @@ func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	saved, err := managedRecoveryForInvocation(ctx, tx, id.ID)
 	tx.Rollback()
 	if err != nil || saved == nil || saved.Terminal == nil || saved.Terminal.Outputs["text"] == "PRIVATE" {
@@ -156,6 +159,7 @@ func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if err = finishManagedCodexCheckpoint(ctx, tx, id, result); err == nil {
 		t.Fatal("altered original terminal result accepted")
 	}
@@ -164,6 +168,7 @@ func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if err = finishManagedCodexCheckpoint(ctx, tx, id, *saved.Terminal); err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +181,7 @@ func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if err = finishManagedCodexCheckpoint(ctx, tx, id, *saved.Terminal); err != nil {
 		t.Fatal(err)
 	}
