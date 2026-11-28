@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dk-code-factory/agent-workflow/pkg/process"
@@ -339,6 +338,14 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		return workflows.SessionResult{}, err
 	}
 	defer cleanup()
+	// Capture termination before replacing Cancel. Async interruption and bridge
+	// recovery must not run durable cleanup concurrently with the sole Wait.
+	guardianCancel := cmd.Cancel
+	if guardianCancel == nil {
+		return workflows.SessionResult{}, fmt.Errorf("supervisor cancellation is unavailable")
+	}
+	stop := newCancellationStop(func() { _ = guardianCancel() })
+	defer stop.finish()
 	// Cancellation first requests SDK interruption. The guardian remains the
 	// five-second fallback and still observes controller owner loss directly.
 	const sdkInterruptGrace = 5 * time.Second
@@ -348,27 +355,12 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if cmd.WaitDelay > 0 {
 		cmd.WaitDelay += sdkInterruptGrace
 	}
-	// The supervisor's cancellation closes only its guardian lifetime pipe.
-	// Final cleanup reads ProcessState and must remain owned by the Wait caller.
-	guardianCancel := cmd.Cancel
-	var interruptTimer *time.Timer
-	var interruptMu sync.Mutex
 	cmd.Cancel = func() error {
-		interruptMu.Lock()
-		if interruptTimer == nil {
-			interruptTimer = time.AfterFunc(sdkInterruptGrace, func() { _ = guardianCancel() })
+		if stop.arm(sdkInterruptGrace) {
+			go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
 		}
-		interruptMu.Unlock()
-		go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
 		return nil
 	}
-	defer func() {
-		interruptMu.Lock()
-		if interruptTimer != nil {
-			interruptTimer.Stop()
-		}
-		interruptMu.Unlock()
-	}()
 	if input["managed_broker"] == true && req.ObserveUsage != nil {
 		if err = workflows.BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, model); err != nil {
 			return workflows.SessionResult{}, err
@@ -387,7 +379,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 			return workflows.BindManagedSDKModel(ctx, req.RunID, req.InvocationID, requested, resolved)
 		}))
 	}
-	result, parseErr := bridgeTurnControlled(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild, func(proof sdkBrokerProof) error {
+	result, parseErr := bridgeTurnControlled(ctx, stdout, writer, input, invocationTools, emit, stop.stop, req.AuthorizeSkillChild, func(proof sdkBrokerProof) error {
 		if req.ObserveUsage != nil {
 			if err := req.ObserveUsage(workflows.UsageUpdate{Key: "sdk-response:" + proof.ResponseID, Provider: "claude-sdk", Model: proof.Model, SessionID: proof.SessionID, Usage: proof.Usage, Incomplete: true}); err != nil {
 				return err
@@ -436,8 +428,9 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		parseErr = fmt.Errorf("provider returned an unexpected resumed session identity")
 	}
 	if parseErr != nil {
-		cleanup()
+		stop.stop()
 	}
+	stop.finish()
 	waitErr := cmd.Wait()
 	if cmd.ProcessState != nil && (cmd.ProcessState.ExitCode() == 125 || cmd.ProcessState.ExitCode() < 0) {
 		return result, errors.Join(ctx.Err(), fmt.Errorf("%w: %v", process.ErrCleanup, waitErr))
