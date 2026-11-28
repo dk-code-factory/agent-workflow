@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -330,24 +331,28 @@ func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeW
 			}
 			stateMu.Unlock()
 		case "result":
+			var integrityErr error
 			if managed != nil {
-				if err := managed.complete(frame.Outputs); err != nil {
-					return result, err
-				}
+				integrityErr = managed.complete(frame.Outputs)
 			}
 			stateMu.Lock()
 			remaining := len(pending) + len(nativeWork)
 			stateMu.Unlock()
 			if remaining != 0 {
-				return result, fmt.Errorf("provider terminated with unresolved callbacks")
+				integrityErr = errors.Join(integrityErr, fmt.Errorf("provider terminated with unresolved callbacks"))
+			}
+			identityChanged := frame.ProviderVersion != "" && frame.ProviderVersion != result.ProviderVersion
+			if identityChanged {
+				integrityErr = errors.Join(integrityErr, fmt.Errorf("bridge provider identity changed during turn"))
+			}
+			failed := frame.Status != workflows.RunStatusSucceeded
+			if !failed && integrityErr != nil {
+				return result, integrityErr
 			}
 			terminal = true
 			result.Status = frame.Status
 			result.ProviderStatus = frame.ProviderStatus
-			if frame.ProviderVersion != "" {
-				if frame.ProviderVersion != result.ProviderVersion {
-					return result, fmt.Errorf("bridge provider identity changed during turn")
-				}
+			if frame.ProviderVersion != "" && !identityChanged {
 				result.ProviderVersion = frame.ProviderVersion
 			}
 			partial := result.Outputs
@@ -360,8 +365,19 @@ func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeW
 					result.Outputs["usage_incomplete"] = true
 				}
 			}
-			if frame.Status != workflows.RunStatusSucceeded {
-				return result, fmt.Errorf("provider failed: %s", frame.Error)
+			if failed {
+				if managed != nil {
+					if result.Outputs == nil {
+						result.Outputs = map[string]any{}
+					}
+					// Rejected terminal accounting cannot replace earlier known usage.
+					// Keeping the failed frame and cause grants no settlement authority.
+					if integrityErr != nil && partial["usage"] != nil {
+						result.Outputs["usage"] = partial["usage"]
+					}
+					result.Outputs["usage_incomplete"] = true
+				}
+				return result, errors.Join(fmt.Errorf("provider failed: %s", frame.Error), integrityErr)
 			}
 			if managed != nil && len(knownTerminal) == 1 {
 				// A real terminal's known charge survives a later EOF, cleanup or
