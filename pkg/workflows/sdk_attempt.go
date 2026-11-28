@@ -285,13 +285,25 @@ func settleManagedSDKAttempt(ctx context.Context, tx *sql.Tx, w Worker, msg Work
 	a.State = "settled"
 	return putManagedSDKAttempt(ctx, tx, msg.ID, fields, a)
 }
-func managedSDKWorkerHold(ctx context.Context, tx *sql.Tx, worker string) error {
+
+type managedWorkerHoldQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// New work and ordinary failure dispositions cannot bypass an original native
+// attempt. Completed originals remain eligible for normal continuation.
+func managedWorkerHold(ctx context.Context, q managedWorkerHoldQuery, worker string) error {
 	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations u JOIN messages m ON m.id=u.invocation_id WHERE m.worker_id=? AND u.observation_key=? AND COALESCE(json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state'),'')!='settled'`, worker, managedSDKAttemptKey).Scan(&count); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM messages m
+ CROSS JOIN usage_observations u
+ WHERE m.worker_id=? AND u.invocation_id=m.id AND (
+ (u.observation_key=? AND COALESCE(json_extract(CAST(u.record AS TEXT),'$.managed_sdk_attempt.state'),'')!='settled') OR
+ (u.observation_key=? AND (COALESCE(json_extract(CAST(u.record AS TEXT),'$.managed_codex_admission.state'),'')!='completed' OR m.status!='succeeded')) OR
+ (json_type(CAST(u.record AS TEXT),'$.managed_codex_witness')='object' AND m.status!='succeeded'))`, worker, managedSDKAttemptKey, managedCodexAdmissionKey).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
-		return fmt.Errorf("SDK original native attempt must settle before new work or acknowledgement")
+		return fmt.Errorf("%w: original managed native attempt must reconcile before new work or acknowledgement", ErrActionIntegrity)
 	}
 	return nil
 }

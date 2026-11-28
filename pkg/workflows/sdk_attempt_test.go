@@ -194,7 +194,7 @@ func TestManagedSDKTerminalRequiresOriginalPrivateCheckpointAndCurrentOwner(t *t
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+	if err = managedWorkerHold(ctx, tx, w.ID); err != nil {
 		t.Fatal("settled original remained held", err)
 	}
 }

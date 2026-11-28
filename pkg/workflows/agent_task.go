@@ -281,6 +281,9 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 			if actionHash(observed) != actionHash(retained) {
 				return outputs, fmt.Errorf("%w: authoritative task failure changed", ErrActionIntegrity)
 			}
+			if err = managedWorkerHold(context.WithoutCancel(ctx), e.Workers.Store.db, reference); err != nil {
+				return outputs, err
+			}
 			if current.FailureAcknowledgement != nil {
 				if !nativeTaskFailureAcknowledged(current) {
 					return outputs, fmt.Errorf("%w: task failure observation receipt changed", ErrActionIntegrity)
@@ -376,6 +379,9 @@ func (m *WorkerManager) reopenAgentTask(ctx context.Context, run, id, role strin
 	}
 	if worker.Definition == nil || worker.Role != role || worker.SessionID == "" {
 		return fmt.Errorf("%w: original agent session binding is unknown", ErrActionIntegrity)
+	}
+	if err = managedWorkerHold(ctx, tx, worker.ID); err != nil {
+		return err
 	}
 	if worker.Status != "closed" && worker.Status != RunStatusNeedsAttention {
 		return nil
@@ -503,6 +509,9 @@ func (e *Executor) observedNativeTaskFailure(ctx context.Context, step Step, res
 	}
 	reference := nativeString(result.Outputs, "agent")
 	if reference == "" {
+		return false
+	}
+	if managedWorkerHold(ctx, e.Workers.Store.db, reference) != nil {
 		return false
 	}
 	// A recovered physical attempt can refer to the original failed turn. Bind

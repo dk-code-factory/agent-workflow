@@ -657,7 +657,7 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 		return WorkerMessage{}, err
 	}
 	if w.Status != RunStatusRunning {
-		if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+		if err = managedWorkerHold(ctx, tx, w.ID); err != nil {
 			return WorkerMessage{}, err
 		}
 	}
@@ -916,7 +916,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			_ = m.saveWorkerOwned(context.WithoutCancel(ctx), w)
 			return
 		}
-		if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+		if err = managedWorkerHold(ctx, tx, w.ID); err != nil {
 			_ = tx.Rollback()
 			w.Status = RunStatusNeedsAttention
 			w.Error = err.Error()
@@ -1279,7 +1279,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)
 	msg.UnsafeFailureClass = unsafeWorkerFailureClass(errors.Join(failureCauses, turnErr))
-	if sdkAttempt != 0 && (turnErr != nil || ctx.Err() != nil || result.Status != RunStatusSucceeded) {
+	if (sdkAttempt != 0 || managedAdmission) && (turnErr != nil || ctx.Err() != nil || result.Status != RunStatusSucceeded) {
 		msg.UnsafeFailureClass = "integrity"
 	}
 	msg.FinishedAt = time.Now().UTC()
@@ -1332,7 +1332,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	current.FailureGeneration = msg.Generation
 	if current.Status != "closed" {
 		current.Status = "idle"
-		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) || (managedAdmission && turnErr != nil) || (sdkAttempt != 0 && msg.Status != RunStatusSucceeded) {
+		if progressErr != nil || errors.Is(turnErr, process.ErrCleanup) || (turnErr != nil && ctx.Err() == nil) || (managedAdmission && turnErr != nil) || ((sdkAttempt != 0 || managedAdmission) && msg.Status != RunStatusSucceeded) {
 			current.Status = RunStatusNeedsAttention
 		}
 	}
@@ -1452,7 +1452,7 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err = managedSDKWorkerHold(ctx, tx, w.ID); err != nil {
+	if err = managedWorkerHold(ctx, tx, w.ID); err != nil {
 		return err
 	}
 	if err = checkEffectAdmission(ctx, tx, run); err != nil {
@@ -1467,15 +1467,6 @@ func (m *WorkerManager) Resume(ctx context.Context, run, id string) error {
 	}
 
 	for _, msg := range messages {
-		if msg.Status != RunStatusSucceeded {
-			var managed int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND (observation_key=? OR json_type(CAST(record AS TEXT),'$.managed_codex_witness')='object')`, msg.ID, managedCodexAdmissionKey).Scan(&managed); err != nil {
-				return err
-			}
-			if managed != 0 {
-				return fmt.Errorf("original managed Codex invocation must reconcile before mailbox acknowledgement")
-			}
-		}
 		if msg.Status == RunStatusRunning {
 			msg.Status = "interrupted"
 			msg.Error = "owner stopped; explicitly acknowledged without replaying this turn"
