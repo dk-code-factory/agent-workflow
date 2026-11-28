@@ -1254,6 +1254,17 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			w.SessionID = result.SessionID
 		}
 	}
+	// Settlement compares the exact redacted provider evidence, before the
+	// controller adds its public policy receipt or removes untrusted output.
+	providerResult := result
+	if sdkAttempt != 0 || managedTerminal {
+		providerResult.Outputs, _ = redactValue(result.Outputs, secrets).(map[string]any)
+		if result.TaskPolicy != nil {
+			policy := *result.TaskPolicy
+			policy.Grant.NativeTools = append([]string(nil), result.TaskPolicy.Grant.NativeTools...)
+			providerResult.TaskPolicy = &policy
+		}
+	}
 	policyErr := retainNativeTaskPolicy(w, msg, &result, turnErr == nil)
 	if policyErr != nil {
 		turnErr = errors.Join(turnErr, policyErr)
@@ -1337,7 +1348,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		}
 	}
 	if sdkAttempt != 0 && msg.Status == RunStatusSucceeded {
-		if err = settleManagedSDKAttempt(context.WithoutCancel(ctx), tx, current, msg, result); err != nil {
+		if err = settleManagedSDKAttempt(context.WithoutCancel(ctx), tx, current, msg, providerResult); err != nil {
 			return
 		}
 	}
@@ -1350,7 +1361,7 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		if msg.Status != RunStatusSucceeded || turnErr != nil {
 			return
 		}
-		if err = finishManagedCodexCheckpoint(context.WithoutCancel(ctx), tx, usageIdentity, result); err != nil {
+		if err = finishManagedCodexCheckpoint(context.WithoutCancel(ctx), tx, usageIdentity, providerResult); err != nil {
 			return
 		}
 	}
