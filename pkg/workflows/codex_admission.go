@@ -28,6 +28,10 @@ type managedCodexAdmissionRow struct {
 	Admission *managedCodexAttemptAdmission `json:"managed_codex_admission"`
 }
 
+func managedZeroChargeBookkeeping(row UsageObservation) bool {
+	return row.Scope == "invocation" && !row.Final && !row.Complete && !row.CounterReset && !row.CostIncomplete && row.CounterBasis == "" && row.ReceiptFingerprint == "" && row.InputTokens == nil && row.CachedInputTokens == nil && row.OutputTokens == nil && row.CostUSD == nil && row.DeltaInputTokens == nil && row.DeltaCachedInputTokens == nil && row.DeltaOutputTokens == nil && row.DeltaCostUSD == nil
+}
+
 func readManagedCodexAdmission(ctx context.Context, tx *sql.Tx, inv string) (map[string]json.RawMessage, *managedCodexAttemptAdmission, error) {
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, inv, managedCodexAdmissionKey).Scan(&raw); err != nil {
@@ -44,7 +48,7 @@ func parseManagedCodexAdmission(raw []byte) (map[string]json.RawMessage, *manage
 	if err := decodeJSONWithNumbers(raw, &row); err != nil {
 		return nil, nil, err
 	}
-	if row.Admission == nil || row.Scope != "invocation" || row.Final || row.Complete || row.CounterReset || row.InputTokens != nil || row.CachedInputTokens != nil || row.OutputTokens != nil || row.CostUSD != nil || row.DeltaInputTokens != nil || row.DeltaCachedInputTokens != nil || row.DeltaOutputTokens != nil {
+	if row.Admission == nil || !managedZeroChargeBookkeeping(row.UsageObservation) {
 		return nil, nil, fmt.Errorf("managed admission is not exact zero-charge bookkeeping")
 	}
 	return fields, row.Admission, nil

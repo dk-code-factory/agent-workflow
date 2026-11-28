@@ -21,6 +21,50 @@ func sdkAttemptFixture(t *testing.T) (*SQLiteStore, context.Context, UsageIdenti
 	}
 	return store, ctx, id
 }
+
+func TestManagedBookkeepingRejectsAccountingFields(t *testing.T) {
+	for _, provider := range []string{"codex-app-server", "claude-sdk"} {
+		for _, field := range []string{"delta_input_tokens", "delta_cached_input_tokens", "delta_output_tokens", "delta_cost_usd", "counter_basis", "receipt_fingerprint", "cost_incomplete"} {
+			t.Run(provider+"/"+field, func(t *testing.T) {
+				fixture := managedUsageFixture
+				key := managedCodexAdmissionKey
+				if provider == "claude-sdk" {
+					fixture = sdkAttemptFixture
+					key = managedSDKAttemptKey
+				}
+				store, ctx, id := fixture(t)
+				if provider == "claude-sdk" {
+					if err := BeginManagedSDKInvocation(ctx, id.RunID, id.ID, "fixture"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				value := "1"
+				if field == "counter_basis" || field == "receipt_fingerprint" {
+					value = `"unexpected"`
+				} else if field == "cost_incomplete" {
+					value = "true"
+				}
+				if _, err := store.db.Exec(`UPDATE usage_observations SET record=json_set(record,?,json(?)) WHERE invocation_id=? AND observation_key=?`, "$."+field, value, id.ID, key); err != nil {
+					t.Fatal(err)
+				}
+				tx, err := store.db.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				if provider == "claude-sdk" {
+					_, _, err = readManagedSDKAttempt(ctx, tx, id.ID)
+				} else {
+					_, _, err = readManagedCodexAdmission(ctx, tx, id.ID)
+				}
+				if err == nil {
+					t.Fatal("accounting field accepted as zero-charge bookkeeping")
+				}
+			})
+		}
+	}
+}
+
 func TestManagedSDKOriginalAttemptCannotRestartOrAcknowledgeUnknown(t *testing.T) {
 	store, ctx, id := sdkAttemptFixture(t)
 	if err := BeginManagedSDKInvocation(ctx, id.RunID, id.ID, "fixture"); err != nil {
