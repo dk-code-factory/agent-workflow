@@ -48,6 +48,7 @@ COPY --from=dependencies /bridge /opt/agent-workflow/bridge
 COPY --from=dependencies /codex /opt/agent-workflow/codex
 COPY bridge/claude/bridge.mjs /opt/agent-workflow/bridge/bridge.mjs
 COPY bridge/claude/isolation.mjs /opt/agent-workflow/bridge/isolation.mjs
+COPY bridge/claude/broker-stream.mjs /opt/agent-workflow/bridge/broker-stream.mjs
 ENV PATH="/usr/local/go/bin:/opt/agent-workflow/codex/node_modules/.bin:$PATH" \
     HOME="/state/home" CODEX_HOME="/state" CLAUDE_CONFIG_DIR="/state" CGO_ENABLED="0"
 USER 65532:65532

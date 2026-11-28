@@ -460,6 +460,14 @@ class InstallerTests(unittest.TestCase):
             launcher.setup_claude_bridge(distribution, self.cache)
         self.assertFalse((self.cache / "bridges").exists())
 
+    def test_bridge_setup_rejects_missing_broker_validator_before_install(self):
+        distribution = self.candidate()
+        (distribution / "bridge/claude/broker-stream.mjs").unlink()
+        with patch.object(launcher, "command", side_effect=AssertionError("missing source must not install")), \
+                self.assertRaisesRegex(launcher.InstallError, "source unavailable: broker-stream.mjs"):
+            launcher.setup_claude_bridge(distribution, self.cache)
+        self.assertFalse((self.cache / "bridges").exists())
+
     def test_bridge_setup_preserves_legacy_verified_sources_without_isolation_import(self):
         legacy = b"// Verified legacy bridge fixture without local imports.\nexport const legacy = true;\n"
         distribution = self.candidate(self.make_archive(bridge_body=legacy, include_isolation=False))

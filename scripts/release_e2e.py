@@ -115,10 +115,15 @@ def configuration(state, package, runtime=None, image=None):
         'codex': {'provider': 'codex-app-server', 'authentication': {'mode': 'native', 'credential-file': str(state / 'codex/auth.json')}, 'sandbox': 'workspace-write'},
         'claude': {'provider': 'claude-sdk', 'bridge': str(package / 'bridge/claude/bridge.mjs'),
                    'authentication': {'mode': 'native', 'credential-env': 'CLAUDE_CODE_OAUTH_TOKEN'}, 'tools': ['Bash', 'Read', 'Write', 'Edit'],
-                   'mcp-grants': [{'server': 'engine', 'tool': t} for t in ['worker_spawn', 'worker_send', 'worker_wait', 'worker_status', 'worker_interrupt', 'worker_close']],
                    'limits': {'max-workers': 4, 'max-depth': 3, 'max-turns': 8, 'turn-timeout': '5m'}}}
+    # Native shell/file coverage keeps its original grants. Broker-only
+    # scenarios use a distinct workspace-owned role with no direct native tools.
+    agents['claude_managed'] = dict(agents['claude'], tools=[], **{
+        'mcp-grants': [{'server': 'engine', 'tool': t} for t in
+                       ['worker_spawn', 'worker_send', 'worker_wait', 'worker_status', 'worker_interrupt', 'worker_close']]})
     if runtime:
-        agents['claude']['execution'] = {'mode': 'container', 'runtime': runtime, 'image': image, 'writable': True, 'cleanup': 'strict'}
+        for role in ['claude', 'claude_managed']:
+            agents[role]['execution'] = {'mode': 'container', 'runtime': runtime, 'image': image, 'writable': True, 'cleanup': 'strict'}
     return {'agents': agents}
 
 def rows(policy, phase):
@@ -165,10 +170,12 @@ def run_phase(state, dist, phase):
             private_write(cfg, json.dumps(configuration(state, package, runtime, image['image'])))
             output = state / ('evidence-' + str(len(list(state.glob('evidence-*')))))
             role = {'claude-cli': 'claude_cli', 'codex-cli': 'codex_cli', 'codex-app-server': 'codex', 'claude-sdk': 'claude'}[row['provider']]
+            if row['provider'] == 'claude-sdk' and row['scenario'] in ['nested-workers-capacity-one', 'external-mcp-uncertain-response', 'managed-discovery-canaries']:
+                role = 'claude_managed'
             command = [str(package / 'workflow-conformance'), '--release-ci', '--allow-live', '--scenario', str(ROOT / 'conformance/scenarios' / (row['scenario'] + '.json')),
                        '--config', str(cfg), '--role', role, '--engine', str(package / 'agent-workflow'), '--evidence', str(output), '--timeout', '5m']
             if row['scenario'] == 'nested-workers-capacity-one':
-                command += ['--child-role', 'claude']
+                command += ['--child-role', 'claude_managed']
             if row['scenario'].startswith('mixed-development-'):
                 repo = make_mixed_fixture(state)
                 command += ['--repository-path', str(repo), '--workflow', 'workflows/mixed-development.yml']

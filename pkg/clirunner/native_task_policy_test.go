@@ -225,7 +225,7 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyFormatting(t *testing.T) {
 type nativePolicyBrokerProbe struct{ calls atomic.Int32 }
 
 func (b *nativePolicyBrokerProbe) Catalog() []workflows.ToolDefinition {
-	return []workflows.ToolDefinition{{Server: "fixture", Name: "write", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+	return []workflows.ToolDefinition{{Server: "engine", Name: "worker_status", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 }
 func (b *nativePolicyBrokerProbe) Call(context.Context, workflows.ToolRequest) (json.RawMessage, error) {
 	b.calls.Add(1)
@@ -285,7 +285,11 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyDeniedEffects(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("READONLY_DENIAL_KEY", "fake-loopback-key-only")
-			runner := &Runner{Workspace: root, Config: Config{AgentRuntime: "native", Agents: map[string]Agent{"native": {Provider: "claude-sdk", Bridge: bridge, Model: "claude-sonnet-4-6", Tools: []string{"Read", "Write", "WebFetch"}, MCPGrants: []workflows.ToolGrant{{Server: "fixture", Tool: "write"}}, Authentication: Authentication{Mode: "gateway", Endpoint: gateway.URL, CredentialEnv: "READONLY_DENIAL_KEY"}}}}}
+			cfg, err := LoadConfig(nativePolicyFixtureConfig(t, root, bridge, gateway.URL, "[{server: engine, tool: worker_status}]"))
+			if err != nil {
+				t.Fatal("public configuration rejected the native policy role", err)
+			}
+			runner := &Runner{Workspace: root, Config: cfg}
 			definition, err := runner.AdmitNativeTask(&workflows.AgentDefinition{Name: "validator", ToolPolicy: "read-only"})
 			if err != nil {
 				t.Fatal(err)
@@ -295,6 +299,9 @@ func TestSDKNativeAgainstFakeGatewayReadOnlyDeniedEffects(t *testing.T) {
 			result, err := runner.RunTurn(ctx, workflows.SessionRequest{AgentRequest: workflows.AgentRequest{AgentID: "native", ParentWorkerID: "agent-denial", InvocationID: kind, Definition: definition, Prompt: "Validate the proposal.", Tools: &workflows.InvocationTools{Binding: probe}}}, nil)
 			if err != nil || result.TaskPolicy == nil || calls.Load() != 2 || probe.calls.Load() != 0 || network.Load() != 0 {
 				t.Fatal("forbidden effect escaped read-only grant", result, err, calls.Load(), probe.calls.Load(), network.Load())
+			}
+			if !reflect.DeepEqual(result.TaskPolicy.Grant, *definition.NativePolicy) || result.TaskPolicy.InvocationID != kind || result.TaskPolicy.Agent != "agent-denial" || result.TaskPolicy.FormattingTool || !reflect.DeepEqual(cfg.Agents["native"].Tools, []string{"Read", "Write", "WebFetch"}) {
+				t.Fatal("loaded role or original read-only receipt changed", cfg.Agents["native"], result.TaskPolicy)
 			}
 			content, err := os.ReadFile(proposal)
 			if err != nil || string(content) != "original" {

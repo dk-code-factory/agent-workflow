@@ -99,11 +99,9 @@ func (r *Runner) ValidateConversationOutput(id string, schema map[string]any) er
 	return nil
 }
 
-func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
-	agent, ok := r.Config.Agents[req.AgentID]
-	if !ok {
-		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
-	}
+// isolateRepairTurn is shared by session transport preparation. It retains
+// engine invocation ownership while removing task authority and history.
+func isolateRepairTurn(agent Agent, req workflows.SessionRequest) (Agent, workflows.SessionRequest) {
 	if req.RepairOnly {
 		// A formatting repair is a fresh, tool-free operation. In particular a
 		// native task's retained definition/input/session must not restore its
@@ -119,6 +117,19 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		agent.InstructionText = "Format the supplied repair data as JSON. Do not execute tools or perform the original task."
 		agent.Tools = []string{}
 	}
+	return agent, req
+}
+
+func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit func(workflows.ProviderEvent)) (result workflows.SessionResult, err error) {
+	if req.RepairOnly && req.Skill != nil {
+		return workflows.SessionResult{}, fmt.Errorf("selected skill formatting repair is not certified")
+	}
+	agent, ok := r.Config.Agents[req.AgentID]
+	if !ok {
+		return workflows.SessionResult{}, fmt.Errorf("unknown agent %s", req.AgentID)
+	}
+	agent, req = isolateRepairTurn(agent, req)
+
 	if req.Definition != nil {
 		if req.AgentID != r.NativeTaskRole() {
 			return workflows.SessionResult{}, fmt.Errorf("native task runtime role binding changed")
@@ -143,6 +154,10 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		if req.Definition.Model != "" {
 			agent.Model = req.Definition.Model
 		}
+	}
+	// An admitted native policy removes broker authority before this check.
+	if req.Skill == nil && agent.Provider == "claude-sdk" && len(agent.Tools) > 0 && req.Tools != nil && req.Tools.Binding != nil && len(req.Tools.Binding.Catalog()) > 0 {
+		return workflows.SessionResult{}, fmt.Errorf("SDK direct native tools with managed broker lease release are not certified")
 	}
 	if req.Skill != nil {
 		workspace := req.Workspace
@@ -240,7 +255,7 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.Output != nil {
 		schema = req.Output.Schema
 	}
-	input := map[string]any{"session_id": req.SessionID, "prompt": req.Prompt, "workspace": workspace, "model": model, "instructions": agent.InstructionText, "tools": agent.Tools, "repair_only": req.RepairOnly, "schema": schema}
+	input := map[string]any{"managed_broker": (req.Definition == nil || req.Definition.NativePolicy == nil) && req.Skill == nil && len(agent.Tools) == 0 && (req.ObserveUsage != nil || req.Tools != nil && req.Tools.Binding != nil), "session_id": req.SessionID, "prompt": req.Prompt, "workspace": workspace, "model": model, "instructions": agent.InstructionText, "tools": agent.Tools, "repair_only": req.RepairOnly, "schema": schema}
 	var taskPolicy *workflows.NativeTaskPolicy
 	if req.Definition != nil && req.Definition.NativePolicy != nil {
 		taskPolicy = req.Definition.NativePolicy
@@ -333,12 +348,15 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if cmd.WaitDelay > 0 {
 		cmd.WaitDelay += sdkInterruptGrace
 	}
+	// The supervisor's cancellation closes only its guardian lifetime pipe.
+	// Final cleanup reads ProcessState and must remain owned by the Wait caller.
+	guardianCancel := cmd.Cancel
 	var interruptTimer *time.Timer
 	var interruptMu sync.Mutex
 	cmd.Cancel = func() error {
 		interruptMu.Lock()
 		if interruptTimer == nil {
-			interruptTimer = time.AfterFunc(sdkInterruptGrace, cleanup)
+			interruptTimer = time.AfterFunc(sdkInterruptGrace, func() { _ = guardianCancel() })
 		}
 		interruptMu.Unlock()
 		go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
@@ -351,6 +369,11 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		}
 		interruptMu.Unlock()
 	}()
+	if input["managed_broker"] == true && req.ObserveUsage != nil {
+		if err = workflows.BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, model); err != nil {
+			return workflows.SessionResult{}, err
+		}
+	}
 	if err = cmd.Start(); err != nil {
 		return workflows.SessionResult{}, err
 	}
@@ -359,7 +382,35 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	if req.RepairOnly {
 		invocationTools = nil
 	}
-	result, parseErr := bridgeTurn(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild)
+	if input["managed_broker"] == true && req.ObserveUsage != nil {
+		ctx = context.WithValue(ctx, sdkModelBindingKey{}, sdkModelBinding(func(requested, resolved string) error {
+			return workflows.BindManagedSDKModel(ctx, req.RunID, req.InvocationID, requested, resolved)
+		}))
+	}
+	result, parseErr := bridgeTurnControlled(ctx, stdout, writer, input, invocationTools, emit, cleanup, req.AuthorizeSkillChild, func(proof sdkBrokerProof) error {
+		if req.ObserveUsage != nil {
+			if err := req.ObserveUsage(workflows.UsageUpdate{Key: "sdk-response:" + proof.ResponseID, Provider: "claude-sdk", Model: proof.Model, SessionID: proof.SessionID, Usage: proof.Usage, Incomplete: true}); err != nil {
+				return err
+			}
+		}
+		if req.ObserveUsage != nil {
+			return workflows.CheckManagedSDKAuthority(ctx, req.RunID, req.InvocationID)
+		}
+		return ctx.Err()
+	}, func() error {
+		if req.ObserveUsage != nil {
+			return workflows.CheckManagedSDKAuthority(ctx, req.RunID, req.InvocationID)
+		}
+		return ctx.Err()
+	}, func(terminal workflows.SessionResult) error {
+		if req.ObserveUsage == nil {
+			return nil
+		}
+		if req.SessionID != "" && terminal.SessionID != req.SessionID {
+			return fmt.Errorf("known SDK terminal changed original resumed session")
+		}
+		return workflows.RecordManagedSDKTerminalCost(ctx, req.RunID, req.InvocationID, terminal)
+	})
 	if req.Skill != nil && len(req.Skill.Children) != 0 && result.Outputs != nil {
 		raw, _ := result.Outputs["native_child_result"].(map[string]any)
 		if raw == nil {
@@ -412,7 +463,11 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		result.Outputs["provider_version"] = result.ProviderVersion
 		result.Outputs["session_id"] = result.SessionID
 	}
-	return limitResult(result, agent)
+	result, err = limitResult(result, agent)
+	if err == nil && input["managed_broker"] == true && req.ObserveUsage != nil {
+		err = workflows.CheckpointManagedSDKTerminal(ctx, result)
+	}
+	return result, err
 }
 
 // Only explicit provider authentication is added by each session adapter.
@@ -643,6 +698,16 @@ func (r *Runner) ValidateNativeModel(model any) error {
 		if _, ok := model.(string); !ok {
 			return fmt.Errorf("agent model must be a string")
 		}
+	}
+	return nil
+}
+func (r *Runner) ValidateConversationRole(id string) error {
+	a, ok := r.Config.Agents[id]
+	if !ok {
+		return fmt.Errorf("unknown conversation agent %s", id)
+	}
+	if a.Provider == "claude-sdk" && len(a.Tools) > 0 {
+		return fmt.Errorf("conversation role %s: direct native tools with broker lease release are not certified", id)
 	}
 	return nil
 }
