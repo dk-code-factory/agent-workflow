@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "enabled": false,
+  "status": "pending-review-and-current-source-conformance",
+  "protocol": "agent-workflow-codex-managed/1",
+  "upstream_tag": "rust-v0.167.1",
+  "upstream_sha": "0a94398fa60c4fac0e7659e4213a0a36e613dd46",
+  "rust_toolchain": "1.95.0",
+  "patch": "patches/codex/0.167.1-managed-v1.patch",
+  "patch_sha256": "ad9533ccedfcc5855dff28281e833f43a61f295a1ece6be39bf0b131964edf37",
+  "recipe_sha256": "935a32a34c44daff2321b3d5ec865749075bce8f42fdce8bb629d7eda684466f",
+  "offline_wrapper": "scripts/codex_offline_exec.py",
+  "offline_wrapper_sha256": "0c69b92b2765567dd72bc725ce55119625128233f35d1dc8036ff5dfee47f2e4",
+  "upstream_lock_sha256": "9e71c74824a7ea114d0a3a4c94e93d81a1ddd13ca8fa6f698cbd1284c2e9ff2f",
+  "source_lock_sha256": "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883",
+  "source_sha256": "ae0f5d0d23968ce93929beece4fb54f680c144b2ac125b9fc7bbf72e31c28101"
+}
