@@ -326,12 +326,19 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 	defer cleanup()
 	// Cancellation first requests SDK interruption. The guardian remains the
 	// five-second fallback and still observes controller owner loss directly.
+	const sdkInterruptGrace = 5 * time.Second
+	// os/exec starts WaitDelay when Cancel returns, before this protocol grace.
+	// Retain the supervisor's cleanup budget after that grace instead of killing
+	// the guardian at the same instant it first receives the shutdown request.
+	if cmd.WaitDelay > 0 {
+		cmd.WaitDelay += sdkInterruptGrace
+	}
 	var interruptTimer *time.Timer
 	var interruptMu sync.Mutex
 	cmd.Cancel = func() error {
 		interruptMu.Lock()
 		if interruptTimer == nil {
-			interruptTimer = time.AfterFunc(5*time.Second, cleanup)
+			interruptTimer = time.AfterFunc(sdkInterruptGrace, cleanup)
 		}
 		interruptMu.Unlock()
 		go func() { _ = writer.send(map[string]any{"type": "interrupt"}) }()
