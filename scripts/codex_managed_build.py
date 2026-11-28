@@ -500,7 +500,7 @@ def check(args):
             (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
     if code == 0 and reason == "completed" and args.phase in ("runtime-tests", "submission-tests", "journal-tests", "lifecycle-tests"):
         count = selected_test_count((root / (label + ".log")).read_text(errors="replace"))
-        expected_count = {"runtime-tests": 11, "submission-tests": 1, "journal-tests": 11, "lifecycle-tests": 5}[args.phase]
+        expected_count = {"runtime-tests": 11, "submission-tests": 1, "journal-tests": 11, "lifecycle-tests": 7}[args.phase]
         report["selected_test_count"] = count
         if count != expected_count:
             report["reason"] = reason = "selected_test_count_mismatch"
