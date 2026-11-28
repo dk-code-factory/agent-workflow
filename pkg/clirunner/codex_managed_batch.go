@@ -97,6 +97,7 @@ type codexManagedBatchController struct {
 	seenBatches               map[string]bool
 	batch                     *codexParkedBatch
 	running                   bool
+	closed                    bool
 	err                       error
 	interrupt                 func(error)
 	// Revalidate the admitted engine owner/fence immediately before dispatch
@@ -149,6 +150,11 @@ func (c *codexManagedBatchController) fail(failure error) {
 
 func (c *codexManagedBatchController) bindStart(turn string) error {
 	c.mu.Lock()
+	if c.closed {
+		err := c.err
+		c.mu.Unlock()
+		return err
+	}
 	if c.bound || turn == "" || c.batch != nil && c.batch.TurnID != turn {
 		c.mu.Unlock()
 		err := fmt.Errorf("managed official turn identity changed")
@@ -257,26 +263,19 @@ func (c *codexManagedBatchController) handle(ctx context.Context, frame rpcFrame
 }
 
 func (c *codexManagedBatchController) maybeStartLocked() {
-	if c.err != nil || !c.bound || c.batch == nil || c.running || len(c.pending) != len(c.batch.CallIDs) {
+	// A failed callback still owes its retained completed-response accounting.
+	// Only the matching official turn and full callback set can start it;
+	// execute retains the sticky cancellation before any broker effect.
+	if c.closed || !c.bound || c.batch == nil || c.running || len(c.pending) != len(c.batch.CallIDs) {
 		return
 	}
 	calls := make([]*codexPendingCall, 0, len(c.batch.CallIDs))
-	argumentBytes := 0
 	for _, id := range c.batch.CallIDs {
 		call := c.pending[id]
 		if call == nil || call.call.TurnID != c.turn {
 			return
 		}
-		argumentBytes += len(call.call.Arguments)
 		calls = append(calls, call)
-	}
-	if argumentBytes > 8<<20 {
-		// The read loop remains live; the worker below will reject before
-		// releasing capacity or dispatching an effect.
-		c.running = true
-		c.wg.Add(1)
-		go func() { defer c.wg.Done(); c.fail(fmt.Errorf("managed complete argument batch exceeds bound")) }()
-		return
 	}
 	batch := *c.batch
 	batch.CallIDs = append([]string(nil), batch.CallIDs...)
@@ -292,6 +291,16 @@ func (c *codexManagedBatchController) execute(batch codexParkedBatch, calls []*c
 	// Every accounting failure holds this entire batch.
 	if err := c.observe(c.ctx, batch); err != nil {
 		c.fail(err)
+		return
+	}
+	argumentBytes := 0
+	for _, call := range calls {
+		argumentBytes += len(call.call.Arguments)
+	}
+	if argumentBytes > 8<<20 {
+		// Broker argument admission cannot erase an already completed model
+		// charge, but still holds capacity and dispatches no effects.
+		c.fail(fmt.Errorf("managed complete argument batch exceeds bound"))
 		return
 	}
 	if err := context.Cause(c.ctx); err != nil {
@@ -361,6 +370,8 @@ func (c *codexManagedBatchController) execute(batch codexParkedBatch, calls []*c
 
 func (c *codexManagedBatchController) close() {
 	c.mu.Lock()
+	// Fence future WaitGroup additions under the scheduling mutex before Wait.
+	c.closed = true
 	if c.err == nil {
 		c.err = errors.New("managed controller closed")
 	}
