@@ -226,11 +226,13 @@ def terminate_group(process, grace=5):
 
 
 def bounded_cache_copy(source, destination, root, cache, started):
-    """Copy regular pinned inputs without crossing the owned byte/free ceiling.
+    """Copy pinned regular files with logical-byte reservations and free-space checks.
 
-    A whole tree is reserved before its first write, and every bounded chunk
-    rechecks both the deadline and actual remaining free space. Symlinks and
-    special files are rejected rather than followed into unbounded inputs.
+    Reserve the inventoried regular-file st_size total before the first write;
+    recheck the deadline and actual free space before each bounded chunk. This
+    logical reservation excludes directory allocation and filesystem rounding,
+    so it does not guarantee that writes never cross the free-space floor.
+    Reject symlinks and special files rather than following unbounded inputs.
     """
     entries, total = [], 0
 
