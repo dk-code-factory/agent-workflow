@@ -51,6 +51,7 @@ const promptReady = new Promise(resolve => { releasePrompt = resolve; });
 const requestReady = new Promise((resolve, reject) => { start = { resolve, reject }; });
 
 function barrier() {
+  if (terminal) return;
   emit({ type: 'progress', data: { type: 'broker_wait_state', pending_count: pending.size, native_active: nativeActive.size, model_idle: modelIdle } });
   // Custom tools explicitly use the pinned SDK's serial (non-read-only) path.
   // Later unstarted tools cannot run until this callback returns. Every tool
