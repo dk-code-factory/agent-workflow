@@ -47,6 +47,12 @@ class Redirects(urllib.request.HTTPRedirectHandler):
     def __init__(self, receipt):
         self.receipt = receipt
 
+    def http_error_302(self, request, response, code, message, headers):
+        response.close()
+        return super().http_error_302(request, response, code, message, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
     def redirect_request(self, request, response, code, message, headers, target):
         canonical(target)
         self.receipt.append({"from": request.full_url, "to": target, "status": code})
@@ -78,6 +84,7 @@ def save_archive(stream, destination, expected, guard):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
+
 @contextmanager
 def preparation_deadline(seconds):
     if seconds <= 0:
@@ -106,6 +113,12 @@ def reserve_space(root, size):
 
 
 def prepare(args):
+    started = time.monotonic()
+    with preparation_deadline(MAX_SECONDS):
+        return prepare_owned(args, started)
+
+
+def prepare_owned(args, started):
     root = args.output.resolve(strict=True)
     cache = root / "cargo-home"
     destination_root = cache / "registry/cache" / REGISTRY
@@ -128,43 +141,42 @@ def prepare(args):
     names = sorted({entry.removeprefix("archive:") for entry in missing if entry.startswith("archive:")})
     if len(names) > 53 or any(name not in packages for name in names):
         raise ValueError("archive preparation exceeds its explicit pinned set")
-    started, total, rows = time.monotonic(), 0, []
+    total, rows = 0, []
     report = {"original_lock_sha256": lock_hash, "limits": {"archives": 53, "archive_bytes": MAX_ARCHIVE, "total_bytes": MAX_TOTAL, "seconds": MAX_SECONDS, "minimum_free_bytes": MIN_FREE}, "archives": rows}
 
     def guard(size=0, reserve=0):
         if time.monotonic() - started >= MAX_SECONDS or total + size > MAX_TOTAL:
             raise ValueError("archive preparation resource limit exceeded")
-        reserve_space(root, reserve)
+        reserve_space(destination_root, reserve)
 
     try:
-        with preparation_deadline(MAX_SECONDS - (time.monotonic() - started)):
-            for name in names:
-                guard()
-                package = packages[name]
-                row = {"name": package["name"], "version": package["version"], "sha256": package["checksum"], "redirects": []}
-                rows.append(row)
-                target = destination_root / name
-                if target.exists():
-                    if target.is_symlink() or target.stat().st_nlink != 1 or digest(target) != package["checksum"]:
-                        raise ValueError("existing owned archive does not match its lock")
-                    row.update({"source": "owned-cache", "bytes": target.stat().st_size})
-                    continue
-                candidate = args.from_cache / "registry/cache" / REGISTRY / name
-                if candidate.is_file() and not candidate.is_symlink():
-                    with candidate.open("rb") as stream:
-                        size = save_archive(stream, target, package["checksum"], guard)
-                    row.update({"source": str(candidate), "bytes": size})
-                else:
-                    url = canonical("https://static.crates.io/crates/" + quote(package["name"], safe="") + "/" + quote(name, safe=""))
-                    row["url"] = url
-                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Redirects(row["redirects"]))
-                    with opener.open(url, timeout=min(15, MAX_SECONDS - (time.monotonic() - started))) as response:
-                        row.update({"final_url": canonical(response.url), "http_status": response.status})
-                        if response.status != 200:
-                            raise ValueError("canonical archive HTTP response is not 200")
-                        size = save_archive(response, target, package["checksum"], guard)
-                    row.update({"source": "canonical-https", "bytes": size})
-                total += size
+        for name in names:
+            guard()
+            package = packages[name]
+            row = {"name": package["name"], "version": package["version"], "sha256": package["checksum"], "redirects": []}
+            rows.append(row)
+            target = destination_root / name
+            if target.exists():
+                if target.is_symlink() or target.stat().st_nlink != 1 or digest(target) != package["checksum"]:
+                    raise ValueError("existing owned archive does not match its lock")
+                row.update({"source": "owned-cache", "bytes": target.stat().st_size})
+                continue
+            candidate = args.from_cache / "registry/cache" / REGISTRY / name
+            if candidate.is_file() and not candidate.is_symlink():
+                with candidate.open("rb") as stream:
+                    size = save_archive(stream, target, package["checksum"], guard)
+                row.update({"source": str(candidate), "bytes": size})
+            else:
+                url = canonical("https://static.crates.io/crates/" + quote(package["name"], safe="") + "/" + quote(name, safe=""))
+                row["url"] = url
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Redirects(row["redirects"]))
+                with opener.open(url, timeout=min(15, MAX_SECONDS - (time.monotonic() - started))) as response:
+                    row.update({"final_url": canonical(response.url), "http_status": response.status})
+                    if response.status != 200:
+                        raise ValueError("canonical archive HTTP response is not 200")
+                    size = save_archive(response, target, package["checksum"], guard)
+                row.update({"source": "canonical-https", "bytes": size})
+            total += size
         report["exit_code"] = 0
     except BaseException as error:
         report.update({"exit_code": 1, "error": type(error).__name__ + ": " + str(error)})

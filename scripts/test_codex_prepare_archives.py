@@ -1,15 +1,16 @@
 import argparse
 import hashlib
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("archives", Path(__file__).with_name("codex_prepare_archives.py"))
 ARCHIVES = importlib.util.module_from_spec(SPEC)
@@ -40,6 +41,25 @@ class PinnedArchiveTests(unittest.TestCase):
                 handler.redirect_request(None, None, 302, "", {}, url)
         self.assertEqual(redirects, [])
 
+    def test_redirect_bodies_are_closed_without_being_buffered(self):
+        for code in (301, 302, 303, 307, 308):
+            with self.subTest(code=code):
+                wire = io.BytesIO(b"HTTP/1.1 302 Found\r\nContent-Length: 1073741824\r\nLocation: https://static.crates.io/crates/fixture/final.crate\r\n\r\n")
+                transport = Mock()
+                transport.makefile.return_value = wire
+                response = HTTPResponse(transport)
+                response.begin()
+                request = ARCHIVES.urllib.request.Request("https://static.crates.io/crates/fixture/start.crate")
+                request.timeout = 1
+                redirects = []
+                handler = ARCHIVES.Redirects(redirects)
+                handler.parent = Mock()
+                with patch.object(wire, "read", side_effect=AssertionError("redirect body was buffered")):
+                    result = getattr(handler, "http_error_" + str(code))(request, response, code, "Redirect", response.headers)
+                self.assertIs(result, handler.parent.open.return_value)
+                self.assertTrue(wire.closed)
+                self.assertEqual(redirects[0]["status"], code)
+
     def fixture(self, root):
         prepared, origin = root / "prepared", root / "original"
         archives = prepared / "cargo-home/registry/cache" / ARCHIVES.REGISTRY
@@ -66,6 +86,53 @@ class PinnedArchiveTests(unittest.TestCase):
             report = json.loads((args.output / args.receipt).read_text())
             self.assertEqual(report["exit_code"], 1)
             self.assertEqual(report["prepared_bytes"], 0)
+
+    def test_archive_floor_checks_its_filesystem_separately_from_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+            checked = []
+
+            def free_space(path):
+                checked.append(path)
+                return type("Space", (), {"free": 24 if path == archives else 10000})()
+
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=free_space), self.assertRaisesRegex(ValueError, "resource limit"):
+                ARCHIVES.prepare(args)
+            self.assertIn(archives, checked)
+            self.assertIn(args.output, checked)
+            self.assertEqual(list(archives.iterdir()), [])
+            self.assertEqual(json.loads((args.output / args.receipt).read_text())["exit_code"], 1)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO prerequisite")
+    def test_total_deadline_covers_blocking_preflight_inputs(self):
+        for relative in ("source/codex-rs/Cargo.lock", "cache.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                args, archives = self.fixture(Path(directory))
+                lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+                path = args.output / relative
+                path.unlink()
+                os.mkfifo(path)
+                with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
+                    ARCHIVES.prepare(args)
+                self.assertEqual(list(archives.iterdir()), [])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO prerequisite")
+    def test_total_deadline_covers_final_lock_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, _ = self.fixture(Path(directory))
+            lock = args.output / "source/codex-rs/Cargo.lock"
+            lock_hash = ARCHIVES.digest(lock)
+            save = ARCHIVES.save_archive
+
+            def changed_lock(*params):
+                size = save(*params)
+                lock.unlink()
+                os.mkfifo(lock)
+                return size
+
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES, "save_archive", side_effect=changed_lock), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
+                ARCHIVES.prepare(args)
 
     def test_dangling_receipt_alias_cannot_write_outside_owned_storage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,15 +218,19 @@ class PinnedArchiveTests(unittest.TestCase):
         thread.start()
         connection = HTTPConnection("127.0.0.1", server.server_port, timeout=1)
         try:
-            connection.request("GET", "/fixture")
-            response = connection.getresponse()
-            response.url = "https://static.crates.io/crates/fixture/fixture-1.0.0.crate"
             with tempfile.TemporaryDirectory() as directory:
                 args, archives = self.fixture(Path(directory))
                 (args.from_cache / "registry/cache" / ARCHIVES.REGISTRY / "fixture-1.0.0.crate").unlink()
                 lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+
+                def open_response(*_, **__):
+                    connection.request("GET", "/fixture")
+                    response = connection.getresponse()
+                    response.url = "https://static.crates.io/crates/fixture/fixture-1.0.0.crate"
+                    return response
+
                 with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES.urllib.request, "build_opener") as opener, self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
-                    opener.return_value.open.return_value = response
+                    opener.return_value.open.side_effect = open_response
                     ARCHIVES.prepare(args)
                 self.assertEqual(list(archives.iterdir()), [])
                 report = json.loads((args.output / args.receipt).read_text())

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 import tempfile
 
@@ -74,6 +75,21 @@ def install():
         lib.seccomp_release(context)
 
 
+def close_inherited_descriptors():
+    for descriptor in (0, 1, 2):
+        try:
+            metadata = os.fstat(descriptor)
+        except OSError as error:
+            if error.errno == errno.EBADF:
+                continue
+            raise
+        if stat.S_ISSOCK(metadata.st_mode):
+            with socket.socket(fileno=os.dup(descriptor)) as stream:
+                if stream.family != socket.AF_UNIX:
+                    raise RuntimeError("offline command cannot inherit Internet standard streams")
+    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--receipt", type=Path, required=True)
@@ -92,8 +108,10 @@ def main():
         "CARGO_PROFILE_TEST_DEBUG", "AGENT_WORKFLOW_CODEX_BUILD_ID",
     }
     environment = {key: value for key, value in os.environ.items() if key in allowed}
+    close_inherited_descriptors()
     receipt = install()
-    args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")
+    with args.receipt.open("x") as output:
+        output.write(json.dumps(receipt, indent=2) + "\n")
     os.execve(command[0], command, environment)
 
 
