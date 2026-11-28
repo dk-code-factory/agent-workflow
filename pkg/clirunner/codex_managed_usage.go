@@ -17,6 +17,28 @@ type codexModelWitness struct {
 	Usage json.RawMessage    `json:"usage"`
 }
 
+// Canonical JSON binds semantic witness bytes across notification/permit
+// envelopes without depending on JSON object key ordering. Both observation
+// and sealing must use this durable identity.
+func codexWitnessDigest(value codexModelWitness) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	var canonical any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&canonical); err != nil {
+		return "", err
+	}
+	raw, err = json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 // This recorder owns immutable wire evidence, independently of exposed broker
 // tools. Empty-catalog final responses and fresh repairs use the same journal.
 // A completion event charges known usage only; it never releases capacity.
@@ -40,34 +62,19 @@ func (a *codexManagedAccounting) observe(value codexModelWitness) error {
 		a.failure = fmt.Errorf("managed completed observation differs from original invocation")
 		return a.failure
 	}
-	// Canonical JSON binds semantic witness bytes across notification/permit
-	// envelopes without depending on JSON object key ordering.
-	raw, err := json.Marshal(value)
+	digest, err := codexWitnessDigest(value)
 	if err != nil {
 		a.failure = err
 		return err
 	}
-	var canonical any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&canonical); err != nil {
-		a.failure = err
-		return err
-	}
-	raw, err = json.Marshal(canonical)
-	if err != nil {
-		a.failure = err
-		return err
-	}
-	digest := sha256.Sum256(raw)
 	var usage map[string]any
-	decoder = json.NewDecoder(bytes.NewReader(value.Usage))
+	decoder := json.NewDecoder(bytes.NewReader(value.Usage))
 	decoder.UseNumber()
 	if err = decoder.Decode(&usage); err != nil {
 		a.failure = err
 		return err
 	}
-	w := workflows.ManagedUsageWitness{ResponseID: b.ResponseID, Digest: hex.EncodeToString(digest[:]), SessionID: b.ThreadID, TurnID: b.TurnID, PolicyID: b.PolicyID, BuildID: b.BuildID, Model: a.model, Usage: usage, Batch: mustManagedBatchJSON(b)}
+	w := workflows.ManagedUsageWitness{ResponseID: b.ResponseID, Digest: digest, SessionID: b.ThreadID, TurnID: b.TurnID, PolicyID: b.PolicyID, BuildID: b.BuildID, Model: a.model, Usage: usage, Batch: mustManagedBatchJSON(b)}
 	// Record commits even after cancellation if this original execution still
 	// owns the invocation. Authority/deadline checks follow the known charge.
 	if err = workflows.RecordManagedCodexUsage(a.ctx, a.run, a.invocation, w); err != nil {
@@ -118,18 +125,11 @@ func (a *codexManagedAccounting) seal(batch codexParkedBatch) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// Reconstruct the same canonical witness digest used by observe, retaining
-	// exact semantic batch identity independently of its fresh permit epoch.
-	raw, _ := json.Marshal(codexModelWitness{Batch: codexSemanticBatch(batch), Usage: batch.Usage})
-	var canonical any
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.UseNumber()
-	if err := d.Decode(&canonical); err != nil {
+	digest, err := codexWitnessDigest(codexModelWitness{Batch: codexSemanticBatch(batch), Usage: batch.Usage})
+	if err != nil {
 		return err
 	}
-	raw, _ = json.Marshal(canonical)
-	digest := sha256.Sum256(raw)
-	return workflows.SealManagedCodexBatch(a.ctx, a.run, a.invocation, hex.EncodeToString(digest[:]), mustManagedBatchJSON(codexSemanticBatch(batch)))
+	return workflows.SealManagedCodexBatch(a.ctx, a.run, a.invocation, digest, mustManagedBatchJSON(codexSemanticBatch(batch)))
 }
 func (a *codexManagedAccounting) checkpoint(result workflows.SessionResult) error {
 	a.mu.Lock()

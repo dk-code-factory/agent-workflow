@@ -286,17 +286,18 @@ func (c *codexManagedBatchController) maybeStartLocked() {
 }
 
 func (c *codexManagedBatchController) execute(batch codexParkedBatch, calls []*codexPendingCall) {
+	// Commit the exact original native response observation before capacity
+	// release or broker effects. The observer retains known charges even when
+	// admission expires or is cancelled; it fences the original owner itself.
+	// Every accounting failure holds this entire batch.
+	if err := c.observe(c.ctx, batch); err != nil {
+		c.fail(err)
+		return
+	}
 	if err := context.Cause(c.ctx); err != nil {
 		return
 	}
 	if err := c.authorize(c.ctx); err != nil {
-		c.fail(err)
-		return
-	}
-	// Commit the exact original native response observation before capacity
-	// release or broker effects. The observer retains known charges even when
-	// they exceed budget; every accounting failure holds this entire batch.
-	if err := c.observe(c.ctx, batch); err != nil {
 		c.fail(err)
 		return
 	}
