@@ -356,7 +356,8 @@ func managedReusableLineage(ctx context.Context, tx *sql.Tx, run, origin string)
 		if !exists || err != nil || ref != child.WorkflowRef {
 			return nil, "", fmt.Errorf("%w: reusable parent job changed", ErrActionIntegrity)
 		}
-		path = append(path, run)
+		// Physical iterations of the same wrapper job share its replay hold.
+		path = append(path, edge.JobID)
 		run = edge.ParentRunID
 	}
 	if run != origin {

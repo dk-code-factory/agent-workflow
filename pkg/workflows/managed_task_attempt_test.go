@@ -490,3 +490,125 @@ func TestManagedConversationIndependentReusableChildren(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedConversationRepeatRetainsHeldOriginal(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		for _, held := range []bool{true, false} {
+			name := provider + "/held"
+			if !held {
+				name = provider + "/completed"
+			}
+			t.Run(name, func(t *testing.T) {
+				var store *SQLiteStore
+				var original string
+				var markerBefore, identityBefore []byte
+				admitted := 0
+				runner := &managedConversationSession{provider: provider}
+				runner.conversationSession = newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+					var result SessionResult
+					var err error
+					if provider == "claude-sdk" {
+						err = BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, "fixture")
+					} else {
+						err = BeginManagedCodexInvocation(ctx, req.RunID, req.InvocationID, "build", "policy", "fixture")
+					}
+					if err != nil {
+						return result, err
+					}
+					admitted++
+					result.SessionID = "held-session"
+					emit(ProviderEvent{Type: "session", SessionID: result.SessionID})
+					key := managedSDKAttemptKey
+					if provider == "claude-sdk" {
+						if err = BindManagedSDKModel(ctx, req.RunID, req.InvocationID, "fixture", "fixture"); err != nil {
+							return result, err
+						}
+						usage := map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+						err = req.ObserveUsage(UsageUpdate{Key: "sdk-response:known", Provider: provider, Model: "fixture", SessionID: result.SessionID, Usage: usage, Incomplete: true})
+					} else {
+						key = managedCodexAdmissionKey
+						if err = BindManagedCodexInvocation(ctx, req.RunID, req.InvocationID, result.SessionID, "turn"); err != nil {
+							return result, err
+						}
+						w := managedUsageWitness("known", 10)
+						w.SessionID, w.TurnID = result.SessionID, "turn"
+						w.Batch = mustManagedRecoveryJSON(managedCodexBatchIdentity{ThreadID: w.SessionID, TurnID: w.TurnID, InvocationID: req.InvocationID, PolicyID: w.PolicyID, BuildID: w.BuildID, BatchID: "batch-known", ResponseID: w.ResponseID, CallIDs: []string{}})
+						err = RecordManagedCodexUsage(ctx, req.RunID, req.InvocationID, w)
+					}
+					if err != nil {
+						return result, err
+					}
+					if original == "" {
+						original = req.InvocationID
+						if err = store.db.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, original, key).Scan(&markerBefore); err != nil {
+							return result, err
+						}
+						if err = store.db.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, original).Scan(&identityBefore); err != nil {
+							return result, err
+						}
+					}
+					if held {
+						// The ordinary failed result is continued by the child workflow,
+						// while the missing private checkpoint retains native uncertainty.
+						return result, ErrProviderFailure
+					}
+					if req.AgentID == "builder" {
+						err = conversationCall(ctx, req, "send", "send", `{"to":"reviewer","message":"review"}`)
+					} else {
+						err = conversationCall(ctx, req, "finish", "finish", `{"text":"approved"}`)
+					}
+					if err != nil {
+						return result, err
+					}
+					result.Status = RunStatusSucceeded
+					if provider == "claude-sdk" {
+						result.ProviderStatus, result.ProviderVersion = "success", "claude-agent-sdk@0.3.322"
+						result.Outputs = map[string]any{"usage": map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "cost_usd": float64(0)}
+						return result, CheckpointManagedSDKTerminal(ctx, result)
+					}
+					w := managedUsageWitness("known", 10)
+					result.ProviderStatus, result.ProviderVersion = "completed", "agent-workflow-managed-v1/build"
+					result.Outputs = map[string]any{"usage": w.Usage, "usage_incomplete": false}
+					return result, CheckpointManagedCodexTerminal(ctx, result, w.ResponseID, w.Digest)
+				})
+				e, journal := durableExecutor(t, "jobs:\n  call:\n    uses: workflows/child.yml\n    repeat: {max-attempts: 2, until: 'iteration.number == 2'}\n", runner)
+				store = journal
+				writeWorkflow(t, e.WorkspaceDir, "child.yml", "on:\n  workflow_call: {}\njobs:\n  work:\n    steps:\n      - id: chat\n        conversation: [builder, reviewer]\n        finishBy: reviewer\n        continue-on-error: true\n        prompt: task\n")
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml"})
+				if !held {
+					if err != nil || run.Status != RunStatusSucceeded || admitted != 4 {
+						t.Fatalf("completed originals blocked repeat: admitted=%d err=%v", admitted, err)
+					}
+					return
+				}
+				if !errors.Is(err, ErrActionIntegrity) || admitted != 1 {
+					t.Fatalf("same wrapper repeat bypassed held original: admitted=%d err=%v", admitted, err)
+				}
+				first, _, loadErr := store.Load(ctx, reusableChildID(run.ID, "call", 1))
+				if loadErr != nil || first.Status != RunStatusSucceeded {
+					t.Fatal("continued child did not reach repeat boundary", first, loadErr)
+				}
+				second, _, loadErr := store.Load(ctx, reusableChildID(run.ID, "call", 2))
+				if loadErr != nil || second.Status != RunStatusNeedsAttention {
+					t.Fatal("second physical iteration did not retain hold", second, loadErr)
+				}
+				var markerAfter, identityAfter []byte
+				key := managedSDKAttemptKey
+				if provider == "codex-app-server" {
+					key = managedCodexAdmissionKey
+				}
+				if loadErr = store.db.QueryRowContext(ctx, `SELECT record FROM usage_observations WHERE invocation_id=? AND observation_key=?`, original, key).Scan(&markerAfter); loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if loadErr = store.db.QueryRowContext(ctx, `SELECT record FROM usage_invocations WHERE id=?`, original).Scan(&identityAfter); loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if string(markerBefore) != string(markerAfter) || string(identityBefore) != string(identityAfter) {
+					t.Fatal("repeat admission changed original authority or accounting")
+				}
+			})
+		}
+	}
+}
