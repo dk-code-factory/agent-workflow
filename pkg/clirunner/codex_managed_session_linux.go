@@ -94,7 +94,14 @@ func (r *Runner) codexManagedTransport(parent context.Context, agent Agent, req 
 		return result, err
 	}
 	defer stop()
-	control := newCodexControl(stop)
+	// Cancellation only requests guardian termination. Durable runtime cleanup
+	// remains with this transport after its sole Wait.
+	guardianCancel := cmd.Cancel
+	if guardianCancel == nil {
+		return result, fmt.Errorf("supervisor cancellation is unavailable")
+	}
+	control := newCodexControl(func() { _ = guardianCancel() })
+	defer control.finish(context.Background())
 	cmd.Cancel = control.interrupt
 	if err = cmd.Start(); err != nil {
 		return result, err
