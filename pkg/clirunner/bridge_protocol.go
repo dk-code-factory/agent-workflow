@@ -170,7 +170,25 @@ func bridgeTurnControlled(ctx context.Context, reader io.Reader, writer *bridgeW
 				return result, err
 			}
 		case "broker_attempt_uncertainty":
-			return result, fmt.Errorf("original SDK model attempt is uncertain")
+			result.Status = workflows.RunStatusFailed
+			if result.Outputs == nil {
+				result.Outputs = map[string]any{}
+			}
+			// The aggregate bridge stream limit also bounds this original diagnostic.
+			evidence := frame.Data["raw"]
+			result.Outputs["native_attempt_error"] = evidence
+			result.Outputs["usage_incomplete"] = true
+			if raw, ok := evidence.(map[string]any); ok {
+				result.ProviderStatus, _ = raw["subtype"].(string)
+				if result.ProviderStatus == "" {
+					result.ProviderStatus, _ = raw["error"].(string)
+				}
+				if result.ProviderStatus == "" {
+					result.ProviderStatus, _ = raw["type"].(string)
+				}
+			}
+			diagnostic, _ := json.Marshal(evidence)
+			return result, errors.Join(fmt.Errorf("provider failed: %s", diagnostic), fmt.Errorf("original SDK model attempt is uncertain"))
 		case "native_request":
 			if managed != nil {
 				return result, fmt.Errorf("native work outside managed broker profile")

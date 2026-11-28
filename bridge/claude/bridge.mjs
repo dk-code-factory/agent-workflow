@@ -404,14 +404,15 @@ try {
         if (message.event?.type === 'message_stop') { modelIdle = true; setImmediate(barrier); }
       }
       if (message.type === 'result') {
-        if (brokerStream && (!brokerStream.current?.proof || brokerStream.current.remaining.size)) throw new Error('Original broker/model batch did not settle');
         if (!isolatedInitialization) throw new Error('Provider omitted isolation initialization');
         const succeeded = !attemptEvidence && message.subtype === 'success' && !message.is_error && (!skill || message.api_error == null && message.api_error_status == null);
+        if (succeeded && brokerStream && (!brokerStream.current?.proof || brokerStream.current.remaining.size)) throw new Error('Original broker/model batch did not settle');
+        const failureEvidence = attemptEvidence ?? (brokerStream && !succeeded ? message : undefined);
         const text = message.structured_output !== undefined ? JSON.stringify(message.structured_output) : (message.result ?? '');
         if (child && childCall) childEvidence('parent_terminal', message);
         terminal = true;
         emit({ type: 'result', session_id: sessionID, status: succeeded ? 'succeeded' : 'failed', provider_status: message.subtype, provider_version: 'claude-agent-sdk@' + sdkVersion,
-          outputs: { text, response: text, usage: message.usage, structured: message.structured_output, cost_usd: message.total_cost_usd, ...(child ? { native_child_result: message } : {}), ...(attemptEvidence ? { usage_incomplete: true, native_attempt_error: attemptEvidence } : {}) }, error: succeeded ? undefined : attemptEvidence ? 'Original native attempt has incomplete usage/effects' : (message.errors ?? [message.subtype]).join('; ') });
+          outputs: { text, response: text, usage: message.usage, structured: message.structured_output, cost_usd: message.total_cost_usd, ...(child ? { native_child_result: message } : {}), ...(failureEvidence ? { usage_incomplete: true, native_attempt_error: failureEvidence } : {}) }, error: succeeded ? undefined : attemptEvidence ? 'Original native attempt has incomplete usage/effects' : (message.errors ?? [message.subtype]).join('; ') });
         break;
       }
       emit({ type: 'progress', session_id: sessionID, data: { type: message.type } });
