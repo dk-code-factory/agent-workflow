@@ -53,6 +53,29 @@ class OfflineCompilerTests(unittest.TestCase):
                 with self.assertRaises(TimeoutError):
                     incoming.recv(32)
 
+    def test_inherited_internet_descriptor_above_lowered_limit_is_closed(self):
+        with socket.socket() as listener, tempfile.TemporaryDirectory() as directory:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            with socket.create_connection(listener.getsockname()) as outgoing, listener.accept()[0] as incoming:
+                receipt = Path(directory) / "filter.json"
+                bootstrap = """import os,resource,sys
+os.dup2(int(sys.argv[1]),200,inheritable=True)
+_,hard=resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE,(64,hard))
+os.execv(sys.executable,[sys.executable,*sys.argv[2:]])
+"""
+                check = """import errno,os
+try: os.write(200,b'leaked')
+except OSError as error: assert error.errno == errno.EBADF
+else: raise AssertionError('high inherited Internet descriptor remains usable')
+"""
+                result = subprocess.run([sys.executable, "-c", bootstrap, str(outgoing.fileno()), str(WRAPPER), "--receipt", str(receipt), "--", sys.executable, "-c", check], pass_fds=(outgoing.fileno(),), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                incoming.settimeout(0.1)
+                with self.assertRaises(TimeoutError):
+                    incoming.recv(32)
+
     def test_unix_standard_stream_remains_usable(self):
         with tempfile.TemporaryDirectory() as directory:
             left, right = socket.socketpair()

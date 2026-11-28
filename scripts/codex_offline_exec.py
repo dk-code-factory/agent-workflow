@@ -87,7 +87,9 @@ def close_inherited_descriptors():
             with socket.socket(fileno=os.dup(descriptor)) as stream:
                 if stream.family != socket.AF_UNIX:
                     raise RuntimeError("offline command cannot inherit Internet standard streams")
-    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+    for descriptor in map(int, os.listdir("/proc/self/fd")):
+        if descriptor > 2:
+            os.closerange(descriptor, descriptor + 1)
 
 
 def main():

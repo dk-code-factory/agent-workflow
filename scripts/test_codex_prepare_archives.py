@@ -5,8 +5,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 from pathlib import Path
+import signal
 import tempfile
 import threading
 import unittest
@@ -79,7 +81,7 @@ class PinnedArchiveTests(unittest.TestCase):
             args, archives = self.fixture(Path(directory))
             lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
             scarce = type("Space", (), {"free": 30})()
-            ample = type("Space", (), {"free": 10000})()
+            ample = type("Space", (), {"free": 24 + 2 * os.statvfs(args.output).f_frsize})()
             with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=[scarce, scarce, ample, ample]), self.assertRaisesRegex(ValueError, "resource limit"):
                 ARCHIVES.prepare(args)
             self.assertEqual(list(archives.iterdir()), [])
@@ -95,7 +97,7 @@ class PinnedArchiveTests(unittest.TestCase):
 
             def free_space(path):
                 checked.append(path)
-                return type("Space", (), {"free": 24 if path == archives else 10000})()
+                return type("Space", (), {"free": 24 if path == archives else 24 + 2 * os.statvfs(path).f_frsize})()
 
             with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=free_space), self.assertRaisesRegex(ValueError, "resource limit"):
                 ARCHIVES.prepare(args)
@@ -133,6 +135,93 @@ class PinnedArchiveTests(unittest.TestCase):
 
             with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES, "save_archive", side_effect=changed_lock), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
                 ARCHIVES.prepare(args)
+
+    @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "POSIX fork prerequisite")
+    def test_expired_deadline_does_not_reopen_a_replaced_fifo_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            lock = args.output / "source/codex-rs/Cargo.lock"
+            lock_hash = ARCHIVES.digest(lock)
+
+            def prepare_until_timeout():
+                def wait_for_deadline(*_):
+                    lock.unlink()
+                    os.mkfifo(lock)
+                    signal.pause()
+
+                with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES, "save_archive", side_effect=wait_for_deadline):
+                    try:
+                        ARCHIVES.prepare(args)
+                    except TimeoutError:
+                        return
+                    raise AssertionError("preparation did not expire")
+
+            process = multiprocessing.get_context("fork").Process(target=prepare_until_timeout)
+            process.start()
+            try:
+                process.join(timeout=2)
+                self.assertFalse(process.is_alive(), "expired preparation blocked during final lock validation")
+                self.assertEqual(process.exitcode, 0)
+            finally:
+                if process.is_alive():
+                    process.kill()
+                process.join(timeout=2)
+                process.close()
+            self.assertEqual(list(archives.iterdir()), [])
+            report = json.loads((args.output / args.receipt).read_text())
+            self.assertEqual(report["exit_code"], 1)
+            self.assertIn("deadline exceeded", report["error"])
+            self.assertIsNone(report["final_lock_sha256"])
+
+    def test_parsed_packages_are_bound_to_the_approved_lock_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            lock = args.output / "source/codex-rs/Cargo.lock"
+            lock_hash = ARCHIVES.digest(lock)
+            replacement = b"unapproved archive"
+            alternate = lock.read_text().replace(hashlib.sha256(b"fixture").hexdigest(), hashlib.sha256(replacement).hexdigest())
+            (args.from_cache / "registry/cache" / ARCHIVES.REGISTRY / "fixture-1.0.0.crate").write_bytes(replacement)
+            read_text = Path.read_text
+
+            def inconsistent_read(path, *params, **options):
+                return alternate if path == lock else read_text(path, *params, **options)
+
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(Path, "read_text", inconsistent_read), self.assertRaisesRegex(ValueError, "original locked SHA-256"):
+                ARCHIVES.prepare(args)
+            self.assertEqual(list(archives.iterdir()), [])
+            report = json.loads((args.output / args.receipt).read_text())
+            self.assertEqual(report["exit_code"], 1)
+            self.assertEqual(report["original_lock_sha256"], report["final_lock_sha256"])
+
+    def test_lock_snapshot_rejects_oversized_input_before_archive_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            lock = args.output / "source/codex-rs/Cargo.lock"
+            content = lock.read_bytes()
+            stream = io.BytesIO(content)
+            read = stream.read
+
+            def bounded_read(size=-1):
+                self.assertEqual(size, 33)
+                return read(size)
+
+            with patch.object(ARCHIVES, "MAX_LOCK", 32), patch.object(Path, "open", return_value=stream), patch.object(stream, "read", side_effect=bounded_read), self.assertRaisesRegex(ValueError, "source lock exceeds its byte limit"):
+                ARCHIVES.prepare(args)
+            self.assertEqual(list(archives.iterdir()), [])
+            self.assertFalse((args.output / args.receipt).exists())
+
+    def test_space_reservations_cover_large_filesystem_blocks(self):
+        for block in (4096, 16384, 65536):
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                metadata = type("Filesystem", (), {"f_frsize": block})()
+                with patch.object(ARCHIVES.os, "statvfs", return_value=metadata):
+                    self.test_free_space_floor_is_reserved_before_archive_write()
+                    self.test_archive_floor_checks_its_filesystem_separately_from_receipts()
+                    self.test_receipt_cannot_spend_the_floor_remaining_after_an_archive()
+                    space = type("Space", (), {"free": 24 + block - 1})()
+                    with patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", return_value=space), self.assertRaisesRegex(ValueError, "resource limit"):
+                        ARCHIVES.reserve_space(root, 1)
 
     def test_dangling_receipt_alias_cannot_write_outside_owned_storage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -191,7 +280,7 @@ class PinnedArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             args, archives = self.fixture(Path(directory))
             lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
-            ample = type("Space", (), {"free": 10000})()
+            ample = type("Space", (), {"free": 24 + 2 * os.statvfs(args.output).f_frsize})()
             floor = type("Space", (), {"free": 24})()
             with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=[ample, ample, floor]), self.assertRaisesRegex(ValueError, "resource limit"):
                 ARCHIVES.prepare(args)

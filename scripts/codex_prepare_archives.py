@@ -23,6 +23,7 @@ MAX_ARCHIVE = 64 << 20
 MAX_TOTAL = 512 << 20
 MIN_FREE = 24 << 30
 MAX_SECONDS = 15 * 60
+MAX_LOCK = 1 << 20
 REGISTRY = "index.crates.io-1949cf8c6b5b557f"
 SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 LOCK_HASHES = {
@@ -133,10 +134,14 @@ def prepare_owned(args, started):
     if Path(args.receipt).name != args.receipt or receipt_path.exists() or receipt_path.is_symlink():
         raise ValueError("archive receipt must be a new file within owned storage")
     lock = root / "source/codex-rs/Cargo.lock"
-    lock_hash = digest(lock)
+    with lock.open("rb") as stream:
+        lock_content = stream.read(MAX_LOCK + 1)
+    if len(lock_content) > MAX_LOCK:
+        raise ValueError("source lock exceeds its byte limit")
+    lock_hash = hashlib.sha256(lock_content).hexdigest()
     if lock_hash not in LOCK_HASHES:
         raise ValueError("archive preparation requires the reviewed exact 0.167.1 lock")
-    packages = {p["name"] + "-" + p["version"] + ".crate": p for p in tomllib.loads(lock.read_text())["package"] if p.get("source") == SOURCE}
+    packages = {p["name"] + "-" + p["version"] + ".crate": p for p in tomllib.loads(lock_content.decode("utf-8"))["package"] if p.get("source") == SOURCE}
     missing = json.loads((root / "cache.json").read_text())["missing"]
     names = sorted({entry.removeprefix("archive:") for entry in missing if entry.startswith("archive:")})
     if len(names) > 53 or any(name not in packages for name in names):
@@ -182,8 +187,12 @@ def prepare_owned(args, started):
         report.update({"exit_code": 1, "error": type(error).__name__ + ": " + str(error)})
         raise
     finally:
-        report.update({"elapsed_seconds": time.monotonic() - started, "prepared_bytes": total, "final_lock_sha256": digest(lock)})
-        lock_changed = report["final_lock_sha256"] != lock_hash
+        elapsed = time.monotonic() - started
+        expired = elapsed >= MAX_SECONDS
+        report.update({"elapsed_seconds": elapsed, "prepared_bytes": total, "final_lock_sha256": None if expired else digest(lock)})
+        lock_changed = not expired and report["final_lock_sha256"] != lock_hash
+        if expired:
+            report.update({"exit_code": 1, "error": "TimeoutError: archive preparation deadline exceeded"})
         if lock_changed:
             report.update({"exit_code": 1, "error": "ValueError: archive preparation changed the source lock"})
         content = (json.dumps(report, indent=2) + "\n").encode("utf-8")
@@ -194,6 +203,8 @@ def prepare_owned(args, started):
             if shutil.disk_usage(root).free < MIN_FREE:
                 receipt_path.unlink()
                 raise ValueError("archive preparation resource limit exceeded")
+        if expired:
+            raise TimeoutError("archive preparation deadline exceeded")
         if lock_changed:
             raise ValueError("archive preparation changed the source lock")
     print(json.dumps({"exit_code": 0, "archives": len(rows), "prepared_bytes": total, "receipt": str(receipt_path)}))
