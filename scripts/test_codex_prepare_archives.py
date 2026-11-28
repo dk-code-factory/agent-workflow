@@ -1,10 +1,13 @@
 import argparse
 import hashlib
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -55,8 +58,9 @@ class PinnedArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             args, archives = self.fixture(Path(directory))
             lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
-            space = type("Space", (), {"free": 30})()
-            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", return_value=space), self.assertRaisesRegex(ValueError, "resource limit"):
+            scarce = type("Space", (), {"free": 30})()
+            ample = type("Space", (), {"free": 10000})()
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=[scarce, scarce, ample, ample]), self.assertRaisesRegex(ValueError, "resource limit"):
                 ARCHIVES.prepare(args)
             self.assertEqual(list(archives.iterdir()), [])
             report = json.loads((args.output / args.receipt).read_text())
@@ -85,6 +89,69 @@ class PinnedArchiveTests(unittest.TestCase):
             self.assertEqual(report["exit_code"], 0)
             self.assertEqual(report["prepared_bytes"], 7)
             self.assertEqual(report["original_lock_sha256"], report["final_lock_sha256"])
+
+    def test_receipt_reserves_space_even_when_no_archives_are_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            (args.output / "cache.json").write_text(json.dumps({"missing": []}))
+            lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+            space = type("Space", (), {"free": 24})()
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", return_value=space), self.assertRaisesRegex(ValueError, "resource limit"):
+                ARCHIVES.prepare(args)
+            self.assertFalse((args.output / args.receipt).exists())
+            self.assertEqual(list(archives.iterdir()), [])
+
+    def test_receipt_cannot_spend_the_floor_remaining_after_an_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, archives = self.fixture(Path(directory))
+            lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+            ample = type("Space", (), {"free": 10000})()
+            floor = type("Space", (), {"free": 24})()
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 24), patch.object(ARCHIVES.shutil, "disk_usage", side_effect=[ample, ample, floor]), self.assertRaisesRegex(ValueError, "resource limit"):
+                ARCHIVES.prepare(args)
+            self.assertEqual((archives / "fixture-1.0.0.crate").read_bytes(), b"fixture")
+            self.assertFalse((args.output / args.receipt).exists())
+
+    def test_overall_deadline_interrupts_a_pending_http_body_read(self):
+        release = threading.Event()
+
+        class SlowBody(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(1 << 20))
+                self.end_headers()
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                release.wait(2)
+
+            def log_message(self, *_):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SlowBody)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=1)
+        try:
+            connection.request("GET", "/fixture")
+            response = connection.getresponse()
+            response.url = "https://static.crates.io/crates/fixture/fixture-1.0.0.crate"
+            with tempfile.TemporaryDirectory() as directory:
+                args, archives = self.fixture(Path(directory))
+                (args.from_cache / "registry/cache" / ARCHIVES.REGISTRY / "fixture-1.0.0.crate").unlink()
+                lock_hash = ARCHIVES.digest(args.output / "source/codex-rs/Cargo.lock")
+                with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES.urllib.request, "build_opener") as opener, self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
+                    opener.return_value.open.return_value = response
+                    ARCHIVES.prepare(args)
+                self.assertEqual(list(archives.iterdir()), [])
+                report = json.loads((args.output / args.receipt).read_text())
+                self.assertEqual(report["exit_code"], 1)
+                self.assertIn("deadline exceeded", report["error"])
+        finally:
+            release.set()
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

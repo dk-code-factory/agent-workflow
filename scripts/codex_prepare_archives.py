@@ -6,10 +6,13 @@ changes locks, installs dependencies, runs build scripts, or writes shared cache
 """
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import signal
 import tempfile
 import time
 import tomllib
@@ -75,6 +78,32 @@ def save_archive(stream, destination, expected, guard):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
+@contextmanager
+def preparation_deadline(seconds):
+    if seconds <= 0:
+        raise TimeoutError("archive preparation deadline exceeded")
+    if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise ValueError("archive preparation requires an unused deadline timer")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def expired(*_):
+        raise TimeoutError("archive preparation deadline exceeded")
+
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def reserve_space(root, size):
+    block = os.statvfs(root).f_frsize
+    reservation = ((size + block - 1) // block) * block
+    if shutil.disk_usage(root).free - reservation < MIN_FREE:
+        raise ValueError("archive preparation resource limit exceeded")
+
 
 def prepare(args):
     root = args.output.resolve(strict=True)
@@ -103,45 +132,53 @@ def prepare(args):
     report = {"original_lock_sha256": lock_hash, "limits": {"archives": 53, "archive_bytes": MAX_ARCHIVE, "total_bytes": MAX_TOTAL, "seconds": MAX_SECONDS, "minimum_free_bytes": MIN_FREE}, "archives": rows}
 
     def guard(size=0, reserve=0):
-        if time.monotonic() - started >= MAX_SECONDS or total + size > MAX_TOTAL or shutil.disk_usage(root).free - reserve < MIN_FREE:
+        if time.monotonic() - started >= MAX_SECONDS or total + size > MAX_TOTAL:
             raise ValueError("archive preparation resource limit exceeded")
+        reserve_space(root, reserve)
 
     try:
-        for name in names:
-            guard()
-            package = packages[name]
-            row = {"name": package["name"], "version": package["version"], "sha256": package["checksum"], "redirects": []}
-            rows.append(row)
-            target = destination_root / name
-            if target.exists():
-                if target.is_symlink() or target.stat().st_nlink != 1 or digest(target) != package["checksum"]:
-                    raise ValueError("existing owned archive does not match its lock")
-                row.update({"source": "owned-cache", "bytes": target.stat().st_size})
-                continue
-            candidate = args.from_cache / "registry/cache" / REGISTRY / name
-            if candidate.is_file() and not candidate.is_symlink():
-                with candidate.open("rb") as stream:
-                    size = save_archive(stream, target, package["checksum"], guard)
-                row.update({"source": str(candidate), "bytes": size})
-            else:
-                url = canonical("https://static.crates.io/crates/" + quote(package["name"], safe="") + "/" + quote(name, safe=""))
-                row["url"] = url
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Redirects(row["redirects"]))
-                with opener.open(url, timeout=min(15, MAX_SECONDS - (time.monotonic() - started))) as response:
-                    row.update({"final_url": canonical(response.url), "http_status": response.status})
-                    if response.status != 200:
-                        raise ValueError("canonical archive HTTP response is not 200")
-                    size = save_archive(response, target, package["checksum"], guard)
-                row.update({"source": "canonical-https", "bytes": size})
-            total += size
+        with preparation_deadline(MAX_SECONDS - (time.monotonic() - started)):
+            for name in names:
+                guard()
+                package = packages[name]
+                row = {"name": package["name"], "version": package["version"], "sha256": package["checksum"], "redirects": []}
+                rows.append(row)
+                target = destination_root / name
+                if target.exists():
+                    if target.is_symlink() or target.stat().st_nlink != 1 or digest(target) != package["checksum"]:
+                        raise ValueError("existing owned archive does not match its lock")
+                    row.update({"source": "owned-cache", "bytes": target.stat().st_size})
+                    continue
+                candidate = args.from_cache / "registry/cache" / REGISTRY / name
+                if candidate.is_file() and not candidate.is_symlink():
+                    with candidate.open("rb") as stream:
+                        size = save_archive(stream, target, package["checksum"], guard)
+                    row.update({"source": str(candidate), "bytes": size})
+                else:
+                    url = canonical("https://static.crates.io/crates/" + quote(package["name"], safe="") + "/" + quote(name, safe=""))
+                    row["url"] = url
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Redirects(row["redirects"]))
+                    with opener.open(url, timeout=min(15, MAX_SECONDS - (time.monotonic() - started))) as response:
+                        row.update({"final_url": canonical(response.url), "http_status": response.status})
+                        if response.status != 200:
+                            raise ValueError("canonical archive HTTP response is not 200")
+                        size = save_archive(response, target, package["checksum"], guard)
+                    row.update({"source": "canonical-https", "bytes": size})
+                total += size
         report["exit_code"] = 0
     except BaseException as error:
         report.update({"exit_code": 1, "error": type(error).__name__ + ": " + str(error)})
         raise
     finally:
         report.update({"elapsed_seconds": time.monotonic() - started, "prepared_bytes": total, "final_lock_sha256": digest(lock)})
-        with receipt_path.open("x") as receipt:
-            receipt.write(json.dumps(report, indent=2) + "\n")
+        content = (json.dumps(report, indent=2) + "\n").encode("utf-8")
+        reserve_space(root, len(content))
+        with receipt_path.open("xb") as receipt:
+            receipt.write(content)
+            receipt.flush()
+            if shutil.disk_usage(root).free < MIN_FREE:
+                receipt_path.unlink()
+                raise ValueError("archive preparation resource limit exceeded")
         if report["final_lock_sha256"] != lock_hash:
             raise ValueError("archive preparation changed the source lock")
     print(json.dumps({"exit_code": 0, "archives": len(rows), "prepared_bytes": total, "receipt": str(receipt_path)}))
