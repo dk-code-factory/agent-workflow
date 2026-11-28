@@ -3,6 +3,7 @@ package clirunner
 import (
 	"context"
 	"encoding/json"
+	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -101,5 +102,29 @@ func TestManagedAdmissionCannotReplaceHistoricalOrSelectedAuthority(t *testing.T
 	r := &Runner{Config: Config{AgentRuntime: "worker", NativeTaskAdmission: 2, Agents: map[string]Agent{"worker": {Provider: "codex-app-server"}}}}
 	if err := r.ValidateNativeOutput(nil); err == nil {
 		t.Fatal("managed admission accepted a stock retained role")
+	}
+}
+
+func TestSDKMixedNativeBrokerAuthorityIsClosedBeforeAdmission(t *testing.T) {
+	role := Agent{Provider: "claude-sdk", Tools: []string{"Read"}, MCPGrants: []workflows.ToolGrant{{Server: "engine", Tool: "worker_spawn"}}}
+	runner := &Runner{Config: Config{AgentRuntime: "worker", Agents: map[string]Agent{"worker": role}}}
+	if _, err := runner.PinRoles(context.Background()); err == nil {
+		t.Fatal("mixed native/broker profile pinned")
+	}
+	if _, err := runner.nativeTaskRuntime(); err == nil {
+		t.Fatal("mixed native/broker task admitted")
+	}
+	if err := runner.ValidateConversationRole("worker"); err == nil {
+		t.Fatal("native conversation admitted broker release")
+	}
+	role.MCPGrants = nil
+	runner.Config.Agents["worker"] = role
+	if _, err := runner.nativeTaskRuntime(); err != nil {
+		t.Fatal("native-only route changed", err)
+	}
+	role.Tools = nil
+	runner.Config.Agents["worker"] = role
+	if err := runner.ValidateConversationRole("worker"); err != nil {
+		t.Fatal("broker-only conversation rejected", err)
 	}
 }
