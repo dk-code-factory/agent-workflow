@@ -16609,10 +16609,10 @@ index 8724766..882ef77 100644
              session_id: child_thread.session.session_id(),
 diff --git a/codex-rs/core/src/agent_workflow_journal.rs b/codex-rs/core/src/agent_workflow_journal.rs
 new file mode 100644
-index 0000000..8135bcc
+index 0000000..f2f1ae0
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_journal.rs
-@@ -0,0 +0,1244 @@
+@@ -0,0 +1,1238 @@
 +//! Durable broker recovery records. Native normalized history is never a receipt.
 +//!
 +//! Journal I/O is synchronous within its owning model or control operation.
@@ -17097,24 +17097,21 @@ index 0000000..8135bcc
 +                namespace,
 +                ..
 +            } = item
++                && witness.batch.call_ids.contains(call_id)
++                && (namespace.is_some()
++                    || !policy.broker_tools.contains(name)
++                    || calls
++                        .insert(
++                            call_id.clone(),
++                            OriginalCall {
++                                id: call_id.clone(),
++                                tool: name.clone(),
++                                arguments: arguments.clone(),
++                            },
++                        )
++                        .is_some())
 +            {
-+                if witness.batch.call_ids.contains(call_id) {
-+                    if namespace.is_some()
-+                        || !policy.broker_tools.contains(name)
-+                        || calls
-+                            .insert(
-+                                call_id.clone(),
-+                                OriginalCall {
-+                                    id: call_id.clone(),
-+                                    tool: name.clone(),
-+                                    arguments: arguments.clone(),
-+                                },
-+                            )
-+                            .is_some()
-+                    {
-+                        return Err(invalid("invalid or duplicated native intent call"));
-+                    }
-+                }
++                return Err(invalid("invalid or duplicated native intent call"));
 +            }
 +        }
 +        if calls.keys().cloned().collect::<Vec<_>>() != witness.batch.call_ids {
@@ -17190,7 +17187,7 @@ index 0000000..8135bcc
 +        };
 +        if record.thread_id.to_string() != identity.thread_id
 +            || record.turn_id != identity.turn_id
-+            || record.agent_workflow_witness.as_ref() != Some(&expected)
++            || record.agent_workflow_witness.as_deref() != Some(&expected)
 +        {
 +            return Err(invalid(
 +                "native Completed identity, invocation, callset or usage differs",
@@ -17210,32 +17207,29 @@ index 0000000..8135bcc
 +            .map_or(0, |index| index + 1);
 +        let mut actual_calls = BTreeMap::new();
 +        for item in &self.items[previous_index..completed_index] {
-+            if let codex_history::RolloutItem::ResponseItem(envelope) = item {
-+                if let ResponseItem::FunctionCall {
++            if let codex_history::RolloutItem::ResponseItem(envelope) = item
++                && let ResponseItem::FunctionCall {
 +                    call_id,
 +                    name,
 +                    namespace,
 +                    arguments,
 +                    ..
 +                } = &envelope.item
-+                {
-+                    if namespace.is_some()
-+                        || actual_calls
-+                            .insert(
-+                                call_id.clone(),
-+                                OriginalCall {
-+                                    id: call_id.clone(),
-+                                    tool: name.clone(),
-+                                    arguments: arguments.clone(),
-+                                },
-+                            )
-+                            .is_some()
-+                    {
-+                        return Err(invalid(
-+                            "foreign namespace or duplicated actual response call",
-+                        ));
-+                    }
-+                }
++                && (namespace.is_some()
++                    || actual_calls
++                        .insert(
++                            call_id.clone(),
++                            OriginalCall {
++                                id: call_id.clone(),
++                                tool: name.clone(),
++                                arguments: arguments.clone(),
++                            },
++                        )
++                        .is_some())
++            {
++                return Err(invalid(
++                    "foreign namespace or duplicated actual response call",
++                ));
 +            }
 +        }
 +        if actual_calls
@@ -17607,10 +17601,10 @@ index 0000000..8135bcc
 +        metadata.agent_workflow_policy = Some(policy());
 +        let usage: TokenUsage = serde_json::from_value(journal.usage.clone()).unwrap();
 +        let record = TokenUsageRecord {
-+            agent_workflow_witness: Some(AgentWorkflowModelWitness {
++            agent_workflow_witness: Some(Box::new(AgentWorkflowModelWitness {
 +                batch: journal.identity.clone(),
 +                usage: journal.usage.clone(),
-+            }),
++            })),
 +            thread_id: thread,
 +            turn_id: journal.identity.turn_id.clone(),
 +            session_id: thread.into(),
@@ -17859,10 +17853,10 @@ index 0000000..8135bcc
 +}
 diff --git a/codex-rs/core/src/agent_workflow_managed.rs b/codex-rs/core/src/agent_workflow_managed.rs
 new file mode 100644
-index 0000000..2eae8c0
+index 0000000..c13a244
 --- /dev/null
 +++ b/codex-rs/core/src/agent_workflow_managed.rs
-@@ -0,0 +1,1562 @@
+@@ -0,0 +1,1559 @@
 +//! Repository-owned managed profile. Stock sessions retain their native policy.
 +//! All checks run before spawning session work; unknown history cannot acquire it.
 +
@@ -18092,15 +18086,13 @@ index 0000000..2eae8c0
 +        if pending_journal || incomplete_batch || unknown_attempt {
 +            self.recovery_hold.store(true, Ordering::Release);
 +        }
-+        if pending_journal {
-+            if let Some((file, journal)) = durable.as_mut() {
-+                let mut cancelled = journal.clone();
-+                cancelled.phase = JournalPhase::Cancelled;
-+                // Failure leaves a hold in memory and the engine's durable
-+                // cancelled invocation fence still forbids private recovery.
-+                if file.persist(&cancelled, &self.policy).is_ok() {
-+                    *journal = cancelled;
-+                }
++        if pending_journal && let Some((file, journal)) = durable.as_mut() {
++            let mut cancelled = journal.clone();
++            cancelled.phase = JournalPhase::Cancelled;
++            // Failure leaves a hold in memory and the engine's durable
++            // cancelled invocation fence still forbids private recovery.
++            if file.persist(&cancelled, &self.policy).is_ok() {
++                *journal = cancelled;
 +            }
 +        }
 +        *batch = None;
@@ -18857,11 +18849,10 @@ index 0000000..2eae8c0
 +    if !hex(&policy.build_id, 64) || expected_build != Some(policy.build_id.as_str()) {
 +        return Err(invalid("policy requires its exact verified source build"));
 +    }
-+    if options
++    if !options
 +        .initial_history
 +        .get_selected_capability_roots()
-+        .len()
-+        > 0
++        .is_empty()
 +        || options
 +            .thread_extension_init
 +            .get::<Vec<codex_protocol::capabilities::SelectedCapabilityRoot>>()
@@ -19639,7 +19630,7 @@ index 26e780e..428aba1 100644
          rx_event: rx_events,
          agent_status,
 diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
-index a8d5865..93a56d1 100644
+index a8d5865..7f64317 100644
 --- a/codex-rs/core/src/codex_thread.rs
 +++ b/codex-rs/core/src/codex_thread.rs
 @@ -245,6 +245,28 @@ impl CodexThread {
@@ -19684,7 +19675,7 @@ index a8d5865..93a56d1 100644
      /// Returns tools from this thread’s ready, unshared Apps MCP client.
      /// Returns an empty list if the client is absent, still starting, or uses
      /// a shared catalog. Does not start or wait for discovery.
-@@ -541,21 +569,57 @@ impl CodexThread {
+@@ -541,21 +569,61 @@ impl CodexThread {
          &self,
          request: impl Into<WithTurnExtensionData<RecoverTurnRequest>>,
      ) -> CodexResult<StartIfIdleSubmission> {
@@ -19697,12 +19688,16 @@ index a8d5865..93a56d1 100644
 +            let recovery = request
 +                .turn_extension_init
 +                .as_ref()
-+                .and_then(|init| init.get::<crate::AgentWorkflowRecovery>())
++                .and_then(
++                    codex_extension_api::ExtensionDataInit::get::<crate::AgentWorkflowRecovery>,
++                )
 +                .ok_or_else(|| CodexErr::InvalidRequest("engine owns managed recovery".into()))?;
 +            let invocation = request
 +                .turn_extension_init
 +                .as_ref()
-+                .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                .and_then(
++                    codex_extension_api::ExtensionDataInit::get::<crate::AgentWorkflowInvocation>,
++                )
 +                .ok_or_else(|| {
 +                    CodexErr::InvalidRequest("original managed invocation absent".into())
 +                })?;
@@ -19746,7 +19741,7 @@ index a8d5865..93a56d1 100644
          };
          match self
              .io
-@@ -656,6 +720,35 @@ impl CodexThread {
+@@ -656,6 +724,37 @@ impl CodexThread {
          request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
          mode: TurnInputMode,
      ) -> CodexResult<TurnInputSubmission> {
@@ -19759,7 +19754,9 @@ index a8d5865..93a56d1 100644
 +            if request
 +                .turn_extension_init
 +                .as_ref()
-+                .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                .and_then(
++                    codex_extension_api::ExtensionDataInit::get::<crate::AgentWorkflowInvocation>,
++                )
 +                .is_none()
 +            {
 +                return Err(CodexErr::InvalidRequest(
@@ -19929,7 +19926,7 @@ index 4356991..fe1f6fd 100644
          let shutdown = self.mcp_prewarm_shutdown.clone();
          let worker = self.services.runtime_handle.spawn(async move {
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index f365c4e..72c0d6d 100644
+index f365c4e..007fa26 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
 @@ -440,6 +440,7 @@ pub(crate) enum NetworkApprovalTurn {
@@ -19964,7 +19961,7 @@ index f365c4e..72c0d6d 100644
 +                } => sub
 +                    .turn_extension_init
 +                    .as_ref()
-+                    .and_then(|init| init.get::<crate::AgentWorkflowInvocation>())
++                    .and_then(codex_extension_api::ExtensionDataInit::get::<crate::AgentWorkflowInvocation>)
 +                    .is_some(),
 +                Op::RecoverTurn { .. } => sub.turn_extension_init.as_ref().is_some_and(|init| {
 +                    let recovery = init.get::<crate::AgentWorkflowRecovery>();
@@ -19974,7 +19971,7 @@ index f365c4e..72c0d6d 100644
 +                Op::DynamicToolResponse { .. } => sub
 +                    .turn_extension_init
 +                    .as_ref()
-+                    .and_then(|init| init.get::<crate::agent_workflow_managed::AgentWorkflowCallbackTurn>())
++                    .and_then(codex_extension_api::ExtensionDataInit::get::<crate::agent_workflow_managed::AgentWorkflowCallbackTurn>)
 +                    .is_some_and(|turn| !turn.0.is_empty()),
 +                Op::Interrupt
 +                | Op::Shutdown
@@ -20130,22 +20127,22 @@ index f365c4e..72c0d6d 100644
      }
  
      pub(crate) async fn record_response_token_usage(
-@@ -5363,11 +5456,11 @@ impl Session {
+@@ -5363,11 +5456,9 @@ impl Session {
          turn_context: &TurnContext,
          response_id: &str,
          usage: Option<&TokenUsage>,
 -    ) {
-+    ) -> Option<codex_protocol::protocol::AgentWorkflowModelWitness> {
-         let Some(usage) = usage else {
+-        let Some(usage) = usage else {
 -            return;
-+            return None;
-         };
+-        };
 -        let record = self.state.lock().await.record_token_usage(
++    ) -> Option<codex_protocol::protocol::AgentWorkflowModelWitness> {
++        let usage = usage?;
 +        let mut record = self.state.lock().await.record_token_usage(
              self.thread_id,
              &turn_context.sub_id,
              self.session_id(),
-@@ -5378,8 +5471,25 @@ impl Session {
+@@ -5378,8 +5469,25 @@ impl Session {
              response_id.to_string(),
              usage,
          );
@@ -20155,7 +20152,7 @@ index f365c4e..72c0d6d 100644
 +            .get::<crate::AgentWorkflowRuntime>()
 +        {
 +            match runtime.model_witness(&turn_context.sub_id, response_id, usage) {
-+                Ok(witness) => record.agent_workflow_witness = Some(witness),
++                Ok(witness) => record.agent_workflow_witness = Some(Box::new(witness)),
 +                Err(_) => {
 +                    // Revocation can race an already received usage report.
 +                    // Preserve its exact original spending record without a
@@ -20164,14 +20161,14 @@ index f365c4e..72c0d6d 100644
 +                }
 +            }
 +        }
-+        let witness = record.agent_workflow_witness.clone();
++        let witness = record.agent_workflow_witness.as_deref().cloned();
          self.persist_rollout_items(&[RolloutItem::TokenUsageRecord(record)])
              .await;
 +        witness
      }
  
      pub(crate) async fn record_token_usage_info(
-@@ -5539,7 +5649,11 @@ impl Session {
+@@ -5539,7 +5647,11 @@ impl Session {
              let state = self.state.lock().await;
              state.token_info_and_rate_limits()
          };
@@ -20184,7 +20181,7 @@ index f365c4e..72c0d6d 100644
          self.send_event(turn_context, event).await;
      }
  
-@@ -5801,7 +5915,14 @@ async fn build_hooks_config(
+@@ -5801,7 +5913,14 @@ async fn build_hooks_config(
      plugins_manager: &PluginsManager,
      environment: Option<&TurnEnvironment>,
      disabled_plugin_ids: &[String],
@@ -21697,7 +21694,7 @@ index c3a82ef..6c66411 100644
          if let Some(live_thread) = self.live_thread() {
              let config = self.get_config().await;
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index ef7db28..5731cf5 100644
+index ef7db28..e2454d8 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
 @@ -183,6 +183,12 @@ pub(crate) async fn run_turn(
@@ -21795,7 +21792,7 @@ index ef7db28..5731cf5 100644
          })
          .await;
      }
-@@ -3565,6 +3614,42 @@ async fn try_run_sampling_request(
+@@ -3565,6 +3614,41 @@ async fn try_run_sampling_request(
      )
      .await;
  
@@ -21825,20 +21822,19 @@ index ef7db28..5731cf5 100644
 +        if let Some(units) = request_token_usage
 +            .as_ref()
 +            .and_then(|usage| usage.codex_rollout_budget_units.as_ref())
++            && let Some(object) = usage.as_object_mut()
 +        {
-+            if let Some(object) = usage.as_object_mut() {
-+                object.insert(
-+                    "codex_rollout_budget_units".into(),
-+                    serde_json::Value::Number(units.clone()),
-+                );
-+            }
++            object.insert(
++                "codex_rollout_budget_units".into(),
++                serde_json::Value::Number(units.clone()),
++            );
 +        }
 +        runtime.seal_durable(managed_response_id.unwrap_or_default(), &rollout, usage)?;
 +    }
      if !in_flight.is_empty() {
          let _tool_blocking_timing_guard = turn_context
              .turn_timing_state
-@@ -3577,6 +3662,17 @@ async fn try_run_sampling_request(
+@@ -3577,6 +3661,17 @@ async fn try_run_sampling_request(
          );
          drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
      }
@@ -21856,7 +21852,7 @@ index ef7db28..5731cf5 100644
  
      if should_emit_token_count {
          // A tool call such as request_user_input can intentionally pause the turn. Emit token
-@@ -3615,6 +3711,39 @@ pub(crate) fn get_last_assistant_message_from_turn<'a>(
+@@ -3615,6 +3710,39 @@ pub(crate) fn get_last_assistant_message_from_turn<'a>(
      None
  }
  
@@ -22292,7 +22288,7 @@ index 7bd869f..de0e0c8 100644
              .options
              .config
 diff --git a/codex-rs/core/src/tools/handlers/dynamic.rs b/codex-rs/core/src/tools/handlers/dynamic.rs
-index 0eac846..9a1a0de 100644
+index 0eac846..f949267 100644
 --- a/codex-rs/core/src/tools/handlers/dynamic.rs
 +++ b/codex-rs/core/src/tools/handlers/dynamic.rs
 @@ -159,6 +159,7 @@ impl DynamicToolHandler {
@@ -22312,7 +22308,7 @@ index 0eac846..9a1a0de 100644
      session: &Session,
      turn_context: &TurnContext,
      call_id: String,
-@@ -219,6 +220,15 @@ async fn request_dynamic_tool(
+@@ -219,6 +220,14 @@ async fn request_dynamic_tool(
          warn!("Overwriting existing pending dynamic tool call for call_id: {event_id}");
      }
  
@@ -22320,10 +22316,9 @@ index 0eac846..9a1a0de 100644
 +        .services
 +        .thread_extension_data
 +        .get::<crate::AgentWorkflowRuntime>()
++        && runtime.park(&call_id).is_err()
 +    {
-+        if runtime.park(&call_id).is_err() {
-+            return None;
-+        }
++        return None;
 +    }
      let started_at = Instant::now();
      session
@@ -22655,7 +22650,7 @@ index bbe92b8..f10bc65 100644
      pub success: bool,
  }
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index a0af620..73acd4b 100644
+index a0af620..8746982 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
 @@ -2503,6 +2503,8 @@ pub struct TokenUsage {
@@ -22663,7 +22658,7 @@ index a0af620..73acd4b 100644
  #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
  pub struct TokenUsageRecord {
 +    #[serde(default, skip_serializing_if = "Option::is_none")]
-+    pub agent_workflow_witness: Option<AgentWorkflowModelWitness>,
++    pub agent_workflow_witness: Option<Box<AgentWorkflowModelWitness>>,
      pub thread_id: ThreadId,
      pub turn_id: String,
      pub session_id: SessionId,
