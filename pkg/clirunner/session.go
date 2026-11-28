@@ -2,6 +2,7 @@ package clirunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -122,8 +123,21 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		if req.AgentID != r.NativeTaskRole() {
 			return workflows.SessionResult{}, fmt.Errorf("native task runtime role binding changed")
 		}
-		if _, err := r.AdmitNativeTask(req.Definition); err != nil {
+		admitted, err := r.AdmitNativeTask(req.Definition)
+		if err != nil {
 			return workflows.SessionResult{}, err
+		}
+		if req.Definition.ToolPolicy != "" {
+			if !reflect.DeepEqual(admitted, req.Definition) || req.Skill != nil || req.Output != nil && req.Output.RepairAttempts > 0 {
+				return workflows.SessionResult{}, fmt.Errorf("native read-only task requires its original admitted policy, no skills, and repair-attempts: 0")
+			}
+			agent.Tools = append([]string{}, admitted.NativePolicy.NativeTools...)
+			// Even role-granted broker tools are outside this task's ceiling.
+			if req.Tools != nil {
+				leaseOnly := *req.Tools
+				leaseOnly.Binding = nil
+				req.Tools = &leaseOnly
+			}
 		}
 		agent.InstructionText += "\n\n" + req.Definition.DeveloperInstructions
 		if req.Definition.Model != "" {
@@ -226,6 +240,38 @@ func (r *Runner) RunTurn(ctx context.Context, req workflows.SessionRequest, emit
 		schema = req.Output.Schema
 	}
 	input := map[string]any{"session_id": req.SessionID, "prompt": req.Prompt, "workspace": workspace, "model": model, "instructions": agent.InstructionText, "tools": agent.Tools, "repair_only": req.RepairOnly, "schema": schema}
+	var taskPolicy *workflows.NativeTaskPolicy
+	if req.Definition != nil && req.Definition.NativePolicy != nil {
+		taskPolicy = req.Definition.NativePolicy
+		input["task_policy"] = taskPolicy
+	}
+	policyVerified := false
+	defer func() {
+		if taskPolicy == nil {
+			return
+		}
+		if !policyVerified || result.SessionID == "" {
+			err = errors.Join(err, fmt.Errorf("native task read-only initialization evidence is missing"))
+			return
+		}
+		result.TaskPolicy = &workflows.NativeTaskPolicyEvidence{Grant: *taskPolicy, Agent: req.ParentWorkerID, InvocationID: req.InvocationID, SessionFingerprint: workflows.NativeTaskSessionFingerprint(result.SessionID), FormattingTool: schema != nil}
+	}()
+	policyEmit := emit
+	emit = func(event workflows.ProviderEvent) {
+		if event.Type == "progress" && event.Data["type"] == "native_task_policy" {
+			encoded, encodeErr := json.Marshal(event.Data["policy"])
+			var observed workflows.NativeTaskPolicy
+			if encodeErr != nil || json.Unmarshal(encoded, &observed) != nil || !reflect.DeepEqual(taskPolicy, &observed) || event.Data["formatting_tool"] != (schema != nil) {
+				observationErr = errors.Join(observationErr, fmt.Errorf("native task read-only initialization changed"))
+				cancel()
+			} else {
+				policyVerified = true
+			}
+		}
+		if policyEmit != nil {
+			policyEmit(event)
+		}
+	}
 	if agent.Execution.Mode == "container" {
 		input["workspace"] = "/workspace"
 	}
@@ -538,6 +584,10 @@ func (r *Runner) AdmitNativeTask(definition *workflows.AgentDefinition) (*workfl
 		return nil, fmt.Errorf("Claude SDK native tasks do not support definition reasoning-effort")
 	}
 	result := *definition
+	result.NativePolicy, err = admitNativePolicy(role, definition)
+	if err != nil {
+		return nil, err
+	}
 	if result.Model == "" {
 		result.Model = role.Model
 	}

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
+import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization, assertNativeTaskPolicy, assertNativeTaskAcknowledgement, assertNativeTaskInitialization } from './isolation.mjs';
 
 const sdkVersion = '0.3.322';
 const sdkMetadata = JSON.parse(await readFile(new URL('./package.json', import.meta.resolve('@anthropic-ai/claude-agent-sdk')), 'utf8'));
@@ -84,6 +84,7 @@ try {
   const request = await requestReady;
   sessionID = request.repair_only ? '' : (request.session_id ?? '');
   const skill = request.skill;
+  const taskPolicy = request.task_policy;
   const child = skill?.child;
   if (skill && (request.repair_only || !['claude-sdk@0.3.322/local-skill-v1', 'claude-sdk@0.3.322/sonnet46-one-read-child-v1'].includes(skill.profile) || Boolean(child) !== (skill.profile === 'claude-sdk@0.3.322/sonnet46-one-read-child-v1') || skill.qualified !== 'aw-' + skill.name + ':' + skill.name || typeof skill.root !== 'string' || typeof skill.arguments !== 'string')) throw new Error('Invalid admitted skill contract');
   if (child && (request.model !== 'claude-sonnet-4-6' || child.model !== request.model || child.effort !== 'high' || child.type !== 'aw-child-' + child.name || child.max_turns !== 2 || child.max_calls !== 1 || child.background !== false || typeof child.prompt !== 'string' || !child.prompt || typeof child.description !== 'string' || !child.description || !Array.isArray(child.resources) || !child.resources.length)) throw new Error('Invalid admitted child controls');
@@ -141,6 +142,10 @@ try {
   const nativeTools = request.repair_only ? [] : (request.tools ?? []);
   if (!Array.isArray(nativeTools) || nativeTools.some(t => [...(child ? [] : ['agent']), 'task', ...(skill ? [] : ['skill']), 'toolsearch', 'teamcreate', 'teamdelete', 'sendmessage'].includes(String(t).toLowerCase().replace(/[_-]/g, '')))) throw new Error('native delegation, discovery, and skills are disabled');
   const catalog = request.repair_only ? [] : (request.broker_tools ?? []);
+  if (taskPolicy) {
+    assertNativeTaskPolicy(taskPolicy, nativeTools);
+    if (skill || request.repair_only || catalog.length) throw new Error('Native read-only tasks cannot add skills, repairs or broker tools');
+  }
   const brokerNames = new Set();
   const customTools = catalog.map(definition => {
     const name = definition.wire_name;
@@ -189,7 +194,7 @@ try {
     ...(skill ? { env: { ...process.env, CLAUDE_CODE_MAX_RETRIES: '0', CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1', CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: '0' } } : {}),
     ...(child ? { effort: 'high', maxTurns: 4, includeHookEvents: true, forwardSubagentText: true } : {}),
     hooks: {
-      PreToolUse: [{ ...(skill ? { onFailure: 'block' } : {}), hooks: [async input => {
+      PreToolUse: [{ ...(skill || taskPolicy ? { onFailure: 'block' } : {}), hooks: [async input => {
         if (attemptEvidence) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Original native attempt is uncertain' } };
         if (!isolatedInitialization) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Provider initialization is not verified' } };
         let permitEvidence;
@@ -244,7 +249,7 @@ try {
   let finishInput;
   const inputDone = new Promise(resolve => { finishInput = resolve; });
   async function* prompt() {
-    if (skill && !await promptReady) return;
+    if ((skill || taskPolicy) && !await promptReady) return;
     yield { type: 'user', session_id: sessionID, message: { role: 'user', content: request.prompt }, parent_tool_use_id: null };
     await inputDone;
   }
@@ -255,12 +260,18 @@ try {
     emit({ type: 'progress', data: { type: 'skill_acknowledged', qualified: skill.qualified } });
     releasePrompt(true);
   }
+  if (taskPolicy) {
+    assertNativeTaskAcknowledgement(await running.initializationResult());
+    releasePrompt(true);
+  }
   if (interrupted) await running.interrupt();
   try {
     for await (const message of running) {
       if (message.type === 'system' && message.subtype === 'init') {
-        if (skill) assertSelectedInitialization(message, skill); else assertIsolatedInitialization(message);
+        if (taskPolicy) assertNativeTaskInitialization(message, taskPolicy, Boolean(request.schema));
+        else if (skill) assertSelectedInitialization(message, skill); else assertIsolatedInitialization(message);
         isolatedInitialization = true;
+        if (taskPolicy) emit({ type: 'progress', data: { type: 'native_task_policy', policy: taskPolicy, formatting_tool: Boolean(request.schema) } });
         emit({ type: 'progress', data: { type: 'discovery_isolation', plugins: message.plugins, skills: message.skills } });
       }
       if (message.session_id) { sessionID = message.session_id; emit({ type: 'session', session_id: sessionID }); }

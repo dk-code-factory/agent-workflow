@@ -20,6 +20,33 @@ export function assertIsolatedInitialization(message) {
   }
 }
 
+export function assertNativeTaskPolicy(policy, tools) {
+  if (!policy || policy.mode !== 'read-only' || policy.provider !== 'claude-sdk' ||
+      policy.profile !== 'claude-sdk@0.3.322/native-task-read-only-v1' ||
+      !Array.isArray(policy.native_tools) || !Array.isArray(tools) ||
+      policy.native_tools.some(name => !['Read', 'Glob', 'Grep'].includes(name)) ||
+      new Set(policy.native_tools).size !== policy.native_tools.length ||
+      JSON.stringify(policy.native_tools) !== JSON.stringify(tools)) {
+    throw new Error('Invalid admitted native task read-only policy');
+  }
+}
+
+export function assertNativeTaskAcknowledgement(initialization) {
+  if (initialization.claude_code_version !== '2.1.322' || initialization.hooks_applied !== true ||
+      initialization.hook_on_failure_supported !== true) {
+    throw new Error('Provider did not initialize the native task read-only controls');
+  }
+}
+
+export function assertNativeTaskInitialization(message, policy, formattingTool) {
+  assertIsolatedInitialization(message);
+  const expected = [...policy.native_tools, ...(formattingTool ? ['StructuredOutput'] : [])];
+  if (message.tools.length !== expected.length || new Set(message.tools).size !== expected.length ||
+      message.tools.some(name => !expected.includes(name))) {
+    throw new Error('Provider initialization exceeds the native task read-only grant');
+  }
+}
+
 // Initialization acknowledgement alone is insufficient: the pinned CLI also
 // returns plugins_applied:true for missing/corrupt local plugin manifests.
 export function assertSkillAcknowledgement(initialization, qualified) {

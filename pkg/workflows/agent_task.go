@@ -89,6 +89,12 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	if request.Skill != nil && request.Skill.Workspace != "" && request.Workspace != request.Skill.Workspace {
 		return nil, fmt.Errorf("%w: admitted skill workspace changed", ErrActionIntegrity)
 	}
+	if err := validateNativeTaskPolicy(request.Definition); err != nil {
+		return nil, err
+	}
+	if request.Definition != nil && request.Definition.NativePolicy != nil && (request.Skill != nil || request.RepairOnly || request.Output != nil && request.Output.RepairAttempts > 0) {
+		return nil, fmt.Errorf("native read-only tasks require no skills or repair turns; set output.repair-attempts: 0")
+	}
 	if request.Skill != nil {
 		if request.Model == "" {
 			request.Model = request.Skill.Model
