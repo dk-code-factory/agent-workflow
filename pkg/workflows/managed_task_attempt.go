@@ -232,7 +232,7 @@ func recordManagedTaskTerminal(ctx context.Context, tag managedTaskAdmission, re
 
 // Unknown nonworker native attempts remain held. No retry flag or changed
 // logical/physical run may silently grant another provider attempt.
-const managedTaskCoordinateSelect = `SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id)
+const managedTaskCoordinateSelect = `SELECT u.observation_key,u.record,v.record,(SELECT status FROM attempts WHERE id=v.id),a.run_id
  FROM usage_invocations v INDEXED BY usage_origin
  CROSS JOIN usage_observations u
  CROSS JOIN attempts a
@@ -270,8 +270,8 @@ func managedTaskCoordinateHold(ctx context.Context, tx *sql.Tx, run, job, step s
 	for rows.Next() {
 		var key string
 		var raw, identityRaw []byte
-		var status string
-		if err = rows.Scan(&key, &raw, &identityRaw, &status); err != nil {
+		var status, originalRun string
+		if err = rows.Scan(&key, &raw, &identityRaw, &status, &originalRun); err != nil {
 			return err
 		}
 		var settled bool
@@ -293,11 +293,97 @@ func managedTaskCoordinateHold(ctx context.Context, tx *sql.Tx, run, job, step s
 			return err
 		}
 		if !settled || !identity.Finished || status != RunStatusSucceeded {
+			independent, e := managedIndependentReusableTasks(ctx, tx, run, originalRun, origin)
+			if e != nil {
+				return e
+			}
+			if independent {
+				continue
+			}
 			return fmt.Errorf("%w: original managed conversation attempt requires reconciliation before replay", ErrActionIntegrity)
 		}
 	}
 	return rows.Err()
 }
+
+// Only engine-admitted reusable edges can distinguish sibling job lineages.
+// Older snapshots without an edge remain conservative; caller metadata cannot
+// label an unresolved original as an independent execution.
+func managedReusableLineage(ctx context.Context, tx *sql.Tx, run, origin string) ([]string, string, error) {
+	var path []string
+	var logical string
+	for depth := 0; run != origin && depth < maxReusableWorkflowDepth; depth++ {
+		var raw, snapshot []byte
+		var actualOrigin string
+		if err := tx.QueryRowContext(ctx, `SELECT record,snapshot,origin_id FROM runs WHERE id=?`, run).Scan(&raw, &snapshot, &actualOrigin); err != nil {
+			return nil, "", err
+		}
+		var child Run
+		var snap Snapshot
+		if err := decodeJSONWithNumbers(raw, &child); err != nil {
+			return nil, "", err
+		}
+		if err := decodeJSONWithNumbers(snapshot, &snap); err != nil {
+			return nil, "", err
+		}
+		if depth == 0 {
+			logical = nativeString(snap.Metadata, "iteration_logical_run_id")
+		}
+		edge := snap.ReusableInvocation
+		if child.ID != run || actualOrigin != origin || edge == nil {
+			return nil, logical, nil
+		}
+		if edge.ParentRunID == "" || edge.JobID == "" || edge.Iteration < 1 || run != reusableChildID(edge.ParentRunID, edge.JobID, edge.Iteration) {
+			return nil, "", fmt.Errorf("%w: reusable execution identity changed", ErrActionIntegrity)
+		}
+		var parent Run
+		var parentSnapshot Snapshot
+		if err := tx.QueryRowContext(ctx, `SELECT record,snapshot FROM runs WHERE id=?`, edge.ParentRunID).Scan(&raw, &snapshot); err != nil {
+			return nil, "", err
+		}
+		if err := decodeJSONWithNumbers(raw, &parent); err != nil {
+			return nil, "", err
+		}
+		if err := decodeJSONWithNumbers(snapshot, &parentSnapshot); err != nil {
+			return nil, "", err
+		}
+		definition := parentSnapshot.Definitions[parent.WorkflowRef]
+		if parent.ID != edge.ParentRunID || definition == nil {
+			return nil, "", fmt.Errorf("%w: reusable parent definition missing", ErrActionIntegrity)
+		}
+		job, exists := definition.Jobs[edge.JobID]
+		ref, err := CanonicalLocalRef(job.Uses)
+		if !exists || err != nil || ref != child.WorkflowRef {
+			return nil, "", fmt.Errorf("%w: reusable parent job changed", ErrActionIntegrity)
+		}
+		path = append(path, run)
+		run = edge.ParentRunID
+	}
+	if run != origin {
+		return nil, "", fmt.Errorf("%w: reusable ancestry exceeds admitted bound", ErrActionIntegrity)
+	}
+	return path, logical, nil
+}
+
+func managedIndependentReusableTasks(ctx context.Context, tx *sql.Tx, run, original, origin string) (bool, error) {
+	left, logical, err := managedReusableLineage(ctx, tx, run, origin)
+	if err != nil || len(left) == 0 {
+		return false, err
+	}
+	right, originalLogical, err := managedReusableLineage(ctx, tx, original, origin)
+	if err != nil || len(right) == 0 || logical != "" && logical == originalLogical {
+		return false, err
+	}
+	// Compare from the shared origin. An ancestor or identical lineage is not
+	// independent; only a proven divergence between wrapper jobs is isolated.
+	for i, j := len(left)-1, len(right)-1; i >= 0 && j >= 0; i, j = i-1, j-1 {
+		if left[i] != right[j] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func settleManagedTaskAttempt(ctx context.Context, tx *sql.Tx, a Attempt, result StepExecution) error {
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM usage_observations WHERE invocation_id=? AND observation_key IN (?,?)`, a.ID, managedSDKAttemptKey, managedCodexAdmissionKey).Scan(&count); err != nil {

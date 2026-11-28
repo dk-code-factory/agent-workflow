@@ -355,3 +355,138 @@ func TestManagedConversationRedactedAuthority(t *testing.T) {
 		}
 	}
 }
+
+type managedReusableGate struct{ admitted <-chan struct{} }
+
+func (g managedReusableGate) Admission(context.Context, map[string]*Workflow) (map[string]any, error) {
+	return nil, nil
+}
+func (g managedReusableGate) RunAction(ctx context.Context, req ActionRequest) (map[string]any, error) {
+	if req.With["commit"] == "right" {
+		select {
+		case <-g.admitted:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return map[string]any{}, nil
+}
+
+func TestManagedConversationIndependentReusableChildren(t *testing.T) {
+	for _, provider := range []string{"claude-sdk", "codex-app-server"} {
+		for _, mode := range []string{"admitted-edge", "nested-edge", "legacy-edge-metadata-label"} {
+			legacy := mode == "legacy-edge-metadata-label"
+			t.Run(provider+"/"+mode, func(t *testing.T) {
+				left, right := make(chan struct{}), make(chan struct{})
+				var store *SQLiteStore
+				runner := &managedConversationSession{provider: provider}
+				runner.conversationSession = newConversationSession(func(ctx context.Context, req SessionRequest, emit func(ProviderEvent)) (SessionResult, error) {
+					var result SessionResult
+					var err error
+					if provider == "claude-sdk" {
+						err = BeginManagedSDKInvocation(ctx, req.RunID, req.InvocationID, "fixture")
+					} else {
+						err = BeginManagedCodexInvocation(ctx, req.RunID, req.InvocationID, "build", "policy", "fixture")
+					}
+					if err != nil {
+						return result, err
+					}
+					if req.AgentID == "builder" {
+						if strings.Contains(req.Prompt, "left") {
+							if legacy {
+								tag := ctx.Value(managedTaskKey{}).(managedTaskAdmission)
+								// Older admitted snapshots have no private edge. A public
+								// metadata label must not manufacture isolation for them.
+								if _, err = store.db.ExecContext(ctx, `UPDATE runs SET snapshot=json_remove(snapshot,'$.reusable_invocation') WHERE id=?`, tag.Attempt.RunID); err != nil {
+									return result, err
+								}
+							}
+							close(left)
+							select {
+							case <-right:
+							case <-ctx.Done():
+								return result, ctx.Err()
+							}
+						} else {
+							close(right)
+						}
+					}
+					result = conversationEvent(req, emit)
+					if req.AgentID == "builder" {
+						err = conversationCall(ctx, req, "send", "send", `{"to":"reviewer","message":"review"}`)
+					} else {
+						err = conversationCall(ctx, req, "finish", "finish", `{"answer":"approved"}`)
+					}
+					if err != nil {
+						return result, err
+					}
+					if provider == "claude-sdk" {
+						if err = BindManagedSDKModel(ctx, req.RunID, req.InvocationID, "fixture", "fixture"); err != nil {
+							return result, err
+						}
+						usage := map[string]any{"input_tokens": 16, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+						if err = req.ObserveUsage(UsageUpdate{Key: "sdk-response:final", Provider: provider, Model: "fixture", SessionID: result.SessionID, Usage: usage, Incomplete: true}); err != nil {
+							return result, err
+						}
+						result.ProviderStatus, result.ProviderVersion = "success", "claude-agent-sdk@0.3.322"
+						result.Outputs["usage"], result.Outputs["cost_usd"] = usage, float64(0)
+						return result, CheckpointManagedSDKTerminal(ctx, result)
+					}
+					if err = BindManagedCodexInvocation(ctx, req.RunID, req.InvocationID, result.SessionID, "turn"); err != nil {
+						return result, err
+					}
+					w := managedUsageWitness("final", 10)
+					w.SessionID, w.TurnID = result.SessionID, "turn"
+					w.Batch = mustManagedRecoveryJSON(managedCodexBatchIdentity{ThreadID: w.SessionID, TurnID: w.TurnID, InvocationID: req.InvocationID, PolicyID: w.PolicyID, BuildID: w.BuildID, BatchID: "batch-final", ResponseID: w.ResponseID, CallIDs: []string{}})
+					if err = RecordManagedCodexUsage(ctx, req.RunID, req.InvocationID, w); err != nil {
+						return result, err
+					}
+					result.ProviderStatus, result.ProviderVersion = "completed", "agent-workflow-managed-v1/build"
+					result.Outputs["usage"], result.Outputs["usage_incomplete"] = w.Usage, false
+					return result, CheckpointManagedCodexTerminal(ctx, result, w.ResponseID, w.Digest)
+				})
+				e, journal := durableExecutor(t, "jobs:\n  left:\n    uses: workflows/child.yml\n    with: {task: left}\n  right:\n    uses: workflows/child.yml\n    with: {task: right}\n", runner)
+				store = journal
+				e.MaxParallel = 4
+				e.Actions = managedReusableGate{admitted: left}
+				child := "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\n" + conversationYAML
+				child = strings.Replace(child, "    steps:\n", "    steps:\n      - id: gate\n        uses: workspace/create\n        with: {commit: '${{ inputs.task }}'}\n", 1)
+				writeWorkflow(t, e.WorkspaceDir, "child.yml", child)
+				if mode == "nested-edge" {
+					writeWorkflow(t, e.WorkspaceDir, "main.yml", "jobs:\n  left:\n    uses: workflows/middle.yml\n    with: {task: left}\n  right:\n    uses: workflows/middle.yml\n    with: {task: right}\n")
+					writeWorkflow(t, e.WorkspaceDir, "middle.yml", "on:\n  workflow_call:\n    inputs:\n      task: {type: string}\njobs:\n  nested:\n    uses: workflows/child.yml\n    with: {task: '${{ inputs.task }}'}\n")
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				run, err := e.Run(ctx, RunRequest{Ref: "workflows/main.yml", Metadata: map[string]any{"reusable_invocation": map[string]any{"parent_run_id": "caller-parent", "job_id": "caller-job", "iteration": 1}}})
+				if legacy {
+					if err == nil || !strings.Contains(err.Error(), "original managed conversation attempt") || runner.calls.Load() != 1 {
+						t.Fatalf("legacy original escaped its hold: calls=%d err=%v", runner.calls.Load(), err)
+					}
+					select {
+					case <-right:
+						t.Fatal("metadata label admitted a second provider")
+					default:
+					}
+					return
+				}
+				if err != nil || run.Status != RunStatusSucceeded || runner.calls.Load() != 4 {
+					t.Fatalf("independent reusable conversations did not finish: calls=%d err=%v", runner.calls.Load(), err)
+				}
+				if run.Jobs["left"].ChildRunID == run.Jobs["right"].ChildRunID {
+					t.Fatal("parallel jobs did not retain distinct execution identities")
+				}
+				_, rootSnapshot, loadErr := store.Load(ctx, run.ID)
+				if loadErr != nil || rootSnapshot.ReusableInvocation != nil {
+					t.Fatal("caller metadata manufactured a reusable edge", loadErr)
+				}
+				for _, job := range []string{"left", "right"} {
+					child, snapshot, loadErr := store.Load(ctx, reusableChildID(run.ID, job, 1))
+					if loadErr != nil || snapshot.ReusableInvocation == nil || snapshot.ReusableInvocation.ParentRunID != run.ID || snapshot.ReusableInvocation.JobID != job || snapshot.ReusableInvocation.Iteration != 1 || child.OriginID != run.ID || child.Status != RunStatusSucceeded {
+						t.Fatal("child execution lost common origin or completion", child, loadErr)
+					}
+				}
+			})
+		}
+	}
+}

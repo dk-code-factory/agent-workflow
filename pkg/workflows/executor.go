@@ -88,6 +88,7 @@ type Executor struct {
 }
 
 type RunRequest struct {
+	reusable          *reusableInvocation
 	SkillSources      map[string]*SkillSource
 	skillInputs       map[string]string
 	Package           *PackageSource
@@ -702,6 +703,7 @@ func (e *Executor) executeJobOnce(ctx context.Context, id string, job Job, input
 		childReq.SecretRefs = req.SecretRefs
 		childReq.RetryUncertain = req.RetryUncertain
 		childReq.runID = reusableChildID(req.runID, id, req.iteration)
+		childReq.reusable = &reusableInvocation{ParentRunID: req.runID, JobID: id, Iteration: req.iteration}
 		if logical := nativeString(req.Metadata, "iteration_logical_run_id"); req.ordered {
 			if logical == "" {
 				logical = req.runID

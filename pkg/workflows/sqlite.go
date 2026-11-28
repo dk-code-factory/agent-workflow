@@ -20,25 +20,33 @@ import (
 
 const RunStatusNeedsAttention = "needs_attention"
 
+// reusableInvocation is installed only by the reusable workflow executor.
+type reusableInvocation struct {
+	ParentRunID string `json:"parent_run_id"`
+	JobID       string `json:"job_id"`
+	Iteration   int    `json:"iteration"`
+}
+
 // Snapshot is the admitted definition closure and nonsecret execution context.
 // Credentials are resolved again on resume; values never belong here.
 type Snapshot struct {
-	SkillInputs       map[string]string         `json:"skill_inputs,omitempty"`
-	Package           *PackageBinding           `json:"package,omitempty"`
-	CredentialAliases map[string]string         `json:"credential_aliases,omitempty"`
-	ActionContracts   map[string]ActionContract `json:"application_actions,omitempty"`
-	Execution         runtimeexec.Policy        `json:"execution,omitempty"`
-	Metadata          map[string]any            `json:"metadata,omitempty"`
-	Version           int                       `json:"version"`
-	Definitions       map[string]*Workflow      `json:"definitions"`
-	Hashes            map[string]string         `json:"hashes"`
-	Inputs            map[string]any            `json:"inputs,omitempty"`
-	Event             map[string]any            `json:"event,omitempty"`
-	SecretRefs        map[string]string         `json:"secret_refs,omitempty"`
-	RequestID         string                    `json:"request_id,omitempty"`
-	RequiredSecrets   []string                  `json:"required_secrets,omitempty"`
-	Roles             json.RawMessage           `json:"roles,omitempty"`
-	Parallel          int                       `json:"parallel"`
+	ReusableInvocation *reusableInvocation       `json:"reusable_invocation,omitempty"`
+	SkillInputs        map[string]string         `json:"skill_inputs,omitempty"`
+	Package            *PackageBinding           `json:"package,omitempty"`
+	CredentialAliases  map[string]string         `json:"credential_aliases,omitempty"`
+	ActionContracts    map[string]ActionContract `json:"application_actions,omitempty"`
+	Execution          runtimeexec.Policy        `json:"execution,omitempty"`
+	Metadata           map[string]any            `json:"metadata,omitempty"`
+	Version            int                       `json:"version"`
+	Definitions        map[string]*Workflow      `json:"definitions"`
+	Hashes             map[string]string         `json:"hashes"`
+	Inputs             map[string]any            `json:"inputs,omitempty"`
+	Event              map[string]any            `json:"event,omitempty"`
+	SecretRefs         map[string]string         `json:"secret_refs,omitempty"`
+	RequestID          string                    `json:"request_id,omitempty"`
+	RequiredSecrets    []string                  `json:"required_secrets,omitempty"`
+	Roles              json.RawMessage           `json:"roles,omitempty"`
+	Parallel           int                       `json:"parallel"`
 }
 
 type Attempt struct {
@@ -147,7 +155,7 @@ func newID() string { // crypto/rand is shared with the executor's admission hel
 	return randomID()
 }
 func snapshotFor(all map[string]*Workflow, req RunRequest, roles json.RawMessage, parallel int) (Snapshot, error) {
-	s := Snapshot{SkillInputs: req.skillInputs, Package: req.packageBinding, CredentialAliases: req.credentialAliases, RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
+	s := Snapshot{ReusableInvocation: req.reusable, SkillInputs: req.skillInputs, Package: req.packageBinding, CredentialAliases: req.credentialAliases, RequestID: req.RequestID, Metadata: req.Metadata, Version: 1, Definitions: all, Hashes: map[string]string{}, Inputs: req.Inputs, Event: req.Event, SecretRefs: req.SecretRefs, Roles: roles, Parallel: parallel}
 	s.Execution = req.Execution
 	s.ActionContracts = req.actionContracts
 	for k, w := range all {
