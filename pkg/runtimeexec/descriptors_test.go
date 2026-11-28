@@ -61,7 +61,11 @@ func TestLocalDescriptorsRejectUnprovenTransportAndImplicitFiles(t *testing.T) {
 	} {
 		cmd := exec.Command("/bin/cat")
 		cmd.ExtraFiles = []*os.File{file}
-		if stop, err := SuperviseLocalDescriptors(context.Background(), cmd, test.policy, test.descriptors); err == nil || stop != nil || cmd.Process != nil {
+		stop, err := SuperviseLocalDescriptors(context.Background(), cmd, test.policy, test.descriptors)
+		if stop != nil {
+			stop()
+		}
+		if err == nil || stop != nil || cmd.Process != nil {
 			t.Fatal("unproven descriptor transport admitted", test)
 		}
 	}
