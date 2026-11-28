@@ -58,3 +58,10 @@ ui-pr-check: ui-flow-checker-test
 .PHONY: portable-prfix-test
 portable-prfix-test:
 	python3 -B -m unittest discover -s examples/pr-fix/tests -p 'test_*.py' -v
+
+# Local fake gateways only. Require the owned source-built artifact so the
+# custom Codex arms cannot silently skip and masquerade as cross-provider proof.
+.PHONY: managed-conformance
+managed-conformance:
+	@test -n "$$AGENT_WORKFLOW_TEST_MANAGED_CODEX_MANIFEST" && test -f "$$AGENT_WORKFLOW_TEST_MANAGED_CODEX_MANIFEST" || { echo 'Set AGENT_WORKFLOW_TEST_MANAGED_CODEX_MANIFEST to the prepared source-build manifest' >&2; exit 1; }
+	AGENT_WORKFLOW_SDK_TEST=1 go test -race ./pkg/workflows ./pkg/clirunner -run '^TestManagedCodex|^TestManagedConversation|^TestManagedSDK|^TestSDKManaged|^TestSDKBrokerNativeStreamBoundaries$$|^TestManagedPublicAgentTaskNativeContinuation$$|^TestSDKMixedNative|^TestManagedAdmission' -count=1 -v
