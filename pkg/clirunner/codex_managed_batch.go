@@ -310,7 +310,16 @@ func (c *codexManagedBatchController) execute(batch codexParkedBatch, calls []*c
 		c.fail(err)
 		return
 	}
-	if err := c.tools.Lease.Suspend(); err != nil {
+	// Publish the local lease transition under the same lock as fail/close.
+	// Authority and broker calls remain outside this critical section.
+	c.mu.Lock()
+	if c.err != nil || c.closed || context.Cause(c.ctx) != nil {
+		c.mu.Unlock()
+		return
+	}
+	err := c.tools.Lease.Suspend()
+	c.mu.Unlock()
+	if err != nil {
 		c.fail(err)
 		return
 	}
