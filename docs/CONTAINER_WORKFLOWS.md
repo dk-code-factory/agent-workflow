@@ -325,7 +325,8 @@ Declare the resource in every reusable workflow that needs it. The name selects
 one directory within the admitted package and target workspace; the mount target
 selects its container path. Helpers set their application environment explicitly.
 The workflow cannot supply a host source path. Unpackaged workflow execution
-rejects these declarations before container discovery or launch.
+rejects these declarations before container launch. Discovery for other workflows
+in the reusable workflow closure may occur before rejection.
 
 The engine selects
 `${XDG_STATE_HOME:-$HOME/.local/state}/agent-workflow/plugin-state/repositories/<workspace-hash>/<package-name>/<resource-name>`.

@@ -136,3 +136,22 @@ jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-workflows-state
   await ui.getByRole('button', { name: 'Redo', exact: true }).click();
   expect((await snapshot(page)).workflow['persistent-state']).toEqual(exported['persistent-state']);
 });
+
+test('normalize an imported binary persistent-state target through visual editing and history', async ({ page }) => {
+  const source = `persistent-state: {ledger: {mount-target: !!binary L2NmLXN0YXRl}}
+jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-state/ledger]}]}}
+`;
+  const ui = await open(page, source);
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).workflow['persistent-state'].ledger['mount-target']).toBe('/cf-state');
+  await job(page);
+  await field(page, 'Name', 'Binary target retained');
+  const exported = parse(await downloadText(page));
+  expect(exported['persistent-state']).toEqual({ ledger: { 'mount-target': '/cf-state' } });
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  expect((await snapshot(page)).workflow['persistent-state'].ledger['mount-target']).toBe('/cf-state');
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(exported['persistent-state']);
+  expect((await snapshot(page)).workflow.jobs.build.name).toBe('Binary target retained');
+});

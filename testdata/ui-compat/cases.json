@@ -568,5 +568,11 @@
     "file": "persistent-state.yml",
     "parse": true,
     "valid": true
+  },
+  {
+    "name": "persistent-state-binary-target",
+    "file": "persistent-state-binary-target.yml",
+    "parse": true,
+    "valid": true
   }
 ]

@@ -152,7 +152,7 @@ export const handlerKinds = ['onResult', 'onComplete', 'onIncomplete', 'onError'
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
-  'persistent-state': { '*': { 'mount-target': 'strict-string' } },
+  'persistent-state': { '*': { 'mount-target': 'string' } },
   'step-definitions': { '*': { parameters: { '*': input }, step: 'any' } },
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {

@@ -79,6 +79,24 @@ describe('advisory reference dependencies', () => {
 });
 
 describe('runner compatibility', () => {
+  it('normalizes a binary persistent-state target through visual edits and history', () => {
+    const source = readFileSync(resolve(root, 'persistent-state-binary-target.yml'), 'utf8');
+    const document = new WorkflowDocument({ source });
+    const target = () => document.getSnapshot().workflow!['persistent-state']!.ledger['mount-target'];
+    expect(document.getSnapshot().stale).toBe(false);
+    expect(document.getSnapshot().diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(target()).toBe('/cf-state');
+    document.setField(['jobs', 'build', 'name'], 'Changed');
+    expect(target()).toBe('/cf-state');
+    expect(parseDocument(document.getSnapshot().source).toJS()['persistent-state'].ledger['mount-target']).toBe('/cf-state');
+    expect(parseWorkflow(document.getSnapshot().source).workflow).toEqual(document.getSnapshot().workflow);
+    document.undo();
+    expect(document.getSnapshot().source).toBe(source);
+    expect(target()).toBe('/cf-state');
+    document.redo();
+    expect(target()).toBe('/cf-state');
+    expect(document.getSnapshot().workflow!.jobs.build.name).toBe('Changed');
+  });
   for (const fixture of fixtures) it(fixture.name, () => {
     const result = parseWorkflow(readFileSync(resolve(root, fixture.file), 'utf8'));
     expect(!result.diagnostics.some(d => d.source === 'parser' && d.severity === 'error')).toBe(fixture.parse);
