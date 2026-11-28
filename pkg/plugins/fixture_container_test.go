@@ -2,6 +2,8 @@ package plugins
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,10 +38,13 @@ func TestPluginFixtureContainerHelpersUseJournalWithoutDiscovery(t *testing.T) {
 	// No executable lookup or container endpoint can succeed in these cases.
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("DOCKER_HOST", "unix:///fixture-must-not-discover.sock")
+	stateHome := filepath.Join(t.TempDir(), "must-not-create")
+	t.Setenv("XDG_STATE_HOME", stateHome)
 	for _, docker := range []bool{false, true} {
 		for _, effect := range []string{"read_only", "external_mutation"} {
 			t.Run(fmt.Sprintf("docker=%v/%s", docker, effect), func(t *testing.T) {
 				workflow, uses := fixtureHelperWorkflow(docker, effect)
+				workflow = "persistent-state: {ledger: {mount-target: /fixture-ledger}}\n" + workflow
 				root := fixtureProject(t, workflow, fmt.Sprintf(`schema-version: 1
 cases:
   - name: helper-recovery
@@ -61,6 +66,9 @@ cases:
 				}
 			})
 		}
+	}
+	if _, err := os.Lstat(stateHome); !os.IsNotExist(err) {
+		t.Fatal("fixture boundary created persistent host state", err)
 	}
 }
 
