@@ -171,6 +171,9 @@ def prepare(args):
         raise
     finally:
         report.update({"elapsed_seconds": time.monotonic() - started, "prepared_bytes": total, "final_lock_sha256": digest(lock)})
+        lock_changed = report["final_lock_sha256"] != lock_hash
+        if lock_changed:
+            report.update({"exit_code": 1, "error": "ValueError: archive preparation changed the source lock"})
         content = (json.dumps(report, indent=2) + "\n").encode("utf-8")
         reserve_space(root, len(content))
         with receipt_path.open("xb") as receipt:
@@ -179,7 +182,7 @@ def prepare(args):
             if shutil.disk_usage(root).free < MIN_FREE:
                 receipt_path.unlink()
                 raise ValueError("archive preparation resource limit exceeded")
-        if report["final_lock_sha256"] != lock_hash:
+        if lock_changed:
             raise ValueError("archive preparation changed the source lock")
     print(json.dumps({"exit_code": 0, "archives": len(rows), "prepared_bytes": total, "receipt": str(receipt_path)}))
 

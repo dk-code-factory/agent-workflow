@@ -101,6 +101,25 @@ class PinnedArchiveTests(unittest.TestCase):
             self.assertFalse((args.output / args.receipt).exists())
             self.assertEqual(list(archives.iterdir()), [])
 
+    def test_changed_lock_is_reported_as_failure_in_retained_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, _ = self.fixture(Path(directory))
+            lock = args.output / "source/codex-rs/Cargo.lock"
+            lock_hash = ARCHIVES.digest(lock)
+            save = ARCHIVES.save_archive
+
+            def changed_lock(*params):
+                size = save(*params)
+                lock.write_text(lock.read_text() + "\n")
+                return size
+
+            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "save_archive", side_effect=changed_lock), self.assertRaisesRegex(ValueError, "changed the source lock"):
+                ARCHIVES.prepare(args)
+            report = json.loads((args.output / args.receipt).read_text())
+            self.assertEqual(report["exit_code"], 1)
+            self.assertIn("changed the source lock", report["error"])
+            self.assertNotEqual(report["original_lock_sha256"], report["final_lock_sha256"])
+
     def test_receipt_cannot_spend_the_floor_remaining_after_an_archive(self):
         with tempfile.TemporaryDirectory() as directory:
             args, archives = self.fixture(Path(directory))
