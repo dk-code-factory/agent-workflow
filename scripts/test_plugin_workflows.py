@@ -1,12 +1,16 @@
 """Deterministic local workflows for the packaged authoring/recovery contracts."""
+import fcntl
 import importlib.util
 import json
 from pathlib import Path
+import select
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from test_plugin_acceptance import acceptance
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -199,10 +203,133 @@ class WorkflowTests(unittest.TestCase):
         evidence = self.workspace / "evidence"
         evidence.mkdir()
         try:
-            acceptance.recover_gate(self.engine, self.workspace, dict(os.environ), evidence, run_id, time.monotonic() + 20)
+            acceptance.recover_gate(self.engine, self.workspace, dict(os.environ), evidence, run_id, time.monotonic() + 20, self.controller)
         finally:
             self.cli("stop", okay=False)
         self.assertEqual(json.loads((evidence / "recovery.json").read_text())["processing_count"], 1)
+
+
+class HarnessRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="plugin-recovery-boundary-")
+        self.addCleanup(self.temporary.cleanup)
+        self.workspace = Path(self.temporary.name)
+        self.evidence = self.workspace / "evidence"
+        self.evidence.mkdir()
+        self.gate = {"state": "pending", "gate_id": "original-gate", "evidence_id": "original-evidence"}
+
+    def recover(self, controller, deadline=None):
+        acceptance.recover_gate(Path("fixture-engine"), self.workspace, {}, self.evidence, "original-run",
+                                deadline if deadline is not None else time.monotonic() + 5, controller)
+
+    def initial_command(self, arguments, **kwargs):
+        return json.dumps([self.gate] if arguments[1] == "inputs" else {"stopping": True})
+
+    def test_resume_waits_for_owned_process_to_release_workspace(self):
+        lock_path = self.workspace / "owner.lock"
+        child = subprocess.Popen([sys.executable, "-c", """import fcntl, sys
+with open(sys.argv[1], 'w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    print('owned', flush=True)
+    sys.stdin.buffer.read(1)
+""", str(lock_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        def cleanup():
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            for stream in (child.stdin, child.stdout, child.stderr):
+                stream.close()
+        self.addCleanup(cleanup)
+        self.assertTrue(select.select([child.stdout], [], [], 5)[0], "owned fixture did not acquire its lock")
+        self.assertEqual(child.stdout.readline(), b"owned\n")
+        def finish_shutdown(timeout):
+            child.stdin.write(b"x")
+            child.stdin.flush()
+            return child.wait(timeout=timeout)
+        controller = mock.Mock()
+        controller.wait.side_effect = finish_shutdown
+        calls = []
+        def cli(arguments, **kwargs):
+            calls.append(arguments[1])
+            if arguments[1] == "resume":
+                # Stop ACK leaves the real fixture process holding ownership until joined.
+                with lock_path.open("r+") as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError as failure:
+                        raise subprocess.CalledProcessError(1, arguments, stderr="workspace already has an execution owner") from failure
+                self.assertEqual(child.poll(), 0)
+            if arguments[1] in {"inputs", "stop"}:
+                return self.initial_command(arguments, **kwargs)
+            return json.dumps({"id": "original-run", "status": "succeeded"})
+        fixture = self.workspace / "fixture"
+        fixture.mkdir()
+        (fixture / "processed.count").write_text("1")
+        (fixture / "report.txt").write_text("Total: 5\n")
+        stale = subprocess.CompletedProcess([], 1, stderr=b"stale gate evidence")
+        with mock.patch.object(acceptance, "run", side_effect=cli), mock.patch.object(acceptance.subprocess, "run", return_value=stale):
+            self.recover(controller)
+        self.assertEqual(calls, ["inputs", "stop", "resume", "inputs", "answer", "status"])
+        controller.wait.assert_called_once()
+        record = json.loads((self.evidence / "recovery.json").read_text())
+        self.assertTrue(record["same_run"] and record["same_gate"] and record["stale_answer_rejected"])
+        self.assertEqual(record["processing_count"], 1)
+
+    def test_owned_shutdown_timeout_does_not_resume(self):
+        controller = mock.Mock()
+        controller.wait.side_effect = subprocess.TimeoutExpired("owned-controller", 1)
+        with mock.patch.object(acceptance, "run", side_effect=self.initial_command) as cli:
+            with self.assertRaisesRegex(TimeoutError, "Owned controller shutdown exceeded recovery deadline"):
+                self.recover(controller)
+        self.assertEqual([call.args[0][1] for call in cli.call_args_list], ["inputs", "stop"])
+
+    def test_deadline_is_not_renewed_after_stop_or_process_exit(self):
+        for expired_after in ("stop", "wait"):
+            with self.subTest(expired_after=expired_after):
+                clock = [10.0]
+                controller = mock.Mock()
+                def cli(arguments, **kwargs):
+                    self.assertEqual(kwargs["timeout"], 1.0)
+                    if arguments[1] == "stop" and expired_after == "stop":
+                        clock[0] = 11.0
+                    return self.initial_command(arguments, **kwargs)
+                def wait(timeout):
+                    self.assertEqual(timeout, 1.0)
+                    clock[0] = 11.0
+                    return 0
+                controller.wait.side_effect = wait
+                with mock.patch.object(acceptance.time, "monotonic", side_effect=lambda: clock[0]), mock.patch.object(acceptance, "run", side_effect=cli) as command:
+                    with self.assertRaisesRegex(TimeoutError, "Recovery exceeded subject deadline"):
+                        self.recover(controller, deadline=11.0)
+                self.assertEqual([call.args[0][1] for call in command.call_args_list], ["inputs", "stop"])
+                self.assertEqual(controller.wait.call_count, expired_after == "wait")
+
+    def test_failed_owned_controller_does_not_resume(self):
+        controller = mock.Mock()
+        controller.wait.return_value = 1
+        with mock.patch.object(acceptance, "run", side_effect=self.initial_command) as cli:
+            with self.assertRaisesRegex(RuntimeError, "Owned controller exited with status 1"):
+                self.recover(controller)
+        self.assertEqual([call.args[0][1] for call in cli.call_args_list], ["inputs", "stop"])
+
+    def test_resume_failure_reports_stderr_without_environment(self):
+        controller = mock.Mock()
+        controller.wait.return_value = 0
+        def cli(arguments, **kwargs):
+            if arguments[1] == "resume":
+                raise subprocess.CalledProcessError(1, arguments, output="private stdout", stderr="controller did not start; inspect fixture/controller.log")
+            return self.initial_command(arguments, **kwargs)
+        with mock.patch.object(acceptance, "run", side_effect=cli):
+            with self.assertRaisesRegex(RuntimeError, "Recovery resume failed with exit 1: controller did not start; inspect fixture/controller.log") as failure:
+                self.recover(controller)
+        self.assertNotIn("private stdout", str(failure.exception))
+        self.assertNotIn(str(self.workspace), str(failure.exception))
+
+    def test_recovery_requires_its_owned_controller(self):
+        with mock.patch.object(acceptance, "run") as cli:
+            with self.assertRaisesRegex(ValueError, "Recovery needs its owned controller process"):
+                self.recover(None)
+        cli.assert_not_called()
 
 
 if __name__ == "__main__":
