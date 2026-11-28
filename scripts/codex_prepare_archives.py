@@ -22,6 +22,10 @@ MIN_FREE = 24 << 30
 MAX_SECONDS = 15 * 60
 REGISTRY = "index.crates.io-1949cf8c6b5b557f"
 SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+LOCK_HASHES = {
+    "9e71c74824a7ea114d0a3a4c94e93d81a1ddd13ca8fa6f698cbd1284c2e9ff2f",
+    "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883",
+}
 
 
 def digest(path):
@@ -58,9 +62,10 @@ def save_archive(stream, destination, expected, guard):
                 size += len(chunk)
                 if size > MAX_ARCHIVE:
                     raise ValueError("archive exceeds its byte limit")
-                guard(size)
+                guard(size, reserve=len(chunk))
                 checksum.update(chunk)
                 output.write(chunk)
+                output.flush()
         if checksum.hexdigest() != expected:
             raise ValueError("archive differs from the original locked SHA-256")
         # No process other than this explicit preparation command owns this cache.
@@ -83,14 +88,11 @@ def prepare(args):
         if path.is_symlink() or path.is_file() and path.stat().st_nlink != 1:
             raise ValueError("owned cache contains a shared alias")
     receipt_path = root / args.receipt
-    if Path(args.receipt).name != args.receipt or receipt_path.exists():
+    if Path(args.receipt).name != args.receipt or receipt_path.exists() or receipt_path.is_symlink():
         raise ValueError("archive receipt must be a new file within owned storage")
     lock = root / "source/codex-rs/Cargo.lock"
     lock_hash = digest(lock)
-    if lock_hash not in {
-        "9e71c74824a7ea114d0a3a4c94e93d81a1ddd13ca8fa6f698cbd1284c2e9ff2f",
-        "9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883",
-    }:
+    if lock_hash not in LOCK_HASHES:
         raise ValueError("archive preparation requires the reviewed exact 0.167.1 lock")
     packages = {p["name"] + "-" + p["version"] + ".crate": p for p in tomllib.loads(lock.read_text())["package"] if p.get("source") == SOURCE}
     missing = json.loads((root / "cache.json").read_text())["missing"]
@@ -100,8 +102,8 @@ def prepare(args):
     started, total, rows = time.monotonic(), 0, []
     report = {"original_lock_sha256": lock_hash, "limits": {"archives": 53, "archive_bytes": MAX_ARCHIVE, "total_bytes": MAX_TOTAL, "seconds": MAX_SECONDS, "minimum_free_bytes": MIN_FREE}, "archives": rows}
 
-    def guard(size=0):
-        if time.monotonic() - started >= MAX_SECONDS or total + size > MAX_TOTAL or shutil.disk_usage(root).free < MIN_FREE:
+    def guard(size=0, reserve=0):
+        if time.monotonic() - started >= MAX_SECONDS or total + size > MAX_TOTAL or shutil.disk_usage(root).free - reserve < MIN_FREE:
             raise ValueError("archive preparation resource limit exceeded")
 
     try:
@@ -138,7 +140,8 @@ def prepare(args):
         raise
     finally:
         report.update({"elapsed_seconds": time.monotonic() - started, "prepared_bytes": total, "final_lock_sha256": digest(lock)})
-        receipt_path.write_text(json.dumps(report, indent=2) + "\n")
+        with receipt_path.open("x") as receipt:
+            receipt.write(json.dumps(report, indent=2) + "\n")
         if report["final_lock_sha256"] != lock_hash:
             raise ValueError("archive preparation changed the source lock")
     print(json.dumps({"exit_code": 0, "archives": len(rows), "prepared_bytes": total, "receipt": str(receipt_path)}))
