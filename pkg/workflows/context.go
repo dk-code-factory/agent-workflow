@@ -161,11 +161,12 @@ type SessionRequest struct {
 	SessionID string
 }
 type SessionResult struct {
-	ProviderStatus  string         `json:"provider_status,omitempty"`
-	ProviderVersion string         `json:"provider_version,omitempty"`
-	SessionID       string         `json:"session_id"`
-	Status          string         `json:"status"`
-	Outputs         map[string]any `json:"outputs,omitempty"`
+	TaskPolicy      *NativeTaskPolicyEvidence `json:"task_policy,omitempty"`
+	ProviderStatus  string                    `json:"provider_status,omitempty"`
+	ProviderVersion string                    `json:"provider_version,omitempty"`
+	SessionID       string                    `json:"session_id"`
+	Status          string                    `json:"status"`
+	Outputs         map[string]any            `json:"outputs,omitempty"`
 }
 type SessionRunner interface {
 	Capabilities(string) (ProviderCapabilities, error)

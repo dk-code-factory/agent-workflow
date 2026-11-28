@@ -196,7 +196,12 @@ execution requires a separately installed locked bridge and an explicit token or
 API-key environment reference. No login or credential refresh occurs implicitly.
 
 Agent definitions use the shared engine YAML contract: required `name`,
-`description` and `instructions`, optional `model` and `reasoning-effort`. New
+`description` and `instructions`, optional `model`, `reasoning-effort`, and the
+narrower `tool-policy: read-only`. Read-only native tasks use the supported local
+Claude SDK profile and retain an exact tool-grant receipt for later verifier
+steps; arbitrary tool grants and provider overrides remain forbidden. Unsupported
+runtime combinations reject admission. See [native task policy](AGENT_TASKS.md).
+New
 source admissions reject Codex TOML and Claude Markdown with conversion guidance.
 Use `agent-workflow agent convert --from codex|claude --input FILE --output FILE.yaml`
 offline; review omitted options and required workspace runtime-policy changes.

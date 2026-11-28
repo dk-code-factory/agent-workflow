@@ -270,6 +270,19 @@ func subset(child, parent []string) bool {
 	return true
 }
 func (m *WorkerManager) Spawn(ctx context.Context, spec WorkerSpec) (Worker, error) {
+	if err := validateNativeTaskPolicy(spec.Definition); err != nil {
+		return Worker{}, err
+	}
+	if spec.Definition != nil && spec.Definition.NativePolicy != nil {
+		if spec.Skill != nil || len(spec.ToolGrants) != 0 {
+			return Worker{}, fmt.Errorf("native read-only tasks cannot add skills or broker grants")
+		}
+		if spec.Tools != nil && actionHash(spec.Tools) != actionHash(spec.Definition.NativePolicy.NativeTools) {
+			return Worker{}, fmt.Errorf("%w: native task tool ceiling changed", ErrActionIntegrity)
+		}
+		spec.Tools = append([]string{}, spec.Definition.NativePolicy.NativeTools...)
+		spec.ToolGrants = []ToolGrant{}
+	}
 	run, snapshot, err := m.Store.Load(ctx, spec.RunID)
 	if err != nil {
 		return Worker{}, err
@@ -591,6 +604,11 @@ func (m *WorkerManager) sendTask(ctx context.Context, run, id, requestID string,
 	if err != nil {
 		return WorkerMessage{}, err
 	}
+	if w.Definition != nil && w.Definition.NativePolicy != nil {
+		if task.RepairOnly || task.Skill != nil || task.Output != nil && task.Output.RepairAttempts > 0 || task.Definition != nil && actionHash(task.Definition) != actionHash(w.Definition) {
+			return WorkerMessage{}, fmt.Errorf("%w: original native read-only task binding changed", ErrActionIntegrity)
+		}
+	}
 	_, _, secrets, err := m.Factory(ctx, run, w.Role, w.Tools)
 	if err != nil {
 		return WorkerMessage{}, err
@@ -812,6 +830,9 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 	if err == nil && w.Access.Workspace != "" {
 		runner, err = scopeWorker(runner, w.Role, w.Access.Workspace)
 	}
+	if err == nil {
+		err = validateWorkerNativePolicy(w, runner)
+	}
 	if err != nil {
 		w.Status = RunStatusNeedsAttention
 		w.Error = Redact(err.Error(), secrets)
@@ -825,12 +846,17 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		return
 	}
 	var b []byte
+	validatedPolicyBinding := actionHash([]any{w.Definition, w.Tools, w.ToolGrants, w.Skill})
 	err = tx.QueryRowContext(ctx, "SELECT record FROM workers WHERE id=? AND status='idle'", w.ID).Scan(&b)
 	if err != nil {
 		_ = tx.Rollback()
 		return
 	}
 	if err = decodeJSONWithNumbers(b, &w); err != nil {
+		_ = tx.Rollback()
+		return
+	}
+	if actionHash([]any{w.Definition, w.Tools, w.ToolGrants, w.Skill}) != validatedPolicyBinding {
 		_ = tx.Rollback()
 		return
 	}
@@ -1120,6 +1146,10 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 			w.SessionID = result.SessionID
 		}
 	}
+	policyErr := retainNativeTaskPolicy(w, msg, &result, turnErr == nil)
+	if policyErr != nil {
+		turnErr = errors.Join(turnErr, policyErr)
+	}
 	result.Outputs, _ = redactValue(result.Outputs, secrets).(map[string]any)
 	encoded, _ := json.Marshal(result)
 	outputLimit := w.MaxOutput
@@ -1127,8 +1157,16 @@ func (m *WorkerManager) turn(ctx context.Context, w Worker, lease *CapacityLease
 		outputLimit = m.Limits.MaxOutput
 	}
 	if len(encoded) > outputLimit {
+		// Discard provider outputs, retaining the validated controller receipt
+		// alongside its typed binding. Frozen waits must still verify both.
+		publicPolicy := result.Outputs["tool_policy"]
 		result.Outputs = nil
-		turnErr = fmt.Errorf("worker output exceeds limit")
+		if result.TaskPolicy != nil && publicPolicy != nil {
+			result.Outputs = map[string]any{"tool_policy": publicPolicy}
+		}
+		// Grant validation runs after the original failure causes are captured.
+		// Its integrity error must survive replacement of the size diagnostic.
+		turnErr = errors.Join(policyErr, fmt.Errorf("worker output exceeds limit"))
 	}
 	msg.Result = result
 	msg.FailureClass = classifyFailure(turnErr)

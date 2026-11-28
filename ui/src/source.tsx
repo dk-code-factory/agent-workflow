@@ -31,6 +31,13 @@ export function stepResultPaths(step: Step, schemas: Workflow['schemas'] = {}, p
     }
   };
   visit(schema, step.protocol === 'action-v1' ? 'outputs' : '');
+  if (step.uses === 'agent/run') {
+    for (const field of ['grant.mode', 'grant.provider', 'grant.profile', 'grant.native_tools', 'agent', 'invocation_id', 'task_attempt_id', 'session_fingerprint', 'formatting_tool']) {
+      const path = `outputs.tool_policy.${field}`;
+      if (result.length >= limit) break;
+      if (path.startsWith(prefix)) result.push(path);
+    }
+  }
   return result;
 }
 export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepIndex?: number, path?: Path, prefix = ''): string[] {
@@ -38,6 +45,7 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
   const callable = workflow.on?.workflow_call as { inputs?: Record<string, unknown> } | undefined;
   const result: string[] = [];
   const schemaPaths = new Map<unknown, Map<string, string[]>>();
+  const nativeSchemaPaths = new Map<unknown, Map<string, string[]>>();
   const add = (value: string) => { if (value.startsWith(prefix)) result.push(value); return result.length >= expressionSuggestionLimit; };
   const addStep = (step: Step, base: string) => {
     const start = base + '.';
@@ -45,8 +53,9 @@ export function expressionSuggestions(workflow?: Workflow, jobID?: string, stepI
       const fieldPrefix = prefix.startsWith(start) ? prefix.slice(start.length) : '';
       const contract = step.with?.output;
       const schema = step.protocol === 'action-v1' ? step : mapping(contract) ? contract.schema : undefined;
-      let byPrefix = schemaPaths.get(schema);
-      if (!byPrefix) schemaPaths.set(schema, byPrefix = new Map());
+      const cache = step.uses === 'agent/run' ? nativeSchemaPaths : schemaPaths;
+      let byPrefix = cache.get(schema);
+      if (!byPrefix) cache.set(schema, byPrefix = new Map());
       let fields = byPrefix.get(fieldPrefix);
       if (!fields) {
         fields = stepResultPaths(step, workflow.schemas, fieldPrefix);

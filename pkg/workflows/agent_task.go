@@ -89,6 +89,12 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 	if request.Skill != nil && request.Skill.Workspace != "" && request.Workspace != request.Skill.Workspace {
 		return nil, fmt.Errorf("%w: admitted skill workspace changed", ErrActionIntegrity)
 	}
+	if err := validateNativeTaskPolicy(request.Definition); err != nil {
+		return nil, err
+	}
+	if request.Definition != nil && request.Definition.NativePolicy != nil && (request.Skill != nil || request.RepairOnly || request.Output != nil && request.Output.RepairAttempts > 0) {
+		return nil, fmt.Errorf("native read-only tasks require no skills or repair turns; set output.repair-attempts: 0")
+	}
 	if request.Skill != nil {
 		if request.Model == "" {
 			request.Model = request.Skill.Model
@@ -187,6 +193,11 @@ func (e *Executor) executeAgentTask(ctx context.Context, step Step, ec expressio
 				outcome, err = e.Workers.WaitMessage(cleanup, WorkerWaitRequest{RunID: owner, OperationID: operationID, WorkerID: worker.ID, MessageID: message.ID, Deadline: message.EnqueuedAt.Add(worker.TurnDuration)})
 			}
 			cancel()
+		}
+		if outcome.ID != "" {
+			if policyErr := validateRetainedNativeTaskPolicy(worker, outcome); policyErr != nil {
+				return nil, policyErr
+			}
 		}
 		if err != nil {
 			outputs, _ := cloneJSONValue(outcome.Result.Outputs).(map[string]any)

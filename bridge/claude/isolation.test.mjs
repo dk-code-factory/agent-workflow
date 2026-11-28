@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization } from './isolation.mjs';
+import { isolatedSettings, assertIsolatedInitialization, assertSkillAcknowledgement, assertSelectedInitialization, assertNativeTaskPolicy, assertNativeTaskAcknowledgement, assertNativeTaskInitialization } from './isolation.mjs';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,4 +78,18 @@ test('selected skill requires qualified acknowledgement and exact later plugin s
   const childMessage={...message,tools:['Task','Read','Skill']};
   assert.doesNotThrow(()=>assertSelectedInitialization(childMessage,childSkill));
   for(const tools of [['Agent','Read','Skill'],['Task','Read','Skill','Bash'],['Read','Skill'],['Task','Skill']]) assert.throws(()=>assertSelectedInitialization({...childMessage,tools},childSkill));
+});
+
+test('native task read-only policy requires exact grants and verified blocking hooks', () => {
+  const policy = {mode:'read-only',provider:'claude-sdk',profile:'claude-sdk@0.3.322/native-task-read-only-v1',native_tools:['Read']};
+  assert.doesNotThrow(() => assertNativeTaskPolicy(policy,['Read']));
+  for (const changes of [{mode:'unrestricted'},{provider:'codex-app-server'},{profile:'future'},{native_tools:['Bash']},{native_tools:['Read','Read']}]) assert.throws(() => assertNativeTaskPolicy({...policy,...changes},['Read']));
+  assert.throws(() => assertNativeTaskPolicy(policy,['Read','Bash']));
+  const acknowledgement={claude_code_version:'2.1.322',hooks_applied:true,hook_on_failure_supported:true};
+  assert.doesNotThrow(() => assertNativeTaskAcknowledgement(acknowledgement));
+  for (const changes of [{claude_code_version:'future'},{hooks_applied:false},{hook_on_failure_supported:undefined}]) assert.throws(() => assertNativeTaskAcknowledgement({...acknowledgement,...changes}));
+  const init={plugins:[],skills:[],tools:['Read']};
+  assert.doesNotThrow(() => assertNativeTaskInitialization(init,policy,false));
+  assert.doesNotThrow(() => assertNativeTaskInitialization({...init,tools:['StructuredOutput','Read']},policy,true));
+  for (const tools of [[],['Read','Bash'],['Read','WebFetch'],['Read','mcp__broker__write'],['Read','Read'],['Read','StructuredOutput']]) assert.throws(() => assertNativeTaskInitialization({...init,tools},policy,false));
 });

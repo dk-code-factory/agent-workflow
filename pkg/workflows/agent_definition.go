@@ -13,16 +13,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AgentDefinition is immutable admitted data, not a provider/security policy.
-// Native custom agent files cannot replace authentication, tools or execution.
+// AgentDefinition retains behavior and an optional narrower native task policy.
+// Definitions cannot replace authentication or execution, or add tool authority.
 type AgentDefinition struct {
-	Name                  string `yaml:"name" json:"name"`
-	Description           string `yaml:"description" json:"description"`
-	DeveloperInstructions string `yaml:"instructions" json:"developer_instructions"`
-	Model                 string `yaml:"model,omitempty" json:"model,omitempty"`
-	ReasoningEffort       string `yaml:"reasoning-effort,omitempty" json:"model_reasoning_effort,omitempty"`
-	Source                string `yaml:"-" json:"source"`
-	Bytes                 string `yaml:"-" json:"bytes"`
+	Name                  string            `yaml:"name" json:"name"`
+	Description           string            `yaml:"description" json:"description"`
+	DeveloperInstructions string            `yaml:"instructions" json:"developer_instructions"`
+	Model                 string            `yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort       string            `yaml:"reasoning-effort,omitempty" json:"model_reasoning_effort,omitempty"`
+	ToolPolicy            string            `yaml:"tool-policy,omitempty" json:"tool_policy,omitempty"`
+	NativePolicy          *NativeTaskPolicy `yaml:"-" json:"native_policy,omitempty"`
+	Source                string            `yaml:"-" json:"source"`
+	Bytes                 string            `yaml:"-" json:"bytes"`
 }
 
 func LoadAgentDefinition(path string) (*AgentDefinition, error) {
@@ -111,6 +113,9 @@ func ParseAgentDefinition(data []byte) (*AgentDefinition, error) {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh":
 	default:
 		return nil, fmt.Errorf("unsupported reasoning-effort %q", definition.ReasoningEffort)
+	}
+	if definition.ToolPolicy != "" && definition.ToolPolicy != "read-only" {
+		return nil, fmt.Errorf("unsupported agent tool-policy %q", definition.ToolPolicy)
 	}
 	return &definition, nil
 }

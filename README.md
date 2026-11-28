@@ -637,8 +637,14 @@ jobs:
             schema: {type: object, required: [approved], properties: {approved: {type: boolean}}}
 ```
 
-Definitions support `name`, `description`, `instructions`, `model`, and
-`reasoning-effort`. Admission captures the definition and effective runtime
+Definitions support `name`, `description`, `instructions`, `model`,
+`reasoning-effort`, and the narrower `tool-policy: read-only`. The initial
+read-only profile supports local Claude SDK tasks: it intersects the role's
+Read/Glob/Grep tools, excludes broker and mutation tools, and retains
+controller-generated `outputs.tool_policy` grant evidence. Unsupported runtimes
+reject admission; structured contracts require `repair-attempts: 0`. See
+[native task policy and evidence](docs/AGENT_TASKS.md).
+Admission captures the definition and effective runtime
 settings. An explicit definition creates an independent agent; use
 `${{ steps.review.outputs.agent }}` as another task's `with.agent` to continue
 its session. Identity survives retries and execution generations.

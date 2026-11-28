@@ -9,6 +9,9 @@ import (
 )
 
 func (e *Executor) preflight(ctx context.Context, all map[string]*Workflow) error {
+	if err := e.validateNativeTaskPolicies(all); err != nil {
+		return err
+	}
 	if e.Boundary != nil {
 		if err := e.Boundary.CheckPolicy(e.CommandExecution); err != nil {
 			return err
