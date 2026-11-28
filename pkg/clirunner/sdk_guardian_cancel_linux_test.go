@@ -220,7 +220,10 @@ func TestSDKCancellationRetainsGuardianCleanupBudget(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("SDK_GUARDIAN_FIXTURE_KEY", "sdk-guardian-cancel-fixture")
-			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"sdk": {Provider: "claude-sdk", Command: self, Bridge: "-test.run=^TestSDKGuardianInterruptBridgeFixture$", Model: mode, Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_GUARDIAN_FIXTURE_KEY"}}}}}
+			// Declare a native-tool role so this protocol-only fixture does not select
+			// managed-broker accounting when composed with that adapter. The Read
+			// capability is unused; no SDK, provider, or tool call executes.
+			runner := &Runner{Workspace: root, Config: Config{Agents: map[string]Agent{"sdk": {Provider: "claude-sdk", Command: self, Bridge: "-test.run=^TestSDKGuardianInterruptBridgeFixture$", Model: mode, Tools: []string{"Read"}, Authentication: Authentication{Mode: "gateway", Endpoint: "http://127.0.0.1:1", CredentialEnv: "SDK_GUARDIAN_FIXTURE_KEY"}}}}}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var owner sdkCancelOwnership
