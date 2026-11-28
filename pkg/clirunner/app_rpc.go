@@ -12,6 +12,17 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
+// appRPCResponseError distinguishes a peer's explicit rejection from transport
+// loss. Its text preserves the historical stock-adapter diagnostic.
+type appRPCResponseError struct {
+	method string
+	raw    json.RawMessage
+}
+
+func (e *appRPCResponseError) Error() string {
+	return fmt.Sprintf("app-server %s failed: %s", e.method, e.raw)
+}
+
 type rpcFrame struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
@@ -179,7 +190,7 @@ func (rpc *appRPC) callContext(ctx context.Context, method string, params any) (
 	select {
 	case frame := <-response:
 		if len(frame.Error) > 0 && string(frame.Error) != "null" {
-			return nil, fmt.Errorf("app-server %s failed: %s", method, frame.Error)
+			return nil, &appRPCResponseError{method: method, raw: frame.Error}
 		}
 		return frame.Result, nil
 	case <-ctx.Done():
@@ -188,7 +199,7 @@ func (rpc *appRPC) callContext(ctx context.Context, method string, params any) (
 		select {
 		case frame := <-response:
 			if len(frame.Error) > 0 && string(frame.Error) != "null" {
-				return nil, fmt.Errorf("app-server %s failed: %s", method, frame.Error)
+				return nil, &appRPCResponseError{method: method, raw: frame.Error}
 			}
 			return frame.Result, nil
 		default:

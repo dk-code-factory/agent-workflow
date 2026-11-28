@@ -281,6 +281,34 @@ func SupervisePolicy(ctx context.Context, cmd *exec.Cmd, p Policy) (func(), erro
 	return superviseNetwork(ctx, cmd, *p.Network)
 }
 
+// SuperviseLocalDescriptors preserves explicit descriptors through the local
+// guardian while retaining invocation admission, lifetime and completion records.
+// Container and network launch transports need their own descriptor proof.
+func SuperviseLocalDescriptors(ctx context.Context, cmd *exec.Cmd, p Policy, descriptors []int) (func(), error) {
+	if p.Mode == "container" || p.Network != nil || p.NetworkRuntime != "" {
+		return nil, fmt.Errorf("descriptor forwarding requires the local runtime")
+	}
+	if err := CheckPolicy(ctx, p); err != nil {
+		return nil, err
+	}
+	if len(descriptors) != len(cmd.ExtraFiles) {
+		return nil, fmt.Errorf("descriptor forwarding must account for every extra file")
+	}
+	for index, descriptor := range descriptors {
+		if descriptor != 3+index || cmd.ExtraFiles[index] == nil {
+			return nil, fmt.Errorf("descriptor forwarding requires contiguous explicit files")
+		}
+	}
+	i, err := Admit(ctx, "native")
+	if err != nil {
+		return nil, err
+	}
+	if i == nil {
+		return process.SuperviseWithOptions(cmd, process.SupervisionOptions{InheritDescriptors: append([]int(nil), descriptors...)})
+	}
+	return i.superviseDescriptors(ctx, cmd, nil, descriptors)
+}
+
 // superviseNetwork prepares an already checked reference; only the caller's
 // subsequent Cmd.Start can send a launch request to the runtime.
 func superviseNetwork(ctx context.Context, cmd *exec.Cmd, ref network.Reference) (_ func(), returnErr error) {
@@ -345,7 +373,11 @@ func Supervise(ctx context.Context, cmd *exec.Cmd) (func(), error) {
 }
 
 func (i *Invocation) Supervise(ctx context.Context, cmd *exec.Cmd, cleanup []string) (func(), error) {
-	stop, err := process.SuperviseWithOptions(cmd, process.SupervisionOptions{Cleanup: cleanup, CompletionPath: i.Record.CompletionPath, Token: i.Record.Token})
+	return i.superviseDescriptors(ctx, cmd, cleanup, nil)
+}
+
+func (i *Invocation) superviseDescriptors(ctx context.Context, cmd *exec.Cmd, cleanup []string, descriptors []int) (func(), error) {
+	stop, err := process.SuperviseWithOptions(cmd, process.SupervisionOptions{Cleanup: cleanup, CompletionPath: i.Record.CompletionPath, Token: i.Record.Token, InheritDescriptors: append([]int(nil), descriptors...)})
 	if err != nil {
 		_ = i.Save(context.WithoutCancel(ctx), "cleaned")
 		return nil, err
