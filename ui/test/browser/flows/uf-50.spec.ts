@@ -113,3 +113,26 @@ test('imported binary helper paths remain editable through export and undo', asy
   expect(exported.container.files).toEqual(expected);
   expect(exported.steps[0].files).toEqual(expected);
 });
+
+test('retain persistent package state declarations through edits and export, and repair unsafe targets', async ({ page }) => {
+  const source = `persistent-state: {ledger: {mount-target: /cf-workflows-state}}
+jobs: {build: {container: ubuntu:24.04, steps: [{argv: [cat, /cf-workflows-state/ledger]}]}}
+`;
+  const ui = await open(page, source);
+  await ui.getByRole('button', { name: 'Split', exact: true }).click();
+  const yaml = ui.getByRole('textbox', { name: 'Workflow YAML' });
+  for (const target of ['/workspace/private', '/state', '../host']) {
+    await yaml.fill(source.replace('mount-target: /cf-workflows-state', `mount-target: ${target}`));
+    expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'persistent-state' && d.severity === 'error')).toBe(true);
+  }
+  await yaml.fill(source);
+  await job(page);
+  await field(page, 'Name', 'Retained package helper');
+  const exported = parse(await downloadText(page));
+  expect(exported['persistent-state']).toEqual({ ledger: { 'mount-target': '/cf-workflows-state' } });
+  expect((await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).source).toBe(source);
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect((await snapshot(page)).workflow['persistent-state']).toEqual(exported['persistent-state']);
+});

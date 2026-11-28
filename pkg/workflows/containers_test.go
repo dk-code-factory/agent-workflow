@@ -107,6 +107,7 @@ type fakeContainer struct {
 	env                    []string
 	id, name, dir, actions string
 	taskStateDir           string
+	persistentState        map[string]string
 	workingDir             string
 	labels                 map[string]string
 	argv                   []string
@@ -134,6 +135,7 @@ type workflowDocker struct {
 	commandContext        context.Context
 	commandTimeout        time.Duration
 	imageReferences       []string
+	persistentMounts      []map[string]string
 	helper                func(context.Context, []string, []byte, []string) ([]byte, []byte, int, bool)
 	t                     *testing.T
 	mu                    sync.Mutex
@@ -186,11 +188,20 @@ func (d *workflowDocker) command(c *fakeContainer, argv []string, input []byte, 
 		}
 	}
 	args := append([]string(nil), argv...)
+	env = append([]string(nil), env...)
+	for target, source := range c.persistentState {
+		for i := range env {
+			env[i] = strings.ReplaceAll(env[i], target, source)
+		}
+	}
 	for i, a := range args {
 		a = strings.ReplaceAll(a, "/tmp/", c.dir+"/")
 		a = strings.ReplaceAll(a, "/workspace", d.workspace)
 		if c.actions != "" {
 			a = strings.ReplaceAll(a, "/actions", c.actions)
+		}
+		for target, source := range c.persistentState {
+			a = strings.ReplaceAll(a, target, source)
 		}
 		args[i] = a
 	}
@@ -326,6 +337,12 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 			d.startDelayInspections = 0
 		}
 		for _, m := range q.HostConfig.Mounts {
+			if runtimeexec.ValidatePersistentStateTarget(m.Target) == nil {
+				if c.persistentState == nil {
+					c.persistentState = map[string]string{}
+				}
+				c.persistentState[m.Target] = m.Source
+			}
 			if m.Target == "/actions" {
 				c.actions = m.Source
 			}
@@ -335,6 +352,9 @@ func (d *workflowDocker) serve(w http.ResponseWriter, r *http.Request) {
 
 		}
 		d.containers[id] = c
+		if len(c.persistentState) > 0 {
+			d.persistentMounts = append(d.persistentMounts, c.persistentState)
+		}
 		d.containers[c.name] = c
 		if d.createResponseError {
 			http.Error(w, "container created but response failed", http.StatusInternalServerError)

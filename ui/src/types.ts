@@ -17,7 +17,7 @@ export interface Job extends Mapping {
   repeat?: { 'max-attempts': number | string; until: string } | null; if?: string;
 }
 export interface StepDefinition { parameters?: Record<string, WorkflowInput>; step: Mapping }
-export interface Workflow extends Mapping { 'step-definitions'?: Record<string, StepDefinition>; name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
+export interface Workflow extends Mapping { 'persistent-state'?: Record<string, { 'mount-target': string }>; 'step-definitions'?: Record<string, StepDefinition>; name?: string; on?: Mapping; schemas?: Record<string, Mapping>; jobs: Record<string, Job> }
 export interface Diagnostic {
   severity: 'error' | 'warning' | 'info'; code: string; message: string; path: Path;
   location?: { line: number; column: number; offset: number; endOffset: number };

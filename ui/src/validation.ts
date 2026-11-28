@@ -152,6 +152,7 @@ export const handlerKinds = ['onResult', 'onComplete', 'onIncomplete', 'onError'
 for (const kind of handlerKinds) stepShape[kind] = [stepShape];
 stepShape.parallel = [stepShape]; stepShape.sequence = [stepShape];
 const schema: Shape = {
+  'persistent-state': { '*': { 'mount-target': 'strict-string' } },
   'step-definitions': { '*': { parameters: { '*': input }, step: 'any' } },
   name: 'string', gates: { '*': 'any' }, schemas: { '*': 'any' },
   on: {
@@ -367,6 +368,22 @@ export function parseWorkflow(source: string): Parsed {
 type Add = (code: string, message: string, path?: Path, node?: Node | null, source?: Diagnostic['source'], severity?: Diagnostic['severity']) => void;
 function validateWorkflow(w: Workflow, add: Add, doc: Document) {
   const jobs = w.jobs;
+  const persistentTargets: string[] = [];
+  const overlaps = (a: string, b: string) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  for (const [name, declaration] of Object.entries(w['persistent-state'] ?? {})) {
+    const location: Path = ['persistent-state', name];
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) add('persistent-state', 'Invalid persistent-state name', location);
+    const target = declaration['mount-target'];
+    if (typeof target !== 'string' || !target.startsWith('/') || target === '/' || /[\\\x00\r\n]/.test(target) || target.includes('${{') || target.slice(1).split('/').some(part => part === '' || part === '.' || part === '..')) {
+      add('persistent-state', 'Mount target requires a clean absolute container path', [...location, 'mount-target']);
+      continue;
+    }
+    const reserved = ['/workspace', '/state', '/actions', '/engine-lifetime', '/engine-task-state', '/engine-guardian', '/tmp', '/proc', '/sys', '/dev', '/home', '/root'];
+    if (reserved.some(path => overlaps(path, target))) add('persistent-state', 'Mount target overlaps a reserved container path', [...location, 'mount-target']);
+    if (persistentTargets.some(path => overlaps(path, target))) add('persistent-state', 'Persistent-state mount targets must be disjoint', [...location, 'mount-target']);
+    persistentTargets.push(target);
+    add('host-persistent-state', 'Runner requires an admitted package and selects its private host directory', location, undefined, 'host', 'info');
+  }
   const namedKeywords = new Set(['type', 'title', 'description', '$comment', 'pattern', 'properties', 'items', 'additionalProperties', 'required', 'enum', 'minLength', 'maxLength', 'maxItems', 'minimum']);
   const inspectSchema = (value: unknown, path: Path) => {
     if (!mapping(value)) { add('schema', 'Expected a schema mapping', path); return; }

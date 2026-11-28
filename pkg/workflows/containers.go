@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type JobContainer struct {
 	Implementation *ContainerImplementation `json:"implementation,omitempty" yaml:"-"`
 }
 type ContainerImplementation struct {
+	PersistentState []PersistentStateBinding  `json:"persistent_state,omitempty"`
 	ContractVersion int                       `json:"contract_version,omitempty"`
 	Bundle          *HelperBundle             `json:"helper_bundle,omitempty"`
 	Selection       containerapi.Selection    `json:"selection"`
@@ -264,9 +266,23 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 		return &ContainerImplementation{ContractVersion: 1, Selection: s, Image: i, Guardian: g, Policy: policy}, nil
 	}
 	for ref, w := range all {
+		mounts, err := e.bindPersistentState(w.PersistentState)
+		if err != nil {
+			return fmt.Errorf("%s: %w", ref, err)
+		}
+		pinForWorkflow := func(image string, retained *ContainerImplementation) (*ContainerImplementation, error) {
+			if retained != nil && !slices.Equal(retained.PersistentState, mounts) {
+				return nil, fmt.Errorf("retained persistent-state binding changed")
+			}
+			p, err := pin(image, retained)
+			if err == nil {
+				p.PersistentState = mounts
+			}
+			return p, err
+		}
 		for id, j := range w.Jobs {
 			if j.Container != nil {
-				p, err := pin(j.Container.Image, j.Container.Implementation)
+				p, err := pinForWorkflow(j.Container.Image, j.Container.Implementation)
 				if err != nil {
 					return fmt.Errorf("%s job %s: %w", ref, id, err)
 				}
@@ -276,7 +292,7 @@ func (e *Executor) pinContainers(ctx context.Context, all map[string]*Workflow) 
 			j.Steps, err = mapSteps(j.Steps, "", func(s Step) (Step, error) {
 				if isDockerStep(s) {
 					var err error
-					s.ContainerImplementation, err = pin(strings.TrimPrefix(s.Uses, "docker://"), s.ContainerImplementation)
+					s.ContainerImplementation, err = pinForWorkflow(strings.TrimPrefix(s.Uses, "docker://"), s.ContainerImplementation)
 					if err != nil {
 						return s, err
 					}
@@ -446,6 +462,10 @@ func (e *Executor) launchOptions(ctx context.Context, p *ContainerImplementation
 		return runtimeexec.LaunchOptions{}, err
 	}
 	opts := runtimeexec.LaunchOptions{Actions: actions, Policy: p.Policy, Selection: p.Selection, Image: p.Image, Guardian: guardian, Workspace: e.WorkspaceDir, State: state, Root: e.WorkspaceDir, Command: argv}
+	opts.PersistentState, err = e.persistentStateMounts(p.PersistentState, b.Dir)
+	if err != nil {
+		return runtimeexec.LaunchOptions{}, err
+	}
 	service, _ := ctx.Value(taskStateServiceKey{}).(*taskStateService)
 	if service == nil {
 		if scope, _ := ctx.Value(jobContainerKey{}).(*jobContainerScope); scope != nil {

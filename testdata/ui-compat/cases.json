@@ -562,5 +562,11 @@
     "file": "checklist-whitespace.yml",
     "parse": true,
     "valid": false
+  },
+  {
+    "name": "persistent-state",
+    "file": "persistent-state.yml",
+    "parse": true,
+    "valid": true
   }
 ]

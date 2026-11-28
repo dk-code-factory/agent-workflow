@@ -8,12 +8,13 @@ import (
 )
 
 type Workflow struct {
-	StepDefinitions map[string]StepDefinition `json:"step-definitions,omitempty" yaml:"step-definitions,omitempty"`
-	Schemas         map[string]map[string]any `json:"schemas,omitempty" yaml:"schemas,omitempty"`
-	Name            string                    `json:"name,omitempty"  yaml:"name,omitempty"`
-	On              WorkflowTriggers          `json:"on,omitempty"    yaml:"on,omitempty"`
-	Gates           map[string]any            `json:"gates,omitempty" yaml:"gates,omitempty"`
-	Jobs            map[string]Job            `json:"jobs"            yaml:"jobs"`
+	PersistentState map[string]PersistentStateDirectory `json:"persistent-state,omitempty" yaml:"persistent-state,omitempty"`
+	StepDefinitions map[string]StepDefinition           `json:"step-definitions,omitempty" yaml:"step-definitions,omitempty"`
+	Schemas         map[string]map[string]any           `json:"schemas,omitempty" yaml:"schemas,omitempty"`
+	Name            string                              `json:"name,omitempty"  yaml:"name,omitempty"`
+	On              WorkflowTriggers                    `json:"on,omitempty"    yaml:"on,omitempty"`
+	Gates           map[string]any                      `json:"gates,omitempty" yaml:"gates,omitempty"`
+	Jobs            map[string]Job                      `json:"jobs"            yaml:"jobs"`
 }
 
 type WorkflowTriggers struct {
@@ -200,6 +201,10 @@ func (w *Workflow) UnmarshalYAML(value *yaml.Node) error {
 		key := strings.TrimSpace(value.Content[i].Value)
 		val := value.Content[i+1]
 		switch key {
+		case "persistent-state":
+			if err := val.Decode(&w.PersistentState); err != nil {
+				return fmt.Errorf("persistent-state: %w", err)
+			}
 		case "name":
 			if err := val.Decode(&w.Name); err != nil {
 				return err
