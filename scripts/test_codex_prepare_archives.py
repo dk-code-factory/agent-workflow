@@ -106,7 +106,7 @@ class PinnedArchiveTests(unittest.TestCase):
             self.assertEqual(list(archives.iterdir()), [])
             self.assertEqual(json.loads((args.output / args.receipt).read_text())["exit_code"], 1)
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO prerequisite")
+    @unittest.skipUnless(hasattr(os, "mkfifo") and "fork" in multiprocessing.get_all_start_methods(), "POSIX FIFO/fork prerequisite")
     def test_total_deadline_covers_blocking_preflight_inputs(self):
         for relative in ("source/codex-rs/Cargo.lock", "cache.json"):
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
@@ -115,11 +115,26 @@ class PinnedArchiveTests(unittest.TestCase):
                 path = args.output / relative
                 path.unlink()
                 os.mkfifo(path)
-                with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
-                    ARCHIVES.prepare(args)
-                self.assertEqual(list(archives.iterdir()), [])
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO prerequisite")
+                def prepare_until_timeout():
+                    with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
+                        ARCHIVES.prepare(args)
+
+                process = multiprocessing.get_context("fork").Process(target=prepare_until_timeout)
+                process.start()
+                try:
+                    process.join(timeout=2)
+                    self.assertFalse(process.is_alive(), "preparation blocked on preflight input: " + relative)
+                    self.assertEqual(process.exitcode, 0)
+                finally:
+                    if process.is_alive():
+                        process.kill()
+                    process.join(timeout=2)
+                    process.close()
+                self.assertEqual(list(archives.iterdir()), [])
+                self.assertFalse((args.output / args.receipt).exists())
+
+    @unittest.skipUnless(hasattr(os, "mkfifo") and "fork" in multiprocessing.get_all_start_methods(), "POSIX FIFO/fork prerequisite")
     def test_total_deadline_covers_final_lock_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             args, _ = self.fixture(Path(directory))
@@ -133,8 +148,22 @@ class PinnedArchiveTests(unittest.TestCase):
                 os.mkfifo(lock)
                 return size
 
-            with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES, "save_archive", side_effect=changed_lock), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
-                ARCHIVES.prepare(args)
+            def prepare_until_timeout():
+                with patch.object(ARCHIVES, "LOCK_HASHES", {lock_hash}), patch.object(ARCHIVES, "MIN_FREE", 0), patch.object(ARCHIVES, "MAX_SECONDS", 0.1), patch.object(ARCHIVES, "save_archive", side_effect=changed_lock), self.assertRaisesRegex(TimeoutError, "preparation deadline exceeded"):
+                    ARCHIVES.prepare(args)
+
+            process = multiprocessing.get_context("fork").Process(target=prepare_until_timeout)
+            process.start()
+            try:
+                process.join(timeout=2)
+                self.assertFalse(process.is_alive(), "preparation blocked during final lock validation")
+                self.assertEqual(process.exitcode, 0)
+            finally:
+                if process.is_alive():
+                    process.kill()
+                process.join(timeout=2)
+                process.close()
+            self.assertFalse((args.output / args.receipt).exists())
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "POSIX fork prerequisite")
     def test_expired_deadline_does_not_reopen_a_replaced_fifo_lock(self):
