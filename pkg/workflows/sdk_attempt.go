@@ -169,7 +169,7 @@ func readManagedSDKAttempt(ctx context.Context, tx *sql.Tx, inv string) (map[str
 	if err := decodeJSONWithNumbers(raw, &row); err != nil {
 		return nil, nil, err
 	}
-	if row.Attempt == nil || row.Scope != "invocation" || row.Final || row.Complete || row.InputTokens != nil || row.OutputTokens != nil || row.CachedInputTokens != nil || row.CostUSD != nil || row.CounterReset || row.CounterBasis != "" {
+	if row.Attempt == nil || !managedZeroChargeBookkeeping(row.UsageObservation) {
 		return nil, nil, fmt.Errorf("SDK original attempt bookkeeping is malformed")
 	}
 	return fields, row.Attempt, nil

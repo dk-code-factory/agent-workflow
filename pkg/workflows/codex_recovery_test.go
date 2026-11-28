@@ -94,6 +94,36 @@ func TestManagedCodexBookkeepingCannotHideChargesOrRestartUnknownAttempt(t *test
 		t.Fatal("charged row accepted as no-token bookkeeping")
 	}
 }
+
+func TestManagedCodexRecoveryRejectsUnrecognizedProofObservation(t *testing.T) {
+	store, ctx, id := managedUsageFixture(t)
+	witness := managedUsageWitness("sealed", 10)
+	var batch managedCodexBatchIdentity
+	if err := json.Unmarshal(witness.Batch, &batch); err != nil {
+		t.Fatal(err)
+	}
+	batch.CallIDs = []string{"original-call"}
+	witness.Batch = mustManagedRecoveryJSON(batch)
+	if err := RecordManagedCodexUsage(ctx, id.RunID, id.ID, witness); err != nil {
+		t.Fatal(err)
+	}
+	if err := SealManagedCodexBatch(ctx, id.RunID, id.ID, witness.Digest, witness.Batch); err != nil {
+		t.Fatal(err)
+	}
+	// Copied response metadata does not make an unknown observation part of the
+	// original invocation. Its key must still identify that exact response.
+	if _, err := store.db.Exec(`INSERT INTO usage_observations(invocation_id,observation_key,record) SELECT invocation_id,'unrecognized-attempt',json_remove(record,'$.managed_codex_recovery') FROM usage_observations WHERE invocation_id=? AND observation_key='codex-response:sealed'`, id.ID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = managedRecoveryForInvocation(ctx, tx, id.ID); err == nil {
+		t.Fatal("unrecognized observation borrowed an original response proof")
+	}
+}
 func TestManagedCodexTerminalCheckpointKeepsResultAndChargesAtomic(t *testing.T) {
 	store, ctx, id := managedUsageFixture(t)
 	w := managedUsageWitness("final", 10)

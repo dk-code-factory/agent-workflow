@@ -288,7 +288,7 @@ func managedRecoveryForInvocation(ctx context.Context, tx *sql.Tx, inv string) (
 		if err = decodeJSONWithNumbers(raw, &observation); err != nil {
 			return nil, err
 		}
-		if observation.Proof == nil {
+		if observation.Proof == nil || key != "codex-response:"+observation.Proof.ResponseID {
 			unproven = true
 		}
 		_, r, err := managedCodexRecoveryRow(raw)
