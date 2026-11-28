@@ -14,8 +14,11 @@ import (
 	"github.com/dk-code-factory/agent-workflow/pkg/workflows"
 )
 
-// SkillTaskPreflight checks effective native controls before workflow admission
-// or recovery claims. It sends no credentials, login, thread or model request.
+// SkillTaskPreflight checks effective native controls. Entry-workflow literal
+// definitions are checked before the root run claim and asset projection;
+// reusable and catalog selections are checked during occurrence binding before
+// the selected step's claim. Retained plans are rechecked before recovery claims.
+// It sends no credentials, login, thread or model request.
 // The application-supplied executable remains trusted process authority.
 func (r *Runner) SkillTaskPreflight(ctx context.Context, plan *workflows.SkillInvocation, workspace string) (returnErr error) {
 	role, err := r.nativeTaskRuntime()

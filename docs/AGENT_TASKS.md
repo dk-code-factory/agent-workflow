@@ -279,7 +279,16 @@ lower bounds rather than inferring unreported tokens or cost. The original
 allowance remains consumed.
 Selected Codex turns use an engine-owned OpenAI descriptor with zero request and
 stream retries, no WebSocket transport/fallback and no unbounded connection
-retries. Admission and retained recovery run a bounded private native control probe: initialize and config/read only, without credentials, login, threads or model requests. The effective descriptor is checked before run claims and asset projection; the selected workspace is pinned. The adapter rechecks the effective descriptor and thread provider before each turn so later configuration drift also fails closed. It rejects inherited credential, header and endpoint overrides; an
+retries. Admission and retained recovery run a bounded private native control
+probe: initialize and config/read only, without credentials, login, threads or
+model requests. For entry-workflow steps with literal agent definitions, the
+effective descriptor is checked before the root run claim and asset projection.
+Reusable and catalog selections are checked after those events, during occurrence
+binding before the selected step's claim and worker dispatch. Retained invocations
+are rechecked before recovery claims. The selected workspace is pinned. The
+adapter rechecks the effective descriptor and thread provider before each turn so
+later configuration drift also fails closed. It rejects inherited credential,
+header and endpoint overrides; an
 explicit application command may supply its endpoint only through the verified
 session-flags layer. A matching public retry notification retains uncertainty and
 cancels the original turn even if a later terminal would report success.

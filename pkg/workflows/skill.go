@@ -55,8 +55,11 @@ type SkillBinding struct {
 	Assets       *AssetBundle `json:"assets"`
 }
 
-// SkillInvocation is pinned before run admission. It never grants tools,
-// credentials, publication authority or a different provider runtime.
+// SkillInvocation is pinned before the selected step's claim. Entry-workflow
+// literal definitions are pinned during initial admission; reusable and catalog
+// selections are pinned during occurrence binding after the root run claim.
+// It never grants tools, credentials, publication authority or a different
+// provider runtime.
 type SkillInvocation struct {
 	Occurrence     string       `json:"occurrence,omitempty"`
 	Workspace      string       `json:"workspace,omitempty"`
