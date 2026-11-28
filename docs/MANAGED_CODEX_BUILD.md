@@ -88,6 +88,14 @@ output must be validated by the engine rather than enabling an SDK formatting
 tool. Repair consumes the original retained task allowance but cannot replace
 the worker's original continuation session.
 
+The pinned patch includes the authoritative JSON and TypeScript fixtures and
+both stable and experimental precomputed protocol export bundles. Regenerate
+them with the upstream protocol writer, preserving its experimental-field
+filtering. Export generation establishes artifact consistency; it does not
+establish app-server execution or managed conformance. The abort lifecycle
+regression also blocks the actual terminal flush and requires the successor's
+real TurnStarted event and durable predecessor terminal record.
+
 ## Exact source anchors
 
 These links identify the pinned source, not latest documentation:
@@ -248,10 +256,29 @@ for that intermediate build.
 The current candidate pins are declared in
 [profile.json](../patches/codex/profile.json); its prepared source receipt derives
 the build identity from those exact inputs. Subsequent revisions correct the
-journal ownership comment and bound cache preparation, including repeated crate
-names. Runtime admission remains disabled until the current counted source tests,
-standalone build and actual binary conformance complete. A preceding binary does
-not prove a changed build identity.
+journal ownership comment, bound cache preparation including repeated crate
+names, add missing unbound-turn test stimuli, and bound the independent child join.
+The source now preserves empty managed hooks during startup and global refresh,
+scopes callback cancellation to its original turn, and retires revoked setup
+through normal terminal cleanup. Poisoned managed authority mutexes fail closed.
+The source also waits for predecessor task cleanup before a successor can execute,
+without dropping counted guards or relaxing exclusive model admission. Shared
+lifecycle ownership also retains external graceful and forced abort tails through
+terminal flush and pending-input cleanup; abort joins exclude their own lifecycle
+and later successor registrations. Response usage witnesses can describe reported
+incomplete spending too; only the actual Completed path can seal an original model
+intent, and unknown originals remain held. Already reported spending remains in
+the durable original response/turn record if revocation prevents deriving a managed
+witness. Incomplete/error sampling publishes known usage before returning its
+original failure. A test-only in-memory stream exercises the actual sampling and
+public event path without claiming transport or native execution conformance. Successful
+and rejected dynamic responses retain their original turn binding through the
+submission queue; stale responses cannot mutate another turn’s receipts or cancel
+its task. The recipe adds `lifecycle-tests` for exactly eight Session regressions alongside
+11 runtime tests, 11 journal tests and one submission test. These new source tests
+remain pending execution. Runtime admission stays disabled until the current
+counted source tests, standalone build and actual binary conformance complete.
+A preceding binary does not prove a changed build identity.
 
 The production Go transport now verifies the held executable and actual guardian
 child before initialize, checks the source build handshake, uses the maintained

@@ -157,8 +157,9 @@ or use the native `CODEX_HOME/auth.json` default. Writable provider state and
 `HOME` remain private to the run/session owner. Keychain-only app-server login
 is not supported by this route; the native CLI compatibility adapter retains its
 provider-owned login behavior. Raw app-server arguments remain rejected. Stock
-app-server builds reject managed tool subsets and tool-free repair. The verified
-local Linux amd64 source build opts in through workspace-owned
+app-server builds reject managed tool subsets and tool-free repair. The current
+source profile remains disabled pending validation of the current source tuple.
+After verification, the Linux amd64 source build opts in through workspace-owned
 `managed-build: {manifest: /absolute/path/managed-binary.json}` on the existing
 `codex-app-server` role. The manifest captures the immutable source/build/binary
 identity; actual executable verification and the native handshake precede task
