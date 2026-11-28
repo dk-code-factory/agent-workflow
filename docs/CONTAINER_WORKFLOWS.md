@@ -340,7 +340,8 @@ are stopped. Installing a new package version under the same name reuses state,
 so the application owns any data migrations and concurrency control.
 
 The host directory and every existing ancestor must be real directories without
-symlinks. The source must be disjoint from the workspace, engine state and other
+symlinks. The source must be valid UTF-8 so runtime transport preserves its exact
+bytes. It must be disjoint from the workspace, engine state and other
 engine mounts, and cannot be the host home directory or an ancestor. Mount targets
 must be valid UTF-8, static, clean absolute container paths, disjoint from one
 another and reserved mounts such as `/workspace`, `/state`, `/actions`, `/engine-task-state`

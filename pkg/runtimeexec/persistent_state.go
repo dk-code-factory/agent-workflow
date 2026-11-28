@@ -37,8 +37,12 @@ func ValidatePersistentStateTarget(target string) error {
 }
 
 // ValidatePersistentStateLocation rejects symlinks in every existing component,
-// including ancestors. Missing directories are permitted only before creation.
+// including ancestors, and source bytes that cannot survive runtime JSON transport.
+// Missing directories are permitted only before creation.
 func ValidatePersistentStateLocation(source string, allowMissing bool, protected ...string) error {
+	if !utf8.ValidString(source) {
+		return fmt.Errorf("persistent-state source must be valid UTF-8")
+	}
 	if !filepath.IsAbs(source) || filepath.Clean(source) != source {
 		return fmt.Errorf("persistent-state requires an absolute directory")
 	}

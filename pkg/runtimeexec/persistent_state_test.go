@@ -45,31 +45,34 @@ func TestPersistentStateBuildRequestReadWriteAndRejectsUnsafeBinds(t *testing.T)
 	if !found {
 		t.Fatal("persistent mount missing")
 	}
-	for _, target := range []string{"/cf-state", "/cf-état"} {
-		opts.PersistentState[0].Target = target
-		request, err := BuildRequest(opts, owner, lifetime)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := json.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var restored containerapi.CreateRequest
-		if err := json.Unmarshal(encoded, &restored); err != nil {
-			t.Fatal(err)
-		}
-		found := false
-		for _, mount := range restored.Mounts {
-			if mount.Source == source {
-				found = true
-				if mount.Target != target || mount.ReadOnly {
-					t.Fatalf("persistent mount changed during JSON serialization: %+v", mount)
+	for _, source := range []string{source, directory("état")} {
+		opts.PersistentState[0].Source = source
+		for _, target := range []string{"/cf-state", "/cf-état"} {
+			opts.PersistentState[0].Target = target
+			request, err := BuildRequest(opts, owner, lifetime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored containerapi.CreateRequest
+			if err := json.Unmarshal(encoded, &restored); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, mount := range restored.Mounts {
+				if mount.Source == source {
+					found = true
+					if mount.Target != target || mount.ReadOnly {
+						t.Fatalf("persistent mount changed during JSON serialization: %+v", mount)
+					}
 				}
 			}
-		}
-		if !found {
-			t.Fatal("serialized persistent mount missing")
+			if !found {
+				t.Fatal("serialized persistent mount missing")
+			}
 		}
 	}
 	link := filepath.Join(root, "link")
@@ -84,7 +87,7 @@ func TestPersistentStateBuildRequestReadWriteAndRejectsUnsafeBinds(t *testing.T)
 	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{home, root, opts.Workspace, directory("workspace/plugin"), opts.EngineState, directory("engine/plugin"), opts.State, lifetime, opts.Actions, link, filepath.Join(ancestorLink, "plugin"), file, filepath.Join(root, "missing")} {
+	for _, bad := range []string{home, root, opts.Workspace, directory("workspace/plugin"), opts.EngineState, directory("engine/plugin"), opts.State, lifetime, opts.Actions, link, filepath.Join(ancestorLink, "plugin"), file, filepath.Join(root, "missing"), directory("plugin-\xff"), directory("plugin-\xfe")} {
 		opts.PersistentState[0].Source = bad
 		if _, err := BuildRequest(opts, owner, lifetime); err == nil {
 			t.Errorf("accepted unsafe source %q", bad)

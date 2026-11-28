@@ -130,8 +130,9 @@ jobs:
 
 func TestPackagePersistentStateSurvivesStepsFreshRunsAndResume(t *testing.T) {
 	e, store, d := containerExecutor(t)
+	assets := filepath.Join(store.Dir, "assets")
 	t.Cleanup(func() {
-		_ = filepath.WalkDir(filepath.Join(store.Dir, "assets"), func(name string, entry fs.DirEntry, err error) error {
+		_ = filepath.WalkDir(assets, func(name string, entry fs.DirEntry, err error) error {
 			if err == nil && entry.IsDir() {
 				return os.Chmod(name, 0700)
 			}
@@ -356,5 +357,59 @@ func TestPersistentStateActionIdentityUsesSymbolsWithoutHostPaths(t *testing.T) 
 	job.Container.Implementation.PersistentState = nil
 	if err := e.pinContainers(t.Context(), all); err == nil || !strings.Contains(err.Error(), "binding changed") {
 		t.Fatal("changed retained mount binding accepted", err)
+	}
+}
+
+func TestPersistentStateSourceRepresentationBeforeCreation(t *testing.T) {
+	for _, variable := range []string{"XDG_STATE_HOME", "HOME"} {
+		for _, fixture := range []struct {
+			name, directory string
+			invalid         bool
+		}{
+			{name: "ascii", directory: "state"},
+			{name: "unicode", directory: "état"},
+			{name: "ff", directory: "state-\xff", invalid: true},
+			{name: "fe", directory: "state-\xfe", invalid: true},
+		} {
+			t.Run(variable+"/"+fixture.name, func(t *testing.T) {
+				root, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				workspace := filepath.Join(root, "workspace")
+				if err := os.Mkdir(workspace, 0700); err != nil {
+					t.Fatal(err)
+				}
+				prefix := filepath.Join(root, fixture.directory)
+				stateHome := prefix
+				t.Setenv("XDG_STATE_HOME", "")
+				t.Setenv("HOME", filepath.Join(root, "home"))
+				t.Setenv(variable, prefix)
+				if variable == "HOME" {
+					stateHome = filepath.Join(prefix, ".local", "state")
+				}
+				e := &Executor{WorkspaceDir: workspace, packageBinding: &PackageBinding{Name: "fixture"}}
+				bindings := []PersistentStateBinding{{Package: "fixture", Name: "ledger", Target: "/cf-state"}}
+				mounts, err := e.persistentStateMounts(bindings, filepath.Join(root, "engine"))
+				if fixture.invalid {
+					if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+						t.Fatalf("nonrepresentable source was not rejected: %+v %v", mounts, err)
+					}
+					if _, err := os.Lstat(prefix); !os.IsNotExist(err) {
+						t.Fatal("unsafe source prefix created before rejection", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(mounts) != 1 || !strings.HasPrefix(mounts[0].Source, stateHome+string(filepath.Separator)) {
+					t.Fatalf("state-home bytes changed: %+v, want prefix %q", mounts, stateHome)
+				}
+				if info, err := os.Stat(mounts[0].Source); err != nil || !info.IsDir() {
+					t.Fatal("valid persistent source not created", err)
+				}
+			})
+		}
 	}
 }
