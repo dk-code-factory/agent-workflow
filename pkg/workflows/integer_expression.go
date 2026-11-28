@@ -128,6 +128,11 @@ func admittedFingerprint(all map[string]*Workflow, roles json.RawMessage, execut
 			}
 			job.Steps, _ = mapSteps(job.Steps, "", func(step Step) (Step, error) {
 				clearOwner(step.ContainerImplementation)
+				for _, binding := range step.SkillAdmissions {
+					if binding != nil && binding.Assets != nil {
+						binding.Assets.OriginID = ""
+					}
+				}
 				if step.Skill != nil && step.Skill.Binding.Assets != nil {
 					step.Skill.Binding.Assets.OriginID = ""
 				}

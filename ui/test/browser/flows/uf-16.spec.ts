@@ -302,3 +302,29 @@ test('configure a selected skill and bounded foreground child with recovery cont
   expect(await downloadText(page)).toContain('repair-attempts: 0');
 
 });
+
+test('configure supplied skills with catalog agents and reusable input arguments', async ({ page }) => {
+  const ui = await open(page, `on: {workflow_call: {inputs: {supplied: {type: skill}, task: {type: object}}}}
+jobs: {build: {steps: [{id: review, uses: agent/run, with: {agent: {select: review, definitions: {review: reviewer.yaml, fix: fixer.yaml}}, prompt: Review}}]}}`);
+  await ui.getByRole('button', { name: 'Inspect job build', exact: true }).click();
+  await ui.getByRole('button', { name: '1. review', exact: true }).click();
+  const skill = "{input: supplied, arguments: '${{ inputs.task.arguments }}', resources: [reference.txt], evidence: {invocation: required}}";
+  await field(page, 'Skill invocation (YAML)', skill);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  expect((await snapshot(page)).diagnostics.some((d: any) => d.code === 'host-skill')).toBe(true);
+  await field(page, 'Agent definition selection (YAML)', "{select: '${{ inputs.task.role }}', definitions: {review: reviewer.yaml, fix: fixer.yaml}}");
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await field(page, 'Skill invocation (YAML)', skill.replace('inputs.task.arguments', 'steps.foreign.outputs.arguments'));
+  await expect.poll(async () => (await snapshot(page)).diagnostics.some((d: any) => d.code === 'skill')).toBe(true);
+  await field(page, 'Skill invocation (YAML)', skill);
+  await expect.poll(async () => (await snapshot(page)).diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
+  await ui.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await snapshot(page)).workflow.jobs.build.steps[0].with.skill.arguments).toBe('${{ steps.foreign.outputs.arguments }}');
+  await ui.getByRole('button', { name: 'Redo', exact: true }).click();
+  const state = await snapshot(page);
+  expect(state.workflow.jobs.build.steps[0].with.skill.input).toBe('supplied');
+  expect(state.workflow.jobs.build.steps[0].with.agent.select).toBe('${{ inputs.task.role }}');
+  const exported = await downloadText(page);
+  expect(exported).toContain('inputs.task.arguments');
+  expect(exported).toContain('fixer.yaml');
+});

@@ -16,7 +16,8 @@ const claudeSkillChildProfile = "claude-sdk@0.3.322/sonnet46-one-read-child-v1"
 const codexSkillProfile = "codex-app-server@0.167.1/local-skill-no-delegation-v1"
 
 // AdmitSkillTask advertises only capabilities established for the pinned
-// adapter. This runs before provider discovery, run claims and worker enqueue.
+// adapter. Initial admission, occurrence binding and retained-profile
+// revalidation call it before the selected step's claim and worker enqueue.
 func (r *Runner) AdmitSkillTask(plan *workflows.SkillInvocation) (*workflows.SkillInvocation, error) {
 	role, err := r.nativeTaskRuntime()
 	if err != nil {

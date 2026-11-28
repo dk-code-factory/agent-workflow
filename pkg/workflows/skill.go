@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,6 +23,8 @@ const SkillAdmissionVersion = 1
 
 // Reserve ample bounded ledger space for native envelopes and child outputs.
 const MaxSkillEncodedInstructionBytes = 64 << 10
+
+var errSkillResourceUnavailable = errors.New("undeclared skill resource")
 
 // SkillSource owns captured bytes. Only fresh admission consumes source paths;
 // provider sessions and recovery receive retained, verified assets instead.
@@ -52,9 +55,13 @@ type SkillBinding struct {
 	Assets       *AssetBundle `json:"assets"`
 }
 
-// SkillInvocation is pinned before run admission. It never grants tools,
-// credentials, publication authority or a different provider runtime.
+// SkillInvocation is pinned before the selected step's claim. Entry-workflow
+// literal definitions are pinned during initial admission; reusable and catalog
+// selections are pinned during occurrence binding after the root run claim.
+// It never grants tools, credentials, publication authority or a different
+// provider runtime.
 type SkillInvocation struct {
+	Occurrence     string       `json:"occurrence,omitempty"`
 	Workspace      string       `json:"workspace,omitempty"`
 	Children       []SkillChild `json:"children,omitempty"`
 	EffectiveTools []string     `json:"effective_parent_tools,omitempty"`
@@ -444,20 +451,15 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 		}
 	}
 	req.skillInputs = SkillInputIdentities(sources)
-	// For now all skill controls must be resolvable from the entry workflow's
-	// admitted inputs. Reusable runtime-dependent selections remain closed.
+	entryInputs, err := resolveInputs(all[canonical].On.WorkflowCall, req.Inputs, req.Secrets)
+	if err != nil {
+		return err
+	}
 	for reference, w := range all {
 		for id, job := range w.Jobs {
 			job.Steps, err = mapSteps(job.Steps, "", func(step Step) (Step, error) {
 				if step.With["skill"] == nil {
 					return step, nil
-				}
-				if reference != canonical {
-					return step, fmt.Errorf("skill selections in reusable workflows are not certified")
-				}
-				inputs, err := resolveInputs(w.On.WorkflowCall, req.Inputs, req.Secrets)
-				if err != nil {
-					return step, err
 				}
 				selection, err := parseSkillSelection(step.With["skill"])
 				if err != nil {
@@ -466,157 +468,47 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 				if w.On.WorkflowCall == nil || w.On.WorkflowCall.Inputs[selection.Input].Type != "skill" {
 					return step, fmt.Errorf("skill selection requires declared type: skill input %q", selection.Input)
 				}
-				source := sources[selection.Input]
-				if source == nil {
-					return step, fmt.Errorf("selected skill input %s is missing", selection.Input)
-				}
-				if err := validateSkillSource(source); err != nil {
-					return step, err
-				}
-				if step.Definition == nil || len(step.Definitions) != 0 {
-					return step, fmt.Errorf("skill task requires one admitted literal agent definition")
-				}
-				expressionCtx := expressionContext{Inputs: inputs}
-				arguments, err := admitSkillText(selection.Arguments, expressionCtx)
-				if err != nil {
-					return step, err
-				}
-				// Only literal and inputs expressions are admitted; other expression roots
-				// are unavailable in this context and must not become late control changes.
-				if strings.Contains(arguments, "${{") {
-					return step, fmt.Errorf("unresolved skill arguments")
-				}
-				selected := map[string]bool{source.Entry: true}
-				resources := []string{}
-				for _, resource := range selection.Resources {
-					if strings.Contains(resource, "${{") {
-						return step, fmt.Errorf("skill resources must be literal paths")
-					}
-					name, err := assetPath(resource)
-					if err != nil || name == "." {
-						return step, fmt.Errorf("invalid skill resource %q", resource)
-					}
-					resource = name
-					name = path.Join(path.Dir(source.Entry), name)
-					found := false
-					for _, input := range source.Entries {
-						if input.Path == name || strings.HasPrefix(input.Path, name+"/") {
-							selected[input.Path] = true
-							found = true
-						}
-					}
-					if !found {
-						return step, fmt.Errorf("undeclared skill resource %q", resource)
-					}
-					resources = append(resources, resource)
-				}
-				for _, input := range source.Entries {
-					if secret, err := containsCredential(string(input.Data), e.redactions(req.Secrets)); err != nil || secret {
-						return step, fmt.Errorf("skill source contains credential material")
-					}
-				}
-				entries := []AssetInput{}
-				for _, input := range source.Entries {
-					if selected[input.Path] {
-						entries = append(entries, input)
-					}
-				}
-				store := invocationStore(e.Store)
-				if store == nil {
-					return step, fmt.Errorf("skill tasks require durable owned asset storage")
-				}
-				manifest, _ := json.Marshal(map[string]string{"name": "aw-" + source.Name, "version": "1.0.0"})
-				entries = append(entries, AssetInput{Path: ".claude-plugin/plugin.json", Mode: 0644, Data: manifest})
-				// Gate provider capabilities against the already captured bytes
-				// before materializing their persistent occurrence projection.
-				bundle, _, _, err := describeAssetInputs(ctx, e.bundleOrigin, entries)
-				if err != nil {
-					return step, err
-				}
-				plan := &SkillInvocation{Version: SkillAdmissionVersion, Binding: SkillBinding{Version: SkillAdmissionVersion, Name: source.Name, Entry: source.Entry, SourceDigest: source.SourceDigest, Assets: bundle}, Arguments: arguments, Resources: resources, Model: step.Definition.Model, Effort: step.Definition.ReasoningEffort}
-				if value, ok := step.With["model"]; ok && value != nil {
-					text, ok := value.(string)
-					if !ok {
-						return step, fmt.Errorf("skill model must be a string or null")
-					}
-					model, err := admitSkillText(text, expressionCtx)
-					if err != nil {
-						return step, err
-					}
-					plan.Model = model
-				}
-				if strings.Contains(plan.Model, "${{") {
-					return step, fmt.Errorf("unresolved skill model")
-				}
-				output, err := resolveNamedOutput(w, step.With["output"])
-				if err != nil {
-					return step, err
-				}
-				contract, err := ParseAgentOutputContract(output)
-				if err != nil {
-					return step, err
-				}
-				if contract != nil && contract.RepairAttempts > 0 {
-					return step, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
-				}
-				workspace := e.WorkspaceDir
-				if value, ok := step.With["workspace"]; ok && value != nil {
-					text, ok := value.(string)
-					if !ok {
-						return step, fmt.Errorf("skill workspace must resolve from admitted text")
-					}
-					text, err = admitSkillText(text, expressionCtx)
-					if err != nil {
-						return step, err
-					}
-					if text != "" {
-						if filepath.IsAbs(text) {
-							workspace = text
-						} else {
-							workspace = filepath.Join(e.WorkspaceDir, text)
-						}
-					}
-				}
-				plan.Workspace, err = filepath.Abs(workspace)
-				if err != nil {
-					return step, err
-				}
-				if err := admitSkillChildren(plan, selection, expressionCtx); err != nil {
-					return step, err
-				}
-				runner, ok := e.Agents.(SkillTaskRunner)
-				if !ok {
+				if _, ok := e.Agents.(SkillTaskRunner); !ok {
 					return step, fmt.Errorf("runtime does not support admitted skills")
 				}
-				plan, err = runner.AdmitSkillTask(plan)
-				if err != nil {
-					return step, err
-				}
-				if plan == nil {
-					return step, fmt.Errorf("runtime returned no admitted skill contract")
-				}
-				if checker, ok := e.Agents.(interface {
-					SkillTaskPreflight(context.Context, *SkillInvocation, string) error
-				}); ok {
-					if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
+				if reference == canonical && step.Definition != nil && len(step.Definitions) == 0 {
+					source := sources[selection.Input]
+					if source == nil {
+						return step, fmt.Errorf("selected skill input %s is missing", selection.Input)
+					}
+					binding, err := e.captureSkillBinding(ctx, source, selection, req.Secrets, false)
+					if err != nil {
 						return step, err
 					}
-				}
-				retained, err := store.CaptureAssetBundle(ctx, e.bundleOrigin, entries)
-				if err != nil {
+					step, err = e.admitSkillInvocation(ctx, step, w, binding, selection, expressionContext{Inputs: entryInputs}, req.Secrets)
+					if err != nil {
+						return step, err
+					}
+					_, err = e.captureSkillBinding(ctx, source, selection, req.Secrets, true)
 					return step, err
 				}
-				if actionHash(retained) != actionHash(plan.Binding.Assets) {
-					return step, fmt.Errorf("runtime changed admitted skill assets")
+				// Only sources captured from declared entry inputs may reach a late
+				// occurrence. A called workflow cannot introduce a new source path.
+				step.SkillAdmissions = map[string]*SkillBinding{}
+				for name, source := range sources {
+					binding, err := e.captureSkillBinding(ctx, source, selection, req.Secrets, true)
+					// Another entry input can be intended for a different skill
+					// selection. It need not expose this step's resource paths.
+					if errors.Is(err, errSkillResourceUnavailable) {
+						continue
+					}
+					if err != nil {
+						return step, err
+					}
+					identity := actionHash(entryInputs[name])
+					if prior := step.SkillAdmissions[identity]; prior != nil && actionHash(prior) != actionHash(binding) {
+						return step, fmt.Errorf("ambiguous captured skill input reference")
+					}
+					step.SkillAdmissions[identity] = binding
 				}
-				plan.Binding.Assets = retained
-				plan.ID = skillPlanID(plan)
-				if secret, err := containsCredential(plan, e.redactions(req.Secrets)); err != nil || secret {
-					return step, fmt.Errorf("skill admission contains credential material")
+				if len(step.SkillAdmissions) == 0 {
+					return step, fmt.Errorf("selected skill requires an admitted entry input")
 				}
-				step.With["workspace"] = plan.Workspace
-				step.With["model"] = plan.Model
-				step.Skill = plan
 				return step, nil
 			})
 			if err != nil {
@@ -628,6 +520,156 @@ func (e *Executor) admitSkills(ctx context.Context, all map[string]*Workflow, re
 	return nil
 }
 
+func (e *Executor) captureSkillBinding(ctx context.Context, source *SkillSource, selection *SkillSelection, secrets map[string]string, persist bool) (*SkillBinding, error) {
+	if err := validateSkillSource(source); err != nil {
+		return nil, err
+	}
+	selected := map[string]bool{source.Entry: true}
+	for _, resource := range selection.Resources {
+		if strings.Contains(resource, "${{") {
+			return nil, fmt.Errorf("skill resources must be literal paths")
+		}
+		name, err := assetPath(resource)
+		if err != nil || name == "." {
+			return nil, fmt.Errorf("invalid skill resource %q", resource)
+		}
+		resource = name
+		name = path.Join(path.Dir(source.Entry), name)
+		found := false
+		for _, input := range source.Entries {
+			if input.Path == name || strings.HasPrefix(input.Path, name+"/") {
+				selected[input.Path] = true
+				found = true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("%w %q", errSkillResourceUnavailable, resource)
+		}
+	}
+	for _, input := range source.Entries {
+		if secret, err := containsCredential(string(input.Data), e.redactions(secrets)); err != nil || secret {
+			return nil, fmt.Errorf("skill source contains credential material")
+		}
+	}
+	entries := []AssetInput{}
+	for _, input := range source.Entries {
+		if selected[input.Path] {
+			entries = append(entries, input)
+		}
+	}
+	store := invocationStore(e.Store)
+	if store == nil {
+		return nil, fmt.Errorf("skill tasks require durable owned asset storage")
+	}
+	manifest, _ := json.Marshal(map[string]string{"name": "aw-" + source.Name, "version": "1.0.0"})
+	entries = append(entries, AssetInput{Path: ".claude-plugin/plugin.json", Mode: 0644, Data: manifest})
+
+	bundle, _, _, err := describeAssetInputs(ctx, e.bundleOrigin, entries)
+	if err == nil && persist {
+		bundle, err = store.CaptureAssetBundle(ctx, e.bundleOrigin, entries)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &SkillBinding{Version: SkillAdmissionVersion, Name: source.Name, Entry: source.Entry, SourceDigest: source.SourceDigest, Assets: bundle}, nil
+}
+
+func (e *Executor) admitSkillInvocation(ctx context.Context, step Step, w *Workflow, binding *SkillBinding, selection *SkillSelection, expressionCtx expressionContext, secrets map[string]string) (Step, error) {
+	arguments, err := admitSkillText(selection.Arguments, expressionCtx)
+	if err != nil {
+		return step, err
+	}
+	resources := make([]string, 0, len(selection.Resources))
+	for _, resource := range selection.Resources {
+		name, err := assetPath(resource)
+		if err != nil || name == "." {
+			return step, fmt.Errorf("invalid skill resource %q", resource)
+		}
+		resources = append(resources, name)
+	}
+	plan := &SkillInvocation{Version: SkillAdmissionVersion, Binding: *binding, Arguments: arguments, Resources: resources, Model: step.Definition.Model, Effort: step.Definition.ReasoningEffort}
+	if value, ok := step.With["model"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return step, fmt.Errorf("skill model must be a string or null")
+		}
+		model, err := admitSkillText(text, expressionCtx)
+		if err != nil {
+			return step, err
+		}
+		plan.Model = model
+	}
+	if strings.Contains(plan.Model, "${{") {
+		return step, fmt.Errorf("unresolved skill model")
+	}
+	output, err := resolveNamedOutput(w, step.With["output"])
+	if err != nil {
+		return step, err
+	}
+	contract, err := ParseAgentOutputContract(output)
+	if err != nil {
+		return step, err
+	}
+	if contract != nil && contract.RepairAttempts > 0 {
+		return step, fmt.Errorf("selected-skill output repairs are unverified; set output.repair-attempts: 0")
+	}
+	workspace := e.WorkspaceDir
+	if value, ok := step.With["workspace"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return step, fmt.Errorf("skill workspace must resolve from admitted text")
+		}
+		text, err = admitSkillText(text, expressionCtx)
+		if err != nil {
+			return step, err
+		}
+		if text != "" {
+			if filepath.IsAbs(text) {
+				workspace = text
+			} else {
+				workspace = filepath.Join(e.WorkspaceDir, text)
+			}
+		}
+	}
+	plan.Workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return step, err
+	}
+	if err := admitSkillChildren(plan, selection, expressionCtx); err != nil {
+		return step, err
+	}
+	runner, ok := e.Agents.(SkillTaskRunner)
+	if !ok {
+		return step, fmt.Errorf("runtime does not support admitted skills")
+	}
+	assetsIdentity := actionHash(binding.Assets)
+	plan, err = runner.AdmitSkillTask(plan)
+	if err != nil {
+		return step, err
+	}
+	if plan == nil {
+		return step, fmt.Errorf("runtime returned no admitted skill contract")
+	}
+	if checker, ok := e.Agents.(interface {
+		SkillTaskPreflight(context.Context, *SkillInvocation, string) error
+	}); ok {
+		if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
+			return step, err
+		}
+	}
+	if actionHash(plan.Binding.Assets) != assetsIdentity {
+		return step, fmt.Errorf("runtime changed admitted skill assets")
+	}
+	plan.ID = skillPlanID(plan)
+	if secret, err := containsCredential(plan, e.redactions(secrets)); err != nil || secret {
+		return step, fmt.Errorf("skill admission contains credential material")
+	}
+	step.With["workspace"] = plan.Workspace
+	step.With["model"] = plan.Model
+	step.Skill = plan
+	return step, nil
+}
+
 // Revalidate retained controls without consulting any mutable source. A changed
 // adapter profile cannot silently rewrite a previously admitted invocation.
 func (e *Executor) validateRetainedSkills(ctx context.Context, definitions map[string]*Workflow) error {
@@ -637,27 +679,8 @@ func (e *Executor) validateRetainedSkills(ctx context.Context, definitions map[s
 				if step.Skill == nil {
 					return step, nil
 				}
-				plan := step.Skill
-				if plan.ID == "" || plan.ID != skillPlanID(plan) || plan.Binding.Assets == nil {
-					return step, fmt.Errorf("retained skill invocation identity changed")
-				}
-				runner, ok := e.Agents.(SkillTaskRunner)
-				if !ok {
-					return step, fmt.Errorf("runtime does not support retained skills")
-				}
-				admitted, err := runner.AdmitSkillTask(plan)
-				if err != nil {
+				if err := e.validateRetainedSkill(ctx, step.Skill); err != nil {
 					return step, err
-				}
-				if checker, ok := e.Agents.(interface {
-					SkillTaskPreflight(context.Context, *SkillInvocation, string) error
-				}); ok {
-					if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
-						return step, err
-					}
-				}
-				if admitted == nil || skillPlanID(admitted) != plan.ID || admitted.ID != plan.ID {
-					return step, fmt.Errorf("retained skill capability profile changed")
 				}
 				return step, nil
 			})
@@ -669,12 +692,12 @@ func (e *Executor) validateRetainedSkills(ctx context.Context, definitions map[s
 	return nil
 }
 
-var skillInputExpression = regexp.MustCompile(`\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*\s*\}\}`)
+var skillInputExpression = regexp.MustCompile(`\$\{\{\s*inputs\.[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*\s*\}\}`)
 
 func admitSkillText(value string, ec expressionContext) (string, error) {
 	for _, expression := range skillInputExpression.FindAllString(value, -1) {
 		name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(expression, "${{"), "}}"))
-		name = strings.TrimPrefix(name, "inputs.")
+		name = strings.Split(strings.TrimPrefix(name, "inputs."), ".")[0]
 		if _, ok := ec.Inputs[name]; !ok {
 			return "", fmt.Errorf("skill control references missing admitted input %s", name)
 		}
@@ -726,6 +749,31 @@ func validateSkillSource(source *SkillSource) error {
 	}
 	if !found {
 		return fmt.Errorf("captured skill entry is missing")
+	}
+	return nil
+}
+
+func (e *Executor) validateRetainedSkill(ctx context.Context, plan *SkillInvocation) error {
+	if plan.ID == "" || plan.ID != skillPlanID(plan) || plan.Binding.Assets == nil {
+		return fmt.Errorf("retained skill invocation identity changed")
+	}
+	runner, ok := e.Agents.(SkillTaskRunner)
+	if !ok {
+		return fmt.Errorf("runtime does not support retained skills")
+	}
+	admitted, err := runner.AdmitSkillTask(plan)
+	if err != nil {
+		return err
+	}
+	if checker, ok := e.Agents.(interface {
+		SkillTaskPreflight(context.Context, *SkillInvocation, string) error
+	}); ok {
+		if err = checker.SkillTaskPreflight(ctx, plan, plan.Workspace); err != nil {
+			return err
+		}
+	}
+	if admitted == nil || skillPlanID(admitted) != plan.ID || admitted.ID != plan.ID {
+		return fmt.Errorf("retained skill capability profile changed")
 	}
 	return nil
 }

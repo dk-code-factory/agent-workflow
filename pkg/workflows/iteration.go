@@ -705,6 +705,9 @@ func (e *Executor) beginIterationStep(ctx context.Context, j Journal, step Step,
 		// and bind the source plus every independently renderable argument.
 		rendered = map[string]any{"unrendered_source": source, "argument_results": iterationArgumentResults(source, ec)}
 	}
+	if step.Skill != nil && step.Skill.Occurrence != "" {
+		rendered["skill_invocation"] = step.Skill
+	}
 	fingerprint := actionHash(rendered)
 	input := iterationJournal(e.Store)
 	if input == nil {

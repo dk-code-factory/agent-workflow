@@ -207,6 +207,10 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 	if err := validateReuseBindings(step, ec); err != nil {
 		return result, err
 	}
+	step, err = e.bindSkillOccurrence(ctx, step, ec)
+	if err != nil {
+		return result, err
+	}
 	if step.Protocol == ContainerActionV1 {
 		return e.executeContainerAction(ctx, step, ec, slots)
 	}
@@ -222,7 +226,7 @@ func (e *Executor) executeLifecycleStep(ctx context.Context, step Step, ec expre
 			} else {
 				return result, fmt.Errorf("checklist requires a durable block journal")
 			}
-		} else if ec.Ordered {
+		} else if ec.Ordered || (step.Skill != nil && step.Skill.Occurrence != "") {
 			attempt, reused, err = e.beginIterationStep(ctx, journal, step, ec, retry)
 		} else {
 			attempt, reused, err = journal.Begin(ctx, ec.RunID, ec.JobID, step.ID, ec.IterationNumber, retry)
