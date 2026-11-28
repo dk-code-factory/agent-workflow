@@ -420,7 +420,7 @@ def check(args):
         admission = json.loads((root / "metadata-admission.json").read_text())
         if admission["build_id"] != build_id or digest(root / admission["metadata_file"]) != admission["metadata_sha256"]:
             raise ValueError("compiler stage requires exact successful metadata admission")
-        if args.phase in ("runtime-tests", "submission-tests", "journal-tests"):
+        if args.phase in ("runtime-tests", "submission-tests", "journal-tests", "lifecycle-tests"):
             admission = admission["core_unit"]
         if admission["unprepared_native_artifacts"]:
             raise ValueError("compiler stage has an unprepared native dependency artifact")
@@ -436,6 +436,8 @@ def check(args):
             command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "agent_workflow_managed::tests::", "--", "--test-threads=2"]
         elif args.phase == "journal-tests":
             command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "agent_workflow_journal::tests::", "--", "--test-threads=2"]
+        elif args.phase == "lifecycle-tests":
+            command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "session::tests::managed_source_", "--", "--test-threads=2"]
         elif args.phase == "submission-tests":
             command = [str(cargo), "test", *common, "-p", "codex-core", "--lib", "session::tests::managed_submission_ceiling_rejects_manual_and_unbound_work_before_queueing", "--", "--exact", "--test-threads=2"]
         else:
@@ -496,9 +498,9 @@ def check(args):
                 reason = "offline_filter_not_attested"
             report.update({"reason": reason, "exit_code": code, "elapsed_seconds": time.monotonic() - started, "target_bytes": owned_size(target), "free_bytes": shutil.disk_usage(root).free, "source_before_sha256": receipt["source_sha256"], "source_after_sha256": final_source, "termination": termination, "retained_group_members": group_members(process.pid), "offline_filter": offline, "phase": args.phase})
             (root / (label + ".json")).write_text(json.dumps(report, indent=2) + "\n")
-    if code == 0 and reason == "completed" and args.phase in ("runtime-tests", "submission-tests", "journal-tests"):
+    if code == 0 and reason == "completed" and args.phase in ("runtime-tests", "submission-tests", "journal-tests", "lifecycle-tests"):
         count = selected_test_count((root / (label + ".log")).read_text(errors="replace"))
-        expected_count = {"runtime-tests": 11, "submission-tests": 1, "journal-tests": 11}[args.phase]
+        expected_count = {"runtime-tests": 11, "submission-tests": 1, "journal-tests": 11, "lifecycle-tests": 3}[args.phase]
         report["selected_test_count"] = count
         if count != expected_count:
             report["reason"] = reason = "selected_test_count_mismatch"
@@ -582,7 +584,7 @@ def main():
     build = commands.add_parser("check")
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--host", default="x86_64-unknown-linux-gnu", choices=["x86_64-unknown-linux-gnu"])
-    build.add_argument("--phase", choices=["metadata", "check", "runtime-tests", "submission-tests", "journal-tests", "build"], default="metadata")
+    build.add_argument("--phase", choices=["metadata", "check", "runtime-tests", "submission-tests", "journal-tests", "lifecycle-tests", "build"], default="metadata")
     build.set_defaults(run=check)
     args = parser.parse_args()
     args.run(args)
